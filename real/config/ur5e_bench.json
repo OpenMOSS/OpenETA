@@ -1,0 +1,145 @@
+{
+  "_comment": "Public UR5e multi-view example. Camera serials are intentionally omitted; set them only in a local ignored copy. 'mount' selects hand-eye mode: fixed->T_base_cam, wrist->T_gripper_cam. Extrinsics {} until calibration.",
+  "task": "",
+  "home_on_reset": false,
+  "robot": {
+    "driver": "ur5e",
+    "name": "arm_1",
+    "ip": "127.0.0.1",
+    "dof": 6,
+    "home_joints": [1.5707963267948966, -1.5707963267948966, 1.5707963267948966, -1.5707963267948966, -1.5707963267948966, 0.0],
+    "has_gripper": true,
+    "extra": {
+      "gripper": "robotiq",
+      "gripper_port": 63352
+    }
+  },
+  "cameras": [
+    {
+      "driver": "realsense_d435",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "name": "d435i_fixed",
+      "serial": null,
+      "mount": "fixed",
+      "extrinsics": {
+        "type": "T_base_cam",
+        "frame": "base_link",
+        "T_base_cam": [
+          [
+            0.588760235022,
+            0.691645417959,
+            -0.418315672038,
+            0.451245742852
+          ],
+          [
+            0.793378186547,
+            -0.395473791376,
+            0.46276509532,
+            -1.001174802857
+          ],
+          [
+            0.154636472957,
+            -0.604340215566,
+            -0.781575629789,
+            0.784206747707
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "driver": "realsense_d435",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "name": "d435i_wrist",
+      "serial": null,
+      "mount": "wrist",
+      "extrinsics": {
+        "type": "T_gripper_cam",
+        "frame": "gripper",
+        "T_gripper_cam": [
+          [
+            0.999522359371,
+            -0.030419098897,
+            0.00545266361,
+            0.002542960682
+          ],
+          [
+            0.027775171376,
+            0.961594476859,
+            0.273065197214,
+            -0.052726302135
+          ],
+          [
+            -0.013549648451,
+            -0.272783321516,
+            0.961980075953,
+            -0.145432922301
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "driver": "realsense_l515",
+      "name": "l515",
+      "serial": null,
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "depth_width": 640,
+      "depth_height": 480,
+      "depth_fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "extrinsics": {
+        "type": "T_base_cam",
+        "frame": "base_link",
+        "T_base_cam": [
+          [
+            0.305544617645,
+            -0.839428901567,
+            0.449445887557,
+            -0.515034030761
+          ],
+          [
+            -0.925775549754,
+            -0.151512166779,
+            0.34638662618,
+            -0.960110083307
+          ],
+          [
+            -0.222670424858,
+            -0.521922582891,
+            -0.823416479895,
+            0.85333845814
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "mount": "fixed"
+    }
+  ]
+}

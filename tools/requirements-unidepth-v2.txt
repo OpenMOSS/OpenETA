@@ -1,0 +1,27 @@
+# Optional dependencies for the OpenETA UniDepth V2 MCP server.
+#
+# Install these in a dedicated model-service environment. Keep PyTorch, CUDA,
+# model weights, and UniDepth out of the default OpenETA agent environment.
+
+mcp
+uvicorn
+starlette
+numpy
+Pillow
+einops
+huggingface-hub
+
+# Install torch and torchvision for the target CUDA platform separately.
+# Install the official UniDepth repository in this environment:
+#   pip install "git+https://github.com/lpiccinelli-eth/UniDepth.git"
+#
+# On managed CUDA images such as NGC PyTorch, preserve the image's validated
+# Torch/Triton/torchvision stack and install a fixed UniDepth checkout without
+# dependency resolution:
+#   pip install --no-deps -e /path/to/UniDepth
+#
+# The default model is the official V2 ViT-L checkpoint:
+#   lpiccinelli/unidepth-v2-vitl14
+#
+# UniDepth is licensed CC BY-NC 4.0. Review deployment use before commercial or
+# externally hosted production use.

@@ -1,0 +1,14 @@
+{
+  "benchmark": "BEHAVIOR-1K",
+  "behavior_1k_tag": "v3.9.0",
+  "behavior_1k_commit": "6559858f7c814143f08be27830d24fac16a12058",
+  "omnigibson": "3.9.0",
+  "isaac_sim": "5.1.0",
+  "python": "3.11",
+  "pytorch": "2.7.0+cu128",
+  "cuda_runtime": "12.8",
+  "bddl_activity_count": 1016,
+  "challenge_2026_task_count": 100,
+  "rlinf_evaluation_manifest_count": 50,
+  "default_robot": "R1Pro"
+}

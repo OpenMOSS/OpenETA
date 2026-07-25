@@ -1,0 +1,16 @@
+{
+  "schema_version": "openeta.robocasa_versions.v1",
+  "python": "3.11",
+  "robocasa": {
+    "package_version": "1.0.1",
+    "git_url": "https://github.com/robocasa/robocasa.git",
+    "git_commit": "b4684e6ee37d377cc392e98302a6b916d588b415"
+  },
+  "robosuite": {
+    "git_url": "https://github.com/ARISE-Initiative/robosuite.git",
+    "git_commit": "5ce6643f3092639d08f7b0f90ed1c6a84f50552c"
+  },
+  "robot": "PandaOmron",
+  "action_dimension": 12,
+  "scenarios_per_task": 50
+}

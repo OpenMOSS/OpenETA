@@ -1,0 +1,26 @@
+# Optional dependencies for the OpenETA AnyGrasp MCP server.
+#
+# Install these in the AnyGrasp service environment only. Do not add AnyGrasp,
+# CUDA, or licensed SDK dependencies to the default OpenETA runtime environment.
+
+mcp
+uvicorn
+starlette
+Pillow
+numpy
+easydict
+open3d
+graspnetAPI
+
+# Install torch for the target CUDA platform separately.
+# Install MinkowskiEngine v0.5.4 according to the AnyGrasp SDK/CUDA version.
+# Install pointnet2 from the official AnyGrasp SDK.
+# Provide the licensed gsnet SDK binary, license, and checkpoint according to
+# the deployment environment.
+#
+# Verified local spike:
+#   torch 2.10.0+cu128
+#   CUDA 12.8
+#   MinkowskiEngine 0.5.4
+#   open3d 0.19.0
+#   graspnetAPI 1.2.11

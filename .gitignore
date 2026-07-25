@@ -1,0 +1,52 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+sim/venvs/
+
+.env
+.env.*
+!.env.example
+apikey.md
+.agents/
+.openeta_memory/
+docs/domain-modeling.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Experiment outputs
+outputs/
+runs/
+artifacts/
+tmp/
+*.log
+
+# Local Claude config
+.claude/
+
+# Temporary test images at repo root
+libero_*.png
+
+# IDE
+.idea/
+.vscode/
+
+# RLinf duplicated seed dir
+sim/envs/robotwin/seeds/seeds/
+
+# Old vendored RLinf reference (removed)
+sim/rlinf/
+
+# Local upstream reference checkout.
+third_party/codex-remote-feishu/
+CLAUDE.md
+third_party/

@@ -1,0 +1,31 @@
+{
+  "schema_version": "openeta.grasp_strategy.v1",
+  "status": "candidate",
+  "strategy_id": "native-side-articulated-handle-panda-p8",
+  "strategy_family_id": "native-articulated-handle-panda",
+  "revision": 1,
+  "description": "Candidate native-pose contact strategy for side articulated-handle approaches.",
+  "compatibility": {
+    "calibration_ids": ["graspnet-eef-panda-p8"]
+  },
+  "automatic_activation": {
+    "target_geometry_families": []
+  },
+  "validated_scope": {
+    "target_geometry_families": [],
+    "note": "Host-owned articulated-handle mode selection must explicitly activate this strategy. No validated pull or hinge trajectory is implied."
+  },
+  "constraints": {
+    "grasp_width_bounds_m": [0.005, 0.08],
+    "clearance_m": 0.01
+  },
+  "pose_policy": {
+    "approach_axis": "preserve_candidate",
+    "orientation": "preserve_candidate"
+  },
+  "provenance": {
+    "source_experiment": "libero-goal-drawer-failure-analysis-20260724",
+    "failure_evidence": "Repeated drawer attempts clamped every estimator candidate to top-down and failed before close or pull.",
+    "intended_use": "Host-selected side contact candidates after front exhaustion; not a validated pull policy."
+  }
+}

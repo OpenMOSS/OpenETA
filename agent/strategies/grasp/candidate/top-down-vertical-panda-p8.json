@@ -1,0 +1,31 @@
+{
+  "schema_version": "openeta.grasp_strategy.v1",
+  "status": "candidate",
+  "strategy_id": "top-down-vertical-panda-p8",
+  "strategy_family_id": "top-down-vertical-panda",
+  "revision": 1,
+  "description": "Conservative top-down grasp strategy for narrow upright rigid objects.",
+  "compatibility": {
+    "calibration_ids": ["graspnet-eef-panda-p8"]
+  },
+  "automatic_activation": {
+    "target_geometry_families": ["upright_can", "upright_bottle", "boxed_item"]
+  },
+  "validated_scope": {
+    "target_geometry_families": ["upright_can", "boxed_item"],
+    "note": "Validation scope is evidence metadata, not a global object allowlist. Upright bottle activation remains candidate-only."
+  },
+  "constraints": {
+    "grasp_width_bounds_m": [0.005, 0.08],
+    "clearance_m": 0.01
+  },
+  "pose_policy": {
+    "approach_axis": "world_-Z",
+    "orientation": "top_down"
+  },
+  "provenance": {
+    "source_calibration_id": "graspnet-eef-panda-p8",
+    "derived_from": "legacy restricted_geometry",
+    "intended_use": "Session-local candidate strategy; not a validated task-family policy."
+  }
+}

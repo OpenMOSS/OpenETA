@@ -1,0 +1,16 @@
+# Optional dependencies for the OpenETA GraspGenX MCP server.
+#
+# Install these in a dedicated environment that can already run the official
+# GraspGenX checkout. OpenETA does not install or vendor GraspGenX, PyTorch,
+# CUDA extensions, gripper assets, or generator/discriminator checkpoints.
+
+mcp
+uvicorn
+starlette
+numpy
+Pillow
+
+# Install torch for the target CUDA platform and install the official GraspGenX
+# dependencies separately. Start tools/graspgenx_mcp_server.py with explicit
+# offline source, checkpoint, and gripper-description roots. The MCP never
+# downloads missing assets or falls back to CPU/mock inference.

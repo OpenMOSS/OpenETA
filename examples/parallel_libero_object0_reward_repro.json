@@ -1,0 +1,19 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-0-reward-repro-seed0",
+      "env_id": "openeta/libero_libero_object_task0-v0",
+      "task": "pick up alphabet soup and place it into basket.",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {
+        "suite": "libero_object",
+        "task_index": 0,
+        "split": "reproduction"
+      }
+    }
+  ]
+}

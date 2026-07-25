@@ -1,0 +1,50 @@
+{
+  "schema_version": "openeta.task_playbook.v1",
+  "status": "candidate",
+  "playbook_id": "libero10-task1-cream-cheese-butter",
+  "revision": 1,
+  "scope": {
+    "environment_id": "openeta/libero_libero_10_task1-v0",
+    "suite": "libero_10",
+    "task_index": 1,
+    "task_text_sha256": "c0d6cce5a78a3c8ead91a154efe159312db5246445614b7a8a06a0e8e4a8b3c7"
+  },
+  "compatibility": {
+    "calibration_ids": ["graspnet-eef-panda-p8"]
+  },
+  "guidance": {
+    "task_summary": "Place the cream cheese box and then the butter in the basket.",
+    "subgoal_order": ["cream cheese box", "butter", "basket"],
+    "object_priors": [
+      {
+        "task_phrase": "cream cheese box",
+        "geometry_family": "boxed_item",
+        "initial_agentview_region_xyxy_normalized": [0.129, 0.727, 0.23, 0.85],
+        "region_is_prior_only": true
+      },
+      {
+        "task_phrase": "butter",
+        "canonical_asset_key": "libero/butter",
+        "geometry_family": "boxed_item",
+        "initial_agentview_region_xyxy_normalized": [0.516, 0.656, 0.58, 0.756],
+        "region_is_prior_only": true
+      }
+    ],
+    "grasp_hints": {
+      "strategy_id": "top-down-vertical-panda-p8",
+      "successful_width_range_m": [0.06, 0.075],
+      "experience": "Both objects succeeded with top-down compiled seeds, wrist alignment, binary close, fixed lift probe, and full lift before placement."
+    },
+    "placement_hints": {
+      "target": "basket",
+      "experience": "Carry at safe height in bounded lateral steps, descend into the segmented basket interior, release, and retreat before starting the second object."
+    }
+  },
+  "evidence": {
+    "source_session_ids": ["75c7a6ac-4562-4902-8538-9783c6df4b62"],
+    "supporting_episode_ids": ["libero-10-1-seed0"],
+    "official_rewards": [1.0],
+    "autonomous": true,
+    "rollout_tool_calls": [".openeta_memory/experiments/libero-six-reference-canary-20260722-r1/generations/000/train/sessions/75c7a6ac-4562-4902-8538-9783c6df4b62/memory/sessions/75c7a6ac-4562-4902-8538-9783c6df4b62/rollout/tool_calls.jsonl"]
+  }
+}

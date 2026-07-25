@@ -1,0 +1,31 @@
+{
+  "schema_version": "openeta.grasp_strategy.v1",
+  "status": "candidate",
+  "strategy_id": "top-down-drawer-handle-panda-p8",
+  "strategy_family_id": "top-down-drawer-handle-panda",
+  "revision": 2,
+  "description": "Candidate top-down contact strategy for accessible horizontal drawer handles.",
+  "compatibility": {
+    "calibration_ids": ["graspnet-eef-panda-p8"]
+  },
+  "automatic_activation": {
+    "target_geometry_families": ["drawer_handle", "articulated_handle"]
+  },
+  "validated_scope": {
+    "target_geometry_families": [],
+    "note": "No validated pull policy is implied; handle attachment and short observed pull segments remain separate gates."
+  },
+  "constraints": {
+    "grasp_width_bounds_m": [0.005, 0.08],
+    "clearance_m": 0.01
+  },
+  "pose_policy": {
+    "approach_axis": "world_-Z",
+    "orientation": "top_down"
+  },
+  "provenance": {
+    "source_experiment": "libero-six-closed-loop-20260721-r7",
+    "failure_evidence": "Generic drawer-handle candidates repeatedly produced controller-incomplete hover receipts with complex EEF orientations.",
+    "intended_use": "Session-staged candidate for supervised LIBERO Panda canaries; not a validated pull policy."
+  }
+}

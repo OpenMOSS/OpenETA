@@ -14,6 +14,16 @@ sim/venvs/
 .env.*
 !.env.example
 apikey.md
+
+# Local MCP and machine-specific runtime configuration
+.mcp.json
+.mcp.local.json
+.mcp.*.local.json
+real/config/local/
+*.local.json
+*.local.yaml
+*.local.yml
+
 .agents/
 .openeta_memory/
 docs/domain-modeling.md

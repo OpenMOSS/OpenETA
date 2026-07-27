@@ -1582,11 +1582,24 @@ class OpenEtaCli:
             return
         if phase == "end":
             success = bool(event.get("success", False))
-            mark = Theme.ok("✓") if success else Theme.err("✗")
+            details = event.get("details")
+            diagnostics = details.get("diagnostics") if isinstance(details, dict) else None
+            warning = isinstance(diagnostics, list) and any(
+                isinstance(item, dict) and item.get("severity") == "warning"
+                for item in diagnostics
+            )
+            mark = (
+                Theme.ok("✓")
+                if success
+                else Theme.warn("⚠")
+                if warning
+                else Theme.err("✗")
+            )
             elapsed = self._pop_tool_elapsed(name)
             elapsed_text = f" {Theme.dim(_format_elapsed(elapsed))}" if elapsed is not None else ""
             content = _single_line(str(event.get("content") or ""))
-            suffix = f" {Theme.dim(_truncate(content, 160))}" if content else ""
+            content_style = Theme.warn if warning else Theme.dim
+            suffix = f" {content_style(_truncate(content, 200))}" if content else ""
             print(f"  {mark} {Theme.bold(name)}{elapsed_text}{suffix}", flush=True)
 
     def _begin_agent_activity(self) -> None:

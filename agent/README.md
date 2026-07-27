@@ -251,6 +251,22 @@ primary agent substrate.
 and committed. Automatic traces and local working state must stay in the
 gitignored `.openeta_memory/` directory.
 
+## Object Memory Bank
+
+`retrieve_asset_reference` uses a host-owned Object Memory Bank service. Set
+both variables together in the process environment or a local ignored `.env`:
+
+```dotenv
+OPENETA_OBJECT_MEMORY_BANK_URL=http://127.0.0.1:8080
+OPENETA_OBJECT_MEMORY_BANK_API_KEY=<service-api-key>
+```
+
+The URL is the service base URL without `/search` or `/bundle`. Download and
+deploy the service from
+<https://github.com/Huaizz-shawen/object-memory-bank>. If the tool is needed
+while the service is unconfigured, it fails closed and returns a visible setup
+warning instead of attempting an invalid placeholder URL.
+
 ## Provider Smoke Test
 
 Create `.env` from `.env.example`, or place a local ignored `apikey.md` with a

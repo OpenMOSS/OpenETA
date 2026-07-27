@@ -21,9 +21,7 @@ from adapter.protocol import JsonDict
 
 OBJECT_MEMORY_BANK_URL_ENV = "OPENETA_OBJECT_MEMORY_BANK_URL"
 OBJECT_MEMORY_BANK_API_KEY_ENV = "OPENETA_OBJECT_MEMORY_BANK_API_KEY"
-# Public snapshot placeholder. Configure OPENETA_OBJECT_MEMORY_BANK_URL in a
-# local, ignored environment before enabling object-memory access.
-DEFAULT_OBJECT_MEMORY_BANK_URL = "https://memory.example.invalid"
+OBJECT_MEMORY_BANK_SETUP_URL = "https://github.com/Huaizz-shawen/object-memory-bank"
 DEFAULT_OBJECT_MEMORY_TIMEOUT_S = 30.0
 DEFAULT_OBJECT_MEMORY_MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 DEFAULT_OBJECT_MEMORY_MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -38,6 +36,17 @@ OBJECT_MEMORY_SEARCH_MATCH_TYPES = frozenset(
 )
 
 ObjectMemoryDownloader = Callable[[str, Mapping[str, str], float, int], bytes]
+
+
+class ObjectMemoryBankConfigurationError(ValueError):
+    """Raised when only one half of the host-owned URL/key pair is configured."""
+
+    def __init__(self, *, missing_fields: tuple[str, ...]) -> None:
+        self.missing_fields = missing_fields
+        super().__init__(
+            "object memory bank URL and API key must be configured together; "
+            "missing {}".format(", ".join(missing_fields))
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,12 +69,11 @@ class ObjectMemoryBankConfig:
         environ: Mapping[str, str] | None = None,
     ) -> "ObjectMemoryBankConfig | None":
         source = environ if environ is not None else os.environ
+        base_url = str(source.get(OBJECT_MEMORY_BANK_URL_ENV) or "").strip()
         api_key = str(source.get(OBJECT_MEMORY_BANK_API_KEY_ENV) or "").strip()
-        if not api_key:
+        if not base_url and not api_key:
             return None
-        base_url = str(
-            source.get(OBJECT_MEMORY_BANK_URL_ENV) or DEFAULT_OBJECT_MEMORY_BANK_URL
-        ).strip()
+        _require_complete_object_memory_config(base_url=base_url, api_key=api_key)
         return cls(base_url=base_url, api_key=api_key)
 
     def validate(self) -> None:
@@ -113,21 +121,32 @@ def load_configured_object_memory_bank(
     source = dict(environ if environ is not None else os.environ)
     dotenv = _read_simple_env(dotenv_path)
     example_url, example_key = _read_object_memory_curl_example(apikey_path)
+    base_url = str(
+        source.get(OBJECT_MEMORY_BANK_URL_ENV)
+        or dotenv.get(OBJECT_MEMORY_BANK_URL_ENV)
+        or example_url
+        or ""
+    ).strip()
     api_key = str(
         source.get(OBJECT_MEMORY_BANK_API_KEY_ENV)
         or dotenv.get(OBJECT_MEMORY_BANK_API_KEY_ENV)
         or example_key
         or ""
     ).strip()
-    if not api_key:
+    if not base_url and not api_key:
         return None
-    base_url = str(
-        source.get(OBJECT_MEMORY_BANK_URL_ENV)
-        or dotenv.get(OBJECT_MEMORY_BANK_URL_ENV)
-        or example_url
-        or DEFAULT_OBJECT_MEMORY_BANK_URL
-    ).strip()
+    _require_complete_object_memory_config(base_url=base_url, api_key=api_key)
     return ObjectMemoryBankConfig(base_url=base_url, api_key=api_key)
+
+
+def _require_complete_object_memory_config(*, base_url: str, api_key: str) -> None:
+    missing = []
+    if not base_url:
+        missing.append(OBJECT_MEMORY_BANK_URL_ENV)
+    if not api_key:
+        missing.append(OBJECT_MEMORY_BANK_API_KEY_ENV)
+    if missing:
+        raise ObjectMemoryBankConfigurationError(missing_fields=tuple(missing))
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,8 +363,8 @@ def object_memory_query_key(*, environment: str, target_object: str) -> str:
 
 
 def _environment_namespace(environment: str) -> str:
-    normalized = environment.strip().lower()
-    for namespace in ("libero", "robocasa", "maniskill", "robotwin"):
+    normalized = re.sub(r"[^a-z0-9]+", "_", environment.strip().lower()).strip("_")
+    for namespace in ("libero_pro", "libero", "robocasa", "maniskill", "robotwin"):
         if namespace in normalized:
             return namespace
     return _safe_key_component(normalized)

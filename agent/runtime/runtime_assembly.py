@@ -51,6 +51,7 @@ from agent.runtime.supervision import (
 )
 from agent.tools.asset_references import (
     build_asset_reference_handler,
+    build_object_memory_configuration_warning_handler,
     build_object_memory_reference_handler,
     load_configured_asset_reference_catalog,
 )
@@ -81,6 +82,7 @@ from agent.tools.grasp_geometry import build_compile_grasp_seed_handler
 from agent.tools.mcp_registry import load_mcp_server_url
 from agent.tools.object_memory import (
     ObjectMemoryBankClient,
+    ObjectMemoryBankConfigurationError,
     load_configured_object_memory_bank,
 )
 from agent.tools.registry import (
@@ -426,7 +428,12 @@ def bind_runtime_perception_tools(
     backend_factory: BackendFactory,
     artifact_root: Path,
 ) -> DepthPriorPrefetchCoordinator | None:
-    object_memory_config = load_configured_object_memory_bank()
+    object_memory_configuration_error = ""
+    try:
+        object_memory_config = load_configured_object_memory_bank()
+    except ObjectMemoryBankConfigurationError as exc:
+        object_memory_config = None
+        object_memory_configuration_error = str(exc)
     asset_catalog = load_configured_asset_reference_catalog()
     if object_memory_config is not None:
         tools.bind_handler(
@@ -443,12 +450,20 @@ def bind_runtime_perception_tools(
             ),
             replace=True,
         )
-    elif asset_catalog is not None:
+    elif asset_catalog is not None and not object_memory_configuration_error:
         tools.bind_handler(
             "retrieve_asset_reference",
             build_asset_reference_handler(
                 asset_catalog,
                 output_root=artifact_root / "asset_references",
+            ),
+            replace=True,
+        )
+    else:
+        tools.bind_handler(
+            "retrieve_asset_reference",
+            build_object_memory_configuration_warning_handler(
+                configuration_error=object_memory_configuration_error,
             ),
             replace=True,
         )

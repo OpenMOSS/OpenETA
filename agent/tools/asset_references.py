@@ -16,7 +16,13 @@ from uuid import uuid4
 from adapter.protocol import JsonDict
 from agent.runtime.artifact_paths import artifact_session_id, artifact_session_root
 from agent.runtime.reference_localization import ReferencePointLocalizer
-from agent.tools.object_memory import ObjectMemoryBankClient, ObjectMemoryResolutionError
+from agent.tools.object_memory import (
+    OBJECT_MEMORY_BANK_API_KEY_ENV,
+    OBJECT_MEMORY_BANK_SETUP_URL,
+    OBJECT_MEMORY_BANK_URL_ENV,
+    ObjectMemoryBankClient,
+    ObjectMemoryResolutionError,
+)
 from agent.tools.registry import ToolExecutionContext, ToolHandler, make_tool_result
 
 
@@ -451,6 +457,46 @@ def build_object_memory_reference_handler(
                 },
             },
             artifacts=artifacts,
+        )
+
+    return handler
+
+
+def build_object_memory_configuration_warning_handler(
+    *,
+    configuration_error: str = "",
+    setup_url: str = OBJECT_MEMORY_BANK_SETUP_URL,
+) -> ToolHandler:
+    """Return a call-time warning when the object-memory service is unavailable."""
+
+    message = (
+        "WARNING: Object Memory Bank URL is not configured. Setup: "
+        f"{setup_url}. Set {OBJECT_MEMORY_BANK_URL_ENV} and "
+        f"{OBJECT_MEMORY_BANK_API_KEY_ENV} together."
+    )
+
+    def handler(context: ToolExecutionContext):
+        warning = {
+            "code": "object_memory_bank_unconfigured",
+            "severity": "warning",
+            "message": message,
+            "setup_url": setup_url,
+            "required_environment_variables": [
+                OBJECT_MEMORY_BANK_URL_ENV,
+                OBJECT_MEMORY_BANK_API_KEY_ENV,
+            ],
+        }
+        if configuration_error:
+            warning["configuration_error"] = configuration_error
+        return make_tool_result(
+            context,
+            success=False,
+            content=message,
+            outputs={
+                "reason": "object_memory_bank_unconfigured",
+                "warning": warning,
+            },
+            diagnostics=[warning],
         )
 
     return handler

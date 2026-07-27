@@ -4,6 +4,8 @@
   <img src="docs/assets/openeta-header-eta-clear.png" alt="OpenETA — Embodied Task Agent" width="100%">
 </p>
 
+[English](README.md) · [简体中文](README.zh-CN.md)
+
 > **A new agentic paradigm for moving intelligence from the digital world into the physical world.**
 
 Physical intelligence is fundamentally about closing a causal loop with the world: understanding the

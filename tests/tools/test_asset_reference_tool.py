@@ -13,6 +13,7 @@ from agent.tools.asset_references import (
     _RejectRedirects,
     AssetReferenceCatalog,
     build_asset_reference_handler,
+    build_object_memory_configuration_warning_handler,
     build_object_memory_reference_handler,
 )
 from agent.tools.object_memory import (
@@ -142,6 +143,31 @@ def test_asset_reference_downloader_rejects_http_redirects() -> None:
     )
 
     assert redirected is None
+
+
+def test_object_memory_configuration_warning_links_to_deployment_repository() -> None:
+    result = build_object_memory_configuration_warning_handler()(
+        _context(
+            {
+                "environment": "openeta/libero_task0-v0",
+                "target_object": "black bowl",
+                "scene_image": "/tmp/scene.png",
+            }
+        )
+    )
+
+    assert result.success is False
+    assert "https://github.com/Huaizz-shawen/object-memory-bank" in result.content
+    outputs = result.details["outputs"]
+    assert outputs["reason"] == "object_memory_bank_unconfigured"
+    warning = outputs["warning"]
+    assert warning["severity"] == "warning"
+    assert warning["setup_url"] == "https://github.com/Huaizz-shawen/object-memory-bank"
+    assert warning["required_environment_variables"] == [
+        "OPENETA_OBJECT_MEMORY_BANK_URL",
+        "OPENETA_OBJECT_MEMORY_BANK_API_KEY",
+    ]
+    assert result.details["diagnostics"] == [warning]
 
 
 def test_asset_reference_result_creates_and_resolves_localization_obligation(

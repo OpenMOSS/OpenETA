@@ -387,6 +387,44 @@ def test_cli_binds_depth_prior_only_when_url_is_configured(monkeypatch) -> None:
     assert calls == [("http://unidepth.example/sse", "estimate_depth", 600.0)]
 
 
+def test_cli_binds_call_time_object_memory_warning_when_unconfigured(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        runtime_assembly,
+        "load_configured_object_memory_bank",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_assembly,
+        "load_configured_asset_reference_catalog",
+        lambda: None,
+    )
+    tools = build_default_tool_registry()
+
+    runtime_assembly.bind_runtime_perception_tools(
+        tools,
+        endpoints=runtime_assembly.RuntimeMcpEndpoints(),
+        backend_factory=lambda **_kwargs: pytest.fail(
+            "unconfigured object memory must not construct a localization backend"
+        ),
+        artifact_root=Path("artifacts"),
+    )
+
+    assert tools.can_execute("retrieve_asset_reference") is True
+    result = tools.call(
+        "retrieve_asset_reference",
+        {
+            "environment": "libero",
+            "target_object": "black bowl",
+            "scene_image": "/tmp/scene.png",
+        },
+    )
+    assert result.success is False
+    assert result.details["outputs"]["reason"] == "object_memory_bank_unconfigured"
+    assert "https://github.com/Huaizz-shawen/object-memory-bank" in result.content
+
+
 def test_cli_injects_depth_prefetch_into_sam3_when_both_are_configured(
     monkeypatch,
 ) -> None:
@@ -1622,3 +1660,34 @@ def test_cli_prints_codex_style_realtime_status(monkeypatch, capsys) -> None:
     assert "sandbox=outside_sandbox" in output
     assert "python_exec completed" in output
     assert "worked for 3.9s" in output
+
+
+def test_cli_prints_object_memory_setup_warning(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("agent.cli.openeta_cli._load_sim_mcp_url", lambda: "")
+    cli = OpenEtaCli()
+
+    cli._print_tool_event(
+        {
+            "phase": "end",
+            "name": "retrieve_asset_reference",
+            "success": False,
+            "content": (
+                "WARNING: Object Memory Bank URL is not configured. Setup: "
+                "https://github.com/Huaizz-shawen/object-memory-bank"
+            ),
+            "details": {
+                "diagnostics": [
+                    {
+                        "code": "object_memory_bank_unconfigured",
+                        "severity": "warning",
+                    }
+                ]
+            },
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert "⚠" in output
+    assert "✗" not in output
+    assert "retrieve_asset_reference" in output
+    assert "https://github.com/Huaizz-shawen/object-memory-bank" in output

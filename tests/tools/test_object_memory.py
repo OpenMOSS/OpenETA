@@ -13,7 +13,9 @@ from agent.tools import object_memory as object_memory_module
 from agent.tools.object_memory import (
     ObjectMemoryBankClient,
     ObjectMemoryBankConfig,
+    ObjectMemoryBankConfigurationError,
     ObjectMemoryResolutionError,
+    load_configured_object_memory_bank,
     object_memory_query_key,
 )
 
@@ -106,6 +108,23 @@ def test_object_memory_query_key_normalizes_environment_and_target() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "environment",
+    [
+        "openeta/libero_pro_task0-v0",
+        "openeta/libero-pro-task0-v0",
+    ],
+)
+def test_object_memory_query_key_preserves_libero_pro_namespace(environment: str) -> None:
+    assert (
+        object_memory_query_key(
+            environment=environment,
+            target_object="Black Bowl",
+        )
+        == "libero_pro/black_bowl"
+    )
+
+
 def test_object_memory_config_repr_redacts_api_key() -> None:
     config = ObjectMemoryBankConfig(
         base_url="https://memory.example.test",
@@ -117,6 +136,45 @@ def test_object_memory_config_repr_redacts_api_key() -> None:
         object_memory_query_key(environment="ignored", target_object="libero/red_coffee_mug")
         == "libero/red_coffee_mug"
     )
+
+
+def test_object_memory_config_is_absent_when_url_and_key_are_absent() -> None:
+    assert ObjectMemoryBankConfig.from_env({}) is None
+
+
+@pytest.mark.parametrize(
+    ("environ", "missing_field"),
+    [
+        (
+            {"OPENETA_OBJECT_MEMORY_BANK_URL": "https://memory.example.test"},
+            "OPENETA_OBJECT_MEMORY_BANK_API_KEY",
+        ),
+        (
+            {"OPENETA_OBJECT_MEMORY_BANK_API_KEY": "secret"},
+            "OPENETA_OBJECT_MEMORY_BANK_URL",
+        ),
+    ],
+)
+def test_object_memory_config_rejects_partial_url_key_pair(
+    environ: dict[str, str],
+    missing_field: str,
+) -> None:
+    with pytest.raises(ObjectMemoryBankConfigurationError) as captured:
+        ObjectMemoryBankConfig.from_env(environ)
+
+    assert captured.value.missing_fields == (missing_field,)
+    assert missing_field in str(captured.value)
+
+
+def test_object_memory_loader_rejects_partial_url_key_pair(tmp_path) -> None:
+    with pytest.raises(ObjectMemoryBankConfigurationError) as captured:
+        load_configured_object_memory_bank(
+            environ={"OPENETA_OBJECT_MEMORY_BANK_API_KEY": "secret"},
+            dotenv_path=str(tmp_path / "missing.env"),
+            apikey_path=str(tmp_path / "missing-apikey.md"),
+        )
+
+    assert captured.value.missing_fields == ("OPENETA_OBJECT_MEMORY_BANK_URL",)
 
 
 def test_object_memory_config_allows_private_network_http() -> None:

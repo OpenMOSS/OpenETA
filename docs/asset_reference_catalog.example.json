@@ -1,0 +1,28 @@
+{
+  "schema_version": "openeta.asset_reference_catalog.v1",
+  "allowed_hosts": [
+    "assets.example.org"
+  ],
+  "environments": [
+    {
+      "id": "libero",
+      "aliases": [
+        "openeta/libero_*"
+      ],
+      "objects": [
+        {
+          "id": "alphabet_soup",
+          "aliases": [
+            "alphabet soup",
+            "alphabet soup can"
+          ],
+          "references": [
+            {
+              "url": "https://assets.example.org/libero/alphabet_soup.png"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

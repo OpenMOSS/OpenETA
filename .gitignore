@@ -1,0 +1,65 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+sim/venvs/
+
+.env
+.env.*
+!.env.example
+.mcp.json
+apikey.md
+.agents/
+.openeta_memory/
+docs/domain-modeling.md
+real/config/ur5e_bench.json
+real/config/ur5e_bench.json.bak
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Experiment outputs
+outputs/
+runs/
+artifacts/
+tmp/
+*.log
+
+# Local Claude config
+.claude/
+
+# Temporary test images at repo root
+libero_*.png
+
+# UR5e/Robotiq bring-up debug probes, dumps, and archives at repo root
+/_*.py
+/*.tar
+/*.tar.gz
+/ur5e_obs_*.png
+/ur5e_obs_raw.json
+/anygrasp_*.png
+/anygrasp_*.json
+/grasp_comparison.png
+/pointcloud_fusion.png
+/topdown_*.png
+
+# IDE
+.idea/
+.vscode/
+
+# RLinf duplicated seed dir
+sim/envs/robotwin/seeds/seeds/
+
+# Old vendored RLinf reference (removed)
+sim/rlinf/
+
+CLAUDE.md
+third_party/

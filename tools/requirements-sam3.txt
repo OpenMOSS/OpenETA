@@ -1,0 +1,19 @@
+# Optional dependencies for the OpenETA SAM3 MCP server.
+#
+# Install these in the SAM3 service environment only. Do not add SAM3 or CUDA
+# dependencies to the default OpenETA runtime environment.
+
+mcp
+uvicorn
+starlette
+einops
+pycocotools
+psutil
+
+# Install torch and torchvision for the target CUDA platform separately.
+# Example from the verified local spike:
+#   torch==2.10.0+cu128
+#   torchvision==0.25.0+cu128
+#
+# Install SAM3 from the official SAM3 package/repository appropriate for your
+# deployment environment.

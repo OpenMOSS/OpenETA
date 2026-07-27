@@ -1,0 +1,70 @@
+{
+  "schema_version": "openeta.grasp_strategy.v1",
+  "status": "candidate",
+  "strategy_id": "top-down-bowl-panda-p8",
+  "strategy_family_id": "top-down-bowl-panda",
+  "revision": 3,
+  "description": "Candidate top-down rim grasp strategy for reachable open bowls.",
+  "compatibility": {
+    "calibration_ids": [
+      "graspnet-eef-panda-p8",
+      "graspnet-eef-robotiq-2f85"
+    ]
+  },
+  "automatic_activation": {
+    "target_geometry_families": [
+      "bowl"
+    ]
+  },
+  "validated_scope": {
+    "target_geometry_families": [],
+    "note": "Accepted as a candidate after two seed-0 LIBERO bowl episodes produced independent attachment PASS verdicts. Held-out and repeated lift evidence are still below the validation gate."
+  },
+  "constraints": {
+    "grasp_width_bounds_m": [
+      0.005,
+      0.08
+    ],
+    "clearance_m": 0.01
+  },
+  "candidate_filter": {
+    "min_downward_alignment": 0.5
+  },
+  "alignment_policy": {
+    "target_region": "nearest_shallow_surface"
+  },
+  "motion_policy": {
+    "precontact_distance_m": 0.05
+  },
+  "pose_policy": {
+    "approach_axis": "world_-Z",
+    "orientation": "top_down_preserve_yaw"
+  },
+  "provenance": {
+    "source_experiment": "libero-six-closed-loop-20260721-r7",
+    "failure_evidence": "Generic bowl candidates repeatedly produced controller-incomplete hover receipts with complex EEF orientations.",
+    "intended_use": "Automatically selectable candidate for LIBERO Panda bowl canaries; not a validated policy.",
+    "admission_evidence": {
+      "experiment_id": "bowl-strategy-canary-20260722-r2",
+      "tasks_with_attachment_pass": 2,
+      "tasks_attempted": 2,
+      "attachment_probe_passes": 2,
+      "attachment_probe_attempts": 4,
+      "official_reward_successes": 0,
+      "conclusion": "Retain as candidate: both task families achieved verified attachment after structured candidate fallback, while placement remained incomplete."
+    },
+    "heldout_evidence": {
+      "experiment_id": "bowl-strategy-heldout-20260722-r3",
+      "tasks_attempted": 2,
+      "tasks_reaching_attachment_probe": 0,
+      "conclusion": "Inconclusive: provider TLS timeouts and planner validation exhaustion stopped both episodes before contact."
+    },
+    "end_to_end_evidence": {
+      "experiment_id": "libero-six-post-bowl-20260722-r1",
+      "episode_id": "libero-goal-1-seed0",
+      "task": "put the bowl on the stove",
+      "official_reward": 1,
+      "conclusion": "The candidate completed grasp, independent attachment verification, placement, and the official environment success condition without human or guidance intervention."
+    }
+  }
+}

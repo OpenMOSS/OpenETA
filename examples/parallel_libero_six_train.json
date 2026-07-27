@@ -1,0 +1,70 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-spatial-0-seed0",
+      "env_id": "openeta/libero_libero_spatial_task0-v0",
+      "task": "pick up the black bowl between the plate and the ramekin and place it on the plate",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_spatial", "task_index": 0, "split": "train"}
+    },
+    {
+      "episode_id": "libero-object-0-seed0",
+      "env_id": "openeta/libero_libero_object_task0-v0",
+      "task": "pick up the alphabet soup and place it in the basket",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_object", "task_index": 0, "split": "train"}
+    },
+    {
+      "episode_id": "libero-goal-0-seed0",
+      "env_id": "openeta/libero_libero_goal_task0-v0",
+      "task": "open the middle drawer of the cabinet",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_goal", "task_index": 0, "split": "train"}
+    },
+    {
+      "episode_id": "libero-goal-1-seed0",
+      "env_id": "openeta/libero_libero_goal_task1-v0",
+      "task": "put the bowl on the stove",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_goal", "task_index": 1, "split": "train"}
+    },
+    {
+      "episode_id": "libero-10-0-seed0",
+      "env_id": "openeta/libero_libero_10_task0-v0",
+      "task": "put both the alphabet soup and the tomato sauce in the basket",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_10", "task_index": 0, "split": "train"}
+    },
+    {
+      "episode_id": "libero-10-1-seed0",
+      "env_id": "openeta/libero_libero_10_task1-v0",
+      "task": "put both the cream cheese box and the butter in the basket",
+      "seed": 0,
+      "max_turns": 100,
+      "max_tool_calls": 200,
+      "timeout_s": 3600,
+      "max_total_tokens": 5000000,
+      "metadata": {"suite": "libero_10", "task_index": 1, "split": "train"}
+    }
+  ]
+}

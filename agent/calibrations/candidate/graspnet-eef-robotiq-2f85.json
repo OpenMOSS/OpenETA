@@ -1,0 +1,42 @@
+{
+  "schema_version": "libero.grasp_to_eef_calibration.v2",
+  "status": "candidate",
+  "calibration_id": "graspnet-eef-robotiq-2f85",
+  "robot_model": "UR5e",
+  "gripper_model": "Robotiq2F85",
+  "grasp_frame": "graspnet",
+  "eef_frame": "openeta_eef",
+  "length_unit": "m",
+  "rotation_convention": "active_column_vectors",
+  "max_gripper_width_m": 0.085,
+  "compatibility": {
+    "environment_families": ["openeta-ur5e", "real"],
+    "controllers": ["cartesian_pose"],
+    "camera_calibration_ids": ["d435i_fixed", "l515", "d435i_wrist"],
+    "grasp_backend_families": ["graspnet", "anygrasp"]
+  },
+  "T_grasp_eef": {
+    "rotation_matrix": [
+      [0.0, 0.0, 1.0],
+      [-1.0, 0.0, 0.0],
+      [0.0, -1.0, 0.0]
+    ],
+    "translation_xyz": [0.0036, 0.0, 0.0]
+  },
+  "provenance": {
+    "calibrated_on": "2026-07-21",
+    "task": "real-robot ur5e bring-up (sim->real migration)",
+    "method": "ESTIMATE ONLY — no physical canary performed. Rotation corrected from graspnet-eef-panda-p8 by a +90 deg roll about the approach axis (see rotation_history); translation still inherited from Panda pending real-robot calibration.",
+    "unverified": true,
+    "estimate_basis": "max_gripper_width_m set to Robotiq 2F-85 stroke (0.085 m). T_grasp_eef.translation_xyz is still the Panda placeholder along the approach axis and is NOT measured for the 2F-85 on the UR5e TCP; it will be wrong if the UR TCP is not configured at the finger working point.",
+    "rotation_history": "Initial rotation was copied verbatim from graspnet-eef-panda-p8 under the incorrect assumption that graspnet->eef rotation is gripper-agnostic. Real-robot session 6af74f15 showed the compiled eef closing axis fell on grasp_Z (gripper-body axis) instead of grasp_Y (jaw axis) — the classic pi/2 'grasps the long edge' symptom. The Robotiq 2F-85 on the UR5e flange closes 90 deg rotated from the Panda gripper. Fixed by R_old @ Rz(90deg): eef-X now maps to -grasp_Y (jaw/closing axis restored), eef-Z stays grasp_X (approach unchanged). +/-90 deg are physically identical for a symmetric two-finger gripper. Rotation-only change; still needs the physical canary below to confirm.",
+    "requires_before_trust": "Physical canary: confirm the jaw closes across the object short edge (rotation fix), then verify finger-center P95 <= 5mm and approach-axis P95 <= 3 deg against the actual UR5e TCP definition; measure and replace T_grasp_eef.translation_xyz.",
+    "approach_axis": "+X column of the GraspNet rotation is the approach direction; translation origin is grasp translation_xyz (depth-independent)."
+  },
+  "candidate_status": {
+    "reason": "Estimated profile for Robotiq 2F-85 on UR5e. Not physically validated. Created to unblock the compile_grasp_seed width gate during sim->real bring-up.",
+    "not_validated_because": "No held-out lift canary on the real robot; T_grasp_eef translation is an unmeasured placeholder.",
+    "gates_unchanged": "finger-center P95 <= 5mm, axis P95 <= 3 deg, held-out lift >= 95%. Any miss keeps status=candidate.",
+    "intended_use": "GraspNet/AnyGrasp-frame to Robotiq 2F-85 EEF calibration for the openeta-ur5e real robot only. Do not use for Panda/sim."
+  }
+}

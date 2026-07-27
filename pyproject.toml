@@ -1,0 +1,56 @@
+[project]
+name = "openeta"
+version = "0.1.0"
+description = "OpenETA embodied agent runtime with real-robot MCP integration."
+requires-python = ">=3.10"
+dependencies = [
+  "gymnasium>=1.0",
+  "imageio[ffmpeg]>=2.34",
+  "mcp>=1.0",
+  "numpy>=1.26",
+  "Pillow>=10",
+  "prompt_toolkit>=3.0",
+  "tiktoken>=0.7",
+]
+
+[project.scripts]
+openeta = "agent.cli.openeta_cli:main"
+openeta-robocasa-benchmark = "scripts.robocasa_benchmark:main"
+openeta-batch = "agent.cli.batch_eval:main"
+openeta-subagent-eval = "agent.cli.subagent_eval:main"
+openeta-replay = "logger.replay:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+# Real-robot deployment hardware SDKs. Imported lazily by real/ drivers so the
+# base agent runtime and unit tests do not require these to be installed.
+real = [
+  "pyrealsense2==2.54.1.5216",  # pinned: L515 support dropped after 2.54.1 (L515 EOL),
+  "ur_rtde>=1.5",
+  "opencv-python>=4.8,<5",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["adapter*", "agent*", "logger*", "real*", "scripts*", "sim*", "tools*"]
+
+[tool.setuptools.package-data]
+"agent.skills" = ["*.md"]
+"agent.prompts" = ["*.md"]
+"real" = ["*.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+  "agent/codex",
+  "third_party",
+]

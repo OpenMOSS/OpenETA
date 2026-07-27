@@ -1,0 +1,17 @@
+# Optional dependencies for the OpenETA MolmoPoint MCP server.
+#
+# Install these in a dedicated MolmoPoint service environment. Do not add the
+# model, CUDA, or Transformers dependencies to the default OpenETA runtime.
+
+mcp
+uvicorn
+starlette
+transformers==4.57.1
+accelerate
+einops
+Pillow
+decord2
+
+# Install torch and torchvision for the target CUDA platform separately.
+# The service is CUDA-only and loads a pre-deployed Hugging Face snapshot with
+# local_files_only=True.

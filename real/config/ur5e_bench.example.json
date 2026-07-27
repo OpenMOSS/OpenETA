@@ -1,0 +1,65 @@
+{
+  "_comment": "Public template only. Copy to ur5e_bench.json and set local controller, serial, and calibration values.",
+  "task": "",
+  "home_on_reset": false,
+  "robot": {
+    "driver": "ur5e",
+    "name": "arm",
+    "ip": "ROBOT_CONTROLLER_IP",
+    "dof": 6,
+    "home_joints": [
+      1.5707963267948966,
+      -1.5707963267948966,
+      1.5707963267948966,
+      -1.5707963267948966,
+      -1.5707963267948966,
+      0.0
+    ],
+    "has_gripper": true,
+    "extra": {
+      "gripper": "robotiq",
+      "gripper_port": 63352
+    }
+  },
+  "cameras": [
+    {
+      "driver": "realsense_d435",
+      "name": "fixed_camera",
+      "serial": null,
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "mount": "fixed",
+      "extrinsics": {}
+    },
+    {
+      "driver": "realsense_d435",
+      "name": "wrist_camera",
+      "serial": null,
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "mount": "wrist",
+      "extrinsics": {}
+    },
+    {
+      "driver": "realsense_l515",
+      "name": "placement_camera",
+      "serial": null,
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "depth_width": 640,
+      "depth_height": 480,
+      "depth_fps": 30,
+      "depth_enabled": true,
+      "align_depth_to_color": true,
+      "mount": "fixed",
+      "extrinsics": {}
+    }
+  ]
+}

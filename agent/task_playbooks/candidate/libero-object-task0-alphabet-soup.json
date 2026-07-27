@@ -1,0 +1,44 @@
+{
+  "schema_version": "openeta.task_playbook.v1",
+  "status": "candidate",
+  "playbook_id": "libero-object-task0-alphabet-soup",
+  "revision": 1,
+  "scope": {
+    "environment_id": "openeta/libero_libero_object_task0-v0",
+    "suite": "libero_object",
+    "task_index": 0,
+    "task_text_sha256": "2d112bee564a0f6cef3403df144f91ee5c02aebe0ad96c18d47e430c2734cb54"
+  },
+  "compatibility": {
+    "calibration_ids": ["graspnet-eef-panda-p8"]
+  },
+  "guidance": {
+    "task_summary": "Pick up the alphabet soup can and place it in the basket.",
+    "subgoal_order": ["alphabet soup", "basket"],
+    "object_priors": [
+      {
+        "task_phrase": "alphabet soup",
+        "canonical_asset_key": "libero/alphabet_soup",
+        "geometry_family": "upright_can",
+        "visual_identity": "Blue upright can with yellow lettering and orange alphabet artwork; from above verify the circular pull-tab lid and embossed oval mark.",
+        "initial_agentview_region_xyxy_normalized": [0.217, 0.449, 0.291, 0.531],
+        "region_is_prior_only": true
+      }
+    ],
+    "grasp_hints": {
+      "strategy_id": "top-down-vertical-panda-p8",
+      "successful_width_range_m": [0.06, 0.08],
+      "experience": "Two earlier contacts failed their lift probes; the eventual attachment used the same verified instance with a different grasp seed. Advance only after structured rejection."
+    },
+    "placement_hints": {
+      "target": "basket",
+      "experience": "Keep the gripper closed through the lift and staged carry; use the freshly segmented basket interior and official reward as completion evidence."
+    }
+  },
+  "evidence": {
+    "source_session_ids": ["public-release-redacted"],
+    "supporting_episode_ids": ["libero-object-0-reward-repro-seed0"],
+    "official_rewards": [1.0],
+    "autonomous": true
+  }
+}

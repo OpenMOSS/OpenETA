@@ -1,0 +1,47 @@
+{
+  "schema_version": "libero.grasp_to_eef_calibration.v2",
+  "status": "candidate",
+  "calibration_id": "graspnet-eef-panda-p8",
+  "robot_model": "Panda",
+  "gripper_model": "PandaGripper",
+  "grasp_frame": "graspnet",
+  "eef_frame": "openeta_eef",
+  "length_unit": "m",
+  "rotation_convention": "active_column_vectors",
+  "max_gripper_width_m": 0.08,
+  "compatibility": {
+    "environment_families": ["libero"],
+    "controllers": ["OSC_POSE"],
+    "camera_calibration_ids": ["libero-agentview-panda-v1"],
+    "grasp_backend_families": ["graspnet"]
+  },
+  "T_grasp_eef": {
+    "rotation_matrix": [
+      [0.0, 0.0, 1.0],
+      [0.0, -1.0, 0.0],
+      [1.0, 0.0, 0.0]
+    ],
+    "translation_xyz": [0.0036, 0.0, 0.0]
+  },
+  "provenance": {
+    "calibrated_on": "2026-07-08",
+    "task": "libero_10 task 0",
+    "method": "offline rigid-body GraspNet->EEF calibration with end-to-end physical canary",
+    "eef_frame_note": "OpenETA EEF pos = gripper0_grip_site position; EEF quat = robot0_right_hand body orientation (mixed frame). T_grasp_eef assembled against this exact convention.",
+    "approach_axis": "+X column of the GraspNet rotation is the approach direction; translation origin is grasp translation_xyz (depth-independent).",
+    "pad_offset_m": 0.0036,
+    "panda_gripper_xml_sha256": "d9d68123909d6910488310d0fae4e358ed4ac831c6d0957f3e30893a5412baac",
+    "versions": {
+      "python": "3.10.20",
+      "mujoco": "3.3.0",
+      "robosuite": "1.4.1",
+      "numpy": "2.2.6"
+    }
+  },
+  "candidate_status": {
+    "reason": "Full physical canary below threshold (reach 1/5, lift 0/5). All failures attributed by telemetry to grasp execution / scene selection (short flat objects, top-down insertion, non-pad geometry hitting the table, OSC pushed off by contact torque), none to the calibration itself.",
+    "not_validated_because": "held-out lift < 95%; grasp controller (table-clearance guard, reject-extended-config, close->lift dynamics) not yet implemented.",
+    "gates_unchanged": "finger-center P95 <= 5mm, axis P95 <= 3 deg, held-out lift >= 95%. Any miss keeps status=candidate.",
+    "intended_use": "GraspNet-frame to Panda EEF calibration only. Task-family pose policies live in agent/strategies/grasp."
+  }
+}

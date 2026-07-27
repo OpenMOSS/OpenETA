@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "openeta-sim": {
+      "url": "http://127.0.0.1:8765/sse"
+    },
+    "openeta-ur5e": {
+      "url": "http://127.0.0.1:8780/sse"
+    },
+    "openeta-sam3": {
+      "url": "http://127.0.0.1:8773/sse"
+    },
+    "openeta-anygrasp": {
+      "url": "http://127.0.0.1:8774/sse"
+    },
+    "openeta-anyplace": {
+      "url": "http://127.0.0.1:8775/sse"
+    },
+    "openeta-contact-graspnet": {
+      "url": "http://127.0.0.1:8776/sse"
+    },
+    "openeta-graspgenx": {
+      "url": "http://127.0.0.1:8778/sse"
+    },
+    "openeta-depth-prior": {
+      "url": "http://127.0.0.1:8779/sse"
+    }
+  }
+}

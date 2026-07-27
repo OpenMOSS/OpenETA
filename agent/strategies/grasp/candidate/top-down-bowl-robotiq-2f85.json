@@ -1,0 +1,47 @@
+{
+  "schema_version": "openeta.grasp_strategy.v1",
+  "status": "candidate",
+  "strategy_id": "top-down-bowl-robotiq-2f85",
+  "strategy_family_id": "top-down-bowl-robotiq",
+  "revision": 4,
+  "description": "Candidate top-down rim grasp strategy for reachable open bowls with UR5e/Robotiq 2F-85.",
+  "compatibility": {
+    "calibration_ids": [
+      "graspnet-eef-robotiq-2f85"
+    ]
+  },
+  "automatic_activation": {
+    "target_geometry_families": [
+      "bowl"
+    ]
+  },
+  "validated_scope": {
+    "target_geometry_families": [],
+    "note": "Robotiq-specific candidate mirrors the Panda bowl policy while using the Robotiq 2F-85 physical stroke. It remains unvalidated until real-robot canary evidence is collected."
+  },
+  "constraints": {
+    "grasp_width_bounds_m": [
+      0.005,
+      0.085
+    ],
+    "clearance_m": 0.01
+  },
+  "candidate_filter": {
+    "min_downward_alignment": 0.5
+  },
+  "alignment_policy": {
+    "target_region": "nearest_shallow_surface"
+  },
+  "motion_policy": {
+    "precontact_distance_m": 0.05
+  },
+  "pose_policy": {
+    "approach_axis": "world_-Z",
+    "orientation": "top_down_preserve_yaw"
+  },
+  "provenance": {
+    "source_calibration_id": "graspnet-eef-robotiq-2f85",
+    "derived_from": "top-down-bowl-panda-p8",
+    "intended_use": "Session-local UR5e/Robotiq 2F-85 candidate strategy; not validated by physical canary."
+  }
+}

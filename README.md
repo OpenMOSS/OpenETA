@@ -26,6 +26,9 @@ change reality.
 
 ## What's New
 
+- **2026-07-27** — **Real-Robot Deployment:** We released the
+  [`dev/real-robot-deployment`](https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment)
+  branch with the real-robot deployment stack, hardware interfaces, and physical-agent tooling.
 - **2026-07-25** — **Physical Hello World:** OpenETA's first public release, extending the agentic
   loop from the digital domain into the physical world.
 

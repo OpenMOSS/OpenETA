@@ -197,6 +197,10 @@ def build_sam3_handler(
             mode = explicit_mode or "text"
         requested_image = _string_param(context.parameters.get("image"))
         image = _resolve_current_observation_rgb_path(requested_image, context.observation)
+        source_camera_metadata = _current_observation_rgb_metadata(
+            image,
+            context.observation,
+        )
         prompt = _string_param(context.parameters.get("prompt"))
         roi_bbox_value = context.parameters.get("roi_bbox_xyxy")
         points: list[JsonDict] = []
@@ -526,6 +530,7 @@ def build_sam3_handler(
             roi_bbox_xyxy=roi_metadata.get("effective_roi_bbox_xyxy"),
             extra_artifacts=[roi_artifact] if roi_artifact is not None else [],
             output_metadata={
+                **source_camera_metadata,
                 **roi_metadata,
                 **({"positive_points": positive_points} if positive_points is not None else {}),
                 "segmentation_mode": (
@@ -567,6 +572,39 @@ def _resolve_current_observation_rgb_path(image: str, observation: Any) -> str:
         kind="rgb",
         allow_frame_alias=True,
     )
+
+
+def _current_observation_rgb_metadata(image: str, observation: Any) -> JsonDict:
+    """Return provenance for the exact current-observation RGB artifact."""
+
+    if not image or observation is None:
+        return {}
+    metadata = getattr(observation, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    artifacts = metadata.get("image_artifacts")
+    if not isinstance(artifacts, list):
+        return {}
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
+            continue
+        path = artifact.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        if not _same_resolved_path(path, image):
+            continue
+        provenance: JsonDict = {}
+        frame_id = str(artifact.get("frame_id") or "")
+        role = str(artifact.get("role") or "")
+        # Preserve the legacy LIBERO result payload exactly. Only role-aware
+        # adapters need additive source-camera provenance.
+        if not role:
+            return {}
+        if frame_id:
+            provenance["source_frame_id"] = frame_id
+        provenance["source_camera_role"] = role
+        return provenance
+    return {}
 
 
 def _resolve_current_observation_artifact_path(
@@ -2013,6 +2051,7 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
         )
     input_camera_frame = _canonical_camera_frame(
         context.parameters.get("input_camera_frame")
+        or context.parameters.get("input_camera_convention")
         or camera_pose.get("camera_frame")
         or camera_pose.get("camera_convention"),
         default="opencv",
@@ -2024,6 +2063,7 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
             content="camera_pose_to_world failed: unsupported input_camera_frame.",
             metadata={
                 "input_camera_frame": context.parameters.get("input_camera_frame")
+                or context.parameters.get("input_camera_convention")
                 or camera_pose.get("camera_frame")
                 or camera_pose.get("camera_convention")
             },
@@ -2075,6 +2115,7 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
     camera_rotation, camera_position, source_format, default_camera_frame = parsed_extrinsics
     camera_to_world_frame = _canonical_camera_frame(
         context.parameters.get("camera_to_world_frame")
+        or context.parameters.get("extrinsics_camera_convention")
         or _camera_frame_from_extrinsics(extrinsics),
         default=default_camera_frame,
     )
@@ -2085,6 +2126,7 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
             content="camera_pose_to_world failed: unsupported camera_to_world_frame.",
             metadata={
                 "camera_to_world_frame": context.parameters.get("camera_to_world_frame")
+                or context.parameters.get("extrinsics_camera_convention")
                 or _camera_frame_from_extrinsics(extrinsics)
             },
         )

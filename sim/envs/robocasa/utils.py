@@ -107,6 +107,13 @@ DEFAULT_ROBOCASA_IMAGE_SIZE = (224, 224, 3)
 
 # Env-level image space mapping: preset name -> list of observation keys.
 IMAGE_SPACE_STR_MAPPING = {
+    # Keep the legacy config builder usable.  RoboCasa training data and the
+    # official PandaOmron path both use the three-camera layout by default.
+    "default": [
+        "observation/image",
+        "observation/wrist_image",
+        "observation/extra_view_image",
+    ],
     "2views": [
         "observation/image",
         "observation/wrist_image",
@@ -125,9 +132,11 @@ def get_image_space(image_space: Union[str, list]) -> list:
         image_space_str = image_space
         image_space = IMAGE_SPACE_STR_MAPPING.get(image_space)
         if image_space is None:
-            logging.warning(
-                f"String-format image_space {image_space_str} property of RoboCasaInputs is not registered in IMAGE_SPACE_STR_MAPPING {list(IMAGE_SPACE_STR_MAPPING.keys())}"
+            raise ValueError(
+                f"Unknown RoboCasa image_space {image_space_str!r}; expected one of "
+                f"{sorted(IMAGE_SPACE_STR_MAPPING)}"
             )
+        return list(image_space)
     return image_space
 
 

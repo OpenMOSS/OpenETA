@@ -33,6 +33,7 @@ class ImageArtifact:
     source_field: str
     format: str = "png"
     frame_id: str = ""
+    role: str = ""
     width: int | None = None
     height: int | None = None
     byte_size: int = 0
@@ -48,6 +49,8 @@ class ImageArtifact:
         }
         if self.frame_id:
             payload["frame_id"] = self.frame_id
+        if self.role:
+            payload["role"] = self.role
         if self.width is not None:
             payload["width"] = self.width
         if self.height is not None:
@@ -151,6 +154,7 @@ def _materialize_dict(
     images: list[ImageArtifact],
 ) -> JsonDict:
     frame_id = str(payload.get("frame_id") or payload.get("camera") or "")
+    role = str(payload.get("role") or "")
     if not frame_id and path_parts:
         frame_id = path_parts[-1]
 
@@ -172,6 +176,7 @@ def _materialize_dict(
             source_field=source_field,
             format=fmt,
             frame_id=frame_id,
+            role=role,
             width=_optional_int(payload.get("width")),
             height=_optional_int(payload.get("height")),
             byte_size=len(data),

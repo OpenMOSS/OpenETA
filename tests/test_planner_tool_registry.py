@@ -35,6 +35,7 @@ from agent.runtime.planner import (
     _matching_depth_enhancement,
     _grasp_compile_obligation,
     _grasp_sensor_safety_obligation,
+    _wrist_alignment_obligation,
     build_tool_context,
 )
 from agent.runtime.promoted_memory import PromotedMemoryStore
@@ -1439,6 +1440,86 @@ def test_planner_context_attaches_primary_current_rgb_artifact() -> None:
         "rgb",
     ]
     assert context["current_camera_artifacts"][1]["path"].endswith("cameras.0.agentview.depth.png")
+
+
+def test_planner_context_uses_additive_camera_roles_for_non_libero_frames() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick cube")
+    memory.save_fact(
+        "grasp_execution",
+        {"status": "required", "stage": "align"},
+        source="test",
+    )
+    observation = EnvObservation(
+        task="pick cube",
+        cameras=[
+            CameraFrame(
+                frame_id="zed_head",
+                role="scene_primary",
+                rgb=[[[0, 0, 0]]],
+            ),
+            CameraFrame(
+                frame_id="wrist_left",
+                role="wrist_secondary",
+                rgb=[[[0, 0, 0]]],
+            ),
+            CameraFrame(
+                frame_id="wrist_right",
+                role="wrist_primary",
+                rgb=[[[0, 0, 0]]],
+            ),
+        ],
+        robot=RobotState(),
+        metadata={
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_left",
+                    "role": "wrist_secondary",
+                    "path": "/exact/session/wrist-left.png",
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "wrist_right",
+                    "role": "wrist_primary",
+                    "path": "/exact/session/wrist-right-depth.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "zed_head",
+                    "role": "scene_primary",
+                    "path": "/exact/session/zed.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_right",
+                    "role": "wrist_primary",
+                    "path": "/exact/session/wrist-right.png",
+                },
+            ]
+        },
+    )
+
+    context = build_tool_context(
+        observation=observation,
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    assert context["vision_image_paths"] == [
+        "/exact/session/zed.png",
+        "/exact/session/wrist-right.png",
+    ]
+    assert [
+        (item["frame_id"], item.get("role"), item["kind"])
+        for item in context["current_camera_artifacts"]
+    ] == [
+        ("zed_head", "scene_primary", "rgb"),
+        ("wrist_right", "wrist_primary", "rgb"),
+        ("wrist_right", "wrist_primary", "depth"),
+        ("wrist_left", "wrist_secondary", "rgb"),
+    ]
 
 
 def test_skill_usage_stops_recommending_inspection_after_skill_call() -> None:
@@ -6581,6 +6662,73 @@ def test_wrist_alignment_obligation_joins_current_geometry(tmp_path: Path) -> No
     assert decision.action == "compute_wrist_alignment"
     assert decision.parameters == required
     assert decision.metadata["execution_model"] == "host_obligation_dispatch"
+
+
+def test_wrist_alignment_accepts_role_tagged_behavior_camera(tmp_path: Path) -> None:
+    rgb = tmp_path / "wrist-right.png"
+    depth = tmp_path / "wrist-right-depth.png"
+    mask = tmp_path / "mask.png"
+    rgb.write_bytes(b"rgb")
+    depth.write_bytes(b"depth")
+    mask.write_bytes(b"mask")
+    observation = EnvObservation(
+        task="pick object",
+        cameras=[
+            CameraFrame(
+                frame_id="wrist_right",
+                role="wrist_primary",
+                rgb=[[[0, 0, 0]]],
+                depth=[[1.0]],
+                intrinsics={
+                    "fx": 100.0,
+                    "fy": 100.0,
+                    "cx": 0.5,
+                    "cy": 0.5,
+                    "scale": 1000,
+                },
+                extrinsics={
+                    "pos": [0.0, 0.0, 0.5],
+                    "mat": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                },
+            )
+        ],
+        robot=RobotState(end_effector_pose={"xyz": [0.1, 0.2, 0.3]}),
+        metadata={},
+    )
+    artifacts = [
+        {
+            "kind": "rgb",
+            "frame_id": "wrist_right",
+            "role": "wrist_primary",
+            "path": str(rgb),
+        },
+        {
+            "kind": "depth",
+            "frame_id": "wrist_right",
+            "role": "wrist_primary",
+            "path": str(depth),
+        },
+    ]
+
+    obligation = _wrist_alignment_obligation(
+        observation,
+        camera_artifacts=artifacts,
+        selected={
+            "source_image": str(rgb),
+            "mask_ref": str(mask),
+            "result_id": "sam-behavior",
+            "id": "detection-0",
+        },
+        execution={
+            "stage": "align",
+            "compiled_grasp": {"schema_version": "openeta.compiled_grasp_seed.v1"},
+        },
+        scene_epoch=2,
+    )
+
+    assert obligation is not None
+    assert obligation["required_parameters"]["depth"] == str(depth)
+    assert obligation["required_parameters"]["scene_epoch"] == 2
 
 
 def test_motion_reconciliation_preempts_pending_host_grasp_move() -> None:

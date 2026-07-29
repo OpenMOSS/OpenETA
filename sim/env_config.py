@@ -118,20 +118,31 @@ def build_d4rl_cfg(task_name: str, **overrides: Any) -> DictConfig:
 def build_behavior_cfg(
     activity_name: str,
     *,
-    robot_model: str = "franka_panda",
+    robot_model: str = "R1Pro",
     base_config_name: str = "r1pro_behavior",
     **overrides: Any,
 ) -> DictConfig:
     render_mode = overrides.pop("render_mode", "rgb_array")
     omni_config: dict[str, Any] = {
-        "task": {"activity_name": activity_name},
-        "robots": [{"model": robot_model}],
+        "task": {
+            "activity_name": activity_name,
+            "instance_resample_mode": "disabled",
+        },
+        "robots": [{"model": robot_model.lower()}],
     }
     if render_mode == "human":
         omni_config.setdefault("macro", {})
         omni_config["macro"]["headless"] = False
         omni_config["macro"]["render_viewer_camera"] = True
-    omni_config.update(overrides.pop("omni_config", {}))
+    for section, value in overrides.pop("omni_config", {}).items():
+        if (
+            section in omni_config
+            and isinstance(omni_config[section], dict)
+            and isinstance(value, dict)
+        ):
+            omni_config[section].update(value)
+        else:
+            omni_config[section] = value
     return _base_cfg(
         max_episode_steps=1000,
         base_config_name=base_config_name,

@@ -24,7 +24,6 @@ from sim.envs.robocasa.utils import (
     OBS_KEY_ROBOCASA_IMAGE_MAPPING,
     get_image_space,
 )
-from sim.envs.robocasa.venv import RobocasaSubprocEnv
 from sim.envs.utils import (
     list_of_dict_to_dict_of_list,
     to_tensor,
@@ -40,7 +39,16 @@ class RobocasaEnv(gym.Env):
         self.num_envs = num_envs
         self.seed = self.cfg.seed + seed_offset
         self._is_start = True
-        self.group_size = self.cfg.group_size
+        self.group_size = int(self.cfg.group_size)
+        if self.num_envs <= 0:
+            raise ValueError("RoboCasa legacy vector env requires num_envs > 0")
+        if self.group_size <= 0:
+            raise ValueError("RoboCasa group_size must be positive")
+        if self.num_envs % self.group_size != 0:
+            raise ValueError(
+                f"RoboCasa num_envs ({self.num_envs}) must be divisible by "
+                f"group_size ({self.group_size})"
+            )
         self.num_group = self.num_envs // self.group_size
         self.use_fixed_reset_state_ids = cfg.get("use_fixed_reset_state_ids", False)
 
@@ -51,15 +59,22 @@ class RobocasaEnv(gym.Env):
 
         # Get task list from config
         # Convert OmegaConf ListConfig to standard Python list
-        task_names_raw = OmegaConf.to_container(cfg.task_names, resolve=True)
+        task_names_raw = (
+            OmegaConf.to_container(cfg.task_names, resolve=True)
+            if OmegaConf.is_config(cfg.task_names)
+            else cfg.task_names
+        )
         self.task_names = (
             task_names_raw if isinstance(task_names_raw, list) else [task_names_raw]
         )
+        if not self.task_names or any(not str(task).strip() for task in self.task_names):
+            raise ValueError("RoboCasa task_names must contain at least one non-empty task")
         self.num_tasks = len(self.task_names)
 
         # Initialize reset state IDs for group_size repetition
         # Each unique scenario (num_group) will be repeated group_size times
         self._init_reset_state_ids()
+        self._init_task_ids()
 
         self._init_env()
 
@@ -70,6 +85,8 @@ class RobocasaEnv(gym.Env):
         self._elapsed_steps = np.zeros(self.num_envs, dtype=np.int32)
 
         self.video_cfg = cfg.video_cfg
+        self.current_raw_obs = None
+        self.current_info_list = None
 
     @property
     def camera_names(self):
@@ -95,9 +112,10 @@ class RobocasaEnv(gym.Env):
 
         We simply assign each parallel environment a unique, fixed seed.
         """
-        local_env_ids = np.arange(self.num_envs, dtype=np.int64)
-        global_env_ids = self.seed_offset * self.num_envs + local_env_ids
-        self.env_seeds = (self.cfg.seed + global_env_ids).astype(np.int64)
+        local_group_ids = np.arange(self.num_group, dtype=np.int64)
+        global_group_ids = self.seed_offset * self.num_group + local_group_ids
+        group_seeds = (self.cfg.seed + global_group_ids).astype(np.int64)
+        self.env_seeds = group_seeds.repeat(self.group_size)
 
     def update_reset_state_ids(self):
         """Update reset state IDs for the next rollout.
@@ -106,17 +124,27 @@ class RobocasaEnv(gym.Env):
         """
         pass
 
+    def _init_task_ids(self):
+        """Assign one task per group, repeated for every group member."""
+
+        group_task_ids = np.arange(self.num_group, dtype=np.int64) % self.num_tasks
+        self.task_ids = group_task_ids.repeat(self.group_size)
+
     def _init_env(self):
         """Initialize robocasa environments using subprocess isolation."""
+        try:
+            from sim.envs.robocasa.venv import RobocasaSubprocEnv
+        except ModuleNotFoundError as exc:
+            if exc.name == "sim.envs.venv":
+                raise RuntimeError(
+                    "The legacy RoboCasa vector path requires the optional RLinf "
+                    "vector helpers (`sim.envs.venv`). Use the registered "
+                    "RoboCasaDirectEnv benchmark path, or install the full RLinf "
+                    "vector runtime."
+                ) from exc
+            raise
+
         import robocasa  # noqa: F401 Robocasa must be imported to register envs
-
-        self.task_ids = []
-
-        # Determine task IDs for each environment
-        for env_id in range(self.num_envs):
-            task_idx = env_id % self.num_tasks
-            self.task_ids.append(task_idx)
-        self.task_ids = np.array(self.task_ids)
 
         # Create environment factory functions for subprocess isolation
         env_fns = self.get_env_fns()
@@ -134,9 +162,20 @@ class RobocasaEnv(gym.Env):
             env_seed = self.env_seeds[env_id]
 
             # Convert OmegaConf configs to standard Python types
-            camera_widths = self.cfg.init_params.camera_widths
-            camera_heights = self.cfg.init_params.camera_heights
+            camera_widths_raw = self.cfg.init_params.camera_widths
+            camera_heights_raw = self.cfg.init_params.camera_heights
+            camera_widths = (
+                OmegaConf.to_container(camera_widths_raw, resolve=True)
+                if OmegaConf.is_config(camera_widths_raw)
+                else camera_widths_raw
+            )
+            camera_heights = (
+                OmegaConf.to_container(camera_heights_raw, resolve=True)
+                if OmegaConf.is_config(camera_heights_raw)
+                else camera_heights_raw
+            )
             robot_name = self.cfg.robot_name
+            camera_names = tuple(self.camera_names)
 
             def env_fn(
                 task=task_name,
@@ -144,8 +183,10 @@ class RobocasaEnv(gym.Env):
                 width=camera_widths,
                 height=camera_heights,
                 robot=robot_name,
+                cameras=camera_names,
             ):
                 """Factory function to create a robosuite environment in subprocess."""
+                import robocasa  # noqa: F401 - register tasks in spawned workers
                 import robosuite
                 from robosuite.controllers import load_composite_controller_config
 
@@ -158,7 +199,7 @@ class RobocasaEnv(gym.Env):
                     env_name=task,
                     robots=robot,
                     controller_configs=controller_config,
-                    camera_names=self.camera_names,
+                    camera_names=list(cameras),
                     camera_widths=width,
                     camera_heights=height,
                     has_renderer=False,
@@ -197,6 +238,7 @@ class RobocasaEnv(gym.Env):
         self.success_once = np.zeros(self.num_envs, dtype=bool)
         self.fail_once = np.zeros(self.num_envs, dtype=bool)
         self.returns = np.zeros(self.num_envs)
+        self.success_episode_len = np.zeros(self.num_envs, dtype=np.int32)
 
     def _reset_metrics(self, env_idx=None):
         if env_idx is not None:
@@ -206,23 +248,33 @@ class RobocasaEnv(gym.Env):
             self.success_once[mask] = False
             self.fail_once[mask] = False
             self.returns[mask] = 0
+            self.success_episode_len[mask] = 0
             self._elapsed_steps[env_idx] = 0
         else:
             self.prev_step_reward[:] = 0
             self.success_once[:] = False
             self.fail_once[:] = False
             self.returns[:] = 0.0
+            self.success_episode_len[:] = 0
             self._elapsed_steps[:] = 0
 
     def _record_metrics(self, step_reward, terminations, infos):
         episode_info = {}
-        self.returns += step_reward
+        self.returns += step_reward * (~self.success_once)
+        new_success_mask = terminations & ~self.success_once
+        if new_success_mask.any():
+            self.success_episode_len[new_success_mask] = self.elapsed_steps[
+                new_success_mask
+            ]
         self.success_once = self.success_once | terminations
         episode_info["success_once"] = self.success_once.copy()
         episode_info["return"] = self.returns.copy()
         episode_info["episode_len"] = self.elapsed_steps.copy()
+        episode_len_for_reward = np.where(
+            self.success_once, self.success_episode_len, self.elapsed_steps
+        )
         episode_info["reward"] = episode_info["return"] / np.maximum(
-            episode_info["episode_len"], 1
+            episode_len_for_reward, 1
         )
         infos["episode"] = to_tensor(episode_info)
         return infos
@@ -294,6 +346,12 @@ class RobocasaEnv(gym.Env):
         return [info.get("ep_meta", {}).get("lang", "") for info in info_list]
 
     def _wrap_obs(self, obs_list, info_list):
+        if len(obs_list) != self.num_envs or len(info_list) != self.num_envs:
+            raise RuntimeError(
+                "RoboCasa observation wrapping requires a full vector batch; "
+                f"got {len(obs_list)} observations and {len(info_list)} infos "
+                f"for num_envs={self.num_envs}"
+            )
         extracted_obs = self._extract_image_and_state(obs_list)
         task_description_list = self._extract_task_description(info_list)
 
@@ -337,25 +395,91 @@ class RobocasaEnv(gym.Env):
 
         return obs
 
+    def _normalise_env_indices(self, env_idx) -> np.ndarray:
+        if env_idx is None:
+            return np.arange(self.num_envs, dtype=np.int64)
+        if isinstance(env_idx, (int, np.integer)):
+            indices = np.asarray([int(env_idx)], dtype=np.int64)
+        else:
+            raw = np.asarray(env_idx)
+            if raw.dtype == bool:
+                if raw.shape != (self.num_envs,):
+                    raise ValueError(
+                        "Boolean RoboCasa env_idx mask must have shape "
+                        f"({self.num_envs},), got {raw.shape}"
+                    )
+                indices = np.flatnonzero(raw).astype(np.int64)
+            else:
+                indices = raw.astype(np.int64, copy=False).reshape(-1)
+        if indices.size == 0:
+            raise ValueError("RoboCasa env_idx must select at least one environment")
+        if np.any(indices < 0) or np.any(indices >= self.num_envs):
+            raise IndexError(
+                f"RoboCasa env_idx values must be in [0, {self.num_envs - 1}]"
+            )
+        if len(np.unique(indices)) != len(indices):
+            raise ValueError("RoboCasa env_idx must not contain duplicates")
+        return indices
+
+    def _merge_reset_batch(self, env_idx, raw_obs, info_list):
+        indices = self._normalise_env_indices(env_idx)
+        raw_batch = list(raw_obs)
+        info_batch = list(info_list)
+        if len(raw_batch) != len(indices) or len(info_batch) != len(indices):
+            raise RuntimeError(
+                "RoboCasa vector reset returned a batch with the wrong size: "
+                f"selected={len(indices)}, observations={len(raw_batch)}, "
+                f"infos={len(info_batch)}"
+            )
+
+        if self.current_raw_obs is None or self.current_info_list is None:
+            if len(indices) != self.num_envs or set(indices.tolist()) != set(
+                range(self.num_envs)
+            ):
+                raise RuntimeError(
+                    "The first RoboCasa legacy vector reset must initialise all "
+                    "environments before a partial reset can be merged"
+                )
+            self.current_raw_obs = [None] * self.num_envs
+            self.current_info_list = [None] * self.num_envs
+
+        for batch_index, env_id in enumerate(indices.tolist()):
+            self.current_raw_obs[env_id] = raw_batch[batch_index]
+            self.current_info_list[env_id] = info_batch[batch_index]
+        if any(item is None for item in self.current_raw_obs) or any(
+            item is None for item in self.current_info_list
+        ):
+            raise RuntimeError("RoboCasa vector observation cache is incomplete")
+        return indices
+
+    def _cache_step_batch(self, raw_obs, info_list) -> None:
+        raw_batch = list(raw_obs)
+        info_batch = list(info_list)
+        if len(raw_batch) != self.num_envs or len(info_batch) != self.num_envs:
+            raise RuntimeError(
+                "RoboCasa vector step must return one item per environment; "
+                f"got {len(raw_batch)} observations and {len(info_batch)} infos "
+                f"for num_envs={self.num_envs}"
+            )
+        self.current_raw_obs = raw_batch
+        self.current_info_list = info_batch
+
     def reset(
         self,
         env_idx: Optional[Union[int, list[int], np.ndarray]] = None,
-        options: Optional[dict] = {},
+        options: Optional[dict] = None,
     ):
-        if env_idx is None:
-            env_idx = np.arange(self.num_envs)
+        del options
+        env_idx = self._normalise_env_indices(env_idx)
 
         if self.is_start:
             self._is_start = False
 
-        if isinstance(env_idx, int):
-            env_idx = [env_idx]
-
         # Reset using vectorized environment (subprocess isolation avoids OpenGL issues)
         # Use libero's SubprocVectorEnv reset interface
         raw_obs, info_list = self.env.reset(id=env_idx)
-
-        obs = self._wrap_obs(raw_obs, info_list)
+        env_idx = self._merge_reset_batch(env_idx, raw_obs, info_list)
+        obs = self._wrap_obs(self.current_raw_obs, self.current_info_list)
         self._reset_metrics(env_idx)
         infos = {}
         return obs, infos
@@ -380,20 +504,26 @@ class RobocasaEnv(gym.Env):
 
         if isinstance(actions, torch.Tensor):
             actions = actions.detach().cpu().numpy()
+        actions = np.asarray(actions)
+        if actions.ndim != 2 or actions.shape[0] != self.num_envs:
+            raise ValueError(
+                "RoboCasa vector actions must have shape "
+                f"(num_envs, action_dim); got {actions.shape}"
+            )
 
         self._elapsed_steps += 1
 
         # Use vectorized environment step (subprocess isolation avoids OpenGL issues)
         # Robosuite returns 4 values: (obs, reward, done, info)
         raw_obs, rewards, dones, info_lists = self.env.step(actions)
-        infos = list_of_dict_to_dict_of_list(info_lists)
+        self._cache_step_batch(raw_obs, info_lists)
 
         # Extract success from infos
         terminations = np.array(
             [info.get("success", False) for info in info_lists]
         ).astype(bool)
         truncations = self._elapsed_steps >= self.cfg.max_episode_steps
-        obs = self._wrap_obs(raw_obs, info_lists)
+        obs = self._wrap_obs(self.current_raw_obs, self.current_info_list)
 
         step_reward = self._calc_step_reward(terminations)
 
@@ -417,6 +547,16 @@ class RobocasaEnv(gym.Env):
 
     def chunk_step(self, chunk_actions):
         # chunk_actions: [num_envs, chunk_step, action_dim]
+        if isinstance(chunk_actions, torch.Tensor):
+            shape = tuple(chunk_actions.shape)
+        else:
+            chunk_actions = np.asarray(chunk_actions)
+            shape = chunk_actions.shape
+        if len(shape) != 3 or shape[0] != self.num_envs or shape[1] <= 0:
+            raise ValueError(
+                "RoboCasa chunk_actions must have shape "
+                f"(num_envs, chunk_size, action_dim) with chunk_size > 0; got {shape}"
+            )
         chunk_size = chunk_actions.shape[1]
         obs_list = []
         infos_list = []

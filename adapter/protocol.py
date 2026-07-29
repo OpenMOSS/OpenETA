@@ -185,7 +185,12 @@ def _depth_range(depth_pixels: Any) -> tuple[float, float]:
 
 @dataclass(slots=True)
 class CameraFrame:
-    """RGBD camera frame in JSON-serializable form for the initial bridge."""
+    """RGBD camera frame in JSON-serializable form for the initial bridge.
+
+    ``role`` is an optional backend-neutral semantic hint such as
+    ``scene_primary`` or ``wrist_primary``.  ``frame_id`` remains the stable
+    backend identifier and is never rewritten to emulate another simulator.
+    """
 
     frame_id: str
     rgb: list[list[list[int]]]
@@ -193,6 +198,7 @@ class CameraFrame:
     intrinsics: JsonDict = field(default_factory=dict)
     extrinsics: JsonDict = field(default_factory=dict)
     timestamp_s: float | None = None
+    role: str = ""
 
     def to_dict(self) -> JsonDict:
         """Convert to a plain JSON-serialisable dict."""
@@ -205,6 +211,8 @@ class CameraFrame:
         }
         if self.timestamp_s is not None:
             d["timestamp_s"] = self.timestamp_s
+        if self.role:
+            d["role"] = self.role
         return d
 
     @classmethod
@@ -233,6 +241,7 @@ class CameraFrame:
             intrinsics=_ensure_plain_dict(d.get("intrinsics")),
             extrinsics=_ensure_plain_dict(d.get("extrinsics")),
             timestamp_s=d.get("timestamp_s"),
+            role=str(d.get("role") or ""),
         )
 
     def to_mcp_dict(self) -> JsonDict:
@@ -249,59 +258,50 @@ class CameraFrame:
 
             depth_m = depth_uint16 / 1000.0
 
+        Newly normalized OpenCV packets make that wire representation
+        machine-readable with ``depth_encoding="uint16_png"`` and
+        ``depth_scale=1000.0`` (encoded units per metre).  Legacy packets
+        intentionally retain their existing shape for reproducibility.
+
         Values fall within ``[znear, zfar]`` from ``intrinsics`` (metric
         clip planes, in metres).
 
-        **Extrinsics convention** (MuJoCo: MetaWorld / LIBERO).  The dict is
-        self-describing — read the tags rather than assuming a layout:
+        **Extrinsics convention.**  Every dict is self-describing: consumers
+        must read ``camera_frame`` instead of inferring a convention from the
+        simulator name or matrix shape.
+
+        Agent-facing RoboCasa and BEHAVIOR adapters normalize the pose to the
+        same **OpenCV optical** frame used by their returned RGB, metric depth,
+        and intrinsics (+X right, +Y down, +Z forward):
 
         * ``matrix_layout`` — ``"row_major"``
         * ``frame_transform`` — ``"camera_to_world"``
-        * ``camera_frame`` — ``"opengl"`` (camera looks along local **-Z**)
+        * ``camera_frame`` — ``"opencv"``
+        * ``image_origin`` — ``"top_left"``
         * ``pos`` — ``[x, y, z]`` camera position in **world** coordinates
-          (metres), NOT relative to the end-effector
+          (metres), not relative to the end-effector
         * ``mat`` — 3×3 rotation matrix, **camera → world**, flattened
-          **row-major**: ``[m00, m01, m02, m10, m11, m12, m20, m21, m22]``.
-          So ``np.array(mat).reshape(3, 3)`` gives the rotation directly.
+          row-major. ``camera_to_world`` also carries the equivalent 4×4
+          homogeneous matrix.
+        * ``normalized_from`` / ``raw_camera_convention`` — optional debug
+          provenance for the renderer frame normalized by the adapter.
 
-          **Columns** = camera-local axes expressed in world::
-
-              col 0 = camera X (right) in world
-              col 1 = camera Y (up) in world
-              col 2 = camera Z (forward) in world
-
-          **Rows** = world axes expressed in camera-local::
-
-              row 0 = world X in camera
-              row 1 = world Y in camera
-              row 2 = world Z in camera
-
-          Transformation formulas (``R = np.array(mat).reshape(3, 3)``)::
-
-              p_world = R @ p_cam + pos      # camera → world
-              p_cam = R.T @ (p_world - pos)  # world → camera
-
-          The camera looks along **-Z** locally, so the look direction
-          in world coordinates is ``-col2`` (i.e. ``-R[:, 2]``).
-
-        **ManiSkill** (SAPIEN): ``pos`` + ``quat_xyzw`` (reordered from
-        SAPIEN's native wxyz), ``frame_transform="camera_to_world"``,
-        ``camera_frame="ros"`` (camera looks along local **+X**, +Z up).
-
-        **Pixel → world (deprojection).**  Pinhole deprojection yields a
-        point in the **OpenCV optical** frame (X right, Y down, Z forward);
-        convert it into the camera's native frame *before* rotating::
+        For these normalized packets, pinhole deprojection is direct::
 
             x = (u - cx) * d / fx
             y = (v - cy) * d / fy
             p_opencv = np.array([x, y, d])
-            # optical -> camera-native (per ``camera_frame``):
-            #   "opengl" (MuJoCo): p_cam = diag(1, -1, -1) @ p_opencv
-            #   "ros" (ManiSkill): p_cam = np.array([d, -x, -y])
-            p_world = R @ p_cam + pos
+            R = np.array(mat).reshape(3, 3)
+            p_world = R @ p_opencv + pos
 
-        The optical->native flip is mandatory and backend-specific; a
-        correct round-trip recovers object centres to ~2-3 cm.
+        LIBERO is deliberately kept on its existing reproducible v1 packet:
+        ``camera_frame="opengl"``, where local +Z is the renderer's backward
+        axis and the camera looks along -Z.  MetaWorld and other legacy
+        MuJoCo adapters currently use the same form.  For those packets,
+        convert the OpenCV point with ``diag(1, -1, -1)`` before applying
+        ``R``.  ManiSkill remains self-described as ``camera_frame="ros"``.
+        The generic ``camera_pose_to_world`` tool accepts these legacy forms;
+        no consumer should guess from the backend name.
         """
         d: JsonDict = {
             "frame_id": self.frame_id,
@@ -314,6 +314,8 @@ class CameraFrame:
         }
         if self.timestamp_s is not None:
             d["timestamp_s"] = self.timestamp_s
+        if self.role:
+            d["role"] = self.role
 
         # RGB → base64 PNG
         if self.rgb:
@@ -326,9 +328,9 @@ class CameraFrame:
             except Exception:
                 pass
 
-        # Depth → base64 PNG (16-bit, scaled to 0–65535)
-        # Also record depth_min/depth_max so the consumer can reconstruct
-        # absolute depth:  depth_m = dmin + (pixel / 65535) * (dmax - dmin)
+        # Depth → uint16 PNG in fixed millimetres. depth_min/depth_max remain
+        # informational scene-range hints; reconstruction is always
+        # depth_m = pixel / 1000.0.
         if self.depth:
             try:
                 _dmin, _dmax = _depth_range(self.depth)
@@ -337,6 +339,16 @@ class CameraFrame:
                     d["depth_base64"] = denc
                     d["depth_min"] = _dmin
                     d["depth_max"] = _dmax
+                    if (
+                        self.extrinsics.get("camera_frame") == "opencv"
+                        and self.extrinsics.get("normalized_from")
+                    ):
+                        # Additive metadata for the new canonical camera
+                        # contract.  Do not alter LIBERO's legacy OpenGL
+                        # packet, whose exact wire shape is reproducibility
+                        # sensitive.
+                        d["depth_encoding"] = "uint16_png"
+                        d["depth_scale"] = 1000.0
                     if not d["width"]:
                         d["width"] = dw
                         d["height"] = dh

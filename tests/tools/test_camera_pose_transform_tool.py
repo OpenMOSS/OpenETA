@@ -144,6 +144,42 @@ def test_camera_pose_to_world_can_override_pos_mat_layout_and_frame() -> None:
     assert outputs["world_pose"]["translation_xyz"] == [0.8, 2.1, 3.3]
 
 
+def test_camera_pose_to_world_accepts_explicit_convention_aliases() -> None:
+    tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    result = tools.call(
+        "camera_pose_to_world",
+        {
+            "camera_pose": _candidate(
+                camera_frame=None,
+                rotation_matrix=None,
+                gripper_tip_position_xyz=None,
+            ),
+            "camera_extrinsics": {
+                "pos": [1.0, 2.0, 3.0],
+                "mat": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            },
+            "input_camera_convention": "opencv",
+            "extrinsics_camera_convention": "opengl",
+        },
+    )
+
+    assert result.success is True
+    outputs = result.details["outputs"]
+    assert outputs["input_camera_frame"] == "opencv"
+    assert outputs["camera_to_world_frame"] == "opengl"
+    assert outputs["world_pose"]["translation_xyz"] == [1.1, 1.8, 2.7]
+
+
 def test_camera_pose_to_world_supports_4x4_matrix_payload() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
     result = tools.call(

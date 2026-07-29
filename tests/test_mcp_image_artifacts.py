@@ -6,6 +6,7 @@ import base64
 import json
 from pathlib import Path
 
+from adapter.protocol import CameraFrame
 from agent.runtime.image_artifacts import DEFAULT_MCP_IMAGE_OUTPUT_ROOT, materialize_mcp_images
 from agent.runtime.runtime import OpenEtaAgentRuntime
 
@@ -28,6 +29,7 @@ def test_materialize_mcp_images_writes_files_and_scrubs_payload(tmp_path: Path) 
             "cameras": [
                 {
                     "frame_id": "front",
+                    "role": "scene_primary",
                     "rgb_base64": PNG_1X1,
                     "depth_base64": PNG_1X1,
                     "width": 1,
@@ -51,6 +53,8 @@ def test_materialize_mcp_images_writes_files_and_scrubs_payload(tmp_path: Path) 
     assert camera["depth_base64_omitted"] is True
     assert camera["rgb_ref"] == "observation.cameras.0.front.rgb"
     assert camera["depth_ref"] == "observation.cameras.0.front.depth"
+    assert {image.role for image in bundle.images} == {"scene_primary"}
+    assert {image.to_dict()["role"] for image in bundle.images} == {"scene_primary"}
     assert len(bundle.images) == 2
     for image in bundle.images:
         path = Path(image.path)
@@ -58,6 +62,41 @@ def test_materialize_mcp_images_writes_files_and_scrubs_payload(tmp_path: Path) 
         assert path.read_bytes().startswith(b"\x89PNG")
         assert path.parent.parent.name in {"rgb", "depth"}
     assert PNG_1X1 not in json.dumps(bundle.to_dict())
+
+
+def test_camera_role_round_trips_through_mcp_camera_packet() -> None:
+    camera = CameraFrame(
+        frame_id="zed_head",
+        role="scene_primary",
+        rgb=[[[1, 2, 3]]],
+        depth=[[1.25]],
+        extrinsics={
+            "camera_frame": "opencv",
+            "normalized_from": "omnigibson_usd",
+        },
+    )
+
+    serialized = camera.to_dict()
+    mcp_payload = camera.to_mcp_dict()
+    restored = CameraFrame.from_dict(serialized)
+
+    assert serialized["role"] == "scene_primary"
+    assert mcp_payload["role"] == "scene_primary"
+    assert mcp_payload["depth_encoding"] == "uint16_png"
+    assert mcp_payload["depth_scale"] == 1000.0
+    assert restored.role == "scene_primary"
+
+
+def test_legacy_opengl_camera_keeps_existing_mcp_depth_shape() -> None:
+    payload = CameraFrame(
+        frame_id="agentview",
+        rgb=[[[1, 2, 3]]],
+        depth=[[1.25]],
+        extrinsics={"camera_frame": "opengl"},
+    ).to_mcp_dict()
+
+    assert "depth_encoding" not in payload
+    assert "depth_scale" not in payload
 
 
 def test_default_mcp_image_output_root_uses_repo_tmp_image_tree() -> None:

@@ -34,6 +34,13 @@ Do not infer PASS from controller success, gripper closure, or reward. Return ex
 {"verdict":"PASS|FAIL|UNKNOWN","reason":"concise visual evidence"}
 """
 
+ROLE_AWARE_ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT = (
+    ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT.replace(
+        "agentview and wrist images",
+        "scene-primary and wrist-primary images",
+    )
+)
+
 
 class AttachmentProbeError(ValueError):
     """Raised when an articulated attachment-probe proposal is invalid."""
@@ -149,14 +156,39 @@ def assess_attachment_probe(
         if isinstance(path, str) and path
     ]
     after = _current_rgb_paths(context.observation)
+    role_aware = _has_backend_neutral_camera_roles(context.observation)
     if len(before) != 2 or len(after) != 2:
+        required_views = (
+            "scene-primary and one wrist-primary"
+            if role_aware
+            else "agentview and one wrist"
+        )
         raise AttachmentProbeError(
-            "exactly one agentview and one wrist RGB image are required before and after"
+            f"exactly one {required_views} RGB image are required before and after"
         )
     paths = [*before, *after]
+    image_order = (
+        [
+            {"image_number": 1, "role": "before_scene_primary"},
+            {"image_number": 2, "role": "before_wrist_primary"},
+            {"image_number": 3, "role": "after_scene_primary"},
+            {"image_number": 4, "role": "after_wrist_primary"},
+        ]
+        if role_aware
+        else [
+            {"image_number": 1, "role": "before_agentview"},
+            {"image_number": 2, "role": "before_wrist"},
+            {"image_number": 3, "role": "after_agentview"},
+            {"image_number": 4, "role": "after_wrist"},
+        ]
+    )
     result = backend.decide(
         PlannerBackendRequest(
-            system_prompt=ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT,
+            system_prompt=(
+                ROLE_AWARE_ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT
+                if role_aware
+                else ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT
+            ),
             tool_context={
                 "schema_version": ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA,
                 "role": "independent_articulated_attachment_reviewer",
@@ -165,12 +197,7 @@ def assess_attachment_probe(
                 "motion_type": probe.get("motion_type"),
                 "distance_m": probe.get("distance_m"),
                 "direction_world_xyz": probe.get("direction_world_xyz"),
-                "image_order": [
-                    {"image_number": 1, "role": "before_agentview"},
-                    {"image_number": 2, "role": "before_wrist"},
-                    {"image_number": 3, "role": "after_agentview"},
-                    {"image_number": 4, "role": "after_wrist"},
-                ],
+                "image_order": image_order,
                 "vision_image_paths": paths,
             },
             metadata={"isolated_context": True},
@@ -491,18 +518,36 @@ def _current_rgb_paths(observation: Any) -> list[str]:
     artifacts = metadata.get("image_artifacts") if isinstance(metadata, Mapping) else None
     if not isinstance(artifacts, list):
         return []
-    preferred = {"agentview": 0, "wrist": 1}
+    preferred_roles = {"scene_primary": 0, "wrist_primary": 1}
+    preferred_frames = {"agentview": 0, "wrist": 1}
     ranked: list[tuple[int, int, str]] = []
     for index, artifact in enumerate(artifacts):
         if not isinstance(artifact, Mapping) or artifact.get("kind") != "rgb":
             continue
         frame_id = str(artifact.get("frame_id") or "")
+        role = str(artifact.get("role") or "")
         path = artifact.get("path")
-        if frame_id not in preferred or not isinstance(path, str) or not path:
+        rank = preferred_roles.get(role)
+        if rank is None:
+            rank = preferred_frames.get(frame_id)
+        if rank is None or not isinstance(path, str) or not path:
             continue
-        ranked.append((preferred[frame_id], index, path))
+        ranked.append((rank, index, path))
     ranked.sort()
     selected: dict[int, str] = {}
     for rank, _, path in ranked:
         selected.setdefault(rank, path)
     return [selected[rank] for rank in sorted(selected)]
+
+
+def _has_backend_neutral_camera_roles(observation: Any) -> bool:
+    metadata = getattr(observation, "metadata", None)
+    artifacts = metadata.get("image_artifacts") if isinstance(metadata, Mapping) else None
+    if not isinstance(artifacts, list):
+        return False
+    return any(
+        isinstance(artifact, Mapping)
+        and str(artifact.get("role") or "")
+        in {"scene_primary", "wrist_primary"}
+        for artifact in artifacts
+    )

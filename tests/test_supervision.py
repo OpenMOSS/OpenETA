@@ -25,6 +25,7 @@ from agent.runtime.supervision import (
     SupervisionGate,
     SupervisionPolicy,
     SupervisionProfile,
+    _current_observation_rgb_paths,
 )
 from agent.tools.registry import ToolExecutionContext, ToolResult, build_default_tool_registry
 
@@ -63,6 +64,46 @@ def test_supervision_prompts_include_examples_for_every_output_label() -> None:
         ACTION_REVIEW_SYSTEM_PROMPT
     )
     assert "articulated_attachment_probe.status is required" in ACTION_REVIEW_SYSTEM_PROMPT
+
+
+def test_supervision_prefers_primary_scene_and_wrist_roles() -> None:
+    observation = {
+        "metadata": {
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "zed_head",
+                    "role": "scene_primary",
+                    "path": "zed.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_left",
+                    "role": "wrist_secondary",
+                    "path": "left.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_right",
+                    "role": "wrist_primary",
+                    "path": "right.png",
+                },
+            ]
+        }
+    }
+
+    assert _current_observation_rgb_paths(
+        observation,
+        limit=2,
+        prefer_grasp_views=True,
+    ) == ["zed.png", "right.png"]
+    assert _current_observation_rgb_paths(
+        observation,
+        limit=2,
+        preferred_frame_id="wrist",
+        preferred_role="wrist_primary",
+        prefer_grasp_views=True,
+    ) == ["right.png", "zed.png"]
 
 
 def test_action_reviewer_allows_exact_host_articulated_probe() -> None:

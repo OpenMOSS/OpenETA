@@ -286,8 +286,7 @@ def compile_grasp_seed(
 
     r_camera_grasp = _rotation(candidate.get("rotation_matrix"), "camera_pose.rotation_matrix")
     p_camera_grasp = _vector(candidate.get("translation_xyz"), 3, "camera_pose.translation_xyz")
-    r_world_native, p_world_camera = _camera_to_world(extrinsics)
-    r_world_cv = _matmul3(r_world_native, _OPENCV_TO_OPENGL)
+    r_world_cv, p_world_camera = _opencv_camera_to_world(extrinsics)
 
     transform = _mapping(profile.get("T_grasp_eef"), "T_grasp_eef")
     r_grasp_eef = _rotation(transform.get("rotation_matrix"), "T_grasp_eef.rotation_matrix")
@@ -478,8 +477,7 @@ def grasp_candidate_approach_world(
         camera_pose.get("rotation_matrix"),
         "camera_pose.rotation_matrix",
     )
-    r_world_native, _ = _camera_to_world(camera_extrinsics)
-    r_world_cv = _matmul3(r_world_native, _OPENCV_TO_OPENGL)
+    r_world_cv, _ = _opencv_camera_to_world(camera_extrinsics)
     r_world_grasp = _matmul3(r_world_cv, r_camera_grasp)
     return _normalise(
         [r_world_grasp[row][0] for row in range(3)],
@@ -490,8 +488,7 @@ def grasp_candidate_approach_world(
 def camera_optical_forward_world(camera_extrinsics: Mapping[str, Any]) -> list[float]:
     """Return the OpenCV optical +Z direction in world coordinates."""
 
-    r_world_native, _ = _camera_to_world(camera_extrinsics)
-    r_world_cv = _matmul3(r_world_native, _OPENCV_TO_OPENGL)
+    r_world_cv, _ = _opencv_camera_to_world(camera_extrinsics)
     return _normalise([r_world_cv[row][2] for row in range(3)], "camera optical forward")
 
 
@@ -523,8 +520,7 @@ def grasp_refinement_hover_pose(
         3,
         "camera_pose.translation_xyz",
     )
-    r_world_native, p_world_camera = _camera_to_world(camera_extrinsics)
-    r_world_cv = _matmul3(r_world_native, _OPENCV_TO_OPENGL)
+    r_world_cv, p_world_camera = _opencv_camera_to_world(camera_extrinsics)
     p_world_target = _add(_matvec3(r_world_cv, p_camera_target), p_world_camera)
     return {
         "frame": "world",
@@ -582,10 +578,9 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         (v - desired_xy[1]) * depth_m / fy,
         0.0,
     ]
-    r_world_native, _ = _camera_to_world(
+    r_world_cv, _ = _opencv_camera_to_world(
         _mapping(parameters.get("camera_extrinsics"), "camera_extrinsics")
     )
-    r_world_cv = _matmul3(r_world_native, _OPENCV_TO_OPENGL)
     delta_world = _matvec3(r_world_cv, delta_camera)
     norm = math.sqrt(sum(value * value for value in delta_world))
     if norm > max_correction:
@@ -724,6 +719,28 @@ def _camera_to_world(extrinsics: Mapping[str, Any]) -> tuple[list[list[float]], 
             rotation = _rotation([row[:3] for row in rows[:3]], f"camera_extrinsics.{key}")
             return rotation, [rows[0][3], rows[1][3], rows[2][3]]
     raise GraspGeometryError("camera_extrinsics must contain pos+mat or a 4x4 matrix")
+
+
+def _opencv_camera_to_world(
+    extrinsics: Mapping[str, Any],
+) -> tuple[list[list[float]], list[float]]:
+    """Return a transform whose local axes are OpenCV optical axes.
+
+    Missing ``camera_frame`` keeps the historical OpenGL interpretation used
+    by LIBERO and older simulator packets.  New simulator adapters must tag
+    their normalized packet explicitly with ``camera_frame="opencv"``.
+    """
+
+    rotation, position = _camera_to_world(extrinsics)
+    raw_frame = str(extrinsics.get("camera_frame") or "opengl")
+    camera_frame = raw_frame.strip().lower().replace("-", "_").replace(" ", "_")
+    if camera_frame in {"opencv", "opencv_optical", "cv"}:
+        return rotation, position
+    if camera_frame in {"opengl", "opengl_renderer", "mujoco", "renderer"}:
+        return _matmul3(rotation, _OPENCV_TO_OPENGL), position
+    raise GraspGeometryError(
+        f"camera_extrinsics.camera_frame has unsupported value {raw_frame!r}"
+    )
 
 
 def _mask_depth_target(

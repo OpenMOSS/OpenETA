@@ -20,6 +20,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
 
+from sim.envs.behavior.seeding import seed_behavior_reset_rngs
 from sim.envs.behavior.utils import sync_robot_after_pose_override
 
 TASK_INSTANCE_FILE_SUFFIX = "_template-tro_state.json"
@@ -245,15 +246,21 @@ class ActivityInstanceLoader:
         activity_instance_id: int,
         instance_resample_mode: str,
         activity_instances: tuple[ActivityInstanceFile, ...],
+        seed: int | None = None,
     ):
         self.omni_cfg = omni_cfg
         self.activity_name = activity_name
         self.activity_instance_id = activity_instance_id
         self.instance_resample_mode = instance_resample_mode
         self.activity_instances = activity_instances
+        self._rng = random.Random(seed)
 
     @classmethod
-    def from_omni_cfg(cls, omni_cfg: DictConfig) -> "ActivityInstanceLoader":
+    def from_omni_cfg(
+        cls,
+        omni_cfg: DictConfig,
+        seed: int | None = None,
+    ) -> "ActivityInstanceLoader":
         """Build an instance loader from OmniGibson task config.
 
         Args:
@@ -327,6 +334,7 @@ class ActivityInstanceLoader:
                 activity_instance_id=activity_instance_id,
                 instance_resample_mode=instance_resample_mode,
                 activity_instances=(),
+                seed=seed,
             )
 
         if activity_instance_dir is None:
@@ -341,6 +349,7 @@ class ActivityInstanceLoader:
                 activity_instance_id=activity_instance_id,
                 instance_resample_mode=instance_resample_mode,
                 activity_instances=(),
+                seed=seed,
             )
 
         if online_object_sampling:
@@ -376,33 +385,86 @@ class ActivityInstanceLoader:
             activity_instance_id=activity_instance_id,
             instance_resample_mode=instance_resample_mode,
             activity_instances=activity_instances,
+            seed=seed,
         )
 
-    def prepare_reset(self, vec_env) -> None:
+    def prepare_reset(
+        self,
+        vec_env,
+        env_indices: list[int] | None = None,
+        seeds: list[int] | None = None,
+    ) -> None:
         """Apply any reset-time task-instance mutation required by the config.
 
         Args:
             vec_env: Vectorized OmniGibson environment whose child envs should be
                 updated before ``vec_env.reset()``.
+            env_indices: Optional local vector rows to mutate. Omitting this
+                argument preserves the historical all-environment behavior.
+            seeds: Optional deterministic per-row seeds for offline resampling.
         """
+        selected = (
+            list(range(len(vec_env.envs)))
+            if env_indices is None
+            else [int(idx) for idx in env_indices]
+        )
+        if len(set(selected)) != len(selected):
+            raise ValueError(f"env_indices must be unique, got {selected}.")
+        if any(idx < 0 or idx >= len(vec_env.envs) for idx in selected):
+            raise IndexError(
+                f"env_indices must be within [0, {len(vec_env.envs)}), got "
+                f"{selected}."
+            )
+        if seeds is not None and len(seeds) != len(selected):
+            raise ValueError(
+                "seeds must have one entry per selected environment, got "
+                f"{len(seeds)} seeds for {len(selected)} environments."
+            )
+        if not selected:
+            return
+
         if self.instance_resample_mode == "online":
             task_cfg = OmegaConf.select(self.omni_cfg, "task")
-            for env in vec_env.envs:
-                env.update_task(task_config=task_cfg)
+            for position, idx in enumerate(selected):
+                if seeds is not None:
+                    seed_behavior_reset_rngs(seeds[position])
+                vec_env.envs[idx].update_task(task_config=task_cfg)
             return
 
         if not self.activity_instances:
             return
 
         if self.instance_resample_mode == "offline":
-            instance_files = [
-                random.choice(self.activity_instances) for _ in range(len(vec_env.envs))
-            ]
+            if seeds is None:
+                instance_files = [
+                    self._rng.choice(self.activity_instances) for _ in selected
+                ]
+            else:
+                instance_files = [
+                    random.Random(int(seed)).choice(self.activity_instances)
+                    for seed in seeds
+                ]
         else:
             instance_file = self._get_activity_instance(self.activity_instance_id)
-            instance_files = [instance_file] * len(vec_env.envs)
+            instance_files = [instance_file] * len(selected)
 
-        self._apply_instance_files(vec_env, instance_files)
+        if (
+            len(selected) != len(vec_env.envs)
+            and instance_files
+            and instance_files[0].file_format == "tro_state"
+        ):
+            raise RuntimeError(
+                "Partial BEHAVIOR reset with tro_state instance hot-switching is "
+                "unsafe because OmniGibson settles all scenes with global physics "
+                "steps. Use instance_resample_mode='disabled', template instances, "
+                "or one environment per actor."
+            )
+        self._apply_instance_files(
+            vec_env,
+            instance_files,
+            env_indices=selected,
+            seeds=seeds,
+        )
 
     def _get_activity_instance(self, instance_id: int) -> ActivityInstanceFile:
         for instance_file in self.activity_instances:
@@ -414,12 +476,28 @@ class ActivityInstanceLoader:
         self,
         vec_env,
         instance_files: list[ActivityInstanceFile],
+        env_indices: list[int] | None = None,
+        seeds: list[int] | None = None,
     ) -> None:
-        if len(instance_files) != len(vec_env.envs):
+        selected = (
+            list(range(len(vec_env.envs)))
+            if env_indices is None
+            else [int(idx) for idx in env_indices]
+        )
+        target_envs = [vec_env.envs[idx] for idx in selected]
+        if len(instance_files) != len(target_envs):
             raise ValueError(
                 "Number of cached activity instance files must match the number of "
-                f"vectorized environments, got {len(instance_files)} and {len(vec_env.envs)}."
+                "selected vectorized environments, got "
+                f"{len(instance_files)} and {len(target_envs)}."
             )
+        if seeds is not None and len(seeds) != len(target_envs):
+            raise ValueError(
+                "seeds must have one entry per selected environment, got "
+                f"{len(seeds)} seeds for {len(target_envs)} environments."
+            )
+        if not instance_files:
+            return
 
         file_format = instance_files[0].file_format
         if any(
@@ -429,36 +507,60 @@ class ActivityInstanceLoader:
                 "Mixed cached instance formats in a single reset are not supported."
             )
         if file_format == "template":
-            self._load_template_instances(vec_env, instance_files)
+            self._load_template_instances(
+                vec_env,
+                target_envs,
+                instance_files,
+                seeds=seeds,
+            )
             return
         if file_format == "tro_state":
-            self._load_tro_state_instances(vec_env, instance_files)
+            self._load_tro_state_instances(
+                target_envs,
+                instance_files,
+                seeds=seeds,
+            )
             return
         raise ValueError(f"Unsupported cached instance format: {file_format}")
 
     def _load_template_instances(
         self,
         vec_env,
+        target_envs: list,
         instance_files: list[ActivityInstanceFile],
+        *,
+        seeds: list[int] | None = None,
     ) -> None:
         import omnigibson as og
 
         if not og.sim.is_stopped():
             og.sim.stop()
 
-        for env, instance_file in zip(vec_env.envs, instance_files, strict=True):
+        for position, (env, instance_file) in enumerate(
+            zip(target_envs, instance_files, strict=True)
+        ):
+            if seeds is not None:
+                seed_behavior_reset_rngs(seeds[position])
             env.reload(self._build_reload_config(instance_file))
 
         og.sim.play()
-        for env in vec_env.envs:
+        for position, env in enumerate(target_envs):
+            if seeds is not None:
+                seed_behavior_reset_rngs(seeds[position])
             env.post_play_load()
 
     def _load_tro_state_instances(
         self,
-        vec_env,
+        target_envs: list,
         instance_files: list[ActivityInstanceFile],
+        *,
+        seeds: list[int] | None = None,
     ) -> None:
-        for env, instance_file in zip(vec_env.envs, instance_files, strict=True):
+        for position, (env, instance_file) in enumerate(
+            zip(target_envs, instance_files, strict=True)
+        ):
+            if seeds is not None:
+                seed_behavior_reset_rngs(seeds[position])
             load_activity_instance_tro_state(
                 env,
                 instance_id=instance_file.instance_id,

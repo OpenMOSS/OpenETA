@@ -14,6 +14,7 @@ from sim.robocasa_benchmark import (
     RoboCasaBenchmarkManifest,
     RoboCasaRolloutResult,
     RoboCasaScenario,
+    aggregate_parallel_batch_results,
     aggregate_results,
     build_manifest,
     evaluate_manifest,
@@ -94,6 +95,25 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--fail-fast", action="store_true")
     evaluate.add_argument("--max-rollouts", type=int)
 
+    parallel_manifest = subparsers.add_parser(
+        "parallel-manifest",
+        help="adapt a RoboCasa manifest for the shared openeta-batch harness",
+    )
+    parallel_manifest.add_argument("manifest", type=Path)
+    parallel_manifest.add_argument("--output", type=Path, required=True)
+    parallel_manifest.add_argument("--max-turns", type=int)
+    parallel_manifest.add_argument("--max-tool-calls", type=int)
+    parallel_manifest.add_argument("--timeout-s", type=float)
+    parallel_manifest.add_argument("--max-total-tokens", type=int)
+
+    parallel_summary = subparsers.add_parser(
+        "parallel-summary",
+        help="convert an openeta-batch v2 result to the RoboCasa result schema",
+    )
+    parallel_summary.add_argument("manifest", type=Path)
+    parallel_summary.add_argument("batch_results", type=Path)
+    parallel_summary.add_argument("--output", type=Path)
+
     summary = subparsers.add_parser("summary", help="recompute and print a result summary")
     summary.add_argument("manifest", type=Path)
     summary.add_argument("results", type=Path)
@@ -133,6 +153,38 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({key: result[key] for key in (
             "completed_rollouts", "expected_rollouts", "success_rate", "complete"
         )}, indent=2))
+        return 0
+    if args.command == "parallel-manifest":
+        manifest = RoboCasaBenchmarkManifest.read_json(args.manifest)
+        episode_limits = {
+            key: value
+            for key, value in {
+                "max_turns": args.max_turns,
+                "max_tool_calls": args.max_tool_calls,
+                "timeout_s": args.timeout_s,
+                "max_total_tokens": args.max_total_tokens,
+            }.items()
+            if value is not None
+        }
+        manifest.write_parallel_json(
+            args.output,
+            episode_limits=episode_limits,
+        )
+        print(json.dumps({
+            "output": str(args.output),
+            "episode_count": manifest.rollout_count,
+            "source_manifest_sha256": manifest.to_dict()["manifest_sha256"],
+            "require_official_reward": True,
+        }, indent=2))
+        return 0
+    if args.command == "parallel-summary":
+        manifest = RoboCasaBenchmarkManifest.read_json(args.manifest)
+        batch_payload = json.loads(args.batch_results.read_text(encoding="utf-8"))
+        result = aggregate_parallel_batch_results(manifest, batch_payload)
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result, indent=2))
         return 0
     manifest = RoboCasaBenchmarkManifest.read_json(args.manifest)
     payload = json.loads(args.results.read_text(encoding="utf-8"))

@@ -47,14 +47,22 @@ def _context(
     )
 
 
-def _observation_with_rgb_artifact(frame_id: str, path: Path) -> EnvObservation:
+def _observation_with_rgb_artifact(
+    frame_id: str,
+    path: Path,
+    *,
+    role: str = "",
+) -> EnvObservation:
+    artifact = {"kind": "rgb", "frame_id": frame_id, "path": str(path)}
+    if role:
+        artifact["role"] = role
     return EnvObservation(
         task="pick object",
-        cameras=[CameraFrame(frame_id=frame_id, rgb=[])],
+        cameras=[CameraFrame(frame_id=frame_id, role=role, rgb=[])],
         robot=RobotState(),
         metadata={
             "image_artifacts": [
-                {"kind": "rgb", "frame_id": frame_id, "path": str(path)},
+                artifact,
                 {"kind": "depth", "frame_id": frame_id, "path": "other-depth.png"},
             ]
         },
@@ -614,7 +622,35 @@ def test_sam3_handler_resolves_frame_id_from_current_observation(tmp_path: Path)
 
     assert result.success is True
     assert result.details["source_image"] == str(FIXTURE_IMAGE)
+    assert "source_frame_id" not in result.details
     assert base64.b64decode(calls[0]["image_base64"]) == FIXTURE_IMAGE.read_bytes()
+
+
+def test_sam3_handler_preserves_role_aware_source_camera_provenance(
+    tmp_path: Path,
+) -> None:
+    handler = build_sam3_handler(
+        lambda _request: {
+            "success": True,
+            "details": {"detection_count": 0, "detections": []},
+        },
+        output_root=tmp_path,
+    )
+
+    result = handler(
+        _context(
+            {"image": "zed_head", "prompt": "cube"},
+            observation=_observation_with_rgb_artifact(
+                "zed_head",
+                FIXTURE_IMAGE,
+                role="scene_primary",
+            ),
+        )
+    )
+
+    assert result.success is True
+    assert result.details["source_frame_id"] == "zed_head"
+    assert result.details["source_camera_role"] == "scene_primary"
 
 
 def test_sam3_handler_resolves_stale_path_to_current_observation(tmp_path: Path) -> None:

@@ -12,27 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import gc
 import inspect
 import json
 import os
+import random
 import time
-from typing import ClassVar
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import gymnasium as gym
-import ray
+import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 
 from sim.envs.behavior.instance_loader import ActivityInstanceLoader
+from sim.envs.behavior.seeding import (
+    derive_behavior_seed,
+    seed_behavior_reset_rngs,
+)
 from sim.envs.behavior.utils import (
     apply_env_wrapper,
     apply_runtime_renderer_settings,
     convert_uint8_rgb,
     setup_omni_cfg,
 )
-from sim.envs.utils import list_of_dict_to_dict_of_list, to_tensor
 from sim.envs._logging import get_logger
+from sim.envs.utils import to_tensor
+
+try:
+    import ray
+except ImportError:  # pragma: no cover - exercised in lightweight unit tests
+    ray = None
 
 __all__ = ["BehaviorEnv"]
 
@@ -57,21 +69,128 @@ def _preload_numba_llvmlite() -> None:
             pass
 
 
-@ray.remote(num_cpus=1)
+def _reset_vector_rows(
+    vector_env,
+    *,
+    reset_indices: list[int] | None,
+    reset_seeds: list[int] | None,
+    get_obs: bool,
+    supports_env_indices: bool,
+):
+    """Reset all vector rows or an explicitly selected subset."""
+
+    if reset_indices is None and reset_seeds is None:
+        return vector_env.reset(get_obs=get_obs)
+    child_envs = getattr(vector_env, "envs", None)
+    if reset_indices is None:
+        if not isinstance(child_envs, list):
+            raise RuntimeError(
+                "Per-row BEHAVIOR reset seeds require a child env list."
+            )
+        reset_indices = list(range(len(child_envs)))
+    if reset_seeds is not None and len(reset_seeds) != len(reset_indices):
+        raise ValueError(
+            "reset_seeds must have one entry per selected environment, got "
+            f"{len(reset_seeds)} seeds for {len(reset_indices)} rows."
+        )
+    if supports_env_indices and reset_seeds is None:
+        return vector_env.reset(
+            get_obs=get_obs,
+            env_indices=reset_indices,
+        )
+
+    # Pinned OmniGibson's VectorEnvironment.reset accepts **kwargs but
+    # forwards them to every child; ``env_indices`` is not an indexing
+    # contract there. Reset selected child environments directly instead.
+    if not isinstance(child_envs, list):
+        raise TypeError(
+            "OmniGibson vector environment does not expose indexed reset "
+            "or a child env list; partial reset is unavailable."
+        )
+    results = []
+    for position, idx in enumerate(reset_indices):
+        if reset_seeds is not None:
+            seed_behavior_reset_rngs(reset_seeds[position])
+        results.append(child_envs[idx].reset(get_obs=get_obs))
+    if not get_obs:
+        return None
+    if any(
+        not isinstance(result, tuple) or len(result) != 2
+        for result in results
+    ):
+        raise RuntimeError(
+            "OmniGibson child reset must return (observation, info)."
+        )
+    return (
+        [result[0] for result in results],
+        [result[1] for result in results],
+    )
+
+
+def _validate_reset_isolation(
+    reset_indices: list[int] | None,
+    *,
+    num_envs: int,
+) -> list[int]:
+    """Reject partial resets that would step sibling scenes in pinned OG."""
+
+    selected = (
+        list(range(num_envs))
+        if reset_indices is None
+        else [int(idx) for idx in reset_indices]
+    )
+    if len(set(selected)) != len(selected):
+        raise ValueError(f"reset_indices must be unique, got {selected}.")
+    if any(idx < 0 or idx >= num_envs for idx in selected):
+        raise IndexError(
+            f"reset_indices must be within [0, {num_envs}), got {selected}."
+        )
+    if num_envs > 1 and set(selected) != set(range(num_envs)):
+        raise RuntimeError(
+            "Pinned OmniGibson resets perform a simulator-global physics step, "
+            "so a partial reset cannot be isolated from sibling scenes in the "
+            "same actor. Configure one child environment per actor (the subprocess "
+            "count must equal the per-worker environment count), or reset the "
+            "complete actor shard."
+        )
+    return selected
+
+
+def _physical_worker_index(
+    seed_offset: int,
+    *,
+    pipeline_stage_num: int,
+) -> int:
+    """Recover the physical worker index from RLinf's stage-aware offset."""
+
+    if pipeline_stage_num <= 0:
+        raise ValueError("pipeline_stage_num must be positive.")
+    return int(seed_offset) // int(pipeline_stage_num)
+
+
 class BehaviorProcess:
     def __init__(
         self,
         cfg: DictConfig,
         num_envs: int,
         pipeline_stage_num: int,
+        process_seed: int = 0,
     ):
         _preload_numba_llvmlite()
         from omnigibson.envs import VectorEnvironment
 
         self.logger = get_logger()
+        self.num_envs = int(num_envs)
         self.pipeline_stage_num = pipeline_stage_num
+        self.process_seed = int(process_seed)
+        random.seed(self.process_seed)
+        np.random.seed(self.process_seed % (2**32))
+        torch.manual_seed(self.process_seed)
         omni_cfg = setup_omni_cfg(cfg)
-        self.instance_loader = ActivityInstanceLoader.from_omni_cfg(omni_cfg)
+        self.instance_loader = ActivityInstanceLoader.from_omni_cfg(
+            omni_cfg,
+            seed=self.process_seed,
+        )
 
         # create env and apply env wrapper if enabled
         omni_cfg_dict = OmegaConf.to_container(
@@ -109,6 +228,10 @@ class BehaviorProcess:
             step_supports_kwargs or "render" in step_signature.parameters
         )
         self.step_supports_env_indices = "env_indices" in step_signature.parameters
+        reset_signature = inspect.signature(self.env.reset)
+        self.reset_supports_env_indices = (
+            "env_indices" in reset_signature.parameters
+        )
         self.skip_intermediate_obs_in_chunk = bool(
             OmegaConf.select(cfg, "skip_intermediate_obs_in_chunk", default=False)
         )
@@ -119,11 +242,25 @@ class BehaviorProcess:
                 "support get_obs; this config will be ignored."
             )
 
-        if self.pipeline_stage_num > 1 and not self.step_supports_env_indices:
-            self.logger.warning(
+        if (
+            self.pipeline_stage_num > 1
+            and self.num_envs > 1
+            and not self.step_supports_env_indices
+        ):
+            raise RuntimeError(
                 "pipeline_stage_num > 1 but OmniGibson env step does not support env_indices; "
-                "this may cause inefficiency since every pipeline step will still "
-                "advance every env with zeroed-out actions for inactive envs."
+                "advancing inactive rows with zero actions would corrupt their episode "
+                "state. Use an OmniGibson build with indexed vector stepping or set "
+                "pipeline_stage_num=1."
+            )
+        if (
+            bool(OmegaConf.select(cfg, "auto_reset", default=True))
+            and self.num_envs > 1
+        ):
+            raise RuntimeError(
+                "BEHAVIOR auto_reset requires one child environment per actor "
+                "because pinned OmniGibson reset steps all scenes globally. Set "
+                "num_env_subprocess to the per-worker environment count."
             )
 
     def get_activity_name(self):
@@ -140,12 +277,20 @@ class BehaviorProcess:
             kwargs["env_indices"] = env_indices
         return self.env.step(actions, **kwargs)
 
-    def _call_reset(self, reset_indices=None, get_obs=True):
+    def _call_reset(
+        self,
+        reset_indices=None,
+        get_obs=True,
+        reset_seeds=None,
+    ):
         """Call ``self.env.reset`` through one normalized code path."""
-        kwargs = {"get_obs": get_obs}
-        if reset_indices is not None:
-            kwargs["env_indices"] = reset_indices
-        return self.env.reset(**kwargs)
+        return _reset_vector_rows(
+            self.env,
+            reset_indices=reset_indices,
+            reset_seeds=reset_seeds,
+            get_obs=get_obs,
+            supports_env_indices=self.reset_supports_env_indices,
+        )
 
     def _step_shard(
         self,
@@ -169,6 +314,12 @@ class BehaviorProcess:
                 render=need_obs,
             )
         else:
+            if env_indices != list(range(actions.shape[0])):
+                raise RuntimeError(
+                    "OmniGibson env step has no indexed stepping support, but "
+                    f"this shard requested only rows {env_indices}. Refusing to "
+                    "advance inactive episodes with zero actions."
+                )
             raw_obs, rewards, terminates, truncates, infos = self._call_step(
                 actions,
                 get_obs=need_obs,
@@ -209,11 +360,20 @@ class BehaviorProcess:
             )
         return tuple(zip(*results))
 
-    def reset(self, reset_indices=None, get_obs=True):
-        self.instance_loader.prepare_reset(self.env)
+    def reset(self, reset_indices=None, get_obs=True, reset_seeds=None):
+        reset_indices = _validate_reset_isolation(
+            reset_indices,
+            num_envs=self.num_envs,
+        )
+        self.instance_loader.prepare_reset(
+            self.env,
+            env_indices=reset_indices,
+            seeds=reset_seeds,
+        )
         result = self._call_reset(
             reset_indices=reset_indices,
             get_obs=get_obs,
+            reset_seeds=reset_seeds,
         )
         if not get_obs:
             return None, None
@@ -227,6 +387,10 @@ class BehaviorProcess:
             self.env = None
 
 
+if ray is not None:
+    BehaviorProcess = ray.remote(num_cpus=1)(BehaviorProcess)
+
+
 class BehaviorProcessPool:
     """Singleton OmniGibson subprocess pool manager.
 
@@ -235,7 +399,42 @@ class BehaviorProcessPool:
 
     _shared_pool: ClassVar["BehaviorProcessPool | None"] = None
     _shared_refcount: ClassVar[int] = 0
-    _pipeline_next_idx: ClassVar[int] = 0
+    _shared_leases: ClassVar[dict[int, int]] = {}
+    _shared_key: ClassVar[tuple[str, int, int, int] | None] = None
+
+    @staticmethod
+    def _config_key(
+        cfg: DictConfig,
+        group_world_size: int,
+        pipeline_stage_num: int,
+        physical_worker_index: int,
+    ) -> tuple[str, int, int, int]:
+        config = (
+            OmegaConf.to_container(cfg, resolve=True)
+            if OmegaConf.is_config(cfg)
+            else cfg
+        )
+        return (
+            json.dumps(config, sort_keys=True, default=str),
+            int(group_world_size),
+            int(pipeline_stage_num),
+            int(physical_worker_index),
+        )
+
+    @staticmethod
+    def _find_lease_offset(
+        total_num_envs: int,
+        leases: dict[int, int],
+        requested_num_envs: int,
+    ) -> int | None:
+        cursor = 0
+        for offset, length in sorted(leases.items()):
+            if cursor + requested_num_envs <= offset:
+                return cursor
+            cursor = max(cursor, offset + length)
+        if cursor + requested_num_envs <= total_num_envs:
+            return cursor
+        return None
 
     @classmethod
     def acquire_shared(
@@ -244,45 +443,125 @@ class BehaviorProcessPool:
         worker_info,
         pipeline_stage_num: int,
         num_envs: int,
+        worker_seed_offset: int,
     ) -> tuple["BehaviorProcessPool", int]:
         """Attach to the shared pool and return ``(pool, pool_offset)``."""
-        if cls._shared_pool is None:  # pool init
-            total_envs = int(OmegaConf.select(cfg, "total_num_envs", default=None))
-            total_envs_per_worker = total_envs // worker_info.group_world_size
-            num_env_subprocess = int(
-                OmegaConf.select(cfg, "num_env_subprocess", default=1)
+        group_world_size = int(worker_info.group_world_size)
+        if group_world_size <= 0:
+            raise ValueError(
+                "worker_info.group_world_size must be positive, got "
+                f"{group_world_size}."
             )
-            cls._shared_pool = cls(
+        if pipeline_stage_num <= 0:
+            raise ValueError(
+                f"pipeline_stage_num must be positive, got {pipeline_stage_num}."
+            )
+        if num_envs <= 0:
+            raise ValueError(f"num_envs must be positive, got {num_envs}.")
+
+        physical_worker_index = _physical_worker_index(
+            worker_seed_offset,
+            pipeline_stage_num=pipeline_stage_num,
+        )
+        shared_key = cls._config_key(
+            cfg,
+            group_world_size,
+            pipeline_stage_num,
+            physical_worker_index,
+        )
+        if cls._shared_pool is not None and cls._shared_key != shared_key:
+            raise RuntimeError(
+                "A BEHAVIOR process pool is already active with a different "
+                "configuration or worker topology. Close all attached BehaviorEnv "
+                "instances before constructing an incompatible one."
+            )
+
+        if cls._shared_pool is None:  # pool init
+            configured_total_envs = OmegaConf.select(
+                cfg,
+                "total_num_envs",
+                default=None,
+            )
+            if configured_total_envs is None:
+                # One contiguous slice is leased per pipeline stage on each worker.
+                total_envs_per_worker = num_envs * pipeline_stage_num
+            else:
+                total_envs = int(configured_total_envs)
+                if total_envs <= 0:
+                    raise ValueError(
+                        f"total_num_envs must be positive, got {total_envs}."
+                    )
+                if total_envs % group_world_size != 0:
+                    raise ValueError(
+                        f"total_num_envs ({total_envs}) must be divisible by "
+                        f"worker_info.group_world_size ({group_world_size})."
+                    )
+                total_envs_per_worker = total_envs // group_world_size
+            configured_subprocesses = OmegaConf.select(
+                cfg,
+                "num_env_subprocess",
+                default=None,
+            )
+            if configured_subprocesses is None:
+                # Pinned OmniGibson performs a simulator-global physics step
+                # during reset. Auto-reset therefore needs one isolated actor
+                # per child unless the caller explicitly disables it.
+                num_env_subprocess = (
+                    total_envs_per_worker
+                    if bool(OmegaConf.select(cfg, "auto_reset", default=True))
+                    else 1
+                )
+            else:
+                num_env_subprocess = int(configured_subprocesses)
+            pool = cls(
                 cfg,
                 total_envs_per_worker,
                 num_env_subprocess,
                 pipeline_stage_num,
+                physical_worker_index,
             )
-
-        idx = cls._pipeline_next_idx
-        global_offset = idx * num_envs
-        cls._pipeline_next_idx += 1
-        cls._shared_refcount += 1
+            cls._shared_pool = pool
+            cls._shared_key = shared_key
+            cls._shared_leases = {}
 
         pool = cls._shared_pool
-
-        if global_offset + num_envs > pool.total_num_envs:
+        global_offset = cls._find_lease_offset(
+            pool.total_num_envs,
+            cls._shared_leases,
+            num_envs,
+        )
+        if global_offset is None:
             raise ValueError(
-                f"BehaviorEnv slice [{global_offset}, {global_offset + num_envs}) "
-                f"exceeds pool total_num_envs={pool.total_num_envs}."
+                f"BehaviorEnv cannot lease {num_envs} rows from pool "
+                f"total_num_envs={pool.total_num_envs}; active leases are "
+                f"{sorted(cls._shared_leases.items())}."
             )
+        cls._shared_leases[global_offset] = num_envs
+        cls._shared_refcount = len(cls._shared_leases)
         return pool, global_offset
 
     @classmethod
-    def release_shared(cls) -> None:
-        """Drop refcount; tear down the shared pool when the last env releases."""
+    def release_shared(cls, pool_offset: int | None = None) -> None:
+        """Release one leased slice and close the pool after the final lease."""
         if cls._shared_pool is None:
             return
-        cls._shared_refcount -= 1
+        if pool_offset is None:
+            if len(cls._shared_leases) != 1:
+                raise RuntimeError(
+                    "pool_offset is required when multiple BEHAVIOR slices are active."
+                )
+            pool_offset = next(iter(cls._shared_leases))
+        if int(pool_offset) not in cls._shared_leases:
+            raise RuntimeError(
+                f"Unknown BEHAVIOR pool lease offset {pool_offset}."
+            )
+        cls._shared_leases.pop(int(pool_offset))
+        cls._shared_refcount = len(cls._shared_leases)
         if cls._shared_refcount <= 0:
             cls._shared_pool.close()
             cls._shared_pool = None
-            cls._pipeline_next_idx = 0
+            cls._shared_leases = {}
+            cls._shared_key = None
 
     def __init__(
         self,
@@ -290,7 +569,21 @@ class BehaviorProcessPool:
         total_num_envs: int,
         num_env_subprocess: int,
         pipeline_stage_num: int,
+        physical_worker_index: int,
     ):
+        if ray is None:
+            raise ImportError(
+                "BehaviorEnv's distributed process pool requires Ray. Install "
+                "the BEHAVIOR / RLinf environment dependencies before constructing it."
+            )
+        if total_num_envs <= 0:
+            raise ValueError(
+                f"total_num_envs must be positive, got {total_num_envs}."
+            )
+        if num_env_subprocess <= 0:
+            raise ValueError(
+                f"num_env_subprocess must be positive, got {num_env_subprocess}."
+            )
         if total_num_envs % num_env_subprocess != 0:
             raise ValueError(
                 f"total_num_envs({total_num_envs}) must be divisible by num_env_subprocess({num_env_subprocess})"
@@ -304,6 +597,7 @@ class BehaviorProcessPool:
         self.skip_intermediate_obs_in_chunk = bool(
             OmegaConf.select(cfg, "skip_intermediate_obs_in_chunk", default=False)
         )
+        base_seed = int(OmegaConf.select(cfg, "seed", default=0))
 
         # Create subprocess actors with a retry/backoff loop. Actor startup
         # can fail (e.g. simulator plugin errors); retry a few times to handle
@@ -325,8 +619,15 @@ class BehaviorProcessPool:
                         self.cfg,
                         self.num_env_shard,
                         pipeline_stage_num,
+                        derive_behavior_seed(
+                            base_seed,
+                            worker_seed_offset=physical_worker_index,
+                            row_index=process_idx,
+                            reset_count=0,
+                            stream=1,
+                        ),
                     )
-                    for _ in range(self.num_env_subprocess)
+                    for process_idx in range(self.num_env_subprocess)
                 ]
 
                 # Wait for all instances to initialize and fetch their activity name
@@ -392,20 +693,71 @@ class BehaviorProcessPool:
             if slice_positions_by_proc[sp]
         ]
 
-    def env_reset_slice(self, global_start: int, num_envs: int):
-        """Reset envs in ``[global_start, global_start + num_envs)``."""
-        if num_envs == 0:
+    def env_reset_slice(
+        self,
+        global_start: int,
+        num_envs: int,
+        env_indices: list[int] | None = None,
+        reset_seeds: list[int] | None = None,
+    ):
+        """Reset selected rows from one contiguous caller slice.
+
+        Returned observations and infos follow ``env_indices`` order. Omitting
+        ``env_indices`` preserves the historical full-slice behavior.
+        """
+        selected = (
+            list(range(num_envs))
+            if env_indices is None
+            else [int(idx) for idx in env_indices]
+        )
+        if not selected:
             return [], []
-        plan = self._slice_plan(global_start, num_envs)
+        if len(set(selected)) != len(selected):
+            raise ValueError(f"env_indices must be unique, got {selected}.")
+        if any(idx < 0 or idx >= num_envs for idx in selected):
+            raise IndexError(
+                f"env_indices must be within [0, {num_envs}), got {selected}."
+            )
+        if reset_seeds is not None and len(reset_seeds) != len(selected):
+            raise ValueError(
+                "reset_seeds must have one entry per selected environment, got "
+                f"{len(reset_seeds)} seeds for {len(selected)} environments."
+            )
+
+        positions_by_proc = [[] for _ in range(self.num_env_subprocess)]
+        local_rows_by_proc = [[] for _ in range(self.num_env_subprocess)]
+        seeds_by_proc = [[] for _ in range(self.num_env_subprocess)]
+        for output_pos, slice_pos in enumerate(selected):
+            global_idx = global_start + slice_pos
+            sp = global_idx % self.num_env_subprocess
+            positions_by_proc[sp].append(output_pos)
+            local_rows_by_proc[sp].append(global_idx // self.num_env_subprocess)
+            if reset_seeds is not None:
+                seeds_by_proc[sp].append(int(reset_seeds[output_pos]))
+        plan = [
+            (
+                sp,
+                positions_by_proc[sp],
+                local_rows_by_proc[sp],
+                seeds_by_proc[sp] if reset_seeds is not None else None,
+            )
+            for sp in range(self.num_env_subprocess)
+            if positions_by_proc[sp]
+        ]
         refs = [
-            self.env_processes[sp].reset.remote(local_rows)
-            for sp, _positions, local_rows in plan
+            self.env_processes[sp].reset.remote(local_rows, True, process_seeds)
+            for sp, _positions, local_rows, process_seeds in plan
         ]
 
         shard_results = ray.get(refs)
-        all_raw_obs: list = [None] * num_envs
-        all_infos: list = [None] * num_envs
-        for (raw_obs, infos), (_sp, positions, _local_rows) in zip(shard_results, plan):
+        all_raw_obs: list = [None] * len(selected)
+        all_infos: list = [None] * len(selected)
+        for (raw_obs, infos), (
+            _sp,
+            positions,
+            _local_rows,
+            _process_seeds,
+        ) in zip(shard_results, plan):
             for pos, obs, info in zip(positions, raw_obs, infos):
                 all_raw_obs[pos] = obs
                 all_infos[pos] = info
@@ -495,45 +847,88 @@ class BehaviorProcessPool:
 
 
 class BehaviorEnv(gym.Env):
+    """RLinf-compatible vector adapter around the Ray OmniGibson pool."""
+
     def __init__(
         self,
         cfg,
         num_envs,
         seed_offset,
         total_num_processes,
-        worker_info,
+        worker_info=None,
         record_metrics=True,
     ):
         self.cfg = cfg
-        self.reward_coef = cfg.get("reward_coef", 1)
+        self.num_envs = int(num_envs)
+        if self.num_envs <= 0:
+            raise ValueError(f"num_envs must be positive, got {self.num_envs}.")
 
-        self.num_envs = num_envs
-        self.ignore_terminations = cfg.ignore_terminations
-        self.seed_offset = seed_offset
-        self.seed = self.cfg.seed + seed_offset
-        self.total_num_processes = total_num_processes
-        self.worker_info = worker_info
-        self.record_metrics = record_metrics
+        self.reward_coef = float(cfg.get("reward_coef", 1.0))
+        self.ignore_terminations = bool(cfg.get("ignore_terminations", False))
+        self.use_rel_reward = bool(cfg.get("use_rel_reward", False))
+        self.seed_offset = int(seed_offset)
+        self.seed = int(cfg.get("seed", 0)) + self.seed_offset
+        self.total_num_processes = int(total_num_processes)
+        self.worker_info = worker_info or SimpleNamespace(group_world_size=1)
+        group_world_size = int(
+            getattr(self.worker_info, "group_world_size", 1)
+        )
+        if group_world_size <= 0:
+            raise ValueError(
+                "worker_info.group_world_size must be positive, got "
+                f"{group_world_size}."
+            )
+        if self.total_num_processes <= 0:
+            raise ValueError(
+                "total_num_processes must be positive, got "
+                f"{self.total_num_processes}."
+            )
+        if self.total_num_processes % group_world_size != 0:
+            raise ValueError(
+                f"total_num_processes ({self.total_num_processes}) must be divisible by "
+                f"worker_info.group_world_size ({group_world_size}) to infer "
+                "pipeline_stage_num."
+            )
+        self.pipeline_stage_num = self.total_num_processes // group_world_size
+
+        self.record_metrics = bool(record_metrics)
         self._is_start = True
-        self.enable_offload = cfg.get("enable_offload", False)
-        self.enable_init_offload = cfg.get("enable_init_offload", True)
+        self.enable_offload = bool(cfg.get("enable_offload", False))
+        self.enable_init_offload = bool(cfg.get("enable_init_offload", True))
+        self.auto_reset = bool(cfg.get("auto_reset", True))
+        self.max_episode_steps = int(cfg.get("max_episode_steps", 1000))
+        if self.max_episode_steps <= 0:
+            raise ValueError(
+                "max_episode_steps must be positive, got "
+                f"{self.max_episode_steps}."
+            )
+        self.use_fixed_reset_state_ids = bool(
+            cfg.get("use_fixed_reset_state_ids", False)
+        )
+        if self.use_fixed_reset_state_ids:
+            raise ValueError(
+                "BehaviorEnv does not support fixed reset_state_ids. Use BEHAVIOR "
+                "task.instance_resample_mode with a fixed activity_instance_id instead."
+            )
+
+        self.group_size = int(cfg.get("group_size", 1))
+        self.num_group = max(1, self.num_envs // max(1, self.group_size))
+        self.video_cfg = cfg.get("video_cfg", None)
         self.pool = None
         self.pool_offset = None
         self.task_description = None
-        if total_num_processes % worker_info.group_world_size != 0:
-            raise ValueError(
-                f"total_num_processes ({total_num_processes}) must be divisible by "
-                f"worker_info.group_world_size ({worker_info.group_world_size}) to infer pipeline_stage_num."
-            )
-        self.pipeline_stage_num = total_num_processes // worker_info.group_world_size
+        self.current_raw_obs: list[Any] | None = None
+        self._elapsed_steps = torch.zeros(self.num_envs, dtype=torch.int64)
+        self._reset_counts = torch.zeros(self.num_envs, dtype=torch.int64)
+        self._reset_seed_bases = torch.full(
+            (self.num_envs,),
+            int(cfg.get("seed", 0)),
+            dtype=torch.int64,
+        )
+        self.prev_step_reward = torch.zeros(self.num_envs, dtype=torch.float32)
+        self._init_metrics()
 
-        self.auto_reset = cfg.auto_reset
-        self.max_episode_steps = torch.tensor(cfg.max_episode_steps)
-        self.use_fixed_reset_state_ids = cfg.use_fixed_reset_state_ids
-        if self.record_metrics:
-            self._init_metrics()
         if not (self.enable_offload and not self.enable_init_offload):
-            self._ensure_pool()
             self._init_env()
 
     def _ensure_pool(self):
@@ -543,30 +938,41 @@ class BehaviorEnv(gym.Env):
                 self.worker_info,
                 self.pipeline_stage_num,
                 self.num_envs,
+                self.seed_offset,
             )
 
     def _load_tasks_cfg(self, activity_name: str):
-        # Read task description
-
         task_description_path = os.path.join(
             os.path.dirname(__file__), "behavior_task.jsonl"
         )
-        with open(task_description_path, "r") as f:
-            text = f.read()
-            task_description = [json.loads(x) for x in text.strip().split("\n") if x]
+        with open(task_description_path, "r", encoding="utf-8") as f:
+            task_description = [
+                json.loads(line) for line in f.read().splitlines() if line.strip()
+            ]
         task_description_map = {
-            task_description[i]["task_name"]: task_description[i]["task"]
-            for i in range(len(task_description))
+            item["task_name"]: item["task"] for item in task_description
         }
-        self.task_description = task_description_map[activity_name]
+        self.task_description = task_description_map.get(
+            activity_name,
+            activity_name.replace("_", " "),
+        )
 
     def _init_env(self):
         self._ensure_pool()
         self._load_tasks_cfg(self.pool.activity_name)
 
-    def env_reset(self):
+    def env_reset(
+        self,
+        env_idx: list[int] | None = None,
+        reset_seeds: list[int] | None = None,
+    ):
         self._ensure_pool()
-        return self.pool.env_reset_slice(self.pool_offset, self.num_envs)
+        return self.pool.env_reset_slice(
+            self.pool_offset,
+            self.num_envs,
+            env_indices=env_idx,
+            reset_seeds=reset_seeds,
+        )
 
     def env_chunk_step(self, chunk_actions: torch.Tensor):
         self._ensure_pool()
@@ -578,6 +984,9 @@ class BehaviorEnv(gym.Env):
 
     def _extract_obs_image(self, raw_obs):
         state = None
+        left_image = None
+        right_image = None
+        zed_image = None
         for sensor_data in raw_obs.values():
             assert isinstance(sensor_data, dict)
             for k, v in sensor_data.items():
@@ -589,127 +998,402 @@ class BehaviorEnv(gym.Env):
                     zed_image = convert_uint8_rgb(v["rgb"])
                 elif "proprio" in k:
                     state = v
-        assert state is not None, (
-            "state is not found in the observation which is required for the behavior training."
-        )
+        missing = [
+            name
+            for name, value in (
+                ("state", state),
+                ("left wrist camera", left_image),
+                ("right wrist camera", right_image),
+                ("head camera", zed_image),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                "BEHAVIOR observation is missing required entries: "
+                + ", ".join(missing)
+            )
 
         return {
-            "main_images": zed_image,  # [H, W, C]
-            "wrist_images": torch.stack(
-                [left_image, right_image], axis=0
-            ),  # [N_IMG, H, W, C]
-            "state": state,
+            "main_images": zed_image,
+            "wrist_images": torch.stack([left_image, right_image], dim=0),
+            "state": to_tensor(state),
         }
 
     def _wrap_obs(self, obs_list):
-        extracted_obs_list = []
-        for obs in obs_list:
-            extracted_obs = self._extract_obs_image(obs)
-            extracted_obs_list.append(extracted_obs)
-
-        obs = {
+        extracted_obs_list = [self._extract_obs_image(obs) for obs in obs_list]
+        return {
             "main_images": torch.stack(
-                [obs["main_images"] for obs in extracted_obs_list], axis=0
-            ),  # [N_ENV, H, W, C]
+                [obs["main_images"] for obs in extracted_obs_list],
+                dim=0,
+            ).cpu(),
             "wrist_images": torch.stack(
-                [obs["wrist_images"] for obs in extracted_obs_list], axis=0
-            ),  # [N_ENV, N_IMG, H, W, C]
-            "task_descriptions": [self.task_description for _ in range(self.num_envs)],
+                [obs["wrist_images"] for obs in extracted_obs_list],
+                dim=0,
+            ).cpu(),
+            "task_descriptions": [
+                self.task_description for _ in range(self.num_envs)
+            ],
             "states": torch.stack(
-                [obs["state"] for obs in extracted_obs_list], axis=0
-            ),  # [N_ENV, 32]
+                [obs["state"] for obs in extracted_obs_list],
+                dim=0,
+            ).cpu(),
         }
-        return obs
 
-    def _calc_step_reward(self, reward):
-        return self.reward_coef * reward
+    @staticmethod
+    def _info_list_to_dict(infos: list[dict[str, Any]]) -> dict[str, list[Any]]:
+        keys: list[str] = []
+        for info in infos:
+            for key in info:
+                if key not in keys:
+                    keys.append(key)
+        return {key: [info.get(key) for info in infos] for key in keys}
 
-    def reset(self):
+    def _scatter_partial_infos(
+        self,
+        infos: dict[str, list[Any]],
+        env_idx: list[int],
+    ) -> dict[str, Any]:
+        """Expand selected-row reset info to the full vector shape."""
+
+        if len(env_idx) == self.num_envs:
+            return infos
+        scattered: dict[str, Any] = {}
+        for key, values in infos.items():
+            if not isinstance(values, list) or len(values) != len(env_idx):
+                scattered[key] = values
+                continue
+            full_values: list[Any] = [None] * self.num_envs
+            mask = torch.zeros(self.num_envs, dtype=torch.bool)
+            for position, idx in enumerate(env_idx):
+                full_values[idx] = values[position]
+                mask[idx] = True
+            scattered[key] = full_values
+            scattered[f"_{key}"] = mask
+        return scattered
+
+    @staticmethod
+    def _to_cpu_vector(value, *, dtype: torch.dtype, num_envs: int) -> torch.Tensor:
+        tensor = torch.as_tensor(value, dtype=dtype).detach().cpu().reshape(-1)
+        if tensor.numel() != num_envs:
+            raise ValueError(
+                f"Expected {num_envs} values from BEHAVIOR, got {tensor.numel()}."
+            )
+        return tensor
+
+    @staticmethod
+    def _extract_info_status(info: dict[str, Any]) -> tuple[bool, bool, bool]:
+        """Return ``(terminated, truncated, success)`` from OG info variants."""
+        if not isinstance(info, dict):
+            return False, False, False
+
+        done = info.get("done", {})
+        terminated = bool(info.get("terminated", False))
+        truncated = bool(
+            info.get("truncated", False) or info.get("TimeLimit.truncated", False)
+        )
+        success = bool(info.get("success", False))
+
+        if isinstance(done, bool):
+            terminated |= done
+        elif isinstance(done, dict):
+            success |= bool(done.get("success", False))
+            terminated |= bool(done.get("terminated", False))
+            truncated |= bool(done.get("truncated", False))
+            termination_conditions = done.get("termination_conditions", {})
+            if isinstance(termination_conditions, dict):
+                for name, condition in termination_conditions.items():
+                    condition_done = (
+                        bool(condition.get("done", False))
+                        if isinstance(condition, dict)
+                        else bool(condition)
+                    )
+                    if not condition_done:
+                        continue
+                    normalized_name = str(name).lower()
+                    if any(
+                        token in normalized_name
+                        for token in ("timeout", "time_limit", "max_step", "maxstep")
+                    ):
+                        truncated = True
+                    else:
+                        terminated = True
+        success |= bool(info.get("task_success", False))
+        terminated |= success
+        return terminated, truncated, success
+
+    @classmethod
+    def _extract_info_done(cls, info: dict[str, Any]) -> bool:
+        terminated, truncated, _success = cls._extract_info_status(info)
+        return terminated or truncated
+
+    def _calc_step_reward(self, reward: torch.Tensor) -> torch.Tensor:
+        scaled_reward = self.reward_coef * reward.to(torch.float32).cpu()
+        if not self.use_rel_reward:
+            return scaled_reward
+        relative_reward = scaled_reward - self.prev_step_reward
+        self.prev_step_reward = scaled_reward.clone()
+        return relative_reward
+
+    def _normalize_env_indices(self, env_idx=None) -> list[int]:
+        if env_idx is None:
+            return list(range(self.num_envs))
+        if isinstance(env_idx, (int, np.integer)):
+            indices = [int(env_idx)]
+        elif isinstance(env_idx, torch.Tensor):
+            indices = [int(idx) for idx in env_idx.detach().cpu().reshape(-1)]
+        else:
+            indices = [int(idx) for idx in np.asarray(env_idx).reshape(-1)]
+        if len(set(indices)) != len(indices):
+            raise ValueError(f"env_idx must contain unique indices, got {indices}.")
+        if any(idx < 0 or idx >= self.num_envs for idx in indices):
+            raise IndexError(
+                f"env_idx must be within [0, {self.num_envs}), got {indices}."
+            )
+        return indices
+
+    def _next_reset_seeds(
+        self,
+        env_idx: list[int],
+        seed: int | None = None,
+    ) -> list[int]:
+        if seed is not None:
+            self._reset_seed_bases[env_idx] = torch.as_tensor(
+                [int(seed)] * len(env_idx),
+                dtype=torch.int64,
+            )
+            self._reset_counts[env_idx] = 0
+        pool_offset = int(self.pool_offset or 0)
+        seeds = [
+            derive_behavior_seed(
+                int(self._reset_seed_bases[idx].item()),
+                worker_seed_offset=self.seed_offset,
+                row_index=pool_offset + idx,
+                reset_count=int(self._reset_counts[idx].item()),
+                stream=2,
+            )
+            for idx in env_idx
+        ]
+        self._reset_counts[env_idx] += 1
+        return seeds
+
+    def reset(
+        self,
+        env_idx=None,
+        reset_state_ids=None,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ):
+        if options:
+            if env_idx is None:
+                env_idx = options.get("env_idx")
+            if reset_state_ids is None:
+                reset_state_ids = options.get(
+                    "reset_state_ids",
+                    options.get("episode_id"),
+                )
+        if reset_state_ids is not None:
+            raise ValueError(
+                "BehaviorEnv reset_state_ids are unsupported; configure "
+                "task.activity_instance_id / task.instance_resample_mode instead."
+            )
         if self.enable_offload and self.pool is None:
             self._init_env()
-        raw_obs, infos = self.env_reset()
-        obs = self._wrap_obs(raw_obs)
-        rewards = torch.zeros(self.num_envs, dtype=bool)
-        infos = self._record_metrics(rewards, infos)
-        self._reset_metrics()
+
+        indices = self._normalize_env_indices(env_idx)
+        if not indices:
+            if self.current_raw_obs is None:
+                raise RuntimeError(
+                    "Cannot perform an empty reset before the first full reset."
+                )
+            return self._wrap_obs(self.current_raw_obs), {}
+        if self.current_raw_obs is None and len(indices) != self.num_envs:
+            raise RuntimeError(
+                "A full BehaviorEnv reset is required before a partial reset."
+            )
+
+        reset_seeds = self._next_reset_seeds(indices, seed=seed)
+        raw_obs, raw_infos = self.env_reset(indices, reset_seeds)
+        if len(raw_obs) != len(indices) or len(raw_infos) != len(indices):
+            raise RuntimeError(
+                "BEHAVIOR pool returned an invalid partial-reset batch: "
+                f"{len(raw_obs)} observations and {len(raw_infos)} infos for "
+                f"{len(indices)} requested environments."
+            )
+        if self.current_raw_obs is None:
+            self.current_raw_obs = [None] * self.num_envs
+        for idx, obs in zip(indices, raw_obs):
+            self.current_raw_obs[idx] = obs
+
+        self._reset_metrics(indices)
+        self._is_start = False
+        obs = self._wrap_obs(self.current_raw_obs)
+        infos = self._info_list_to_dict(
+            [info if isinstance(info, dict) else {} for info in raw_infos]
+        )
+        infos = self._scatter_partial_infos(infos, indices)
         return obs, infos
 
+    def _process_step_result(
+        self,
+        raw_obs,
+        raw_rewards,
+        raw_terminations,
+        raw_truncations,
+        raw_infos,
+        *,
+        auto_reset: bool,
+    ):
+        rewards = self._to_cpu_vector(
+            raw_rewards,
+            dtype=torch.float32,
+            num_envs=self.num_envs,
+        )
+        terminations = self._to_cpu_vector(
+            raw_terminations,
+            dtype=torch.bool,
+            num_envs=self.num_envs,
+        )
+        truncations = self._to_cpu_vector(
+            raw_truncations,
+            dtype=torch.bool,
+            num_envs=self.num_envs,
+        )
+        info_list = [
+            info if isinstance(info, dict) else {} for info in list(raw_infos)
+        ]
+        if len(info_list) != self.num_envs:
+            raise ValueError(
+                f"Expected {self.num_envs} BEHAVIOR info dicts, got "
+                f"{len(info_list)}."
+            )
+
+        self._elapsed_steps += 1
+        info_status = [self._extract_info_status(info) for info in info_list]
+        info_terminations = torch.tensor(
+            [status[0] for status in info_status],
+            dtype=torch.bool,
+        )
+        info_truncations = torch.tensor(
+            [status[1] for status in info_status],
+            dtype=torch.bool,
+        )
+        successes = torch.tensor(
+            [status[2] for status in info_status],
+            dtype=torch.bool,
+        )
+        terminations |= info_terminations
+        truncations |= info_truncations
+        truncations |= self._elapsed_steps >= self.max_episode_steps
+
+        step_rewards = self._calc_step_reward(rewards)
+        infos = self._info_list_to_dict(info_list)
+        infos = self._record_metrics(step_rewards, successes, infos)
+        if self.ignore_terminations:
+            if "episode" in infos:
+                infos["episode"]["success_at_end"] = successes.clone()
+            else:
+                infos["success_at_end"] = successes.clone()
+            terminations.zero_()
+
+        if raw_obs is None:
+            obs = None
+        else:
+            self.current_raw_obs = list(raw_obs)
+            obs = self._wrap_obs(self.current_raw_obs)
+
+        dones = terminations | truncations
+        if bool(dones.any()) and auto_reset and self.auto_reset:
+            if obs is None:
+                raise RuntimeError(
+                    "BEHAVIOR auto-reset requires the final step observation."
+                )
+            obs, infos = self._handle_auto_reset(dones, obs, infos)
+        return obs, step_rewards, terminations, truncations, infos
+
+    def step(self, actions=None, auto_reset=True):
+        """Advance every vector row by one action."""
+        if actions is None:
+            raise ValueError("BehaviorEnv.step requires an action batch.")
+        action_tensor = torch.as_tensor(actions).detach().cpu()
+        if action_tensor.ndim == 1 and self.num_envs == 1:
+            action_tensor = action_tensor.unsqueeze(0)
+        if action_tensor.ndim != 2 or action_tensor.shape[0] != self.num_envs:
+            raise ValueError(
+                "BehaviorEnv.step actions must have shape "
+                f"[{self.num_envs}, action_dim], got {tuple(action_tensor.shape)}."
+            )
+        results = self.env_chunk_step(action_tensor.unsqueeze(1))
+        if any(len(component) != 1 for component in results):
+            raise RuntimeError(
+                "BEHAVIOR pool returned an invalid singleton chunk for step()."
+            )
+        return self._process_step_result(
+            *(component[0] for component in results),
+            auto_reset=bool(auto_reset),
+        )
+
     def chunk_step(self, chunk_actions):
-        # chunk_actions: [num_envs, chunk_step, action_dim].
-        chunk_actions = torch.as_tensor(chunk_actions).detach().cpu()
-        (
-            raw_obs_list,
-            raw_rewards_list,
-            raw_terminations_list,
-            raw_truncations_list,
-            raw_infos_list,
-        ) = self.env_chunk_step(chunk_actions)
+        """Advance an action chunk while retaining LIBERO-compatible semantics."""
+        action_tensor = torch.as_tensor(chunk_actions).detach().cpu()
+        if action_tensor.ndim != 3 or action_tensor.shape[0] != self.num_envs:
+            raise ValueError(
+                "BehaviorEnv.chunk_step actions must have shape "
+                f"[{self.num_envs}, chunk, action_dim], got "
+                f"{tuple(action_tensor.shape)}."
+            )
+        chunk_size = int(action_tensor.shape[1])
+        if chunk_size <= 0:
+            raise ValueError("BehaviorEnv.chunk_step requires a non-empty chunk.")
+
+        raw_results = self.env_chunk_step(action_tensor)
+        if any(len(component) != chunk_size for component in raw_results):
+            raise RuntimeError(
+                "BEHAVIOR pool returned a chunk with inconsistent timestep counts."
+            )
 
         obs_list = []
         infos_list = []
-        scaled_rewards_list = []
-        merged_terminations_list = []
-        info_done_flags = []
-        for raw_obs, raw_rewards, raw_terminations, step_infos in zip(
-            raw_obs_list,
-            raw_rewards_list,
-            raw_terminations_list,
-            raw_infos_list,
-        ):
-            if raw_obs is None:
-                obs_list.append(None)
-            else:
-                obs_list.append(self._wrap_obs(raw_obs))
-            step_rewards = self._calc_step_reward(raw_rewards)
-            infos_list.append(self._record_metrics(step_rewards, step_infos))
-            if self.ignore_terminations:
-                raw_terminations = torch.zeros_like(raw_terminations)
-            merged_terminations_list.append(raw_terminations)
-            scaled_rewards_list.append(step_rewards)
-            # `raw_infos_list[i]` is a list of per-env info dicts for chunk step i.
-            step_done = [
-                self._extract_info_done(info) if isinstance(info, dict) else False
-                for info in step_infos
-            ]
-            info_done_flags.append(torch.tensor(step_done, dtype=torch.bool))
+        reward_list = []
+        termination_list = []
+        truncation_list = []
+        for step_result in zip(*raw_results):
+            obs, reward, termination, truncation, infos = (
+                self._process_step_result(*step_result, auto_reset=False)
+            )
+            obs_list.append(obs)
+            reward_list.append(reward)
+            termination_list.append(termination)
+            truncation_list.append(truncation)
+            infos_list.append(infos)
 
-        chunk_rewards = torch.stack(
-            scaled_rewards_list, dim=1
-        )  # [num_envs, chunk_steps]
-        raw_terminations = torch.stack(
-            merged_terminations_list, dim=1
-        )  # [num_envs, chunk_steps]
-        raw_truncations = torch.stack(
-            raw_truncations_list, dim=1
-        )  # [num_envs, chunk_steps]
+        chunk_rewards = torch.stack(reward_list, dim=1)
+        raw_chunk_terminations = torch.stack(termination_list, dim=1)
+        raw_chunk_truncations = torch.stack(truncation_list, dim=1)
+        past_terminations = raw_chunk_terminations.any(dim=1)
+        past_truncations = raw_chunk_truncations.any(dim=1)
+        past_dones = past_terminations | past_truncations
 
-        past_terminations = raw_terminations.any(dim=1)
-        past_truncations = raw_truncations.any(dim=1)
-
-        # Some OmniGibson builds may report episode completion primarily via
-        # `info["done"]` while leaving `terminations`/`truncations` booleans
-        # as all-False for the whole chunk. RLinf's evaluation metrics gate on
-        # `terminations|truncations`, so we fall back to info-done here.
-        past_info_dones = torch.stack(info_done_flags, dim=1).any(dim=1)
-
-        # If the config asks to ignore terminations, map info-done into
-        # truncations; otherwise map it into terminations.
-        if self.ignore_terminations:
-            past_truncations = torch.logical_or(past_truncations, past_info_dones)
-        else:
-            past_terminations = torch.logical_or(past_terminations, past_info_dones)
-        past_dones = torch.logical_or(past_terminations, past_truncations)
-
-        if past_dones.any() and self.auto_reset:
+        if bool(past_dones.any()) and self.auto_reset:
+            if obs_list[-1] is None:
+                raise RuntimeError(
+                    "BEHAVIOR auto-reset requires the final chunk observation."
+                )
             obs_list[-1], infos_list[-1] = self._handle_auto_reset(
-                past_dones, obs_list[-1], infos_list[-1]
+                past_dones,
+                obs_list[-1],
+                infos_list[-1],
             )
 
-        chunk_terminations = torch.zeros_like(raw_terminations)
-        chunk_terminations[:, -1] = past_terminations
-
-        chunk_truncations = torch.zeros_like(raw_truncations)
-        chunk_truncations[:, -1] = past_truncations
+        if self.auto_reset or self.ignore_terminations:
+            chunk_terminations = torch.zeros_like(raw_chunk_terminations)
+            chunk_terminations[:, -1] = past_terminations
+            chunk_truncations = torch.zeros_like(raw_chunk_truncations)
+            chunk_truncations[:, -1] = past_truncations
+        else:
+            chunk_terminations = raw_chunk_terminations
+            chunk_truncations = raw_chunk_truncations
         return (
             obs_list,
             chunk_rewards,
@@ -720,11 +1404,15 @@ class BehaviorEnv(gym.Env):
 
     @property
     def device(self):
-        return "cuda"
+        return "cpu"
 
     @property
     def elapsed_steps(self):
-        return self.max_episode_steps
+        return self._elapsed_steps
+
+    @property
+    def info_logging_keys(self):
+        return []
 
     @property
     def is_start(self):
@@ -732,84 +1420,75 @@ class BehaviorEnv(gym.Env):
 
     @is_start.setter
     def is_start(self, value):
-        self._is_start = value
+        self._is_start = bool(value)
 
     def _init_metrics(self):
-        self.success_once = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.bool
-        )
-        self.returns = torch.zeros(
-            self.num_envs, device=self.device, dtype=torch.float32
+        self.success_once = torch.zeros(self.num_envs, dtype=torch.bool)
+        self.returns = torch.zeros(self.num_envs, dtype=torch.float32)
+        self.success_episode_len = torch.zeros(
+            self.num_envs,
+            dtype=torch.int64,
         )
 
     def _reset_metrics(self, env_idx=None):
-        if not self.record_metrics:
+        indices = self._normalize_env_indices(env_idx)
+        if not indices:
             return
-        if env_idx is not None:
-            mask = torch.zeros(self.num_envs, dtype=bool, device=self.device)
-            mask[env_idx] = True
-        else:
-            mask = torch.ones(self.num_envs, dtype=bool, device=self.device)
-        self.success_once[mask] = False
-        self.returns[mask] = 0
+        self.prev_step_reward[indices] = 0.0
+        self._elapsed_steps[indices] = 0
+        self.success_once[indices] = False
+        self.returns[indices] = 0.0
+        self.success_episode_len[indices] = 0
 
-    def _record_metrics(self, rewards, infos):
-        info_lists = []
-        for env_idx, (reward, info) in enumerate(zip(rewards, infos)):
-            done_dict = info.get("done", {})
-            episode_info = {
-                "success": done_dict.get("success", False),
-                "episode_length": info.get("episode_length", 0),
-            }
-            self.returns[env_idx] += reward
-            self.success_once[env_idx] = self.success_once[env_idx] | done_dict.get(
-                "success", False
-            )
-            episode_info["success_once"] = self.success_once[env_idx].clone()
-
-            episode_info["return"] = self.returns[env_idx].clone()
-            episode_info["episode_len"] = self.elapsed_steps.clone()
-            episode_info["reward"] = (
-                episode_info["return"] / episode_info["episode_len"]
-            )
-            if self.ignore_terminations:
-                episode_info["success_at_end"] = info["success"]
-
-            info_lists.append(episode_info)
-
-        infos = {"episode": to_tensor(list_of_dict_to_dict_of_list(info_lists))}
+    def _record_metrics(self, rewards, successes, infos):
+        if not self.record_metrics:
+            return infos
+        pending_success = ~self.success_once
+        self.returns += rewards * pending_success.to(rewards.dtype)
+        new_successes = successes & pending_success
+        self.success_episode_len[new_successes] = self.elapsed_steps[
+            new_successes
+        ]
+        self.success_once |= successes
+        episode_len_for_reward = torch.where(
+            self.success_once,
+            self.success_episode_len,
+            self.elapsed_steps,
+        )
+        episode_info = {
+            "success": successes.clone(),
+            "success_once": self.success_once.clone(),
+            "return": self.returns.clone(),
+            "episode_len": self.elapsed_steps.clone(),
+            "reward": self.returns
+            / torch.clamp(episode_len_for_reward, min=1).to(torch.float32),
+        }
+        infos["episode"] = episode_info
         return infos
 
-    @staticmethod
-    def _extract_info_done(info: dict) -> bool:
-        tc = info["done"]["termination_conditions"]
-        return any(v["done"] for v in tc.values())
-
     def _handle_auto_reset(self, dones, extracted_obs, infos):
-        final_obs = extracted_obs.copy()
-        env_idx = torch.arange(0, self.num_envs, device=self.device)[dones]
-        options = {"env_idx": env_idx}
-        final_info = infos.copy()
-        if self.use_fixed_reset_state_ids:
-            options.update(episode_id=self.reset_state_ids[env_idx])
-        extracted_obs, infos = self.reset()
-        # gymnasium calls it final observation but it really is just o_{t+1} or the true next observation
-        infos["final_observation"] = final_obs
-        infos["final_info"] = final_info
-        infos["_final_info"] = dones
-        infos["_final_observation"] = dones
-        infos["_elapsed_steps"] = dones
-        return extracted_obs, infos
+        dones = torch.as_tensor(dones, dtype=torch.bool).detach().cpu()
+        final_obs = copy.deepcopy(extracted_obs)
+        final_info = copy.deepcopy(infos)
+        env_idx = torch.nonzero(dones, as_tuple=False).flatten().tolist()
+        extracted_obs, reset_infos = self.reset(env_idx=env_idx)
+        reset_infos["final_observation"] = final_obs
+        reset_infos["final_info"] = final_info
+        reset_infos["_final_info"] = dones.clone()
+        reset_infos["_final_observation"] = dones.clone()
+        reset_infos["_elapsed_steps"] = dones.clone()
+        return extracted_obs, reset_infos
 
     def update_reset_state_ids(self):
-        # use for multi task training
-        pass
+        raise NotImplementedError(
+            "BehaviorEnv uses task.instance_resample_mode instead of reset_state_ids."
+        )
 
     def offload(self):
         self.close()
 
     def close(self):
-        if self.pool:
-            BehaviorProcessPool.release_shared()
+        if self.pool is not None:
+            BehaviorProcessPool.release_shared(self.pool_offset)
             self.pool = None
             self.pool_offset = None

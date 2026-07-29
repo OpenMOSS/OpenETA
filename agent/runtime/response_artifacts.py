@@ -194,6 +194,9 @@ def build_observation_snapshot(
             "rgb": [],
             "depth": None,
         }
+        role = camera.get("role")
+        if isinstance(role, str) and role:
+            row["role"] = role
         for key in ("intrinsics", "extrinsics"):
             value = camera.get(key)
             if isinstance(value, dict):
@@ -412,6 +415,7 @@ def _compact_camera_ref(camera: JsonDict) -> JsonDict:
     for key in (
         "frame_id",
         "camera",
+        "role",
         "width",
         "height",
         "rgb_ref",

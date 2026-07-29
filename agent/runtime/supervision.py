@@ -352,10 +352,14 @@ class BackendActionReviewer:
             in {"align_move", "descend", "preclose_open", "close", "prepare_probe"}
             else None
         )
+        preferred_current_role = (
+            "wrist_primary" if preferred_current_frame == "wrist" else None
+        )
         current_image_paths = _current_observation_rgb_paths(
             observation_summary,
             limit=2 if grasp_visual_stage else 1,
             preferred_frame_id=preferred_current_frame,
+            preferred_role=preferred_current_role,
             prefer_grasp_views=grasp_visual_stage,
         )
         target_image_paths = _target_detection_image_paths(session_context)
@@ -1061,6 +1065,7 @@ def _current_observation_rgb_paths(
     *,
     limit: int = 1,
     preferred_frame_id: str | None = None,
+    preferred_role: str | None = None,
     prefer_grasp_views: bool = False,
 ) -> list[str]:
     metadata = observation.get("metadata")
@@ -1071,7 +1076,13 @@ def _current_observation_rgb_paths(
         return []
     ranked: list[tuple[int, int, str]] = []
     seen: set[str] = set()
-    frame_priority = {"agentview": 0, "wrist": 1, "render": 2} if prefer_grasp_views else {}
+    frame_priority = {"agentview": 0, "wrist": 1, "render": 2}
+    role_priority = {
+        "scene_primary": 0,
+        "wrist_primary": 1,
+        "scene_secondary": 2,
+        "wrist_secondary": 3,
+    }
     for index, artifact in enumerate(artifacts):
         if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
             continue
@@ -1080,10 +1091,15 @@ def _current_observation_rgb_paths(
             continue
         seen.add(path)
         frame_id = str(artifact.get("frame_id") or "")
+        role = str(artifact.get("role") or "")
         priority = 0 if preferred_frame_id and frame_id == preferred_frame_id else 1
         if prefer_grasp_views:
-            priority = frame_priority.get(frame_id, 3)
-            if preferred_frame_id and frame_id == preferred_frame_id:
+            priority = role_priority.get(role, frame_priority.get(frame_id, 4))
+            role_is_preferred = bool(preferred_role and role == preferred_role)
+            frame_is_preferred = bool(
+                preferred_frame_id and frame_id == preferred_frame_id
+            )
+            if role_is_preferred or frame_is_preferred:
                 priority = -1
         ranked.append((priority, index, path))
     ranked.sort(key=lambda entry: (entry[0], entry[1]))

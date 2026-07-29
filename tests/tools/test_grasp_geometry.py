@@ -10,6 +10,7 @@ from PIL import Image
 from agent.tools.grasp_geometry import (
     DEFAULT_GRASP_PROFILE,
     build_compile_grasp_seed_handler,
+    camera_optical_forward_world,
     GraspGeometryError,
     compile_grasp_seed,
     compute_wrist_alignment,
@@ -76,6 +77,64 @@ def test_compile_grasp_seed_applies_camera_and_eef_transforms() -> None:
     assert result["strategy_id"] == "top-down-vertical-panda-p8"
     assert result["strategy_selection"] == "automatic_geometry_family"
     assert result["scene_epoch"] == 0
+
+
+def test_normalized_opencv_and_legacy_opengl_extrinsics_are_equivalent() -> None:
+    legacy_parameters = _compile_parameters()
+    normalized_parameters = deepcopy(legacy_parameters)
+    normalized_parameters["camera_extrinsics"] = {
+        "pos": [0.0, 0.0, 0.0],
+        "mat": [1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0],
+        "camera_to_world": [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        "matrix_layout": "row_major",
+        "frame_transform": "camera_to_world",
+        "camera_frame": "opencv",
+    }
+
+    legacy = compile_grasp_seed(
+        legacy_parameters,
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+    normalized = compile_grasp_seed(
+        normalized_parameters,
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    for key in (
+        "approach_world_xyz",
+        "hover_offset_world_xyz",
+        "precontact_pose",
+        "wrist_alignment_pose",
+    ):
+        assert normalized.get(key) == legacy.get(key)
+    for pose_key in ("contact_pose", "hover_pose"):
+        assert normalized[pose_key]["xyz"] == legacy[pose_key]["xyz"]
+        assert (
+            normalized[pose_key]["rotation_matrix"]
+            == legacy[pose_key]["rotation_matrix"]
+        )
+    assert camera_optical_forward_world(
+        legacy_parameters["camera_extrinsics"]
+    ) == camera_optical_forward_world(normalized_parameters["camera_extrinsics"])
+
+
+def test_grasp_geometry_rejects_unknown_camera_frame() -> None:
+    parameters = _compile_parameters()
+    parameters["camera_extrinsics"]["camera_frame"] = "backend_guess"
+
+    with pytest.raises(GraspGeometryError, match="unsupported value"):
+        compile_grasp_seed(
+            parameters,
+            profile=_profile(),
+            profile_sha256="profile-sha",
+        )
 
 
 def test_refinement_hover_accepts_camera_to_world_matrix() -> None:

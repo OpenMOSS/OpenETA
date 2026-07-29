@@ -1408,15 +1408,26 @@ class AgentMemory:
             parameters = details.get("parameters")
             if not isinstance(parameters, dict):
                 parameters = {}
+            source_camera_role = str(
+                outputs.get("source_camera_role")
+                or details.get("source_camera_role")
+                or ""
+            )
+            source_frame_id = (
+                outputs.get("frame_id")
+                or outputs.get("source_frame_id")
+                or (
+                    details.get("source_frame_id")
+                    if source_camera_role
+                    else None
+                )
+                or parameters.get("frame_id")
+            )
             base = {
                 "result_id": result_id,
                 "target_prompt": outputs.get("prompt") or parameters.get("prompt"),
                 "source_image": outputs.get("source_image") or parameters.get("image"),
-                "frame_id": (
-                    outputs.get("frame_id")
-                    or outputs.get("source_frame_id")
-                    or parameters.get("frame_id")
-                ),
+                "frame_id": source_frame_id,
                 "ranking": outputs.get("ranking") or "score_descending",
                 "candidate_count": len(candidates),
                 "candidates": candidates,
@@ -1424,6 +1435,8 @@ class AgentMemory:
                 "segmentation_mode": outputs.get("segmentation_mode"),
                 "scene_epoch": self.scene_epoch(),
             }
+            if source_camera_role:
+                base["camera_role"] = source_camera_role
             self.facts.pop(REFERENCE_LOCALIZATION_FAILURE_KEY, None)
             asset_reference = self.target_asset_reference()
             if isinstance(asset_reference, dict):
@@ -6360,7 +6373,16 @@ def _camera_packet_from_payload(
         "anygrasp_intrinsics": dict(normalized_intrinsics),
         "extrinsics": dict(extrinsics),
     }
-    for field_name in ("width", "height", "depth_min", "depth_max"):
+    role = camera.get("role")
+    if isinstance(role, str) and role:
+        packet["role"] = role
+    for field_name in (
+        "width",
+        "height",
+        "depth_min",
+        "depth_max",
+        "depth_encoding",
+    ):
         if field_name in camera:
             packet[field_name] = camera[field_name]
     if depth_scale is not None:
@@ -6745,6 +6767,7 @@ def summarize_memory_artifact(artifact: JsonDict) -> JsonDict:
             "mcp_server_url",
             "dashboard_url",
             "frame_id",
+            "role",
             "rgb_path",
             "depth_path",
             "width",

@@ -8,7 +8,9 @@ import pytest
 
 pytest.importorskip("gymnasium")
 
-from adapter.protocol import CameraFrame, EnvObservation, RobotState
+from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
+from agent.runtime.image_artifacts import materialize_mcp_images
+from agent.runtime.memory import AgentMemory
 from agent.tools.depth_prefetch import DepthPriorPrefetchCoordinator
 from agent.tools.handlers import build_sam3_handler
 from agent.tools.registry import (
@@ -237,3 +239,115 @@ def test_sam3_continues_when_depth_prefetch_has_no_intrinsics(
         "reason": "matching_camera_intrinsics_unavailable",
     }
     assert depth_calls == 0
+
+
+def test_role_aware_mcp_camera_flows_through_sam3_and_depth_prefetch(
+    tmp_path: Path,
+) -> None:
+    bundle = materialize_mcp_images(
+        {
+            "observation": {
+                "task": "pick the cup",
+                "cameras": [
+                    {
+                        "frame_id": "zed_head",
+                        "role": "scene_primary",
+                        "rgb_base64": PNG_1X1,
+                        "width": 1,
+                        "height": 1,
+                        "intrinsics": {
+                            "fx": 100.0,
+                            "fy": 100.0,
+                            "cx": 0.5,
+                            "cy": 0.5,
+                            "scale": 1000.0,
+                        },
+                    }
+                ],
+            }
+        },
+        output_root=tmp_path / "mcp-images",
+        bundle_id="behavior-observation",
+    )
+    observation = EnvObservation.from_dict(bundle.payload["observation"])
+    observation.metadata["image_artifacts"] = [
+        image.to_dict() for image in bundle.images
+    ]
+    depth_started = threading.Event()
+    depth_contexts: list[ToolExecutionContext] = []
+
+    def depth_handler(context: ToolExecutionContext):
+        depth_contexts.append(context)
+        depth_started.set()
+        return make_tool_result(
+            context,
+            success=True,
+            content="Depth prior estimated.",
+            outputs={"prior_depth": str(tmp_path / "prior.npy")},
+        )
+
+    depth_spec = build_default_tool_registry().get("estimate_depth_prior")
+    coordinator = DepthPriorPrefetchCoordinator(depth_handler, spec=depth_spec)
+    sam_handler = build_sam3_handler(
+        lambda _request: _sam_response(),
+        depth_prior_prefetch=coordinator.prefetch_for_sam3,
+        output_root=tmp_path / "sam-images",
+        result_output_root=tmp_path / "sam-results",
+    )
+
+    tools = build_default_tool_registry()
+    tools.bind_handler("sam3", sam_handler)
+    sam_result = tools.call(
+        "sam3",
+        {"mode": "text", "image": "zed_head", "prompt": "cup"},
+        observation=observation,
+        metadata={"session_id": "behavior-role-chain"},
+    )
+
+    assert sam_result.success is True
+    outputs = sam_result.details["outputs"]
+    assert outputs["source_frame_id"] == "zed_head"
+    assert outputs["source_camera_role"] == "scene_primary"
+    assert outputs["depth_prior_prefetch"]["camera_id"] == "zed_head"
+    assert depth_started.wait(timeout=2.0)
+
+    memory = AgentMemory()
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "tool_calls": [
+                    {
+                        "name": "sam3",
+                        "result": {
+                            "success": sam_result.success,
+                            "details": sam_result.details,
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    no_detection = memory.sam3_no_detection()
+    assert no_detection is not None
+    assert no_detection["frame_id"] == "zed_head"
+    assert no_detection["camera_role"] == "scene_primary"
+
+    rgb_path = next(
+        image.path for image in bundle.images if image.kind == "rgb"
+    )
+    tools.bind_handler("estimate_depth_prior", coordinator.handler)
+    depth_result = tools.call(
+        "estimate_depth_prior",
+        {
+            "rgb": rgb_path,
+            "intrinsics": dict(observation.cameras[0].intrinsics),
+        },
+        observation=observation,
+        metadata={"session_id": "behavior-role-chain"},
+    )
+
+    assert depth_result.success is True
+    assert depth_result.details["outputs"]["prefetch"]["cache_hit"] is True
+    assert len(depth_contexts) == 1
+    assert depth_contexts[0].parameters["camera_id"] == "zed_head"

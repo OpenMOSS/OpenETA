@@ -8,6 +8,7 @@ from adapter.protocol import CameraFrame, EnvObservation, RobotState
 from agent.backends.planner import PlannerBackendResult, StaticPlannerBackend
 from agent.backends.planner import CallablePlannerBackend
 from agent.tools.attachment_probe import (
+    ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT,
     ARTICULATED_ATTACHMENT_PROBE_DISTANCE_M,
     AttachmentProbeError,
     assess_attachment_probe,
@@ -37,6 +38,52 @@ def _observation() -> EnvObservation:
             "image_artifacts": [
                 {"kind": "rgb", "frame_id": "agentview", "path": "before-agent.png"},
                 {"kind": "rgb", "frame_id": "wrist", "path": "before-wrist.png"},
+            ]
+        },
+    )
+
+
+def _role_observation() -> EnvObservation:
+    return EnvObservation(
+        task="open the cabinet",
+        cameras=[
+            CameraFrame(
+                frame_id="zed_head",
+                role="scene_primary",
+                rgb=[],
+            ),
+            CameraFrame(
+                frame_id="wrist_left",
+                role="wrist_secondary",
+                rgb=[],
+            ),
+            CameraFrame(
+                frame_id="wrist_right",
+                role="wrist_primary",
+                rgb=[],
+            ),
+        ],
+        robot=_observation().robot,
+        metadata={
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "zed_head",
+                    "role": "scene_primary",
+                    "path": "before-zed.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_left",
+                    "role": "wrist_secondary",
+                    "path": "before-left-wrist.png",
+                },
+                {
+                    "kind": "rgb",
+                    "frame_id": "wrist_right",
+                    "role": "wrist_primary",
+                    "path": "before-right-wrist.png",
+                },
             ]
         },
     )
@@ -101,6 +148,19 @@ def test_prepare_linear_probe_preserves_quaternion_orientation() -> None:
         0.0,
         0.0,
         1.0,
+    ]
+
+
+def test_prepare_probe_uses_backend_neutral_scene_and_wrist_roles() -> None:
+    result = prepare_attachment_probe(
+        {"motion_type": "linear", "direction_world_xyz": [1.0, 0.0, 0.0]},
+        observation=_role_observation(),
+        supervision_context=_memory_context(),
+    )
+
+    assert result["pre_probe_image_paths"] == [
+        "before-zed.png",
+        "before-right-wrist.png",
     ]
 
 
@@ -229,6 +289,8 @@ def test_assessment_uses_before_and_after_multiview() -> None:
         "after_agentview",
         "after_wrist",
     ]
+    assert requests[0].system_prompt == ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT
+    assert "before/after agentview and wrist images" in requests[0].system_prompt
 
 
 def test_assessment_fails_closed_without_after_wrist_rgb() -> None:

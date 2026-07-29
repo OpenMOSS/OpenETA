@@ -74,12 +74,16 @@ obs = {
   far  = model.vis.map.zfar  * extent
   z_m  = near / (1 - z_buf * (1 - near / far))
   ```
-- **BEHAVIOR-1K (OmniGibson)**：`depth` / `depth_linear` 已是线性米，直接透传。
+- **BEHAVIOR-1K (OmniGibson)**：只使用米制 optical-Z
+  `depth_linear`；径向 distance-to-camera 的 `depth` 不进入该链路。
 
 所有后端在 UnifiedEnv 边界把 NaN、Inf 和负深度转换成 `0.0`（无效像素），
 避免非有限值进入 JSON；有效像素始终保留米制，不做逐帧归一化。
 
 经 MCP 传输时编码为 uint16 PNG（毫米），解码用 `depth_m = pixel / 1000.0`。
+新标准 RoboCasa / BEHAVIOR 包显式附带 `depth_encoding="uint16_png"` 与
+`depth_scale=1000.0`（每米的编码单位数）；LIBERO 为保持既有 wire shape 不新增
+这两个字段。
 
 ### 相机内参 / 外参
 
@@ -92,50 +96,56 @@ intrinsics = {
 }
 extrinsics = {           # 相机在 world 坐标系中的位姿 (非相对末端)
     "pos": [x, y, z],    # 相机位置 (米)
-    # MuJoCo: 3×3 旋转矩阵 camera→world，行主序 (row-major) 展平
+    # 3×3 旋转矩阵 camera→world，行主序 (row-major) 展平
     "mat": [m00, m01, m02, m10, m11, m12, m20, m21, m22],
+    "camera_to_world": [[...], [...], [...], [0, 0, 0, 1]],
     "matrix_layout": "row_major",
     "frame_transform": "camera_to_world",
-    "camera_frame": "opengl",       # 相机沿局部 -Z 观察
+    "camera_frame": "opencv",       # +X 右、+Y 下、+Z 前
+    "image_origin": "top_left",
+    "normalized_from": "mujoco_opengl",  # 可选调试来源
     # ManiSkill: 四元数 camera→world (已由 SAPIEN 原生 wxyz 重排为 xyzw)
     "quat_xyzw": [x, y, z, w],       # camera_frame="ros"，沿局部 +X 观察
 }
 ```
 
-> ⚠️ **layout 契约**：MuJoCo `mat` 为 **row-major**，用 `R = np.array(mat).reshape(3,3)`
-> 直接得到 camera→world 旋转，**不要转置**。请始终读取返回里的
-> `matrix_layout` / `frame_transform` / `camera_frame` 标签，不要凭约定猜测。
-
-`R` 的列 = 相机局部轴在 world 中的表示（col0=右 X，col1=上 Y，col2=前 Z）。
-相机沿局部 **-Z** 观察，故世界系视线方向为 `-R[:,2]`。变换公式：
+RoboCasa 和 BEHAVIOR 的 agent-facing DirectEnv 会在仿真 adapter 边界把
+MuJoCo/OpenGL 或 OmniGibson/USD 相机位姿归一成与 RGB、线性 depth、intrinsics
+一致的 OpenCV optical `camera_to_world`。其 `R` 可直接用于：
 
 ```
-R = np.array(mat).reshape(3, 3)   # row-major, 无需转置
-p_world = R @ p_cam + pos         # camera → world
-p_cam   = R.T @ (p_world - pos)   # world → camera
+R = np.array(mat).reshape(3, 3)
+p_world = R @ p_opencv + pos
 ```
 
-### 像素 → 世界坐标 (deprojection)
+LIBERO 为保持既有成功率复现，继续发布原有 `camera_frame="opengl"` 的 v1
+自描述外参，不改变 observation、planner context 或控制数值。MetaWorld 等旧
+MuJoCo 路径同样仍可能发布 OpenGL；ManiSkill 发布 `camera_frame="ros"`。
+消费者必须逐包读取 `camera_frame`，不能根据 backend 名称或矩阵形状猜测。
+`camera_pose_to_world` 兼容显式
+`input_camera_convention` / `extrinsics_camera_convention` 参数（以及既有
+`input_camera_frame` / `camera_to_world_frame` 名称）；标准 DirectEnv 包通常无需
+覆盖，因为 producer 已写入 `camera_frame="opencv"`。
 
-这是抓取误差的头号来源。针孔反投影得到的是 **OpenCV 光学系** 点（X 右、Y 下、
-Z 前），必须先转到相机原生系（由 `camera_frame` 决定）再乘旋转：
+### 像素 → 世界坐标（deprojection）
+
+针孔反投影得到 **OpenCV optical** 点（X 右、Y 下、Z 前）：
 
 ```python
 x = (u - cx) * d / fx          # d = depth_m (线性米)
 y = (v - cy) * d / fy
 p_opencv = np.array([x, y, d])
 
-# 光学系 → 相机原生系 (按 camera_frame)：
-#   "opengl" (MuJoCo):   p_cam = np.diag([1,-1,-1]) @ p_opencv   # 翻 Y、Z
-#   "ros"    (ManiSkill): p_cam = np.array([d, -x, -y])          # 轴置换
+# 新 RoboCasa / BEHAVIOR 标准包：
+p_world = np.array(mat).reshape(3, 3) @ p_opencv + pos
 
-R = np.array(mat).reshape(3, 3)   # MuJoCo；ManiSkill 用 quat_xyzw 转 R
-p_world = R @ p_cam + pos
+# LIBERO / 旧 MuJoCo OpenGL 包：
+p_opengl = np.diag([1, -1, -1]) @ p_opencv
+p_world = np.array(mat).reshape(3, 3) @ p_opengl + pos
 ```
 
-> ⚠️ 光学→原生 这一步 **必须做且各后端不同**（读 `camera_frame`，别猜）。
-> 已验证：正确的往返重投影把物体中心恢复到 ~2-3 cm（残差为表面-中心偏移），
-> OpenGL 与 ROS 后端均如此。跳过这步会把抓取点镜像/旋转到错误世界位置。
+BEHAVIOR 只使用 OmniGibson `depth_linear`（distance-to-image-plane）作为
+optical-Z；不会把径向 `depth`（distance-to-camera）冒充针孔 Z 深度。
 
 ### 各环境相机命名与深度
 
@@ -146,12 +156,17 @@ p_world = R @ p_cam + pos
 | `maniskill` | `<sensor_name>` | ✅ 米 | MS3 原生传感器 (int16 毫米 → 米) |
 | `libero` | `agentview`, `wrist` | ✅ 米 | 固定视角 + 腕部相机 |
 | `genesis` | `head` | — | 头部相机 |
-| `behavior` | `zed_head`, `wrist_left`, `wrist_right` | 米（契约测试） | ZED + 双腕 Realsense；相机标定和双臂状态由 DirectEnv 注入 |
-| `robocasa` | `agentview_left`, `agentview`, `wrist`, `agentview_right` | 米（契约测试） | RoboCasa365 原生同相机 RGB-D，MuJoCo z-buffer 线性化 |
+| `behavior` | `zed_head`, `wrist_left`, `wrist_right` | 米（契约测试） | DirectEnv：RGB + `depth_linear` + OpenCV `camera_to_world` |
+| `robocasa` | `agentview_left`, `agentview`, `wrist`, `agentview_right` | 米（契约测试） | DirectEnv：同相机 RGB-D，OpenGL 位姿在 adapter 内归一成 OpenCV |
 | `d4rl` | *(无)* | — | 纯状态 |
 
 > ✅ 表示已安装并验证深度为正确的线性度量米值（无 NaN/inf）。已验证环境：
 > `metaworld_50_assembly-v3`、`maniskill_PickCube-v1`、`libero_libero_10_task0`。
+
+RoboCasa/BEHAVIOR 的 vendored RLinf vector wrapper 保留训练兼容职责：它们是
+batched policy 接口，不是 agent-facing MCP RGB-D 几何接口。MCP registry 使用
+各自 DirectEnv；不要把 vector batch 直接作为单个 `EnvObservation`，也不要在
+缺少逐行 live calibration 时调用 SAM→抓取→世界坐标链路。
 
 ---
 

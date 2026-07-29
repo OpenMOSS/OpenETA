@@ -78,6 +78,12 @@ _REFERENCE_VERIFIED_SAM3_MIN_SCORE = 0.90
 _REFERENCE_VERIFIED_SAM3_MIN_MARGIN = 0.20
 _GRASP_FALLBACK_BACKEND_ORDER = ("anygrasp", "contact_graspnet", "graspgenx")
 _MOLMOPOINT_FALLBACK_MAX_ATTEMPTS = 2
+_CAMERA_ROLE_PREFERENCE = {
+    "scene_primary": 0,
+    "scene_secondary": 1,
+    "wrist_primary": 2,
+    "wrist_secondary": 3,
+}
 
 
 @dataclass(slots=True)
@@ -501,31 +507,65 @@ def _host_obligation_decision(
     reestimate = tool_context.get("grasp_reestimation")
     if isinstance(reestimate, dict) and reestimate.get("status") == "ready":
         previous_view = str(reestimate.get("previous_view") or "agentview")
-        preferred_views = [
-            view for view in ("wrist", "render", "agentview") if view != previous_view
-        ] + [previous_view]
-        current_rgb = next(
-            (
-                artifact.get("path")
-                for view in preferred_views
-                for artifact in tool_context.get("current_camera_artifacts", [])
-                if isinstance(artifact, dict)
-                and artifact.get("kind") == "rgb"
-                and artifact.get("frame_id") == view
-            ),
-            None,
-        )
-        selected_view = next(
-            (
-                artifact.get("frame_id")
-                for view in preferred_views
-                for artifact in tool_context.get("current_camera_artifacts", [])
-                if isinstance(artifact, dict)
-                and artifact.get("kind") == "rgb"
-                and artifact.get("frame_id") == view
-            ),
-            previous_view,
-        )
+        current_artifacts = [
+            artifact
+            for artifact in tool_context.get("current_camera_artifacts", [])
+            if isinstance(artifact, dict) and artifact.get("kind") == "rgb"
+        ]
+        if any(
+            _camera_item_role(artifact) in _CAMERA_ROLE_PREFERENCE
+            for artifact in current_artifacts
+        ):
+            alternate_role_order = {
+                "wrist_primary": 0,
+                "scene_secondary": 1,
+                "scene_primary": 2,
+                "wrist_secondary": 3,
+            }
+            alternate_frame_order = {"wrist": 0, "render": 1, "agentview": 2}
+            ranked_artifacts = sorted(
+                current_artifacts,
+                key=lambda artifact: (
+                    _camera_item_frame_id(artifact) == previous_view,
+                    alternate_role_order.get(
+                        _camera_item_role(artifact),
+                        alternate_frame_order.get(_camera_item_frame_id(artifact), 4),
+                    ),
+                ),
+            )
+            selected_artifact = ranked_artifacts[0] if ranked_artifacts else None
+            current_rgb = (
+                selected_artifact.get("path")
+                if isinstance(selected_artifact, dict)
+                else None
+            )
+            selected_view = (
+                _camera_item_frame_id(selected_artifact)
+                if isinstance(selected_artifact, dict)
+                else previous_view
+            )
+        else:
+            preferred_views = [
+                view for view in ("wrist", "render", "agentview") if view != previous_view
+            ] + [previous_view]
+            current_rgb = next(
+                (
+                    artifact.get("path")
+                    for view in preferred_views
+                    for artifact in current_artifacts
+                    if artifact.get("frame_id") == view
+                ),
+                None,
+            )
+            selected_view = next(
+                (
+                    artifact.get("frame_id")
+                    for view in preferred_views
+                    for artifact in current_artifacts
+                    if artifact.get("frame_id") == view
+                ),
+                previous_view,
+            )
         image = current_rgb or reestimate.get("source_image")
         prompt = reestimate.get("target_prompt")
         if (
@@ -3714,7 +3754,7 @@ def _build_tool_context_payload(
         vision_image_paths = [
             artifact["path"]
             for artifact in camera_artifacts
-            if artifact["kind"] == "rgb" and artifact["frame_id"] in {"agentview", "wrist"}
+            if artifact["kind"] == "rgb" and _is_primary_planner_camera(artifact)
         ][:2]
     else:
         primary_rgb = next(
@@ -3963,12 +4003,15 @@ def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
             "kind": kind,
             "path": path,
         }
+        role = str(raw.get("role") or "")
+        if role:
+            artifact["role"] = role
         for artifact_field in ("width", "height", "format", "index"):
             value = raw.get(artifact_field)
             if value is not None:
                 artifact[artifact_field] = value
         artifact["_sort_key"] = (
-            preferred_frames.get(frame_id, 3),
+            _CAMERA_ROLE_PREFERENCE.get(role, preferred_frames.get(frame_id, 3)),
             0 if kind == "rgb" else 1,
             index,
         )
@@ -3984,15 +4027,87 @@ def _current_camera_calibrations(observation: EnvObservation) -> list[JsonDict]:
 
     if observation.metadata.get("fresh_observation_required") is True:
         return []
-    return [
-        {
+    calibrations: list[JsonDict] = []
+    for camera in observation.cameras:
+        if not camera.intrinsics and not camera.extrinsics:
+            continue
+        calibration: JsonDict = {
             "frame_id": camera.frame_id,
             "intrinsics": dict(camera.intrinsics),
             "extrinsics": dict(camera.extrinsics),
         }
-        for camera in observation.cameras
-        if camera.intrinsics or camera.extrinsics
-    ]
+        if camera.role:
+            calibration["role"] = camera.role
+        calibrations.append(calibration)
+    return calibrations
+
+
+def _camera_item_role(value: object) -> str:
+    if isinstance(value, dict):
+        return str(value.get("role") or "")
+    return str(getattr(value, "role", "") or "")
+
+
+def _camera_item_frame_id(value: object) -> str:
+    if isinstance(value, dict):
+        return str(value.get("camera_frame_id") or value.get("frame_id") or "")
+    return str(getattr(value, "frame_id", "") or "")
+
+
+def _camera_matches(
+    value: object,
+    *,
+    roles: set[str],
+    legacy_frames: set[str],
+) -> bool:
+    role = _camera_item_role(value)
+    if role in _CAMERA_ROLE_PREFERENCE:
+        return role in roles
+    return _camera_item_frame_id(value) in legacy_frames
+
+
+def _is_primary_planner_camera(value: object) -> bool:
+    return _camera_matches(
+        value,
+        roles={"scene_primary", "wrist_primary"},
+        legacy_frames={"agentview", "wrist"},
+    )
+
+
+def _is_wrist_camera(value: object, *, primary_only: bool = False) -> bool:
+    roles = {"wrist_primary"} if primary_only else {"wrist_primary", "wrist_secondary"}
+    return _camera_matches(value, roles=roles, legacy_frames={"wrist"})
+
+
+def _is_supported_perception_camera(value: object) -> bool:
+    return _camera_matches(
+        value,
+        roles=set(_CAMERA_ROLE_PREFERENCE),
+        legacy_frames={"agentview", "render", "wrist"},
+    )
+
+
+def _frame_is_wrist_camera(
+    frame_id: str,
+    *,
+    observation: EnvObservation,
+    camera_artifacts: list[JsonDict],
+) -> bool:
+    artifact = next(
+        (
+            value
+            for value in camera_artifacts
+            if _camera_item_frame_id(value) == frame_id
+        ),
+        None,
+    )
+    if artifact is not None:
+        return _is_wrist_camera(artifact)
+    camera = next(
+        (value for value in observation.cameras if value.frame_id == frame_id),
+        None,
+    )
+    return camera is not None and _is_wrist_camera(camera)
 
 
 def _targeted_grasp_obligation(
@@ -4198,12 +4313,15 @@ def _grasp_estimation_fallback_obligation(
                     "status": "required",
                     "stage": (
                         "wrist_refinement_estimation"
-                        if _target_camera_frame(
-                            current_target,
+                        if _frame_is_wrist_camera(
+                            _target_camera_frame(
+                                current_target,
+                                observation=observation,
+                                camera_artifacts=camera_artifacts,
+                            ),
                             observation=observation,
                             camera_artifacts=camera_artifacts,
                         )
-                        == "wrist"
                         else "alternate_camera_estimation"
                     ),
                     "required_tool": "grasp_pose_estimate",
@@ -4214,7 +4332,7 @@ def _grasp_estimation_fallback_obligation(
 
     complete_views = _complete_rgbd_views(observation, camera_artifacts)
     passive_views = [
-        view for view in complete_views if str(view.get("camera_frame_id") or "") != "wrist"
+        view for view in complete_views if not _is_wrist_camera(view)
     ]
     next_view = next(
         (
@@ -4247,7 +4365,7 @@ def _grasp_estimation_fallback_obligation(
         (
             view
             for view in complete_views
-            if str(view.get("camera_frame_id") or "") == "wrist"
+            if _is_wrist_camera(view, primary_only=True)
         ),
         None,
     )
@@ -4310,7 +4428,7 @@ def _grasp_estimation_fallback_obligation(
                     "image": wrist_view["rgb"],
                     "prompt": fallback_prompt,
                 },
-                "camera_frame_id": "wrist",
+                "camera_frame_id": wrist_view["camera_frame_id"],
                 "fallback_target_prompt": fallback_prompt,
                 "recovery_id": recovery.get("recovery_id"),
             }
@@ -4469,14 +4587,16 @@ def _complete_rgbd_views(
         )
         if not isinstance(depth, dict) or camera is None or not camera.intrinsics:
             continue
-        views.append(
-            {
-                "camera_frame_id": frame_id,
-                "rgb": rgb["path"],
-                "depth": depth["path"],
-                "intrinsics": dict(camera.intrinsics),
-            }
-        )
+        view: JsonDict = {
+            "camera_frame_id": frame_id,
+            "rgb": rgb["path"],
+            "depth": depth["path"],
+            "intrinsics": dict(camera.intrinsics),
+        }
+        role = _camera_item_role(rgb) or _camera_item_role(camera)
+        if role:
+            view["role"] = role
+        views.append(view)
     return views
 
 
@@ -4961,15 +5081,31 @@ def _placement_transform_obligation(
     ):
         return None
     compiled = execution.get("compiled_grasp")
-    frame_id = (
-        str(compiled.get("camera_frame_id") or "agentview")
+    explicit_frame_id = (
+        str(compiled.get("camera_frame_id") or "")
         if isinstance(compiled, dict)
-        else "agentview"
+        else ""
     )
+    frame_id = explicit_frame_id or "agentview"
     camera = next(
         (camera for camera in observation.cameras if camera.frame_id == frame_id),
         None,
     )
+    if camera is None and not explicit_frame_id:
+        camera = next(
+            (
+                candidate
+                for candidate in observation.cameras
+                if _camera_matches(
+                    candidate,
+                    roles={"scene_primary"},
+                    legacy_frames=set(),
+                )
+            ),
+            None,
+        )
+        if camera is not None:
+            frame_id = camera.frame_id
     if camera is None or not camera.extrinsics:
         return None
     return {
@@ -5330,23 +5466,25 @@ def _wrist_alignment_obligation(
             artifact
             for artifact in camera_artifacts
             if artifact.get("kind") == "rgb"
-            and artifact.get("frame_id") == "wrist"
+            and _is_wrist_camera(artifact, primary_only=True)
             and _same_local_artifact(artifact.get("path"), source_image)
         ),
         None,
     )
     if not isinstance(rgb, dict):
         return None
+    frame_id = _camera_item_frame_id(rgb)
     depth = next(
         (
             artifact
             for artifact in camera_artifacts
-            if artifact.get("kind") == "depth" and artifact.get("frame_id") == "wrist"
+            if artifact.get("kind") == "depth"
+            and _camera_item_frame_id(artifact) == frame_id
         ),
         None,
     )
     camera = next(
-        (camera for camera in observation.cameras if camera.frame_id == "wrist"),
+        (camera for camera in observation.cameras if camera.frame_id == frame_id),
         None,
     )
     intrinsics = dict(camera.intrinsics) if camera is not None else {}
@@ -5403,7 +5541,8 @@ def _wrist_segmentation_obligation(
         (
             artifact
             for artifact in camera_artifacts
-            if artifact.get("kind") == "rgb" and artifact.get("frame_id") == "wrist"
+            if artifact.get("kind") == "rgb"
+            and _is_wrist_camera(artifact, primary_only=True)
         ),
         None,
     )
@@ -5466,7 +5605,7 @@ def _target_reference_obligation(
             artifact.get("path")
             for artifact in camera_artifacts
             if artifact.get("kind") == "rgb"
-            and artifact.get("frame_id") in {"agentview", "render", "wrist"}
+            and _is_supported_perception_camera(artifact)
             and _same_local_artifact(artifact.get("path"), source_image)
         ),
         None,
@@ -5676,7 +5815,7 @@ def _wrist_reference_obligation(
             artifact.get("path")
             for artifact in camera_artifacts
             if artifact.get("kind") == "rgb"
-            and artifact.get("frame_id") == "wrist"
+            and _is_wrist_camera(artifact, primary_only=True)
             and _same_local_artifact(artifact.get("path"), source_image)
         ),
         None,

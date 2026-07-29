@@ -35,6 +35,8 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 
+from sim.camera_conventions import normalise_camera_to_world_opencv
+
 
 # ══════════════════════════════════════════════════════════════════════
 # UnifiedEnv
@@ -362,6 +364,119 @@ class UnifiedEnv(gym.Env):
             # linearised to metres, so these bound the valid depth range.
             "znear": float(model.vis.map.znear) * extent,
             "zfar": float(model.vis.map.zfar) * extent,
+        }
+
+    def _robocasa_camera_params(
+        self,
+        camera_name: str,
+        image_width: int,
+        image_height: int,
+    ) -> dict[str, Any]:
+        """Extract one exact RoboCasa camera's intrinsics and live world pose.
+
+        This deliberately does not use ``_mj_camera_params``: that shared
+        legacy helper falls back to camera 0 and to static model mounts for
+        compatibility with older backends.  Agent-facing RoboCasa RGB-D must
+        instead fail closed when an exact name or live ``MjData`` pose is
+        unavailable.  LIBERO continues to use the legacy helper unchanged.
+        """
+
+        model = self._find_mj_model()
+        data = self._find_mj_data()
+        if model is None:
+            raise RuntimeError("RoboCasa MuJoCo model is unavailable")
+        if data is None:
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} has no live MuJoCo data"
+            )
+
+        camera_id: int | None = None
+        if hasattr(model, "camera_name2id"):
+            try:
+                camera_id = int(model.camera_name2id(camera_name))
+            except Exception as exc:
+                raise RuntimeError(
+                    f"RoboCasa camera {camera_name!r} is not in the MuJoCo model"
+                ) from exc
+        elif hasattr(model, "camera_names"):
+            names = [
+                value.decode() if isinstance(value, bytes) else str(value)
+                for value in model.camera_names
+            ]
+            if camera_name not in names:
+                raise RuntimeError(
+                    f"RoboCasa camera {camera_name!r} is not in the MuJoCo model"
+                )
+            camera_id = names.index(camera_name)
+        else:
+            raise RuntimeError(
+                "RoboCasa MuJoCo model has no exact camera-name lookup"
+            )
+
+        camera_count = int(getattr(model, "ncam", 0))
+        if camera_id < 0 or camera_id >= camera_count:
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} resolved to invalid id {camera_id}"
+            )
+
+        try:
+            position = np.asarray(data.cam_xpos[camera_id], dtype=np.float64).reshape(-1)
+            rotation = np.asarray(data.cam_xmat[camera_id], dtype=np.float64).reshape(-1)
+        except Exception as exc:
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} live pose is unavailable"
+            ) from exc
+        if (
+            position.size != 3
+            or rotation.size != 9
+            or not np.isfinite(position).all()
+            or not np.isfinite(rotation).all()
+        ):
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} live pose is invalid"
+            )
+
+        fovy_degrees = float(model.cam_fovy[camera_id])
+        if not np.isfinite(fovy_degrees) or fovy_degrees <= 0.0:
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} has invalid vertical FOV"
+            )
+        width = int(image_width)
+        height = int(image_height)
+        if width <= 0 or height <= 0:
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} has invalid image dimensions"
+            )
+        fovy_radians = np.deg2rad(fovy_degrees)
+        fy = (height / 2.0) / np.tan(fovy_radians / 2.0)
+        extent = float(model.stat.extent)
+        znear = float(model.vis.map.znear) * extent
+        zfar = float(model.vis.map.zfar) * extent
+        if (
+            not np.isfinite([fy, extent, znear, zfar]).all()
+            or fy <= 0.0
+            or extent <= 0.0
+            or not 0.0 < znear < zfar
+        ):
+            raise RuntimeError(
+                f"RoboCasa camera {camera_name!r} calibration is invalid"
+            )
+        return {
+            "fx": float(fy),
+            "fy": float(fy),
+            "cx": width / 2.0,
+            "cy": height / 2.0,
+            "width": width,
+            "height": height,
+            "znear": znear,
+            "zfar": zfar,
+            "extrinsics": {
+                "pos": position.tolist(),
+                "mat": rotation.tolist(),
+                "matrix_layout": "row_major",
+                "frame_transform": "camera_to_world",
+                "camera_frame": "opengl",
+            },
         }
 
     def _find_mj_model(self) -> Any:
@@ -747,21 +862,33 @@ class UnifiedEnv(gym.Env):
         if img is not None or wrist is not None:
             cameras: dict[str, dict] = {}
             if img is not None:
-                cameras["zed_head"] = {"rgb": self._np(img)}
+                cameras["zed_head"] = {
+                    "rgb": self._np(img),
+                    "role": "scene_primary",
+                }
                 if main_depth is not None:
                     cameras["zed_head"]["depth"] = self._sanitize_depth_metres(main_depth)
             if wrist is not None:
                 wr = self._np(wrist)
                 if wr.ndim == 4 and wr.shape[0] >= 2:
-                    cameras["wrist_left"] = {"rgb": wr[0]}
-                    cameras["wrist_right"] = {"rgb": wr[1]}
+                    cameras["wrist_left"] = {
+                        "rgb": wr[0],
+                        "role": "wrist_secondary",
+                    }
+                    cameras["wrist_right"] = {
+                        "rgb": wr[1],
+                        "role": "wrist_primary",
+                    }
                     if wrist_depths is not None:
                         wd = self._np(wrist_depths).astype(np.float32)
                         if wd.ndim == 3 and wd.shape[0] >= 2:
                             cameras["wrist_left"]["depth"] = self._sanitize_depth_metres(wd[0])
                             cameras["wrist_right"]["depth"] = self._sanitize_depth_metres(wd[1])
                 elif wr.ndim == 3:
-                    cameras["wrist_left"] = {"rgb": wr}
+                    cameras["wrist_left"] = {
+                        "rgb": wr,
+                        "role": "wrist_primary",
+                    }
             if isinstance(camera_params, dict):
                 for name, params in camera_params.items():
                     if name in cameras and isinstance(params, dict):
@@ -1021,40 +1148,144 @@ class UnifiedEnv(gym.Env):
             return []
 
     def _normalise_robocasa(self, raw: dict) -> dict:
-        """Normalise official RoboCasa365 or legacy RLinf observations."""
+        """Normalise official RoboCasa365 or legacy RLinf observations.
+
+        The official direct adapter is an agent-facing boundary.  Its raw
+        MuJoCo pose uses OpenGL camera axes, so convert that pose here to the
+        OpenCV optical frame shared by RGB, metric depth, and grasp backends.
+        The legacy RLinf RGB-only packet intentionally remains untouched.
+        """
 
         obs: dict[str, Any] = {}
         cameras: dict[str, dict] = {}
 
         official_cameras = [
-            ("robot0_agentview_left", "agentview_left"),
-            ("robot0_agentview_right", "agentview_right"),
-            ("robot0_robotview", "agentview"),
-            ("robot0_eye_in_hand", "wrist"),
+            ("robot0_agentview_left", "agentview_left", "scene_primary"),
+            ("robot0_agentview_right", "agentview_right", "scene_secondary"),
+            ("robot0_robotview", "agentview", "scene_primary"),
+            ("robot0_eye_in_hand", "wrist", "wrist_primary"),
         ]
-        for raw_name, cam_name in official_cameras:
+        expected_camera_names = raw.get("_openeta_robocasa_camera_names")
+        if expected_camera_names is not None:
+            if (
+                not isinstance(expected_camera_names, (list, tuple))
+                or not expected_camera_names
+                or not all(
+                    isinstance(name, str) and name
+                    for name in expected_camera_names
+                )
+            ):
+                raise RuntimeError(
+                    "RoboCasa configured camera names must be a non-empty string list"
+                )
+            supported_names = {raw_name for raw_name, _, _ in official_cameras}
+            unknown_names = sorted(set(expected_camera_names) - supported_names)
+            if unknown_names:
+                raise RuntimeError(
+                    f"RoboCasa configured unsupported cameras: {unknown_names}"
+                )
+            missing_channels = [
+                field
+                for name in expected_camera_names
+                for field in (f"{name}_image", f"{name}_depth")
+                if raw.get(field) is None
+            ]
+            if missing_channels:
+                raise RuntimeError(
+                    "RoboCasa observation is missing configured RGB-D channels: "
+                    f"{missing_channels}"
+                )
+        image_convention = str(
+            raw.get("_openeta_image_convention") or "opengl"
+        ).strip().lower()
+        if image_convention not in {"opengl", "opencv"}:
+            raise ValueError(
+                "RoboCasa image convention must be 'opengl' or 'opencv'"
+            )
+        flip_vertical = image_convention == "opengl"
+        for raw_name, cam_name, role in official_cameras:
             image = raw.get(f"{raw_name}_image")
             if image is None:
                 continue
-            arr = np.flipud(self._np(image))
+            arr = self._np(image)
+            if flip_vertical:
+                arr = np.flipud(arr)
             h, w = arr.shape[:2]
-            camera: dict[str, Any] = {"rgb": arr[..., :3]}
+            camera: dict[str, Any] = {
+                "rgb": arr[..., :3],
+                "role": role,
+            }
             depth = raw.get(f"{raw_name}_depth")
-            if depth is not None:
-                depth_arr = np.squeeze(np.flipud(self._np(depth)))
-                camera["depth"] = self._sanitize_depth_metres(
-                    self._depth_to_metres(depth_arr)
+            if depth is None:
+                raise RuntimeError(
+                    f"RoboCasa camera {raw_name!r} is missing metric depth"
                 )
-            camera.update(
-                self._extract_camera_params(raw_name, image_width=w, image_height=h)
+            depth_arr = self._np(depth)
+            if flip_vertical:
+                depth_arr = np.flipud(depth_arr)
+            depth_arr = np.squeeze(depth_arr)
+            if depth_arr.shape != arr.shape[:2]:
+                raise RuntimeError(
+                    f"RoboCasa RGB/depth dimensions differ for {raw_name!r}"
+                )
+            camera["depth"] = self._sanitize_depth_metres(
+                self._depth_to_metres(depth_arr)
             )
+            strict_params = self._robocasa_camera_params(
+                raw_name,
+                image_width=w,
+                image_height=h,
+            )
+            camera_params = {
+                "intrinsics": {
+                    key: strict_params[key]
+                    for key in (
+                        "fx",
+                        "fy",
+                        "cx",
+                        "cy",
+                        "width",
+                        "height",
+                        "znear",
+                        "zfar",
+                    )
+                    if key in strict_params
+                },
+                "extrinsics": strict_params.get("extrinsics", {}),
+            }
+            intrinsics = camera_params.get("intrinsics")
+            required_intrinsics = {"fx", "fy", "cx", "cy", "width", "height"}
+            if (
+                not isinstance(intrinsics, dict)
+                or not required_intrinsics.issubset(intrinsics)
+                or int(intrinsics["width"]) != w
+                or int(intrinsics["height"]) != h
+            ):
+                raise RuntimeError(
+                    f"RoboCasa camera {raw_name!r} is missing aligned intrinsics"
+                )
+            intrinsics.setdefault("depth_unit", "meter")
+            extrinsics = camera_params.get("extrinsics")
+            if not isinstance(extrinsics, dict) or not extrinsics:
+                raise RuntimeError(
+                    f"RoboCasa camera {raw_name!r} is missing live extrinsics"
+                )
+            if extrinsics.get("matrix_layout", "row_major") != "row_major":
+                raise ValueError("RoboCasa camera rotation must be row-major")
+            camera_params["extrinsics"] = normalise_camera_to_world_opencv(
+                position_xyz=extrinsics.get("pos"),
+                rotation_camera_to_world=extrinsics.get("mat"),
+                source_camera_frame=str(extrinsics.get("camera_frame") or ""),
+                normalized_from="mujoco_opengl",
+            )
+            camera.update(camera_params)
             cameras[cam_name] = camera
 
         # Backward-compatible support for the vendored RLinf vector wrapper.
-        for raw_key, cam_name in [
-            ("left_images", "agentview_left"),
-            ("wrist_images", "wrist"),
-            ("right_images", "agentview_right"),
+        for raw_key, cam_name, role in [
+            ("left_images", "agentview_left", "scene_primary"),
+            ("wrist_images", "wrist", "wrist_primary"),
+            ("right_images", "agentview_right", "scene_secondary"),
         ]:
             if cam_name in cameras:
                 continue
@@ -1064,7 +1295,7 @@ class UnifiedEnv(gym.Env):
             arr = self._np(images)
             if arr.ndim == 4:
                 arr = arr[0]
-            cameras[cam_name] = {"rgb": arr}
+            cameras[cam_name] = {"rgb": arr, "role": role}
         if cameras:
             obs["cameras"] = cameras
 

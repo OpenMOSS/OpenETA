@@ -132,10 +132,16 @@ class RoboCasaDirectEnv(gym.Env):
         super().__init__()
         if split not in {"pretrain", "target"}:
             raise ValueError("RoboCasa split must be 'pretrain' or 'target'")
+        if not camera_depths:
+            raise ValueError(
+                "RoboCasa DirectEnv requires camera_depths=True for the "
+                "agent-facing calibrated RGB-D contract"
+            )
 
         # Lazy imports keep RoboCasa's pinned Gymnasium/MuJoCo dependencies in
         # its dedicated worker process.
         import robocasa  # noqa: F401 - registers the kitchen task classes
+        from robosuite import macros as robosuite_macros
         from robocasa.utils.dataset_registry import TASK_SET_REGISTRY
         from robocasa.utils.dataset_registry_utils import get_task_horizon
         from robocasa.utils.env_utils import create_env
@@ -155,6 +161,15 @@ class RoboCasaDirectEnv(gym.Env):
         self.horizon = int(horizon if horizon is not None else get_task_horizon(task_name))
         self.elapsed_steps = 0
         self._last_raw_obs: dict[str, Any] = {}
+        self._robosuite_macros = robosuite_macros
+        self._image_convention = str(
+            getattr(robosuite_macros, "IMAGE_CONVENTION", "opengl")
+        ).strip().lower()
+        if self._image_convention not in {"opengl", "opencv"}:
+            raise RuntimeError(
+                "Unsupported robosuite IMAGE_CONVENTION "
+                f"{self._image_convention!r}; expected 'opengl' or 'opencv'."
+            )
 
         fixed_base = robot != "PandaOmron"
         if fixed_base:
@@ -219,8 +234,34 @@ class RoboCasaDirectEnv(gym.Env):
         # object sampling both consume this generator during reset.
         self._env.rng = np.random.default_rng(self.scenario_seed)
 
+    def _checked_image_convention(self) -> str:
+        """Return the construction-time convention, rejecting global drift."""
+
+        macros = getattr(self, "_robosuite_macros", None)
+        if macros is not None:
+            current = str(
+                getattr(macros, "IMAGE_CONVENTION", "opengl")
+            ).strip().lower()
+            if current != self._image_convention:
+                raise RuntimeError(
+                    "robosuite IMAGE_CONVENTION changed after RoboCasa "
+                    "environment construction; refusing an ambiguous RGB-D packet"
+                )
+        return self._image_convention
+
     def _annotate(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         obs = dict(raw_obs)
+        missing_rgbd = [
+            field
+            for camera_name in self._camera_names
+            for field in (f"{camera_name}_image", f"{camera_name}_depth")
+            if obs.get(field) is None
+        ]
+        if missing_rgbd:
+            raise RuntimeError(
+                "RoboCasa DirectEnv observation is missing configured RGB-D "
+                f"channels: {missing_rgbd}"
+            )
         if "robot0_base_pos" not in obs:
             try:
                 robot_model = self._env.robots[0].robot_model
@@ -236,6 +277,12 @@ class RoboCasaDirectEnv(gym.Env):
         except Exception:
             language = ""
         obs["_openeta_task_description"] = language
+        # Freeze the convention observed when this environment was created.
+        # Do not mutate the process-global robosuite macro: a worker may also
+        # host a LIBERO environment whose established image path must remain
+        # untouched.
+        obs["_openeta_image_convention"] = self._checked_image_convention()
+        obs["_openeta_robocasa_camera_names"] = list(self._camera_names)
         obs["_openeta_benchmark"] = {
             "name": "robocasa365",
             "task": self.task_name,
@@ -305,8 +352,10 @@ class RoboCasaDirectEnv(gym.Env):
         for camera_name in self._camera_names:
             image = raw.get(f"{camera_name}_image")
             if image is not None:
-                # MuJoCo images use a bottom-left origin.
-                return np.flipud(np.asarray(image))[..., :3].copy()
+                array = np.asarray(image)
+                if self._checked_image_convention() == "opengl":
+                    array = np.flipud(array)
+                return array[..., :3].copy()
         return None
 
     def close(self) -> None:

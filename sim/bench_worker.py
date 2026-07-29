@@ -336,6 +336,18 @@ def _inject_render_frame(env, obs: dict) -> None:
     For MetaWorld, attempts to also extract depth via the gymnasium
     MujocoRenderer's ``rgbd_tuple`` render mode.
     """
+    existing_cameras = obs.get("cameras")
+    backend = str(getattr(env, "_backend", "") or "")
+    if (
+        backend in {"behavior", "robocasa"}
+        and isinstance(existing_cameras, dict)
+        and existing_cameras
+    ):
+        # Their DirectEnv observations already contain role-tagged, calibrated
+        # RGB-D frames. Adding a generic RGB-only `render` frame would violate
+        # the camera packet contract and could displace the planner's primary
+        # view. LIBERO and other established backends keep the legacy path.
+        return
     try:
         with _gl_lock:  # serialise GPU access across the worker's envs
             frame = env.render()

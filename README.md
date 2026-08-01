@@ -1,7 +1,7 @@
 # OpenETA project page
 
 This orphan branch contains the static project page published at
-<https://openmoss.github.io/OpenETA/>. It is intentionally isolated from the
+<https://openmoss.ai/OpenETA/>. It is intentionally isolated from the
 OpenETA release source tree.
 
 The embedded WebM files are silent, lower-resolution previews derived from

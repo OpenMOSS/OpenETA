@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="title" content="OpenETA: An Embodied Task Agent Framework for Trustworthy Physical Closed Loops">
+  <meta name="description" content="OpenETA brings the observe–decide–act–verify loop of digital agents into simulators and robots through bounded tools, trusted receipts, and replayable evidence.">
+  <meta name="keywords" content="OpenETA, embodied agent, robotics, tool use, closed-loop control, LIBERO, sim-to-real">
+  <meta name="author" content="OpenETA Team">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="OpenMOSS">
+  <meta property="og:title" content="OpenETA: Trustworthy Physical Closed Loops">
+  <meta property="og:description" content="A tool-using embodied-agent framework with fresh observations, trusted environment receipts, and auditable trajectories.">
+  <meta property="og:url" content="https://openmoss.github.io/OpenETA/">
+  <meta property="og:image" content="https://openmoss.github.io/OpenETA/static/images/social-preview.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="OpenETA: Trustworthy Physical Closed Loops">
+  <meta name="twitter:description" content="From digital-agent tool use to auditable action in simulators and robots.">
+  <meta name="twitter:image" content="https://openmoss.github.io/OpenETA/static/images/social-preview.jpg">
+  <meta name="citation_title" content="OpenETA: An Embodied Task Agent Framework for Trustworthy Physical Closed Loops">
+  <meta name="citation_author" content="OpenETA Team">
+  <meta name="citation_publication_date" content="2026">
+  <meta name="citation_pdf_url" content="https://openmoss.github.io/OpenETA/static/pdfs/openeta-technical-report.pdf">
+  <meta name="theme-color" content="#071b33">
+  <link rel="canonical" href="https://openmoss.github.io/OpenETA/">
+  <link rel="icon" type="image/png" href="static/images/favicon.png">
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/site.css">
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/site.js"></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ScholarlyArticle",
+    "headline": "OpenETA: An Embodied Task Agent Framework for Trustworthy Physical Closed Loops",
+    "author": {"@type": "Organization", "name": "OpenETA Team"},
+    "datePublished": "2026-08-01",
+    "publisher": {"@type": "Organization", "name": "Shanghai Innovation Institute"},
+    "url": "https://openmoss.github.io/OpenETA/",
+    "image": "https://openmoss.github.io/OpenETA/static/images/social-preview.jpg",
+    "isAccessibleForFree": true
+  }
+  </script>
+  <title>OpenETA | Embodied Task Agent</title>
+</head>
+<body>
+  <nav class="navbar is-fixed-top openeta-nav" aria-label="main navigation">
+    <div class="container is-max-desktop">
+      <div class="navbar-brand">
+        <a class="navbar-item brand" href="#top" aria-label="OpenETA home">
+          <img src="static/images/openeta-wordmark.png" alt="OpenETA">
+        </a>
+        <button class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="main-nav">
+          <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+        </button>
+      </div>
+      <div id="main-nav" class="navbar-menu">
+        <div class="navbar-end">
+          <a class="navbar-item" href="#approach">Approach</a>
+          <a class="navbar-item" href="#evaluation">Evaluation</a>
+          <a class="navbar-item" href="#robot">Real Robot</a>
+          <a class="navbar-item" href="#evolution">Self-Evolution</a>
+          <a class="navbar-item" href="#citation">Citation</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <section class="hero openeta-hero">
+      <div class="hero-body">
+        <div class="container is-max-desktop has-text-centered">
+          <p class="eyebrow">EMBODIED TASK AGENT</p>
+          <h1 class="title publication-title">OpenETA</h1>
+          <h2 class="subtitle publication-subtitle">An Embodied Task Agent Framework for<br class="is-hidden-mobile"> Trustworthy Physical Closed Loops</h2>
+          <p class="authors">OpenETA Team · Shanghai Innovation Institute</p>
+          <div class="buttons is-centered hero-links">
+            <a class="button is-dark is-rounded" href="https://github.com/OpenMOSS/OpenETA" target="_blank" rel="noopener">
+              <span class="icon"><i class="fab fa-github"></i></span><span>Code</span>
+            </a>
+            <a class="button is-light is-rounded" href="static/pdfs/openeta-technical-report.pdf">
+              <span class="icon"><i class="fas fa-file-pdf"></i></span><span>Technical Report</span>
+            </a>
+            <a class="button is-light is-rounded" href="https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment" target="_blank" rel="noopener">
+              <span class="icon"><i class="fas fa-robot"></i></span><span>Robot Stack</span>
+            </a>
+          </div>
+          <div class="hero-visual glass-card">
+            <img src="static/images/openeta-overview.png" alt="OpenETA closed-loop framework overview">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="metric-strip" aria-label="OpenETA release snapshot">
+      <div class="container is-max-desktop">
+        <div class="columns is-mobile is-multiline has-text-centered">
+          <div class="column is-6-mobile is-3-tablet"><div class="metric"><strong>44</strong><span>registered Tools</span></div></div>
+          <div class="column is-6-mobile is-3-tablet"><div class="metric"><strong>40</strong><span>LIBERO tasks</span></div></div>
+          <div class="column is-6-mobile is-3-tablet"><div class="metric"><strong>400</strong><span>evaluated episodes</span></div></div>
+          <div class="column is-6-mobile is-3-tablet"><div class="metric"><strong>1</strong><span>fresh observation after action</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="abstract">
+      <div class="container is-max-desktop narrow-copy">
+        <p class="section-kicker">Why OpenETA</p>
+        <h2 class="title is-2">Task intelligence needs a trustworthy loop.</h2>
+        <p class="lead">Action prediction alone does not tell an embodied agent whether a grasp succeeded, whether an object remains attached, or whether a timed-out request changed the world. OpenETA transfers the digital-agent loop—understand, invoke a Tool, inspect feedback, and decide again—into simulators and robots.</p>
+        <p>OpenETA separates cognition from execution authority across three roles: the <strong>Agent</strong> proposes structured intent, the <strong>Interface</strong> validates contracts and gates side effects, and the <strong>World</strong> returns trusted state evidence. World-changing actions create a fresh-observation obligation before another state-dependent decision.</p>
+      </div>
+    </section>
+
+    <section class="section alt-section" id="approach">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Approach</p>
+        <h2 class="title is-2">Closed-loop Tool use, not a one-shot control program.</h2>
+        <div class="columns is-variable is-6 is-vcentered">
+          <div class="column is-5">
+            <div class="loop-list">
+              <div class="loop-step"><span>01</span><div><strong>Observe</strong><p>Normalize multimodal state and provenance.</p></div></div>
+              <div class="loop-step"><span>02</span><div><strong>Decide</strong><p>Select one bounded Tool from current evidence.</p></div></div>
+              <div class="loop-step"><span>03</span><div><strong>Act</strong><p>Validate authority, safety gates, and side effects.</p></div></div>
+              <div class="loop-step"><span>04</span><div><strong>Verify</strong><p>Read a trusted receipt and observe the changed world.</p></div></div>
+            </div>
+          </div>
+          <div class="column is-7">
+            <figure class="figure-card">
+              <img loading="lazy" src="static/images/paradigm-comparison.png" alt="Comparison of VLA, WAM, code-policy, and OpenETA control loops">
+              <figcaption>OpenETA re-enters the Agent after every bounded Tool call, increasing feedback frequency and localizing failures to a specific stage.</figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="evidence">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Evidence Chain</p>
+        <h2 class="title is-2">A successful API call is not task success.</h2>
+        <figure class="figure-card wide-figure">
+          <img loading="lazy" src="static/images/evidence-chain.png" alt="OpenETA evidence chain from target selection to task checker">
+          <figcaption>OpenETA separates call acceptance, motion completion, physical state change, and task-level verification. Receipts and observations remain replayable.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section dark-section" id="evaluation">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Simulation Evaluation</p>
+        <h2 class="title is-2 has-text-white">A complete 40-task × 10-seed LIBERO baseline.</h2>
+        <p class="section-intro">The frozen descriptive baseline runs without task-specific policy training. Official LIBERO reward is the only success signal; human and agent assistance are zero for all 56 successful episodes.</p>
+        <div class="columns is-variable is-5">
+          <div class="column is-6">
+            <div class="result-card">
+              <table class="table is-fullwidth result-table">
+                <thead><tr><th>Suite</th><th>Successes</th><th>Rate</th></tr></thead>
+                <tbody>
+                  <tr><td>LIBERO Spatial</td><td>8 / 100</td><td>8%</td></tr>
+                  <tr><td>LIBERO Object</td><td>26 / 100</td><td>26%</td></tr>
+                  <tr><td>LIBERO Goal</td><td>21 / 100</td><td>21%</td></tr>
+                  <tr><td>LIBERO-10</td><td>1 / 100</td><td>1%</td></tr>
+                  <tr class="total-row"><td>Overall</td><td>56 / 400</td><td>14.0%</td></tr>
+                </tbody>
+              </table>
+              <p class="microcopy">18/40 tasks succeed at least once. Three LIBERO-10 cells were affected by simulator-TTL expiration and remain counted as zero, so this is descriptive rather than infrastructure-clean confirmatory evidence.</p>
+            </div>
+          </div>
+          <div class="column is-6">
+            <div class="result-card failure-card">
+              <h3 class="title is-5 has-text-white">Dominant terminal outcomes</h3>
+              <div class="failure-row"><span>Episode timeout</span><div><i style="width:100%"></i></div><b>215</b></div>
+              <div class="failure-row"><span>Unattended ask_human</span><div><i style="width:31%"></i></div><b>66</b></div>
+              <div class="failure-row"><span>Max turns</span><div><i style="width:16%"></i></div><b>35</b></div>
+              <div class="failure-row"><span>Status without reward</span><div><i style="width:11%"></i></div><b>24</b></div>
+              <div class="failure-row"><span>Simulator TTL</span><div><i style="width:3%"></i></div><b>3</b></div>
+              <div class="failure-row"><span>Remote termination</span><div><i style="width:2%"></i></div><b>1</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="robot">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Real Robot</p>
+        <h2 class="title is-2">Qualitative UR5e demonstrations.</h2>
+        <p class="section-intro dark-copy">These retained recordings demonstrate hardware execution stages, not a trial denominator or success rate. Formal primitive- and task-validation remain pending a frozen, trial-level evidence batch.</p>
+        <figure class="figure-card wide-figure">
+          <img loading="lazy" src="static/images/real-robot-sponge-keyframes.jpg" alt="Four stages of a UR5e sponge-to-tray manipulation demonstration">
+          <figcaption>One retained sponge-to-tray recording: contact approach, lift-probe verification, multi-waypoint transport, and final placement.</figcaption>
+        </figure>
+        <div class="columns is-variable is-5 video-grid">
+          <div class="column is-6">
+            <article class="video-card">
+              <video controls preload="metadata" playsinline poster="static/images/real-robot-sponge-keyframes.jpg">
+                <source src="static/videos/sponge-demo.webm" type="video/webm">
+                Your browser does not support the embedded video.
+              </video>
+              <div class="video-copy">
+                <div class="status supported">Complete qualitative example</div>
+                <h3 class="title is-5">Sponge block → tray</h3>
+                <p>The retained view visibly supports contact, attachment verification, transport, and placement.</p>
+                <code title="Original MP4 SHA-256">d23664831877…961785c</code>
+              </div>
+            </article>
+          </div>
+          <div class="column is-6">
+            <article class="video-card">
+              <video controls preload="metadata" playsinline poster="static/images/pepper-poster.jpg">
+                <source src="static/videos/pepper-demo.webm" type="video/webm">
+                Your browser does not support the embedded video.
+              </video>
+              <div class="video-copy">
+                <div class="status bounded">Bounded visual claim</div>
+                <h3 class="title is-5">Bell pepper → basket</h3>
+                <p>Grasp, lift, and transport are visible. The archived view does not support a final in-basket relation, so this is not presented as complete task success.</p>
+                <code title="Original MP4 SHA-256">90f53fa34971…e19064</code>
+              </div>
+            </article>
+          </div>
+        </div>
+        <div class="evidence-note">
+          <strong>Evidence boundary.</strong> The webpage videos are lower-resolution, silent previews derived from the retained MP4 files. Their hashes identify the originals; selected successful recordings cannot estimate reliability or replace complete success-and-failure trial coverage.
+        </div>
+      </div>
+    </section>
+
+    <section class="section alt-section" id="evolution">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Self-Evolution</p>
+        <h2 class="title is-2">Experience is proposed locally and promoted conservatively.</h2>
+        <div class="columns is-variable is-6 is-vcentered">
+          <div class="column is-5 content">
+            <p>OpenETA turns traces into candidate strategies, then requires paired replay, non-regression checks, and held-out validation before a candidate can affect future execution.</p>
+            <p>In the current exploratory study, no candidate passed the promotion gate. This supports the safety mechanism—not a performance-improvement claim—and motivates more identifiable, stage-local operators in the second phase.</p>
+          </div>
+          <div class="column is-7">
+            <figure class="figure-card"><img loading="lazy" src="static/images/roadmap.png" alt="OpenETA research roadmap"><figcaption>Only verified experience is eligible to re-enter the deployment loop.</figcaption></figure>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section citation-section" id="citation">
+      <div class="container is-max-desktop">
+        <p class="section-kicker">Resources</p>
+        <h2 class="title is-2">Read, use, and cite OpenETA.</h2>
+        <div class="buttons resource-buttons">
+          <a class="button is-link is-rounded" href="https://github.com/OpenMOSS/OpenETA" target="_blank" rel="noopener">GitHub Repository</a>
+          <a class="button is-light is-rounded" href="static/pdfs/openeta-technical-report.pdf">Download Report</a>
+        </div>
+        <div class="bibtex-wrap">
+          <button class="copy-button" data-copy-target="bibtex" aria-label="Copy BibTeX">Copy BibTeX</button>
+          <pre id="bibtex"><code>@techreport{openeta2026,
+  title       = {OpenETA: An Embodied Task Agent Framework for
+                 Trustworthy Physical Closed Loops},
+  author      = {{OpenETA Team}},
+  institution = {Shanghai Innovation Institute},
+  year        = {2026},
+  url         = {https://github.com/OpenMOSS/OpenETA}
+}</code></pre>
+        </div>
+        <p class="microcopy citation-note">The author list is provisional and will be updated with the frozen release metadata.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer openeta-footer">
+    <div class="content has-text-centered">
+      <p><strong>OpenETA</strong> · Open-source embodied task agents.</p>
+      <p class="template-credit">Page design adapted from the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank" rel="noopener">Academic Project Page Template</a>, licensed under CC BY-SA 4.0.</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,107 @@
+:root {
+  --ink: #102338;
+  --muted: #5b6b7b;
+  --navy: #071b33;
+  --blue: #2563eb;
+  --cyan: #12b8c4;
+  --pale: #f3f8fb;
+  --line: #dce6ed;
+}
+
+html { scroll-behavior: smooth; scroll-padding-top: 4.5rem; }
+body { color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-x: hidden; }
+.openeta-nav { background: rgba(255,255,255,.94); border-bottom: 1px solid rgba(16,35,56,.08); backdrop-filter: blur(14px); }
+.openeta-nav .container { padding: 0 .75rem; }
+.openeta-nav .navbar-item { color: #31465b; font-weight: 650; }
+.openeta-nav .navbar-item:hover { color: var(--blue); background: transparent; }
+.brand img { width: 134px; max-height: 34px; object-fit: contain; }
+
+.openeta-hero { position: relative; overflow: hidden; background: radial-gradient(circle at 80% 10%, rgba(18,184,196,.28), transparent 34%), radial-gradient(circle at 18% 26%, rgba(37,99,235,.28), transparent 32%), linear-gradient(145deg,#061426,#0a2849 58%,#0d4052); color: white; }
+.openeta-hero::after { content: ""; position: absolute; inset: 0; opacity: .11; background-image: linear-gradient(rgba(255,255,255,.15) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.15) 1px,transparent 1px); background-size: 42px 42px; mask-image: linear-gradient(to bottom,black,transparent 80%); pointer-events: none; }
+.openeta-hero .hero-body { padding: 9rem 1.5rem 4.5rem; position: relative; z-index: 1; }
+.eyebrow, .section-kicker { color: var(--cyan); font-size: .78rem; font-weight: 800; letter-spacing: .18em; margin-bottom: .8rem; text-transform: uppercase; }
+.publication-title { color: white !important; font-size: clamp(4rem,10vw,7.4rem) !important; font-weight: 800 !important; letter-spacing: -.055em; line-height: .9 !important; margin-bottom: 1.2rem !important; }
+.publication-subtitle { color: #e8f4ff !important; font-size: clamp(1.35rem,3vw,2.25rem) !important; font-weight: 560 !important; line-height: 1.25 !important; }
+.authors { color: #b8cadd; font-size: 1.05rem; margin: 1.35rem 0 1.7rem; }
+.hero-links { flex-wrap: wrap; }
+.hero-links .button { border: 1px solid rgba(255,255,255,.32); font-weight: 700; }
+.hero-links .button.is-dark { background: #050d17; }
+.glass-card { background: rgba(255,255,255,.92); border: 1px solid rgba(255,255,255,.45); border-radius: 18px; box-shadow: 0 28px 80px rgba(0,0,0,.32); margin: 3.2rem auto 0; max-width: 940px; overflow: hidden; padding: .45rem; }
+.glass-card img { border-radius: 13px; display: block; width: 100%; }
+
+.metric-strip { background: white; border-bottom: 1px solid var(--line); padding: 1.7rem 1rem 1.2rem; }
+.metric strong { color: var(--blue); display: block; font-size: 2rem; line-height: 1; }
+.metric span { color: var(--muted); display: block; font-size: .78rem; font-weight: 700; letter-spacing: .04em; margin-top: .45rem; text-transform: uppercase; }
+.section { padding: 5.8rem 1.5rem; }
+.alt-section { background: var(--pale); }
+.narrow-copy { max-width: 820px !important; }
+.title.is-2 { color: var(--ink); font-size: clamp(2rem,4vw,3.1rem); letter-spacing: -.035em; line-height: 1.08; }
+.lead { color: #233c52; font-size: 1.26rem; line-height: 1.7; margin-bottom: 1.25rem; }
+.narrow-copy > p:last-child, .section-intro, .dark-copy { color: var(--muted); font-size: 1.05rem; line-height: 1.75; }
+
+.loop-list { display: grid; gap: .8rem; }
+.loop-step { align-items: flex-start; background: white; border: 1px solid var(--line); border-radius: 14px; display: flex; gap: 1rem; padding: 1rem; }
+.loop-step > span { align-items: center; background: #e8f3ff; border-radius: 9px; color: var(--blue); display: flex; flex: 0 0 42px; font-size: .82rem; font-weight: 800; height: 42px; justify-content: center; }
+.loop-step strong { color: var(--ink); font-size: 1.03rem; }
+.loop-step p { color: var(--muted); font-size: .9rem; margin-top: .2rem; }
+.figure-card { background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 14px 36px rgba(16,35,56,.08); overflow: hidden; }
+.figure-card img { display: block; width: 100%; }
+.figure-card figcaption { color: var(--muted); font-size: .84rem; line-height: 1.55; padding: 1rem 1.2rem; }
+.wide-figure { margin-top: 2rem; }
+
+.dark-section { background: linear-gradient(145deg,#07192d,#0b2945); color: white; }
+.dark-section .section-intro { color: #bdcddd; max-width: 850px; }
+.result-card { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.13); border-radius: 16px; height: 100%; margin-top: 1.6rem; overflow: hidden; padding: 1.25rem; }
+.result-table { background: transparent; color: white; }
+.result-table th { color: #91deea !important; }
+.result-table td, .result-table th { border-color: rgba(255,255,255,.13) !important; }
+.result-table .total-row { background: rgba(18,184,196,.14); font-weight: 800; }
+.microcopy { color: #9fb2c4; font-size: .78rem; line-height: 1.55; }
+.failure-card { padding: 1.55rem; }
+.failure-row { align-items: center; display: grid; gap: .75rem; grid-template-columns: minmax(120px,1.25fr) 1fr 2.3rem; margin: 1.05rem 0; }
+.failure-row span { color: #e3eef7; font-size: .82rem; }
+.failure-row div { background: rgba(255,255,255,.12); border-radius: 999px; height: 7px; overflow: hidden; }
+.failure-row i { background: linear-gradient(90deg,var(--blue),var(--cyan)); border-radius: inherit; display: block; height: 100%; }
+.failure-row b { color: white; font-size: .82rem; text-align: right; }
+
+.video-grid { margin-top: 1.2rem; }
+.video-card { background: white; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 14px 36px rgba(16,35,56,.08); height: 100%; overflow: hidden; }
+.video-card video { aspect-ratio: 16/9; background: #061426; display: block; object-fit: cover; width: 100%; }
+.video-copy { padding: 1.25rem; }
+.video-copy .title { margin: .7rem 0 .5rem !important; }
+.video-copy p { color: var(--muted); font-size: .9rem; line-height: 1.55; }
+.video-copy code { background: #f3f6f8; color: #486173; display: inline-block; font-size: .72rem; margin-top: .7rem; }
+.status { border-radius: 999px; display: inline-flex; font-size: .69rem; font-weight: 800; letter-spacing: .04em; padding: .35rem .65rem; text-transform: uppercase; }
+.status.supported { background: #dff8ed; color: #14704a; }
+.status.bounded { background: #fff0d8; color: #8a5200; }
+.evidence-note { background: #fff8e8; border: 1px solid #f1d798; border-radius: 12px; color: #6f5420; font-size: .86rem; line-height: 1.6; margin-top: 1.3rem; padding: 1rem 1.2rem; }
+
+.citation-section { background: #f7fafc; }
+.resource-buttons { margin: 1.4rem 0; }
+.bibtex-wrap { max-width: 820px; position: relative; }
+.bibtex-wrap pre { background: #07192d; border-radius: 14px; color: #dcecff; font-size: .82rem; line-height: 1.55; overflow: auto; padding: 1.35rem; }
+.copy-button { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); border-radius: 7px; color: white; cursor: pointer; font-size: .72rem; font-weight: 700; padding: .45rem .7rem; position: absolute; right: .7rem; top: .7rem; z-index: 2; }
+.citation-note { color: var(--muted); margin-top: .75rem; }
+.openeta-footer { background: #061426; color: #b9cad9; padding: 2.7rem 1.5rem; }
+.openeta-footer strong { color: white; }
+.openeta-footer a { color: #7edce4; }
+.template-credit { font-size: .76rem; }
+
+@media (max-width: 768px) {
+  .openeta-nav .navbar-menu { box-shadow: 0 14px 30px rgba(0,0,0,.12); }
+  .openeta-hero .hero-body { padding: 7.5rem 1rem 3.5rem; }
+  .openeta-hero .container { min-width: 0; width: 100%; }
+  .publication-title { font-size: clamp(3.15rem,17vw,4rem) !important; letter-spacing: -.045em; }
+  .publication-subtitle { font-size: clamp(1.08rem,5.8vw,1.35rem) !important; overflow-wrap: anywhere; }
+  .authors { font-size: .92rem; overflow-wrap: anywhere; }
+  .hero-links { margin-left: 0 !important; margin-right: 0 !important; }
+  .hero-links .button { font-size: .82rem; margin: .25rem !important; }
+  .glass-card { border-radius: 12px; max-width: 100%; width: 100%; }
+  .glass-card img { min-width: 0; }
+  .section { padding: 4rem 1.15rem; }
+  .failure-row { grid-template-columns: 1.35fr .8fr 2rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

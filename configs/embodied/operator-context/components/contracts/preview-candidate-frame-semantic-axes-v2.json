@@ -1,0 +1,5 @@
+{
+  "invariants": {
+    "pose_preview_pointcloud_frame": "candidate_gripper_jaw_app_lat_v2"
+  }
+}

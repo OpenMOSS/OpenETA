@@ -1,0 +1,1 @@
+"""Packaged OpenETA configuration resources."""

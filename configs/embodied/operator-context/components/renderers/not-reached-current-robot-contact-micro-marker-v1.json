@@ -1,0 +1,5 @@
+{
+  "invariants": {
+    "move_to_not_reached_contact_feedback": "current_robot_mujoco_contact_micro_marker_v1"
+  }
+}

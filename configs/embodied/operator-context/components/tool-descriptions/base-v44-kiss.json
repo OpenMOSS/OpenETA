@@ -1,0 +1,10 @@
+{
+  "replace": {
+    "observe": "Return fresh standalone views. Choose from agentview, wrist, pointcloud_top, pointcloud_front, and pointcloud_side; omitted views default to agentview and wrist. history_point_ids optionally redraws named solved marks.",
+    "mark_point": "Measure one world XYZ point. Click one image, then reuse point_id in one returned next view until solved. Pixel coordinates are zero-based in that individual image. An agentview click binds that visible instance and feature; in the returned point-cloud view follow its rendered ray and cyan marker rather than re-identifying the object. Two point-cloud views can define any visible or free-space point.",
+    "move_to": "Control the Panda grip-site directly. Set absolute world xyz_m or delta_mm in delta_frame; use grip_site deltas to apply candidate-preview corrections without converting axes to world. Omit both to rotate or operate the gripper in place. Omitted position and gripper stay unchanged. approach_world is local +Z; jaw_world is local +X. Either direction may be supplied alone. preview=true shows the resolved candidate without execution. A close request also previews its pad corridor first; repeat the unchanged request to execute, while any pose or observation change requires a new preview. Preview geometry does not predict contact. After close, aperture at or below observe's near_closed limit means no reliable grasp; a wider aperture still requires visual verification.",
+    "report_issue": "Record concise tool or context feedback without ending the episode.",
+    "check_task": "Return the native LIBERO task result.",
+    "finish_episode": "Finalize the episode. Success requires check_task=true. Failure requires a reason and exhausted attempts; interface feedback is optional."
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "move_to": "Control grip-site by world xyz_m, delta_mm/delta_frame, orientation, or gripper. Omitted inputs stay unchanged. approach_world accepts any world direction for local +Z (e.g. [0,0,-1] points down); jaw_world accepts any nonparallel direction for local +X; either alone is valid. grip_site deltas use [JAW,LAT,APP]. preview=true only renders candidate; close preview returns frozen preview_id, committed by execute_preview_id alone. Agentview is world RGB; front/side are candidate-local JAW/LAT/APP. motion=not_reached means target missed; inspect grip_xyz_m and remaining_delta_mm. Preview cannot predict contact. After close, aperture <= observe's near_closed means no reliable grasp; wider is only contact-compatible. Verify intended-object retention visually or by lift. Post-action images show current markers."
+  }
+}

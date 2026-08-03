@@ -1,0 +1,5 @@
+{
+  "invariants": {
+    "pointcloud_world_bounds": "scene_plus_current_grip_site_100mm_v1"
+  }
+}

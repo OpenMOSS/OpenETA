@@ -1,0 +1,14 @@
+# Optional AnyPlace MCP backend dependencies.
+#
+# Do not install these into the default OpenETA runtime unless you are running
+# tools/anyplace_mcp_server.py. AnyPlace itself should be installed from the
+# official repository in a separate backend environment, with its CUDA/torch
+# dependencies and multi-task checkpoint configured by --config-path.
+#
+# Lightweight server/runtime packages:
+mcp
+uvicorn
+starlette
+numpy
+Pillow
+pyyaml

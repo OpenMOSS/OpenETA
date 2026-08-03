@@ -1,0 +1,6 @@
+{
+  "replace": {
+    "observe": "Return fresh agentview, wrist, or pointcloud_top/front/side; default agentview+wrist. history_point_ids redraws named solved marks. Current grip_xyz_m is a tiny magenta ring with exact 1-px center; point-cloud pad centers are tiny orange dots.",
+    "move_to": "Control Panda grip-site. Set world xyz_m or delta_mm in delta_frame; grip_site deltas use current [JAW,LAT,APP]. Omitted position or gripper stays unchanged. approach_world is local +Z and jaw_world is local +X; either may be supplied alone. preview=true shows the candidate without execution. Agentview preview is world RGB; front/side point clouds use candidate-local JAW/LAT/APP. A close returns frozen preview_id; commit it with execute_preview_id alone, or issue a corrected move_to. motion=not_reached means target missed; inspect grip_xyz_m and remaining_delta_mm. Preview geometry does not predict contact. After close, aperture <= observe's near_closed means no reliable grasp; wider is contact-compatible only. Verify intended-object retention visually or by lift. Post-action images use the same current-state markers."
+  }
+}

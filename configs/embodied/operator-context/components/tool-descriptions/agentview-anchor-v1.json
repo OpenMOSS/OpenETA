@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "mark_point": "An Agentview click with valid RGB-D solves the first visible surface point as a geometry anchor. It is not an automatic grip-site; use it directly only when the gripper center should be there, otherwise derive a separate move target."
+  }
+}

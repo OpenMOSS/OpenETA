@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "move_to": "Control grip-site with world xyz_m, delta_mm/delta_frame, orientation, or gripper; omitted inputs stay unchanged. approach_world sets local +Z to any world direction, jaw_world local +X to any nonparallel direction; either alone is valid. grip_site deltas are [JAW,LAT,APP]. preview=true renders without acting; close preview returns a frozen preview_id, committed by execute_preview_id alone. In a combined call, gripper runs only if motion reaches; after motion=not_reached it is skipped. Agentview is world RGB; front/side use candidate-local JAW/LAT/APP. Compare grip_xyz_m with remaining_delta_mm after motion=not_reached. Preview cannot predict contact. After close, aperture <= aperture_limits_mm.near_closed from observe means no reliable grasp; wider is only contact-compatible. Verify intended-object retention visually or by lift. Post-action magenta ring marks grip_xyz_m. On LIBERO not_reached images, cyan dots mark sampled final-step Panda contacts, not a cause label."
+  }
+}

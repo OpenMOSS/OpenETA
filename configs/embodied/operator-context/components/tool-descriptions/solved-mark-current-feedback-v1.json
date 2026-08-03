@@ -1,0 +1,5 @@
+{
+  "append": {
+    "mark_point": " A solved mark returns annotated contributing source view(s) showing only the point just solved. Earlier solved points are not redrawn in this feedback."
+  }
+}

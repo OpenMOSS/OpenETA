@@ -1,0 +1,3 @@
+prune sim/venvs
+prune third_party
+global-exclude __pycache__ *.py[cod]

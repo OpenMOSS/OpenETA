@@ -1,0 +1,7 @@
+{
+  "invariants": {
+    "agentview_ray_depth_policy": "solve_aligned_rgbd_visible_surface",
+    "agentview_first_surface_shortcut": true,
+    "agentview_ray_fallback": "pending_without_valid_rgbd_depth"
+  }
+}

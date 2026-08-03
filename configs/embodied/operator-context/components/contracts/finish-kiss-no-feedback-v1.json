@@ -1,0 +1,8 @@
+{
+  "invariants": {
+    "finish_episode_input_shape": "kiss_no_feedback_v1",
+    "public_input_schema_sha256": {
+      "finish_episode": "390c53c0dc10058cc50a38a48c6984cdde9bd448a2e37d604bc4aa728f196a58"
+    }
+  }
+}

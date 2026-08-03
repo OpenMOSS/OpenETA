@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "move_to": "Control Panda grip-site. Set world xyz_m or delta_mm in delta_frame; grip_site deltas use current [JAW,LAT,APP]. Omitted position or gripper stays unchanged. approach_world is local +Z and jaw_world is local +X; either may be supplied alone. preview=true shows the candidate without execution. Agentview preview is world RGB; front/side point clouds are candidate-local JAW/LAT/APP views, not world front/side. A close returns a frozen preview_id; execute it with execute_preview_id alone, or issue a corrected move_to. motion=not_reached means the requested endpoint was not achieved; use grip_xyz_m and remaining_delta_mm. Preview geometry does not predict contact. After close, aperture at or below observe's near_closed limit means no reliable grasp; wider is only contact-compatible and still needs fresh visual or lift evidence for intended-object retention."
+  }
+}

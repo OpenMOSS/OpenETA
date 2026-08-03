@@ -1,0 +1,55 @@
+[project]
+name = "openeta"
+version = "0.1.0"
+description = "OpenETA embodied agent runtime and simulator integration."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dependencies = [
+  "gymnasium>=1.0",
+  "imageio[ffmpeg]>=2.34",
+  "jsonschema>=4.26",
+  "mcp>=1.0",
+  "numpy>=1.26",
+  "omegaconf>=2.3",
+  "Pillow>=10",
+  "prompt_toolkit>=3.0",
+  "tiktoken>=0.7",
+]
+
+[project.scripts]
+openeta = "agent.cli.openeta_cli:main"
+openeta-robocasa-benchmark = "scripts.robocasa_benchmark:main"
+openeta-batch = "agent.cli.batch_eval:main"
+openeta-replay = "logger.replay:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["adapter*", "agent*", "configs*", "logger*", "scripts*", "sim*", "tools*"]
+exclude = ["sim.venvs*"]
+
+[tool.setuptools.package-data]
+"agent.skills" = ["*.md"]
+configs = [
+  "embodied/operator-context/**/*.json",
+  "embodied/operator-context/**/*.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+  "third_party",
+]

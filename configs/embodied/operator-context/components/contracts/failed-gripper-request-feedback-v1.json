@@ -1,0 +1,5 @@
+{
+  "invariants": {
+    "move_to_failed_gripper_request_feedback": "actual_aperture_v1"
+  }
+}

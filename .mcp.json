@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "openeta-sim": {
+      "url": "http://127.0.0.1:8765/sse"
+    },
+    "openeta-sam3": {
+      "url": "http://127.0.0.1:8773/sse"
+    },
+    "openeta-anygrasp": {
+      "url": "http://127.0.0.1:8774/sse"
+    },
+    "openeta-anyplace": {
+      "url": "http://127.0.0.1:8775/sse"
+    }
+  }
+}

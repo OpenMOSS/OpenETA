@@ -1,0 +1,169 @@
+{
+  "invariants": {
+    "move_to_close_execution_policy": "frozen_preview_id_commit_v1",
+    "move_to_input_shape": "kiss_flat_v4",
+    "public_input_schema_sha256": {
+      "move_to": "cf947f7cb87601090c14aaffc71425208e2b51b467b17be4ab9cdb0cc7d40c0b"
+    },
+    "public_result_schemas": {
+      "move_to": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "motion",
+              "views"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "motion": {
+                "const": "previewed"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preview_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "motion",
+              "grip_xyz_m",
+              "views"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "motion": {
+                "enum": [
+                  "reached",
+                  "not_requested",
+                  "task_completed"
+                ]
+              },
+              "grip_xyz_m": {
+                "$ref": "#/$defs/vector3nullable"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "aperture_mm": {
+                "type": "number"
+              },
+              "approach_world": {
+                "$ref": "#/$defs/vector3"
+              },
+              "jaw_world": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "motion",
+              "grip_xyz_m",
+              "views",
+              "remaining_delta_mm"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "motion": {
+                "const": "not_reached"
+              },
+              "grip_xyz_m": {
+                "$ref": "#/$defs/vector3nullable"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remaining_delta_mm": {
+                "$ref": "#/$defs/vector3"
+              },
+              "aperture_mm": {
+                "type": "number"
+              },
+              "approach_world": {
+                "$ref": "#/$defs/vector3"
+              },
+              "jaw_world": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "$ref": "#/$defs/error"
+          }
+        ],
+        "$defs": {
+          "vector3": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "vector3nullable": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

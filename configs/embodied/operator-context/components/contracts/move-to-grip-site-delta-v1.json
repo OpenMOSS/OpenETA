@@ -1,0 +1,9 @@
+{
+  "invariants": {
+    "move_to_input_shape": "kiss_flat_v3",
+    "move_to_position_delta_frames": "world_or_current_grip_site_jaw_lat_app_v1",
+    "public_input_schema_sha256": {
+      "move_to": "e8ce6278c81012af898fce4163bf8d74ce06053769139667ad557d38147de289"
+    }
+  }
+}

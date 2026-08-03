@@ -1,0 +1,48 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+sim/venvs/
+
+.env
+.env.*
+!.env.example
+apikey.md
+.agents/
+.openeta_memory/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Experiment outputs
+outputs/
+runs/
+artifacts/
+tmp/
+*.log
+
+# Local Claude config
+.claude/
+
+# Temporary test images at repo root
+libero_*.png
+
+# IDE
+.idea/
+.vscode/
+
+# RLinf duplicated seed dir
+sim/envs/robotwin/seeds/seeds/
+
+CLAUDE.md
+
+# Local external simulator and model checkouts
+third_party/

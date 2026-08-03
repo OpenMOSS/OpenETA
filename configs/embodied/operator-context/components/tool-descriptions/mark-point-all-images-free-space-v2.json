@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "mark_point": "Mark world XYZ using the exact view string from a result. Agentview/wrist RGB-D and their overlays solve the first visible surface at the clicked pixel when aligned depth is valid. Orthographic pointcloud_top/front/side clicks may use empty image space: two complementary views define any surface or free-space point through displayed world axes. Candidate front/side views likewise define any point inside the rendered local JAW/LAT/APP volume. Two-axis views return the needed complement; reuse point_id. A solved point is geometry, not an automatic grip-site."
+  }
+}

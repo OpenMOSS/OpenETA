@@ -1,0 +1,5 @@
+{
+  "replace": {
+    "finish_episode": "Finalize the episode. Success requires check_task=true. Failure requires a reason and exhausted attempts."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "invariants": {
+    "mark_point_image_contract": "all_returned_views_v1",
+    "mark_point_rgbd_surface_views": [
+      "agentview",
+      "wrist"
+    ]
+  }
+}

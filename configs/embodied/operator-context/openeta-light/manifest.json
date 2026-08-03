@@ -1,0 +1,206 @@
+{
+  "schema_version": "openeta.operator_context_profile.v2",
+  "profile_id": "openeta-light",
+  "revision": 1,
+  "status": "release",
+  "components": {
+    "contract.kiss": {
+      "ref": "contracts/operator-kiss-v1.json",
+      "sha256": "9511e6c01777cae79e2794b77f492e0e04db972a33abcdd281c3ac20973124b9"
+    },
+    "prompt.kiss": {
+      "ref": "prompts/operator-kiss-v12-compact-cross-tool.md",
+      "sha256": "7e99a94962133d3ba4f5bc0a049d8657b9074bbbcf3e128bc38dce3ce0085722"
+    },
+    "tools.kiss": {
+      "ref": "tool-descriptions/base-v44-kiss.json",
+      "sha256": "b7241ee547df06530797880100777db857fd155d8ba91d37b958dedf089ddd8b"
+    },
+    "tools.close-commit": {
+      "ref": "tool-descriptions/close-preview-explicit-commit-v3-context-aligned.json",
+      "sha256": "889619dc0e4fb2bd39488c1257655ea478c899fa21945b3f50a388b4245e8698"
+    },
+    "contract.preview-result": {
+      "ref": "contracts/preview-result-views-only-v1.json",
+      "sha256": "e12cae11b8c550c124591448eff24a6281a84dba9d3ab1c32f750bb78715cb95"
+    },
+    "contract.preview-frame": {
+      "ref": "contracts/preview-candidate-frame-semantic-axes-v2.json",
+      "sha256": "204c0c211a8c423c493ffde2acdffd6154fb082aed8a53a7668db564f34db5c5"
+    },
+    "contract.close-confirm": {
+      "ref": "contracts/close-preview-explicit-commit-v1.json",
+      "sha256": "b06da8b3c914e6a0ed4ccd5c43ecc149e0d66c0e39e0fa51a828262c062e4299"
+    },
+    "contract.grip-site-delta": {
+      "ref": "contracts/move-to-grip-site-delta-v1.json",
+      "sha256": "6267486a6343eb5e5c2850d03efcaf164402294217f4d6a56f83427e60e99d31"
+    },
+    "contract.agentview-first-surface": {
+      "ref": "contracts/agentview-first-surface-v1.json",
+      "sha256": "3808d3ff9bc7b74186d04a6aa41c72bf95f9f78149638d1b459ab90b38fac8c0"
+    },
+    "tools.agentview-first-surface": {
+      "ref": "tool-descriptions/agentview-anchor-v1.json",
+      "sha256": "93e2094fd5184cf91f739312dfd6ea945a06582b8b410a19085ccfdcf37265a4"
+    },
+    "renderer.preview-frame": {
+      "ref": "renderers/pose-preview-corridor-local-v2.json",
+      "sha256": "f72e1d0b0fe8c072fca4fe8effcc11ca42674320029d0d1b6bf3195af6fe5cba"
+    },
+    "contract.all-images-markable": {
+      "ref": "contracts/all-returned-images-markable-v1.json",
+      "sha256": "54a505e73c67cc3e26b446da1d46fdde5b59e1df20d55bb40da12f9d59772d81"
+    },
+    "tools.all-images-markable": {
+      "ref": "tool-descriptions/mark-point-all-images-free-space-v2.json",
+      "sha256": "0340144849c100ed98ac7c82e77652fcd09328f669c3fdf2c0ad7727130f66d4"
+    },
+    "contract.current-mark-feedback": {
+      "ref": "contracts/solved-mark-current-feedback-v1.json",
+      "sha256": "2eb18f688331210c988e927711e185bbbd876c2340cfe1c1f4443d015ce873ba"
+    },
+    "tools.current-mark-feedback": {
+      "ref": "tool-descriptions/solved-mark-current-feedback-v1.json",
+      "sha256": "31e5470589138726e1ae88a777559f78c525d26805ba80bbfb9a9e3bc01bd1a3"
+    },
+    "renderer.current-grip-site": {
+      "ref": "renderers/current-grip-site-micro-marker-v1.json",
+      "sha256": "0fc6ad2ce0eb3a03e39f804d683de7478dec2a67d707d0d45454e86dcbdfe071"
+    },
+    "tools.current-grip-site": {
+      "ref": "tool-descriptions/current-grip-site-micro-marker-v3-zero-growth.json",
+      "sha256": "8c20989a5d8c5da4c7cbeb6fac49979e34aff704a66dceefb3b44815ed389404"
+    },
+    "renderer.current-mark": {
+      "ref": "renderers/solved-mark-micro-marker-v1.json",
+      "sha256": "d83fe138fbf1c8c7ad641906f32dd52fa4646d7918ad9efdcce2ef54e0c82e05"
+    },
+    "tools.approach-direction": {
+      "ref": "tool-descriptions/orientation-any-world-direction-v1.json",
+      "sha256": "4494a12479639b1f54d1c68f895aff75a182a0e7f7bdcb9a4594b60c5d6e493d"
+    },
+    "renderer.agentview-preview": {
+      "ref": "renderers/agentview-pose-preview-micro-marker-v1.json",
+      "sha256": "47ff205f7b3791b8f4929979c9589b9b168648ab2e63bcb6b2da90a730c47799"
+    },
+    "result.candidate-view-namespace": {
+      "ref": "results/candidate-pose-view-namespace-v1.json",
+      "sha256": "0f7258f33f0621314c187019212136aa1c3d1c969cb0b9f33fc0e53f08f7270b"
+    },
+    "renderer.pointcloud-reachable-envelope": {
+      "ref": "renderers/pointcloud-current-reachable-envelope-v1.json",
+      "sha256": "31f3767102e2e26f406d3c933a57e95885e04e43e72d39a0a667098c1fd38bec"
+    },
+    "renderer.rejected-mark-feedback": {
+      "ref": "renderers/rejected-mark-current-micro-marker-v1.json",
+      "sha256": "3c7aed44137fbb0d206598537854d790ec187696d09f1efc6c425171c6b2ec73"
+    },
+    "renderer.not-reached-contact": {
+      "ref": "renderers/not-reached-current-robot-contact-micro-marker-v1.json",
+      "sha256": "0ff97ad37636e97769d8b310959acaf3db1ebc37655abb6029797c471be8a2d0"
+    },
+    "contract.server-instructions": {
+      "ref": "contracts/operator-server-instructions-none-v1.json",
+      "sha256": "9929308c65fbb66b5ff11539f1b13ee3548e2f70a0a61ef9850597c7f12153fc"
+    },
+    "contract.failed-gripper-feedback": {
+      "ref": "contracts/failed-gripper-request-feedback-v1.json",
+      "sha256": "82f25f2795321e366527c268b7e5815ae5427eb18da754312d6db16cb0a911f2"
+    },
+    "tools.current-contact": {
+      "ref": "tool-descriptions/current-contact-marker-v2-robot-only.json",
+      "sha256": "d74d03d33e58353eb0c715ab15231179bae4ec81a291a7285ad8d0bac41a1215"
+    },
+    "contract.finish-no-feedback": {
+      "ref": "contracts/finish-kiss-no-feedback-v1.json",
+      "sha256": "15bee6ad82461248f2f7abb286f36f32da933392662c7931bd32901fa851737d"
+    },
+    "tools.finish-no-feedback": {
+      "ref": "tool-descriptions/finish-no-feedback-v1.json",
+      "sha256": "707a55c3c3166b1dac5ed1449df8e9f0ecbdbc10a560dac4e217ef2cedf2c53e"
+    },
+    "renderer.metric-tick-band": {
+      "ref": "renderers/pointcloud-metric-tick-labels-readable-v3.json",
+      "sha256": "95970f51f1c3825c98a27a0a8526be0b4f99fc34585265b7a40f3f5eae1db5af"
+    }
+  },
+  "contract_order": [
+    "contract.kiss",
+    "contract.preview-result",
+    "contract.preview-frame",
+    "contract.grip-site-delta",
+    "contract.close-confirm",
+    "contract.agentview-first-surface",
+    "contract.all-images-markable",
+    "contract.current-mark-feedback",
+    "contract.server-instructions",
+    "contract.failed-gripper-feedback",
+    "contract.finish-no-feedback"
+  ],
+  "result_order": [
+    "result.candidate-view-namespace"
+  ],
+  "prompt_order": [
+    "prompt.kiss"
+  ],
+  "tool_description_order": [
+    "tools.kiss",
+    "tools.close-commit",
+    "tools.agentview-first-surface",
+    "tools.all-images-markable",
+    "tools.current-mark-feedback",
+    "tools.current-grip-site",
+    "tools.approach-direction",
+    "tools.current-contact",
+    "tools.finish-no-feedback"
+  ],
+  "renderer_order": [
+    "renderer.preview-frame",
+    "renderer.current-grip-site",
+    "renderer.current-mark",
+    "renderer.agentview-preview",
+    "renderer.pointcloud-reachable-envelope",
+    "renderer.rejected-mark-feedback",
+    "renderer.not-reached-contact",
+    "renderer.metric-tick-band"
+  ],
+  "integrity": {
+    "schema": "openeta.operator_context_integrity.v1",
+    "composition_algorithm": "sha256-ordered-components-v1",
+    "component_order": [
+      "contract.kiss",
+      "contract.preview-result",
+      "contract.preview-frame",
+      "contract.grip-site-delta",
+      "contract.close-confirm",
+      "contract.agentview-first-surface",
+      "contract.all-images-markable",
+      "contract.current-mark-feedback",
+      "contract.server-instructions",
+      "contract.failed-gripper-feedback",
+      "contract.finish-no-feedback",
+      "result.candidate-view-namespace",
+      "renderer.preview-frame",
+      "renderer.current-grip-site",
+      "renderer.current-mark",
+      "renderer.agentview-preview",
+      "renderer.pointcloud-reachable-envelope",
+      "renderer.rejected-mark-feedback",
+      "renderer.not-reached-contact",
+      "renderer.metric-tick-band",
+      "prompt.kiss",
+      "tools.kiss",
+      "tools.close-commit",
+      "tools.agentview-first-surface",
+      "tools.all-images-markable",
+      "tools.current-mark-feedback",
+      "tools.current-grip-site",
+      "tools.approach-direction",
+      "tools.current-contact",
+      "tools.finish-no-feedback"
+    ],
+    "composition_sha256": "bc1749ac21fdfa3871b87aed77e1a41571a09fd30c4625be45a93f7d9b898399",
+    "manifest_sha256": "0143da43e5ed6c9fb7073e46afbbad40522d0c3f0534db7c032a17bba0105081"
+  }
+}

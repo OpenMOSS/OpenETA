@@ -1,0 +1,93 @@
+{
+  "invariants": {
+    "solved_point_operator_images": "current_mark_source_views_v1",
+    "solved_point_operator_evidence": "current_mark_source_views_v1",
+    "public_result_schemas": {
+      "mark_point": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "status",
+              "point_id"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "solved",
+                  "verified"
+                ]
+              },
+              "point_id": {
+                "type": "string"
+              },
+              "next_views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "xyz_m": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "point_id": {
+                "type": "string"
+              },
+              "next_views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "$defs": {
+          "vector3": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  }
+}

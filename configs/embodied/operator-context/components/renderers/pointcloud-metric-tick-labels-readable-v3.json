@@ -1,0 +1,7 @@
+{
+  "schema_version": "openeta.operator_context_component.v1",
+  "component_type": "renderer",
+  "invariants": {
+    "pointcloud_metric_tick_band_style": "readable_v3"
+  }
+}

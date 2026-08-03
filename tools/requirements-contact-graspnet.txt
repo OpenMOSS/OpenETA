@@ -1,0 +1,18 @@
+# Optional dependencies for the OpenETA Contact-GraspNet MCP server.
+#
+# Install these in the dedicated Contact-GraspNet service environment only.
+# Provide the external Contact-GraspNet PyTorch checkout and checkpoint via
+# --contact-graspnet-root and --checkpoint-dir. Do not install or vendor that
+# non-commercial research/evaluation backend into the default OpenETA runtime.
+
+mcp
+uvicorn
+starlette
+numpy
+Pillow
+pyyaml
+
+# Install torch for the target CUDA platform separately. Install the external
+# backend's PointNet2 and other model dependencies in the same environment.
+# Checkpoint loading remains weights_only=True; the service never falls back to
+# unrestricted pickle deserialization.

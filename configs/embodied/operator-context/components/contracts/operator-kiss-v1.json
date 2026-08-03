@@ -1,0 +1,477 @@
+{
+  "public_operator_tools": [
+    "observe",
+    "mark_point",
+    "move_to",
+    "report_issue",
+    "check_task",
+    "finish_episode"
+  ],
+  "invariants": {
+    "operator_input_schema": "compact_v1",
+    "move_to_input_shape": "kiss_flat_v1",
+    "operator_result_schema": "compact_v1",
+    "operator_server_instructions": "compact_v1",
+    "eef_frame": "panda_grip_site",
+    "point_frame": "world",
+    "marks_are_immutable": true,
+    "mark_depth_policy": "multi_view_constraints_only",
+    "agentview_ray_depth_policy": "confirm_aligned_rgbd_visible_surface",
+    "observe_inspection_policy": "disabled",
+    "operator_image_return_policy": "individual_source_views_only",
+    "observe_default_views": [
+      "agentview",
+      "wrist"
+    ],
+    "pending_point_read_only_observe_policy": "preserved_until_world_change",
+    "pending_point_operator_images": "remaining_clickable_source_views_only",
+    "solved_point_operator_images": "none_replay_only",
+    "solved_point_operator_evidence": "replay_only",
+    "pose_preview_policy": "same_target_resolver_as_execution",
+    "pose_preview_gripper_policy": "accepted_but_not_executed",
+    "pose_preview_overlay": "compact_geometry_only",
+    "pose_preview_agentview_overlay": "hypothetical_candidate_pose_projection",
+    "pose_preview_local_inspection": "disabled",
+    "pose_preview_candidate_frame_inspection": "disabled",
+    "pointcloud_metric_edge_ticks": true,
+    "full_diagnostics_location": "replay_details_only",
+    "public_result_validation": "fail_closed_before_mcp_delivery",
+    "public_input_schema_sha256": {
+      "check_task": "5ff129ba1b72ea350b3a7c97b190e1c0f0126bb020fc2021e3bb70ad2881f8d2",
+      "finish_episode": "d1997d3d7dd855aa202f36bae93c813f0d5adf27cf3cae319627aa2018729787",
+      "mark_point": "ff341169bbfd955540b3dc3c3b6e716fca9a53bd987341aa078792965c62d8cc",
+      "move_to": "081d9fe3e89ef845f6fe081d26d25ef7a85594f490c5cbc46615b2ed08b16410",
+      "observe": "eb1642b557ec678b4a82b1da0e8b2bd7533b2b6b2657b2e5fb839403c07e93ac",
+      "report_issue": "c4fdd84d2339edd3461220f6d3911e77c0363f3e3807feb7c2a4c349a3ed4685"
+    },
+    "public_result_schemas": {
+      "observe": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "observation_id",
+              "views",
+              "grip_xyz_m",
+              "aperture_mm"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "observation_id": {
+                "type": "string"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "grip_xyz_m": {
+                "$ref": "#/$defs/vector3nullable"
+              },
+              "aperture_mm": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "aperture_limits_mm": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "near_closed",
+                  "open"
+                ],
+                "properties": {
+                  "near_closed": {
+                    "type": "number"
+                  },
+                  "open": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "$ref": "#/$defs/error"
+          }
+        ],
+        "$defs": {
+          "vector3nullable": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "mark_point": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "status",
+              "point_id"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "solved",
+                  "verified"
+                ]
+              },
+              "point_id": {
+                "type": "string"
+              },
+              "next_views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "xyz_m": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "point_id": {
+                "type": "string"
+              },
+              "next_views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "$defs": {
+          "vector3": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "move_to": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "motion",
+              "grip_xyz_m",
+              "views"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "motion": {
+                "enum": [
+                  "previewed",
+                  "reached",
+                  "not_requested",
+                  "task_completed"
+                ]
+              },
+              "grip_xyz_m": {
+                "$ref": "#/$defs/vector3nullable"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "aperture_mm": {
+                "type": "number"
+              },
+              "approach_world": {
+                "$ref": "#/$defs/vector3"
+              },
+              "jaw_world": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "motion",
+              "grip_xyz_m",
+              "views",
+              "remaining_delta_mm"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "motion": {
+                "const": "not_reached"
+              },
+              "grip_xyz_m": {
+                "$ref": "#/$defs/vector3nullable"
+              },
+              "views": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remaining_delta_mm": {
+                "$ref": "#/$defs/vector3"
+              },
+              "aperture_mm": {
+                "type": "number"
+              },
+              "approach_world": {
+                "$ref": "#/$defs/vector3"
+              },
+              "jaw_world": {
+                "$ref": "#/$defs/vector3"
+              }
+            }
+          },
+          {
+            "$ref": "#/$defs/error"
+          }
+        ],
+        "$defs": {
+          "vector3": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "vector3nullable": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          },
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "report_issue": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "check_task": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "task_success"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "task_success": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "finish_episode": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "outcome"
+            ],
+            "properties": {
+              "success": {
+                "const": true
+              },
+              "outcome": {
+                "enum": [
+                  "success",
+                  "failure",
+                  "abort"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "success",
+              "reason"
+            ],
+            "properties": {
+              "success": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "required_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

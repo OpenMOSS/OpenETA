@@ -21,7 +21,9 @@ OpenETA 将从数字智能体（Digital Agent）到物理智能体（Physical Ag
 
 - **2026-08-03** — **OpenETA-Light：** 我们发布了
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
-  分支，通过六个类型化工具与版本化 Operator 上下文，将 Codex TUI 接入 LIBERO。
+  分支，通过六个类型化工具与版本化 Operator 上下文，将 Codex TUI 接入 LIBERO。使用
+  `gpt-5.6-sol`（medium reasoning effort），Codex + OpenETA-Light 在全部 130 个 LIBERO 任务上
+  取得 **70.8% Pass@1** 和 **90.0% Pass@5**。
 - **2026-07-27** — **真机部署：** 我们发布了
   [`dev/real-robot-deployment`](https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment)
   分支，其中包含真机部署栈、硬件接口和物理智能体工具。

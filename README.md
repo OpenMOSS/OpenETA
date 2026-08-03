@@ -31,7 +31,9 @@ change reality.
 - **2026-08-03** — **OpenETA-Light:** We released the
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
   branch, which connects the Codex TUI to LIBERO through six typed tools and a
-  versioned Operator context.
+  versioned Operator context. With `gpt-5.6-sol` at medium reasoning effort,
+  Codex + OpenETA-Light reaches **70.8% Pass@1** and **90.0% Pass@5** across
+  all 130 LIBERO tasks.
 - **2026-07-27** — **Real-Robot Deployment:** We released the
   [`dev/real-robot-deployment`](https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment)
   branch with the real-robot deployment stack, hardware interfaces, and physical-agent tooling.

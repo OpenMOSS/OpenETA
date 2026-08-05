@@ -6,6 +6,10 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+[📄 Paper](https://arxiv.org/abs/2608.03924) ·
+[🌐 Project Page](https://openmoss.ai/OpenETA/) ·
+[💻 GitHub](https://github.com/OpenMOSS/OpenETA)
+
 > **A new agentic paradigm for moving intelligence from the digital world into the physical world.**
 
 Physical intelligence is fundamentally about closing a causal loop with the world: understanding the
@@ -28,11 +32,11 @@ change reality.
 
 ## What's New
 
-- **2026-08-03** — **OpenETA-Light:** We released the
+- **2026-08-03** — **OpenETA for Codex:** We released the
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
   branch, which connects the Codex TUI to LIBERO through six typed tools and a
   versioned Operator context. With `gpt-5.6-sol` at medium reasoning effort,
-  Codex + OpenETA-Light reaches **70.8% Pass@1** and **90.0% Pass@5** across
+  Codex + OpenETA reaches **70.8% Pass@1** and **90.0% Pass@5** across
   all 130 LIBERO tasks.
 - **2026-07-27** — **Real-Robot Deployment:** We released the
   [`dev/real-robot-deployment`](https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment)

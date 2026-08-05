@@ -6,6 +6,10 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+[📄 论文](https://arxiv.org/abs/2608.03924) ·
+[🌐 项目主页](https://openmoss.ai/OpenETA/) ·
+[💻 GitHub](https://github.com/OpenMOSS/OpenETA)
+
 > **一种将智能从数字世界迁移到物理世界的全新智能体范式。**
 
 物理智能的本质，是与世界形成闭合的因果循环：理解当前状态，采取行动改变它，观察真实结果，更新底层信念，并在持续交互中积累经验。前沿智能体模型已经开始在数字领域展现这种能力：它们围绕目标进行推理、调用工具、检查执行结果，并通过反馈完成长程任务。它们仍然缺少的，是一种将这一循环可靠地延伸到物理世界的方法。
@@ -19,10 +23,10 @@ OpenETA 将从数字智能体（Digital Agent）到物理智能体（Physical Ag
 
 ## 最新动态
 
-- **2026-08-03** — **OpenETA-Light：** 我们发布了
+- **2026-08-03** — **OpenETA for Codex：** 我们发布了
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
   分支，通过六个类型化工具与版本化 Operator 上下文，将 Codex TUI 接入 LIBERO。使用
-  `gpt-5.6-sol`（medium reasoning effort），Codex + OpenETA-Light 在全部 130 个 LIBERO 任务上
+  `gpt-5.6-sol`（medium reasoning effort），Codex + OpenETA 在全部 130 个 LIBERO 任务上
   取得 **70.8% Pass@1** 和 **90.0% Pass@5**。
 - **2026-07-27** — **真机部署：** 我们发布了
   [`dev/real-robot-deployment`](https://github.com/OpenMOSS/OpenETA/tree/dev/real-robot-deployment)

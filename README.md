@@ -304,7 +304,21 @@ Contact-GraspNet, GraspGenX, and Molmo.
 
 ## Citation and License
 
-Formal citation metadata will be added before the first public technical report. OpenETA is licensed
+If you find OpenETA useful in your research, please cite:
+
+```bibtex
+@misc{chen2026etanewagenticparadigm,
+      title={ETA: A New Agentic Paradigm for Embodied Tasks},
+      author={Yitong Chen and Zezheng Huai and Sixian Li and Yubang Wang and Haozhe Zhang and Yifei Zhang and Hechang Chen and Jingjing Gong and Yu-Gang Jiang and Xipeng Qiu},
+      year={2026},
+      eprint={2608.03924},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2608.03924}
+}
+```
+
+OpenETA is licensed
 under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Third-party components
 and migrated code remain subject to their respective upstream licenses and retained source-file
 notices.

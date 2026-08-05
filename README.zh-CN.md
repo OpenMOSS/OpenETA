@@ -277,4 +277,18 @@ OpenETA 最初的模拟器集成迁移并改编自 [RLinf](https://github.com/RL
 
 ## 引用与许可证
 
-正式引用元数据将在首份公开技术报告发布前添加。OpenETA 采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 许可。第三方组件和迁移的代码仍受各自上游许可证及保留的源文件声明约束。
+如果 OpenETA 对你的研究有帮助，请引用：
+
+```bibtex
+@misc{chen2026etanewagenticparadigm,
+      title={ETA: A New Agentic Paradigm for Embodied Tasks},
+      author={Yitong Chen and Zezheng Huai and Sixian Li and Yubang Wang and Haozhe Zhang and Yifei Zhang and Hechang Chen and Jingjing Gong and Yu-Gang Jiang and Xipeng Qiu},
+      year={2026},
+      eprint={2608.03924},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2608.03924}
+}
+```
+
+OpenETA 采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 许可。第三方组件和迁移的代码仍受各自上游许可证及保留的源文件声明约束。

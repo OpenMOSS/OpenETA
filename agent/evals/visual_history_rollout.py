@@ -73,6 +73,16 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             if isinstance(row.get("duration_s"), (int, float))
         ]
         vdm_tokens = sum(_usage_tokens(row) for row in vdm_calls)
+        planner_prompt_tokens = sum(
+            _usage_metric(row, "prompt_tokens") for row in planner_calls
+        )
+        planner_completion_tokens = sum(
+            _usage_metric(row, "completion_tokens") for row in planner_calls
+        )
+        planner_total_tokens = sum(_usage_tokens(row) for row in planner_calls)
+        usage = metadata.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        episode_total_tokens = _nonnegative_int(usage.get("total_tokens"))
         objective_success = _objective_success(episode)
         false_completion = (
             metadata.get("stop_reason") == "task_complete" and not objective_success
@@ -86,6 +96,7 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "repeat_index": job.get("repeat_index"),
             "seed": outcome.get("seed"),
             "status": outcome.get("status"),
+            "stop_reason": str(metadata.get("stop_reason") or ""),
             "objective_success": objective_success,
             "false_task_completion": false_completion,
             "planner_turn_count": len(planner_calls),
@@ -100,6 +111,13 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "vdm_failure_count": len(vdm_calls) - vdm_success,
             "vdm_total_tokens": vdm_tokens,
             "vdm_total_duration_s": round(sum(vdm_durations), 3),
+            "planner_prompt_tokens": planner_prompt_tokens,
+            "planner_completion_tokens": planner_completion_tokens,
+            "planner_total_tokens": planner_total_tokens,
+            "episode_total_tokens": episode_total_tokens,
+            "episode_duration_s": round(
+                _nonnegative_float(outcome.get("duration_s")), 3
+            ),
             "rollout_dir": str(rollout_dir),
         }
         rows.append(row)
@@ -117,6 +135,20 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         selected = [row for row in rows if row.get("variant_id") == variant_id]
         variants[variant_id] = {
             "job_count": len(selected),
+            "status_counts": dict(
+                sorted(
+                    Counter(
+                        str(row.get("status") or "unknown") for row in selected
+                    ).items()
+                )
+            ),
+            "stop_reason_counts": dict(
+                sorted(
+                    Counter(
+                        str(row.get("stop_reason") or "unknown") for row in selected
+                    ).items()
+                )
+            ),
             "objective_success_count": sum(bool(row["objective_success"]) for row in selected),
             "false_task_completion_count": sum(
                 bool(row["false_task_completion"]) for row in selected
@@ -133,11 +165,39 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "mean_raw_visual_evidence_per_turn": _mean(
                 [float(row["mean_raw_visual_evidence_per_turn"]) for row in selected]
             ),
+            "max_raw_visual_evidence_per_turn": max(
+                (int(row["max_raw_visual_evidence_per_turn"]) for row in selected),
+                default=0,
+            ),
+            "mean_compressed_delta_count_per_turn": _mean(
+                [
+                    float(row["mean_compressed_delta_count_per_turn"])
+                    for row in selected
+                ]
+            ),
             "vdm_call_count": sum(int(row["vdm_call_count"]) for row in selected),
             "vdm_failure_count": sum(int(row["vdm_failure_count"]) for row in selected),
             "vdm_total_tokens": sum(int(row["vdm_total_tokens"]) for row in selected),
             "vdm_total_duration_s": round(
                 sum(float(row["vdm_total_duration_s"]) for row in selected), 3
+            ),
+            "planner_prompt_tokens": sum(
+                int(row["planner_prompt_tokens"]) for row in selected
+            ),
+            "planner_completion_tokens": sum(
+                int(row["planner_completion_tokens"]) for row in selected
+            ),
+            "planner_total_tokens": sum(
+                int(row["planner_total_tokens"]) for row in selected
+            ),
+            "episode_total_tokens": sum(
+                int(row["episode_total_tokens"]) for row in selected
+            ),
+            "mean_episode_total_tokens": _mean(
+                [int(row["episode_total_tokens"]) for row in selected]
+            ),
+            "mean_episode_duration_s": _mean(
+                [float(row["episode_duration_s"]) for row in selected]
             ),
         }
     pair_coverage = Counter(str(row.get("pair_id") or "") for row in rows)
@@ -322,18 +382,34 @@ def _alternating_tool_cycle_count(names: list[str]) -> int:
 
 
 def _usage_tokens(row: JsonDict) -> int:
+    total = _usage_metric(row, "total_tokens")
+    if total > 0:
+        return total
+    return _usage_metric(row, "prompt_tokens") + _usage_metric(
+        row, "completion_tokens"
+    )
+
+
+def _usage_metric(row: JsonDict, key: str) -> int:
     result = row.get("result")
     result = result if isinstance(result, dict) else {}
     details = result.get("details")
     details = details if isinstance(details, dict) else {}
     usage = details.get("usage")
     usage = usage if isinstance(usage, dict) else {}
-    total = usage.get("total_tokens")
-    if isinstance(total, int) and not isinstance(total, bool) and total > 0:
-        return total
-    return sum(
-        int(usage.get(key) or 0) for key in ("prompt_tokens", "completion_tokens")
-    )
+    return _nonnegative_int(usage.get(key))
+
+
+def _nonnegative_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 0
+
+
+def _nonnegative_float(value: object) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return 0.0
 
 
 def _objective_success(episode: JsonDict) -> bool:

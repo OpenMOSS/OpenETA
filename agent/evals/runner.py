@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections import Counter
@@ -103,18 +104,24 @@ class EvaluationScheduler:
             )
             raise
 
+        scheduler_duration_s = time.monotonic() - started
         provider_metrics = getattr(self.worker_factory, "provider_metrics", None)
+        provider_concurrency = (
+            provider_metrics() if callable(provider_metrics) else {}
+        )
         report = build_evaluation_report(
             self.store,
             self.jobs,
-            scheduler_duration_s=time.monotonic() - started,
-            provider_concurrency=(provider_metrics() if callable(provider_metrics) else {}),
+            scheduler_duration_s=scheduler_duration_s,
+            provider_concurrency=provider_concurrency,
         )
         report_path = self.store.write_report(report)
         self.store.set_run_status(
             "complete",
             report_path=str(report_path),
             job_count=len(self.jobs),
+            scheduler_duration_s=round(scheduler_duration_s, 3),
+            provider_concurrency=provider_concurrency,
         )
         return report
 
@@ -272,11 +279,23 @@ def build_evaluation_report(
             ),
             "failure_count": sum(item.get("status") == "fail" for item in variant_outcomes),
         }
-    wall = (
-        float(scheduler_duration_s)
-        if scheduler_duration_s is not None
-        else sum(durations)
-    )
+    run_metadata = store.run_metadata()
+    durable_scheduler_duration = run_metadata.get("scheduler_duration_s")
+    wall = _positive_float(scheduler_duration_s)
+    if wall is None:
+        wall = _positive_float(durable_scheduler_duration)
+    if wall is None:
+        wall = _attempt_wall_clock(finals)
+    if wall is None:
+        wall = sum(durations)
+    durable_provider_concurrency = run_metadata.get("provider_concurrency")
+    if provider_concurrency is None:
+        provider_concurrency = (
+            dict(durable_provider_concurrency)
+            if isinstance(durable_provider_concurrency, dict)
+            and durable_provider_concurrency
+            else _persisted_provider_concurrency(store)
+        )
     return {
         "schema_version": EVALUATION_REPORT_SCHEMA_VERSION,
         "run_id": store.run_id,
@@ -300,6 +319,68 @@ def build_evaluation_report(
         "variants": variants,
         "results_root": str(store.root),
     }
+
+
+def _attempt_wall_clock(finals: list[JsonDict]) -> float | None:
+    starts = [
+        float(item["started_at_s"])
+        for item in finals
+        if _finite_number(item.get("started_at_s"))
+    ]
+    completions = [
+        float(item["completed_at_s"])
+        for item in finals
+        if _finite_number(item.get("completed_at_s"))
+    ]
+    if not starts or not completions:
+        return None
+    return max(0.0, max(completions) - min(starts))
+
+
+def _persisted_provider_concurrency(store: EvaluationRunStore) -> JsonDict:
+    """Recover the last cumulative provider snapshot from durable model calls."""
+
+    best: JsonDict = {}
+    best_key = (-1, -1.0)
+    pattern = "jobs/*/attempts/*/sessions/*/rollout/model_calls.jsonl"
+    for path in store.root.glob(pattern):
+        try:
+            stream = path.open(encoding="utf-8")
+        except OSError:
+            continue
+        with stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                result = row.get("result")
+                result = result if isinstance(result, dict) else {}
+                details = result.get("details")
+                details = details if isinstance(details, dict) else {}
+                snapshot = details.get("provider_concurrency")
+                if not isinstance(snapshot, dict):
+                    continue
+                request_count = snapshot.get("request_count")
+                total_wait = snapshot.get("total_queue_wait_s")
+                key = (
+                    int(request_count) if isinstance(request_count, int) else -1,
+                    float(total_wait) if _finite_number(total_wait) else -1.0,
+                )
+                if key > best_key:
+                    best_key = key
+                    best = dict(snapshot)
+    if best:
+        best["active"] = 0
+    return best
+
+
+def _positive_float(value: object) -> float | None:
+    if _finite_number(value) and float(value) > 0:
+        return float(value)
+    return None
 
 
 def inspect_evaluation_run(store: EvaluationRunStore) -> JsonDict:

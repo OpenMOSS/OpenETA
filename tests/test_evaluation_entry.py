@@ -12,7 +12,11 @@ from agent.evals.plan import (
     compiled_plan_payload,
     load_evaluation_plan,
 )
-from agent.evals.runner import EvaluationScheduler, classify_evaluation_failure
+from agent.evals.runner import (
+    EvaluationScheduler,
+    build_evaluation_report,
+    classify_evaluation_failure,
+)
 from agent.evals.store import EvaluationRunStore
 from agent.evals.visual_history_rollout import (
     _alternating_tool_cycle_count,
@@ -224,6 +228,23 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
                 "semantic_request": {"tool_context": planner_context, "metadata": {}},
                 "parsed_decision": {"tool": "move_to"},
                 "validation": {"accepted": True},
+                "result": {
+                    "details": {
+                        "usage": {
+                            "prompt_tokens": 20,
+                            "completion_tokens": 3,
+                            "total_tokens": 23,
+                        },
+                        "provider_concurrency": {
+                            "schema_version": "openeta.provider_concurrency.v1",
+                            "limit": 2,
+                            "request_count": 7,
+                            "queue_timeout_count": 0,
+                            "active": 1,
+                            "total_queue_wait_s": 1.5,
+                        },
+                    }
+                },
             },
             {
                 "semantic_request": {
@@ -272,7 +293,10 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         "duration_s": 1.0,
         "cleanup": {"ok": True},
         "episode": {
-            "metadata": {},
+            "metadata": {
+                "stop_reason": "task_complete",
+                "usage": {"total_tokens": 35},
+            },
             "steps": [
                 {
                     "step_result": {
@@ -291,13 +315,31 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         retryable=False,
         max_attempts=1,
     )
+    final_path = store.job_dir(jobs[0].job_id) / "final.json"
+    final_payload = json.loads(final_path.read_text(encoding="utf-8"))
+    final_payload.update(started_at_s=10.0, completed_at_s=25.0)
+    final_path.write_text(json.dumps(final_payload), encoding="utf-8")
 
     report = extract_visual_history_rollouts(store)
 
     assert report["variants"]["C"]["vdm_call_count"] == 1
     assert report["variants"]["C"]["vdm_total_tokens"] == 12
+    assert report["variants"]["C"]["status_counts"] == {"success": 1}
+    assert report["variants"]["C"]["stop_reason_counts"] == {"task_complete": 1}
+    assert report["variants"]["C"]["planner_prompt_tokens"] == 20
+    assert report["variants"]["C"]["planner_completion_tokens"] == 3
+    assert report["variants"]["C"]["planner_total_tokens"] == 23
+    assert report["variants"]["C"]["episode_total_tokens"] == 35
+    assert report["variants"]["C"]["mean_episode_duration_s"] == 1.0
+    assert report["variants"]["C"]["max_raw_visual_evidence_per_turn"] == 2
+    assert report["variants"]["C"]["mean_compressed_delta_count_per_turn"] == 1.0
     assert report["jobs"][0]["mean_raw_visual_evidence_per_turn"] == 2.0
     assert Path(report["state_probe_cases_path"]).is_file()
+
+    generic_report = build_evaluation_report(store, jobs)
+    assert generic_report["wall_clock_s"] == 15.0
+    assert generic_report["provider_concurrency"]["request_count"] == 7
+    assert generic_report["provider_concurrency"]["active"] == 0
 
 
 def test_alternating_tool_cycle_count_detects_semantic_loops() -> None:

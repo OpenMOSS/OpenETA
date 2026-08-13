@@ -22,6 +22,7 @@ from adapter.protocol import JsonDict
 OBJECT_MEMORY_BANK_URL_ENV = "OPENETA_OBJECT_MEMORY_BANK_URL"
 OBJECT_MEMORY_BANK_API_KEY_ENV = "OPENETA_OBJECT_MEMORY_BANK_API_KEY"
 OBJECT_MEMORY_BANK_SETUP_URL = "https://github.com/Huaizz-shawen/object-memory-bank"
+DEFAULT_OBJECT_MEMORY_BANK_URL = "http://10.11.18.197:8080"
 DEFAULT_OBJECT_MEMORY_TIMEOUT_S = 30.0
 DEFAULT_OBJECT_MEMORY_MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 DEFAULT_OBJECT_MEMORY_MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -39,20 +40,21 @@ ObjectMemoryDownloader = Callable[[str, Mapping[str, str], float, int], bytes]
 
 
 class ObjectMemoryBankConfigurationError(ValueError):
-    """Raised when only one half of the host-owned URL/key pair is configured."""
+    """Raised when an object-memory endpoint is missing required configuration."""
 
     def __init__(self, *, missing_fields: tuple[str, ...]) -> None:
         self.missing_fields = missing_fields
         super().__init__(
-            "object memory bank URL and API key must be configured together; "
-            "missing {}".format(", ".join(missing_fields))
+            "object memory bank configuration is incomplete; missing {}".format(
+                ", ".join(missing_fields)
+            )
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ObjectMemoryBankConfig:
-    base_url: str
-    api_key: str = field(repr=False)
+    base_url: str = DEFAULT_OBJECT_MEMORY_BANK_URL
+    api_key: str = field(default="", repr=False)
     timeout_s: float = DEFAULT_OBJECT_MEMORY_TIMEOUT_S
     max_bundle_bytes: int = DEFAULT_OBJECT_MEMORY_MAX_BUNDLE_BYTES
     max_image_bytes: int = DEFAULT_OBJECT_MEMORY_MAX_IMAGE_BYTES
@@ -87,7 +89,7 @@ class ObjectMemoryBankConfig:
                 raise ValueError(
                     "object memory bank HTTP URL must use a private IP literal"
                 ) from exc
-            if not (address.is_private or address.is_loopback or address.is_link_local):
+            if not _is_allowed_private_http_address(address):
                 raise ValueError(
                     "object memory bank HTTP URL must use a private, loopback, or "
                     "link-local IP"
@@ -98,7 +100,7 @@ class ObjectMemoryBankConfig:
             )
         if parsed.query or parsed.fragment:
             raise ValueError("object memory bank URL must not contain query or fragment")
-        if not self.api_key:
+        if not self.api_key and not _is_anonymous_default_endpoint(self.base_url):
             raise ValueError("object memory bank API key is missing")
         if self.max_search_bytes < 1:
             raise ValueError("object memory search byte limit must be positive")
@@ -116,7 +118,7 @@ def load_configured_object_memory_bank(
     dotenv_path: str = ".env",
     apikey_path: str = "apikey.md",
 ) -> ObjectMemoryBankConfig | None:
-    """Load object-memory credentials with env > .env > local curl example precedence."""
+    """Load object memory with env > .env > local example > built-in default precedence."""
 
     source = dict(environ if environ is not None else os.environ)
     dotenv = _read_simple_env(dotenv_path)
@@ -125,7 +127,7 @@ def load_configured_object_memory_bank(
         source.get(OBJECT_MEMORY_BANK_URL_ENV)
         or dotenv.get(OBJECT_MEMORY_BANK_URL_ENV)
         or example_url
-        or ""
+        or DEFAULT_OBJECT_MEMORY_BANK_URL
     ).strip()
     api_key = str(
         source.get(OBJECT_MEMORY_BANK_API_KEY_ENV)
@@ -133,8 +135,6 @@ def load_configured_object_memory_bank(
         or example_key
         or ""
     ).strip()
-    if not base_url and not api_key:
-        return None
     _require_complete_object_memory_config(base_url=base_url, api_key=api_key)
     return ObjectMemoryBankConfig(base_url=base_url, api_key=api_key)
 
@@ -143,10 +143,28 @@ def _require_complete_object_memory_config(*, base_url: str, api_key: str) -> No
     missing = []
     if not base_url:
         missing.append(OBJECT_MEMORY_BANK_URL_ENV)
-    if not api_key:
+    if not api_key and not _is_anonymous_default_endpoint(base_url):
         missing.append(OBJECT_MEMORY_BANK_API_KEY_ENV)
     if missing:
         raise ObjectMemoryBankConfigurationError(missing_fields=tuple(missing))
+
+
+def _is_anonymous_default_endpoint(base_url: str) -> bool:
+    return base_url.rstrip("/") == DEFAULT_OBJECT_MEMORY_BANK_URL.rstrip("/")
+
+
+def _is_allowed_private_http_address(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    if address.is_loopback or address.is_link_local:
+        return True
+    private_networks = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("fc00::/7"),
+    )
+    return any(address in network for network in private_networks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +283,7 @@ class ObjectMemoryBankClient:
         )
         raw = self.downloader(
             endpoint,
-            {"X-API-Key": self.config.api_key},
+            self._request_headers(),
             self.config.timeout_s,
             self.config.max_search_bytes,
         )
@@ -334,7 +352,7 @@ class ObjectMemoryBankClient:
         )
         raw = self.downloader(
             endpoint,
-            {"X-API-Key": self.config.api_key},
+            self._request_headers(),
             self.config.timeout_s,
             self.config.max_bundle_bytes,
         )
@@ -344,6 +362,11 @@ class ObjectMemoryBankClient:
             max_image_bytes=self.config.max_image_bytes,
             max_uncompressed_bytes=self.config.max_uncompressed_bytes,
         )
+
+    def _request_headers(self) -> dict[str, str]:
+        if not self.config.api_key:
+            return {}
+        return {"X-API-Key": self.config.api_key}
 
 
 def object_memory_query_key(*, environment: str, target_object: str) -> str:

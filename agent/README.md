@@ -263,19 +263,20 @@ gitignored `.openeta_memory/` directory.
 
 ## Object Memory Bank
 
-`retrieve_asset_reference` uses a host-owned Object Memory Bank service. Set
-both variables together in the process environment or a local ignored `.env`:
+`retrieve_asset_reference` uses the Object Memory Bank at
+`http://10.11.18.197:8080` by default. No configuration is needed for this
+anonymous internal endpoint. To override it, set the URL and API key together
+in the process environment or a local ignored `.env`:
 
 ```dotenv
 OPENETA_OBJECT_MEMORY_BANK_URL=http://127.0.0.1:8080
 OPENETA_OBJECT_MEMORY_BANK_API_KEY=<service-api-key>
 ```
 
-The URL is the service base URL without `/search` or `/bundle`. Download and
-deploy the service from
-<https://github.com/Huaizz-shawen/object-memory-bank>. If the tool is needed
-while the service is unconfigured, it fails closed and returns a visible setup
-warning instead of attempting an invalid placeholder URL.
+The URL is the service base URL without `/search` or `/bundle`. API keys stay in
+the environment and are never stored in `.mcp.json`. Download and deploy the
+service from <https://github.com/Huaizz-shawen/object-memory-bank>. Custom
+endpoints fail closed when either required setting is missing.
 
 ## Provider Smoke Test
 

@@ -23,6 +23,8 @@ from agent.backends.code_policy import (
 )
 from agent.runtime.memory import (
     AgentMemory,
+    DEFAULT_SAM3_EVIDENCE_ROLE,
+    SAM3_EVIDENCE_ROLES,
     grasp_reference_action_error,
     summarize_observation,
 )
@@ -42,6 +44,10 @@ from agent.runtime.task_playbooks import (
     select_task_playbook,
 )
 from agent.runtime.token_counting import DEFAULT_CONTEXT_WINDOW_TOKENS, estimate_json_tokens
+from agent.runtime.visual_history import (
+    VisualHistoryConfig,
+    build_visual_history_projection,
+)
 from agent.tools.grasp_geometry import GraspGeometryError, grasp_refinement_hover_pose
 from agent.tools.registry import ToolRegistry, ToolSpec
 
@@ -112,6 +118,10 @@ class PlannerContextConfig:
     auto_compact_max_events: int = 8
     approx_chars_per_token: int = 4
     token_estimator_model: str | None = None
+    host_task_policy_enabled: bool = True
+    visual_history: VisualHistoryConfig = field(
+        default_factory=lambda: VisualHistoryConfig(enabled=False)
+    )
 
 
 class BasePlanner(ABC):
@@ -148,9 +158,13 @@ class ToolCallingPlanner(BasePlanner):
     ) -> None:
         self.backend = backend or PlaceholderPlannerBackend()
         self.max_validation_retries = max(0, max_validation_retries)
-        base_prompt = system_prompt or _default_tool_planner_system_prompt()
-        self.system_prompt, self.prompt_metadata = compose_main_planner_prompt(base_prompt)
         self.context_config = context_config or PlannerContextConfig()
+        base_prompt = system_prompt or (
+            _default_tool_planner_system_prompt()
+            if self.context_config.host_task_policy_enabled
+            else _agent_owned_tool_planner_system_prompt()
+        )
+        self.system_prompt, self.prompt_metadata = compose_main_planner_prompt(base_prompt)
         self.rollout_recorder: RolloutRecorder | None = None
 
     def set_rollout_recorder(self, recorder: RolloutRecorder | None) -> None:
@@ -173,7 +187,11 @@ class ToolCallingPlanner(BasePlanner):
             skills=skills,
             config=self.context_config,
         )
-        host_obligation = _host_obligation_decision(tool_context, tools=tools)
+        host_obligation = _host_obligation_decision(
+            tool_context,
+            tools=tools,
+            allow_task_policy=self.context_config.host_task_policy_enabled,
+        )
         if host_obligation is not None:
             host_obligation.metadata.update(
                 _planner_metadata(
@@ -204,8 +222,11 @@ class ToolCallingPlanner(BasePlanner):
         backend_usage_sources: JsonDict = {}
         validation_attempt_history: list[JsonDict] = []
         for attempt in range(1, self.max_validation_retries + 2):
+            agent_context = tool_context.get("agent_context")
             request = PlannerBackendRequest(
-                tool_context=tool_context,
+                tool_context=(
+                    dict(agent_context) if isinstance(agent_context, dict) else tool_context
+                ),
                 system_prompt=self.system_prompt,
                 conversation_messages=memory.model_conversation_messages(),
                 conversation_summary=memory.conversation_checkpoint_summary(),
@@ -243,40 +264,47 @@ class ToolCallingPlanner(BasePlanner):
                     validation_errors.append(_required_skill_inspection_error(required_skill))
             if not validation_errors:
                 validation_errors.extend(
+                    _validate_perception_artifact_provenance(
+                        decision,
+                        tool_context=tool_context,
+                    )
+                )
+            if not validation_errors and self.context_config.host_task_policy_enabled:
+                validation_errors.extend(
                     _validate_calibration_tool_scope(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_asset_reference_scene_image(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_reference_localization_obligation(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_exhausted_roi_retry(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_exhausted_anygrasp_backend_retry(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_detection_selection_obligation(
                         decision,
@@ -284,42 +312,42 @@ class ToolCallingPlanner(BasePlanner):
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_anygrasp_candidate_policy(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_grasp_execution_obligation(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_grasp_lift_probe_obligation(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_placement_motion_guidance(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_closed_gripper_recovery(
                         decision,
                         tool_context=tool_context,
                     )
                 )
-            if not validation_errors:
+            if not validation_errors and self.context_config.host_task_policy_enabled:
                 validation_errors.extend(
                     _validate_pick_place_anyplace_obligation(
                         decision,
@@ -426,6 +454,7 @@ def _host_obligation_decision(
     tool_context: JsonDict,
     *,
     tools: ToolRegistry,
+    allow_task_policy: bool = True,
 ) -> PlannerDecision | None:
     """Dispatch fully determined structured joins without model JSON copying."""
 
@@ -474,6 +503,9 @@ def _host_obligation_decision(
                 }
             },
         )
+
+    if not allow_task_policy:
+        return None
 
     recovery = tool_context.get("grasp_recovery")
     if isinstance(recovery, dict) and recovery.get("status") == "required":
@@ -2584,6 +2616,65 @@ def _default_tool_planner_system_prompt() -> str:
     )
 
 
+def _agent_owned_tool_planner_system_prompt() -> str:
+    """Return the production prompt without host-authored task phases."""
+
+    return (
+        "You are the OpenETA closed-loop embodied planner. Return exactly one JSON "
+        "object with fields kind, name, parameters, and reasoning. Valid kinds are "
+        "tool_call and response. For tool_call choose exactly one executable atomic "
+        "tool from available_tools/tool_references. For response use ask_human, talk, "
+        "or task_complete. create_simulator_env is the only environment-creation path; "
+        "never invoke create_env or close_env through python_exec or code_policy. "
+        "You own task decomposition, progress assessment, recovery choice, and the next "
+        "task action. The host does not provide a task phase or required next action. "
+        "Use save_memory to maintain concise plans, hypotheses, attempted alternatives, "
+        "and open questions in agent_working_state; revise them when newer evidence "
+        "contradicts them. Do not invent a phase that is absent from observable evidence. "
+        "Inspect current_observation and its labelled current_scene images before using "
+        "memory. Current visual evidence outranks stale world_evidence and summaries. "
+        "Cite evidence ids that support visually grounded reasoning. Treat freshness "
+        "labels literally: stale_scene_epoch is historical, commanded_not_observed is "
+        "not a sensed state, and an acknowledged close command is not proof of attachment. "
+        "Use recent_transitions to connect the last atomic action to the current scene. "
+        "If visual evidence is missing or ambiguous, observe or ask_human instead of "
+        "pretending the state is known. Perform at most one world-mutating tool call, "
+        "then inspect a fresh observation before further control. A transport-unknown "
+        "result requires observing and reconciling the same environment before any new "
+        "world mutation; never resend an uncertain partial motion. "
+        "Skills are editable guidance, not executable macros. If "
+        "skill_usage.inspection_required is non-empty, inspect the named skill with "
+        "skill_call before world mutation. Runtime tool schemas and returned docstrings "
+        "are authoritative over examples. Preserve exact artifact paths, frame ids, "
+        "scene epochs, matrices, mask refs, candidate ids, and tool-result provenance; "
+        "never invent placeholders such as latest_mask. Resolve "
+        "open_questions.target_selection by visually checking the current original image "
+        "and candidate evidence, then call select_sam3_detection or "
+        "reject_sam3_detections with exact ids. Scores rank proposals but do not prove "
+        "identity. Never use web content as embodied observation. "
+        "For pick/grasp tasks, begin from current RGB-D evidence, segment the intended "
+        "target, obtain normalized grasp candidates, and inspect the complete candidate "
+        "list. Choose a candidate yourself using target identity, geometric feasibility, "
+        "calibration limits, and prior outcomes; record the rationale in Agent memory. "
+        "A normalized grasp candidate must be compiled with compile_grasp_seed using its "
+        "complete camera-frame pose, matching current camera extrinsics/frame id, and "
+        "current scene epoch. Never send a normalized grasp directly through "
+        "camera_pose_to_world or to a motion tool. Treat compiled poses as references, "
+        "not a host-authored sequence: independently plan one safe observed edge at a "
+        "time for open/hover, fresh wrist alignment when useful, contact, binary close, "
+        "a bounded attachment probe, and evidence-based verification. Preserve candidate "
+        "provenance and obey deterministic IK, collision, workspace, sensor, permission, "
+        "and supervision checks. After a structured candidate-specific rejection, choose "
+        "another valid candidate or reacquire perception based on evidence; do not follow "
+        "a hidden fallback stage. Infrastructure failure is not candidate failure. "
+        "For pick-and-place, retain the target grasp and aligned pre-grasp packet needed "
+        "by placement tools before moving the object. Verify continued attachment from "
+        "fresh evidence during carry and release only over the intended receptacle. "
+        "task_complete is valid only when a trusted same-episode environment receipt or "
+        "official reward establishes success; tool-call success alone is insufficient."
+    )
+
+
 def _validate_asset_reference_scene_image(
     decision: PlannerDecision,
     *,
@@ -2747,6 +2838,14 @@ def _validate_detection_selection_obligation(
         return []
     pending = tool_context.get("selection_obligation")
     selected = tool_context.get("selected_sam3_detection")
+    if decision.action == "sam3":
+        evidence_role = str(
+            decision.parameters.get("evidence_role") or DEFAULT_SAM3_EVIDENCE_ROLE
+        ).strip().lower()
+        if evidence_role not in SAM3_EVIDENCE_ROLES:
+            return [
+                "sam3 evidence_role must be target_object or placement_region."
+            ]
     if decision.action == "reject_sam3_detections":
         if not isinstance(pending, dict):
             return ["reject_sam3_detections requested without a pending SAM3 selection."]
@@ -2778,6 +2877,22 @@ def _validate_detection_selection_obligation(
             return [
                 "select_sam3_detection detection_id must identify one candidate from "
                 "the pending SAM3 result."
+            ]
+        pending_role = str(
+            pending.get("evidence_role") or DEFAULT_SAM3_EVIDENCE_ROLE
+        ).strip().lower()
+        requested_role = str(
+            decision.parameters.get("evidence_role") or pending_role
+        ).strip().lower()
+        if requested_role not in SAM3_EVIDENCE_ROLES:
+            return [
+                "select_sam3_detection evidence_role must be target_object or "
+                "placement_region."
+            ]
+        if requested_role != pending_role:
+            return [
+                "select_sam3_detection evidence_role must match the pending SAM3 "
+                f"result role {pending_role!r}."
             ]
         geometry_family = str(
             decision.parameters.get("target_geometry_family") or ""
@@ -3237,6 +3352,18 @@ def _validate_pick_place_anyplace_obligation(
     required_placement = (
         placement.get("required_parameters") if isinstance(placement, dict) else None
     )
+    if decision.action == "sam3" and _looks_like_placement_region_prompt(
+        decision.parameters.get("prompt")
+    ):
+        evidence_role = str(
+            decision.parameters.get("evidence_role") or DEFAULT_SAM3_EVIDENCE_ROLE
+        ).strip().lower()
+        if evidence_role != "placement_region":
+            return [
+                "Placement-region SAM3 must explicitly use "
+                "evidence_role='placement_region' so the receptacle evidence cannot "
+                "replace the target_object selection."
+            ]
     if decision.action == "anyplace" and not attachment_passed:
         return [
             "AnyPlace must wait until the final grasp candidate passes the lift probe "
@@ -3272,18 +3399,6 @@ def _validate_pick_place_anyplace_obligation(
                 "a byte-identical materialization from the same scene epoch so its mask "
                 "stays aligned with the targeted grasp-estimation RGB-D packet."
             ]
-    if (
-        decision.action == "sam3"
-        and not isinstance(policy, dict)
-        and _looks_like_placement_region_prompt(decision.parameters.get("prompt"))
-    ):
-        return [
-            "Target-object grasp estimation must succeed before segmenting the placement region. "
-            "The runtime has one active SAM3 selection slot, so selecting a basket, bin, "
-            "or receptacle now would overwrite the object mask. Call targeted "
-            "grasp_pose_estimate "
-            "with the selected object mask and its aligned RGBD observation first."
-        ]
     if decision.action == "anyplace" and isinstance(retained, dict):
         source = retained.get("source")
         candidate = retained.get("candidate")
@@ -3332,6 +3447,108 @@ def _canonicalize_host_parameters(
 
     if decision.action_type.lower().strip() != "tool_call":
         return []
+    if decision.action == "grasp_pose_estimate":
+        parameters = dict(decision.parameters)
+        if str(parameters.get("mode") or "targeted").strip().lower() == "scene":
+            return []
+        selected = tool_context.get("selected_sam3_detection")
+        object_mask = parameters.get("object_mask")
+        if not isinstance(selected, dict) or not isinstance(object_mask, dict):
+            return []
+        selected_mask = str(selected.get("mask_ref") or "")
+        supplied_mask = str(object_mask.get("mask_ref") or "")
+        source_observation = selected.get("source_observation")
+        selected_epoch = selected.get("scene_epoch")
+        current_epoch = tool_context.get("scene_epoch")
+        if (
+            selected_mask
+            and supplied_mask == selected_mask
+            and isinstance(source_observation, dict)
+            and selected_epoch == current_epoch
+        ):
+            source_rgb = source_observation.get("rgb")
+            source_depth = source_observation.get("depth")
+            source_intrinsics = source_observation.get("intrinsics")
+            source_frame_id = source_observation.get("frame_id")
+            if (
+                isinstance(source_rgb, str)
+                and source_rgb
+                and isinstance(source_depth, str)
+                and source_depth
+                and isinstance(source_intrinsics, dict)
+                and source_intrinsics
+                and isinstance(source_frame_id, str)
+                and source_frame_id
+            ):
+                canonicalizations: list[JsonDict] = []
+
+                def bind(field: str, canonical: object) -> None:
+                    supplied = parameters.get(field)
+                    if supplied == canonical:
+                        return
+                    parameters[field] = canonical
+                    canonicalizations.append(
+                        {
+                            "field": field,
+                            "tool": "grasp_pose_estimate",
+                            "reason": "bind_selected_mask_to_source_observation_packet",
+                            "supplied": supplied,
+                            "canonical": canonical,
+                        }
+                    )
+
+                bind("rgb", source_rgb)
+                hints = parameters.get("hints")
+                enhanced_depth = (
+                    hints.get("depth_enhancement") if isinstance(hints, dict) else None
+                )
+                if not isinstance(enhanced_depth, dict):
+                    bind("depth", source_depth)
+                    bind("intrinsics", dict(source_intrinsics))
+                bind("camera_frame_id", source_frame_id)
+                canonical_mask = dict(object_mask)
+                supplied_source = canonical_mask.get("source_image")
+                if supplied_source != source_rgb:
+                    canonical_mask["source_image"] = source_rgb
+                    canonicalizations.append(
+                        {
+                            "field": "object_mask.source_image",
+                            "tool": "grasp_pose_estimate",
+                            "reason": "bind_selected_mask_to_source_observation_packet",
+                            "supplied": supplied_source,
+                            "canonical": source_rgb,
+                        }
+                    )
+                parameters["object_mask"] = canonical_mask
+                decision.parameters = parameters
+                return canonicalizations
+        rgb = parameters.get("rgb")
+        depth = parameters.get("depth")
+        source_image = object_mask.get("source_image")
+        if (
+            not selected_mask
+            or supplied_mask != selected_mask
+            or not isinstance(rgb, str)
+            or not isinstance(depth, str)
+            or not isinstance(source_image, str)
+            or _same_resolved_local_path(rgb, source_image)
+            or not _same_local_artifact(rgb, source_image)
+            or not _aligned_rgb_depth_packet(rgb, depth, parameters=parameters)
+        ):
+            return []
+        canonical_mask = dict(object_mask)
+        canonical_mask["source_image"] = rgb
+        parameters["object_mask"] = canonical_mask
+        decision.parameters = parameters
+        return [
+            {
+                "field": "object_mask.source_image",
+                "tool": "grasp_pose_estimate",
+                "reason": "bind_byte_identical_mask_source_to_selected_rgbd_packet",
+                "supplied": source_image,
+                "canonical": rgb,
+            }
+        ]
     if decision.action == "compile_grasp_seed":
         obligation = tool_context.get("grasp_compile_obligation")
         required = obligation.get("required_parameters") if isinstance(obligation, dict) else None
@@ -3445,6 +3662,63 @@ def _canonicalize_host_parameters(
             "canonical": required_image,
         }
     ]
+
+
+def _validate_perception_artifact_provenance(
+    decision: PlannerDecision,
+    *,
+    tool_context: JsonDict,
+) -> list[str]:
+    """Keep mask/RGB-D provenance strict without prescribing a task phase."""
+
+    if (
+        decision.action_type.lower().strip() != "tool_call"
+        or decision.action != "grasp_pose_estimate"
+        or str(decision.parameters.get("mode") or "targeted").strip().lower() == "scene"
+    ):
+        return []
+    parameters = decision.parameters
+    object_mask = parameters.get("object_mask")
+    if not isinstance(object_mask, dict):
+        return []
+    rgb = parameters.get("rgb")
+    depth = parameters.get("depth")
+    source_image = object_mask.get("source_image")
+    errors: list[str] = []
+    if not _same_resolved_local_path(rgb, source_image):
+        errors.append(
+            "grasp_pose_estimate object_mask.source_image must be the exact RGB "
+            "artifact passed as rgb. A mask cannot be combined with a later render "
+            "unless that render is byte-identical and host-canonicalized."
+        )
+    if not _aligned_rgb_depth_packet(rgb, depth, parameters=parameters):
+        errors.append(
+            "grasp_pose_estimate rgb and depth must come from the same observation "
+            "packet; copy both paths from one recent transition."
+        )
+    selected = tool_context.get("selected_sam3_detection")
+    if isinstance(selected, dict):
+        selected_epoch = selected.get("scene_epoch")
+        current_epoch = tool_context.get("scene_epoch")
+        if (
+            isinstance(selected_epoch, int)
+            and not isinstance(selected_epoch, bool)
+            and isinstance(current_epoch, int)
+            and not isinstance(current_epoch, bool)
+            and selected_epoch != current_epoch
+        ):
+            errors.append(
+                "grasp_pose_estimate cannot reuse a selected mask from a stale "
+                "scene epoch; segment the current scene first."
+            )
+        expected_mask = str(selected.get("mask_ref") or "")
+        supplied_mask = str(object_mask.get("mask_ref") or "")
+        if expected_mask and supplied_mask != expected_mask:
+            errors.append(
+                "grasp_pose_estimate object_mask.mask_ref must preserve the currently "
+                "selected SAM3 detection."
+            )
+    return errors
 
 
 def _validate_closed_gripper_recovery(
@@ -3586,6 +3860,40 @@ def _looks_like_placement_region_prompt(value: object) -> bool:
     )
 
 
+def _same_resolved_local_path(left: object, right: object) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str) or not left or not right:
+        return False
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def _path_packet_id(path_value: object) -> str:
+    if not isinstance(path_value, str) or not path_value:
+        return ""
+    try:
+        return Path(path_value).parent.name
+    except (OSError, ValueError):
+        return ""
+
+
+def _aligned_rgb_depth_packet(
+    rgb: object,
+    depth: object,
+    *,
+    parameters: JsonDict,
+) -> bool:
+    if not isinstance(rgb, str) or not isinstance(depth, str) or not rgb or not depth:
+        return False
+    hints = parameters.get("hints")
+    if isinstance(hints, dict) and isinstance(hints.get("depth_enhancement"), dict):
+        return True
+    rgb_packet = _path_packet_id(rgb)
+    depth_packet = _path_packet_id(depth)
+    return bool(rgb_packet and depth_packet and rgb_packet == depth_packet)
+
+
 def _same_local_artifact(left: object, right: object) -> bool:
     if not isinstance(left, str) or not isinstance(right, str) or not left or not right:
         return False
@@ -3665,7 +3973,7 @@ def build_policy_context(
         skills=skills,
         config=config,
     )
-    return {
+    context = {
         **tool_context,
         "env_api_reference": _env_api_reference(),
         "safety_constraints": [
@@ -3717,6 +4025,9 @@ def build_tool_context(
             conversation_messages=memory.model_conversation_messages(),
         )
     context["context_budget"] = budget
+    agent_context = context.get("agent_context")
+    if isinstance(agent_context, dict):
+        agent_context["context_budget"] = budget
     return context
 
 
@@ -3748,33 +4059,58 @@ def _build_tool_context_payload(
     working_artifacts = (
         working_memory.get("artifacts", {}) if isinstance(working_memory, dict) else {}
     )
-    execution = memory_context.get("grasp_execution")
-    grasp_visual_stage = _grasp_visual_stage_for_context(execution)
-    if grasp_visual_stage:
-        vision_image_paths = [
-            artifact["path"]
-            for artifact in camera_artifacts
-            if artifact["kind"] == "rgb" and _is_primary_planner_camera(artifact)
-        ][:2]
-    else:
-        primary_rgb = next(
-            (artifact["path"] for artifact in camera_artifacts if artifact["kind"] == "rgb"),
-            None,
+    visual_history: JsonDict | None = None
+    if config.visual_history.enabled:
+        visual_projection = build_visual_history_projection(
+            observation=observation,
+            memory=memory,
+            config=config.visual_history,
+            current_camera_artifacts=camera_artifacts,
         )
-        vision_image_paths = [primary_rgb] if primary_rgb else []
-    return {
+        vision_image_paths = list(visual_projection["vision_image_paths"])
+        vision_evidence = list(visual_projection["vision_evidence"])
+        visual_history = dict(visual_projection["visual_history"])
+    else:
+        execution = memory_context.get("grasp_execution")
+        grasp_visual_stage = _grasp_visual_stage_for_context(execution)
+        if grasp_visual_stage:
+            vision_image_paths = [
+                artifact["path"]
+                for artifact in camera_artifacts
+                if artifact["kind"] == "rgb" and _is_primary_planner_camera(artifact)
+            ][:2]
+        else:
+            primary_rgb = next(
+                (
+                    artifact["path"]
+                    for artifact in camera_artifacts
+                    if artifact["kind"] == "rgb"
+                ),
+                None,
+            )
+            vision_image_paths = [primary_rgb] if primary_rgb else []
+        vision_evidence = _current_vision_evidence(
+            observation,
+            image_paths=vision_image_paths,
+            camera_artifacts=camera_artifacts,
+        )
+    context: JsonDict = {
         "schema_version": "openeta.planner_context.v1",
         "task": effective_task,
         "active_environment_task": memory_context.get("active_environment_task"),
         "task_playbook": task_playbook,
         "observation": _observation_summary(observation),
         "vision_image_paths": vision_image_paths,
+        "vision_evidence": vision_evidence,
+        "visual_history": visual_history,
         "current_camera_artifacts": camera_artifacts,
         "current_camera_calibrations": _current_camera_calibrations(observation),
         "memory": memory_context,
         "selection_obligation": memory_context.get("selection_obligation"),
         "selected_sam3_detection": memory_context.get("selected_sam3_detection"),
+        "selected_sam3_detections": memory_context.get("selected_sam3_detections"),
         "sam3_no_detection": memory_context.get("sam3_no_detection"),
+        "sam3_no_detections": memory_context.get("sam3_no_detections"),
         "grasp_estimation_fallback_obligation": _grasp_estimation_fallback_obligation(
             observation,
             camera_artifacts=camera_artifacts,
@@ -3840,7 +4176,13 @@ def _build_tool_context_payload(
             ),
         ),
         "placement_obligation": _placement_obligation(
-            selected=memory_context.get("selected_sam3_detection"),
+            selected=(
+                memory_context.get("selected_sam3_detections", {}).get(
+                    "placement_region"
+                )
+                if isinstance(memory_context.get("selected_sam3_detections"), dict)
+                else None
+            ),
             retained=memory_context.get("retained_targeted_grasp"),
             memory_context=memory_context,
         ),
@@ -3918,6 +4260,120 @@ def _build_tool_context_payload(
         "selected_skill_guidance": selected_skill_guidance,
         "skill_usage": skill_usage,
         "execution_rules": _tool_calling_rules(),
+    }
+    context["agent_context"] = _build_agent_decision_context(context)
+    return context
+
+
+def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
+    """Project runtime evidence into the smaller context owned by the Agent.
+
+    Host task phases and required-next-action obligations deliberately stay out
+    of this projection. Runtime keeps them temporarily for compatibility and
+    safety checks while the main VLM receives observations, evidence, and open
+    questions from which it can choose its own next action.
+    """
+
+    memory = runtime_context.get("memory")
+    memory = memory if isinstance(memory, dict) else {}
+    working = memory.get("working_memory")
+    working = working if isinstance(working, dict) else {}
+    working_facts = working.get("facts")
+    working_facts = working_facts if isinstance(working_facts, dict) else {}
+
+    explicit_agent_state = memory.get("agent_working_state")
+    if isinstance(explicit_agent_state, dict):
+        agent_facts = dict(explicit_agent_state)
+    else:
+        agent_facts = {
+            str(key): dict(raw_entry)
+            for key, raw_entry in working_facts.items()
+            if isinstance(raw_entry, dict) and raw_entry.get("source") == "save_memory"
+        }
+
+    explicit_world_evidence = memory.get("world_evidence")
+    runtime_evidence = (
+        dict(explicit_world_evidence)
+        if isinstance(explicit_world_evidence, dict)
+        else {}
+    )
+
+    open_questions: JsonDict = {}
+    question_fields = {
+        "target_selection": "selection_obligation",
+        "reference_localization": "reference_localization_obligation",
+        "perception_failure": "sam3_no_detection",
+    }
+    for output_key, context_key in question_fields.items():
+        value = memory.get(context_key)
+        if value is not None:
+            open_questions[output_key] = value
+
+    recent_events = memory.get("recent_events")
+    recent_events = recent_events if isinstance(recent_events, list) else []
+    recent_transitions = [
+        event
+        for event in recent_events
+        if isinstance(event, dict)
+        and event.get("type")
+        in {
+            "action",
+            "observation",
+            "environment_receipt",
+            "human_answer",
+            "recovery_feedback",
+        }
+    ][-4:]
+
+    observation = runtime_context.get("observation")
+    observation = observation if isinstance(observation, dict) else {}
+    visual_evidence = runtime_context.get("vision_evidence")
+    visual_evidence = visual_evidence if isinstance(visual_evidence, list) else []
+    current_visual_evidence = [
+        item
+        for item in visual_evidence
+        if isinstance(item, dict) and item.get("role") == "current_scene"
+    ]
+    artifacts = working.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, dict) else {}
+
+    return {
+        "schema_version": "openeta.agent_context.v2",
+        "objective": {
+            "task": runtime_context.get("task"),
+            "active_environment_task": runtime_context.get("active_environment_task"),
+            "latest_human_interaction": memory.get("latest_human_interaction"),
+        },
+        "current_observation": {
+            "summary": observation,
+            "visual_evidence": current_visual_evidence,
+            "status": (
+                "available" if current_visual_evidence else "visual_evidence_not_supplied"
+            ),
+        },
+        "visual_history": runtime_context.get("visual_history"),
+        "recent_transitions": recent_transitions,
+        "world_evidence": runtime_evidence,
+        "open_questions": open_questions,
+        "agent_working_state": {
+            "facts": agent_facts,
+            "skill_notes": working.get("skill_notes", {}),
+            "compact_summary": working.get("compact_summary", ""),
+        },
+        "artifacts": artifacts,
+        "relevant_skills": runtime_context.get("selected_skill_guidance", []),
+        "skill_usage": runtime_context.get("skill_usage", {}),
+        "available_tools": runtime_context.get("tool_references", []),
+        "tool_references": runtime_context.get("tool_references", []),
+        "operational_constraints": {
+            "fresh_observation_required": (
+                runtime_context.get("fresh_observation_obligation") is not None
+            ),
+            "motion_reconciliation": runtime_evidence.get("motion_reconciliation"),
+            "rules": runtime_context.get("execution_rules", {}),
+        },
+        "vision_image_paths": runtime_context.get("vision_image_paths", []),
+        "vision_evidence": visual_evidence,
     }
 
 
@@ -4006,7 +4462,7 @@ def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
         role = str(raw.get("role") or "")
         if role:
             artifact["role"] = role
-        for artifact_field in ("width", "height", "format", "index"):
+        for artifact_field in ("packet_id", "width", "height", "format", "index"):
             value = raw.get(artifact_field)
             if value is not None:
                 artifact[artifact_field] = value
@@ -4020,6 +4476,47 @@ def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
     for artifact in artifacts:
         artifact.pop("_sort_key", None)
     return artifacts
+
+
+def _current_vision_evidence(
+    observation: EnvObservation,
+    *,
+    image_paths: list[str],
+    camera_artifacts: list[JsonDict],
+) -> list[JsonDict]:
+    """Label every planner image as current evidence with stable provenance."""
+
+    cameras = {camera.frame_id: camera for camera in observation.cameras}
+    step_idx = observation.metadata.get("step_idx")
+    evidence: list[JsonDict] = []
+    for image_index, path in enumerate(image_paths):
+        artifact = next(
+            (
+                item
+                for item in camera_artifacts
+                if item.get("kind") == "rgb" and item.get("path") == path
+            ),
+            {},
+        )
+        frame_id = str(artifact.get("frame_id") or f"camera_{image_index}")
+        camera = cameras.get(frame_id)
+        camera_role = str(artifact.get("role") or getattr(camera, "role", "") or "scene")
+        timestamp_s = getattr(camera, "timestamp_s", None)
+        evidence_id = f"current_observation:{step_idx if step_idx is not None else 'na'}:{frame_id}"
+        item: JsonDict = {
+            "evidence_id": evidence_id,
+            "role": "current_scene",
+            "camera_role": camera_role,
+            "frame_id": frame_id,
+            "path": path,
+            "freshness": "current",
+        }
+        if step_idx is not None:
+            item["observation_step"] = step_idx
+        if timestamp_s is not None:
+            item["timestamp_s"] = timestamp_s
+        evidence.append(item)
+    return evidence
 
 
 def _current_camera_calibrations(observation: EnvObservation) -> list[JsonDict]:
@@ -5954,10 +6451,12 @@ def _context_budget_status(
     conversation_messages: list[JsonDict] | None = None,
 ) -> JsonDict:
     conversation_messages = conversation_messages or []
+    agent_context = context.get("agent_context")
+    budget_context = agent_context if isinstance(agent_context, dict) else context
     estimate = estimate_json_tokens(
         {
             "conversation_messages": conversation_messages,
-            "tool_context": context,
+            "tool_context": budget_context,
         },
         model=config.token_estimator_model,
         approx_chars_per_token=config.approx_chars_per_token,

@@ -830,18 +830,25 @@ def _planner_user_content(
     if not paths:
         return text, []
 
-    content: list[JsonDict] = [{"type": "text", "text": text}]
+    content: list[JsonDict] = [
+        {
+            "type": "text",
+            "text": (
+                "Inspect the labelled visual evidence first. Current-scene images are "
+                "the latest observable state; historical images are context only."
+            ),
+        }
+    ]
     attachments: list[JsonDict] = []
-    evidence_roles: dict[str, str] = {}
+    evidence_by_path: dict[str, JsonDict] = {}
     raw_evidence = request.tool_context.get("vision_evidence")
     if isinstance(raw_evidence, list):
         for item in raw_evidence:
             if not isinstance(item, dict):
                 continue
             evidence_path = item.get("path")
-            evidence_role = item.get("role")
-            if isinstance(evidence_path, str) and isinstance(evidence_role, str):
-                evidence_roles[evidence_path] = evidence_role
+            if isinstance(evidence_path, str):
+                evidence_by_path[evidence_path] = item
     for image_index, path_value in enumerate(paths[: config.max_vision_images], start=1):
         path = Path(path_value)
         try:
@@ -890,9 +897,23 @@ def _planner_user_content(
             )
             continue
         encoded = base64.b64encode(raw_image).decode("ascii")
-        evidence_role = evidence_roles.get(path_value)
+        evidence = evidence_by_path.get(path_value, {})
+        evidence_role = evidence.get("role")
         if evidence_role:
-            role_note = f"Image #{image_index} role: {evidence_role}."
+            qualifiers = []
+            for field in (
+                "evidence_id",
+                "frame_id",
+                "camera_role",
+                "freshness",
+                "observation_step",
+                "timestamp_s",
+            ):
+                value = evidence.get(field)
+                if value is not None and value != "":
+                    qualifiers.append(f"{field}={value}")
+            suffix = f" ({', '.join(qualifiers)})" if qualifiers else ""
+            role_note = f"Image #{image_index} role: {evidence_role}{suffix}."
             if evidence_role == "current_scene":
                 role_note += " This is the current state used for action review."
             elif evidence_role == "target_source_before_grasp":
@@ -916,7 +937,8 @@ def _planner_user_content(
                 **({"role": evidence_role} if evidence_role else {}),
             }
         )
-    if len(content) == 1:
+    content.append({"type": "text", "text": text})
+    if not any(item.get("attached") is True for item in attachments):
         return text, attachments
     return content, attachments
 

@@ -950,6 +950,12 @@ def build_default_tool_registry() -> ToolRegistry:
                     "{x, y, label}; label=1 is foreground and label=0 is background; "
                     "use the exact points returned by retrieve_asset_reference"
                 ),
+                "evidence_role": (
+                    "semantic memory slot for this segmentation: target_object or "
+                    "placement_region. Use placement_region for a basket, bin, "
+                    "receptacle, or other destination; legacy omission defaults to "
+                    "target_object"
+                ),
             },
             effect=ToolEffect.READ_ONLY,
         ),
@@ -1013,6 +1019,10 @@ def build_default_tool_registry() -> ToolRegistry:
                 "detection_id": "stable candidate id such as detection_001",
                 "selection_confidence": "optional VLM confidence in the semantic selection",
                 "reason": "short visual or task-semantic justification",
+                "evidence_role": (
+                    "optional exact semantic role from the pending SAM3 result: "
+                    "target_object or placement_region; omission inherits the pending role"
+                ),
                 "target_geometry_family": (
                     "optional truthful gross-geometry hint: upright_can, "
                     "upright_bottle, boxed_item, bowl, apple, articulated_handle, "

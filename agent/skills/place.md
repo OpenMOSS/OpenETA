@@ -30,18 +30,22 @@ before choosing the next tool call.
    pre-grasp RGBD observation. Do not wait until the object has moved.
 2. Retain the targeted `grasp_pose_estimate` result used for pickup, including its selected
    candidate and `details.outputs.source`. On the same original RGB image, call
-   `sam3` for the basket, bin, or other placement region and resolve its
-   selection obligation with `select_sam3_detection`. Do not segment or select
-   the placement region before targeted grasp estimation succeeds: the runtime has one
-   active SAM3 selection slot, and doing so would overwrite the selected object
-   mask. After object selection, use the RGB, depth, intrinsics, and mask from
-   that aligned observation directly; do not call `observe` merely to refresh
-   unchanged artifact paths.
+   `sam3` for the basket, bin, or other placement region with
+   `evidence_role="placement_region"`, then resolve its selection obligation with
+   `select_sam3_detection`. Target-object and placement-region selections occupy
+   separate semantic evidence slots; never reuse the default `target_object` role
+   for a receptacle. After object selection, use the RGB, depth, intrinsics, and
+   mask from that aligned observation directly; do not call `observe` merely to
+   refresh unchanged artifact paths.
 3. Call `anyplace` with the exact original RGB, depth, intrinsics, selected
    object mask, selected placement-region artifact, and
    `selected_grasp={candidate, source}` from that targeted grasp result.
    The planner context field `retained_targeted_grasp` contains the exact
    `candidate` and `source`; copy them directly without calling `get_memory`.
+   Copy the receptacle mask from
+   `world_evidence.placement_region.value` (or
+   `selected_sam3_detections.placement_region`) and keep
+   `world_evidence.selected_target.value` as the pickup object.
    Segment the placement region on `retained_targeted_grasp.source.rgb`, not a
    newer observation, and do not shorten or reconstruct any retained path.
    Never run grasp estimation on the receptacle as a substitute for AnyPlace.

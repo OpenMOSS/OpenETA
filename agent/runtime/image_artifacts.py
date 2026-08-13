@@ -31,6 +31,7 @@ class ImageArtifact:
     path: str
     kind: str
     source_field: str
+    packet_id: str = ""
     format: str = "png"
     frame_id: str = ""
     role: str = ""
@@ -49,6 +50,8 @@ class ImageArtifact:
         }
         if self.frame_id:
             payload["frame_id"] = self.frame_id
+        if self.packet_id:
+            payload["packet_id"] = self.packet_id
         if self.role:
             payload["role"] = self.role
         if self.width is not None:
@@ -174,6 +177,7 @@ def _materialize_dict(
             path=str(path.resolve()),
             kind=kind,
             source_field=source_field,
+            packet_id=bundle_id,
             format=fmt,
             frame_id=frame_id,
             role=role,

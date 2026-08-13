@@ -49,6 +49,7 @@ from agent.runtime.supervision import (
     SupervisionPolicy,
     SupervisionProfile,
 )
+from agent.runtime.visual_history import VisualHistoryConfig, VisualHistoryManager
 from agent.tools.asset_references import (
     build_asset_reference_handler,
     build_object_memory_configuration_warning_handler,
@@ -107,6 +108,8 @@ McpUrlLoader = Callable[..., str]
 ApprovalCallback = Callable[[ToolExecutionContext], bool]
 PublicationApproval = Callable[[JsonDict], bool]
 SkillApproval = Callable[[str], bool]
+
+MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 
 
 REMOTE_PLACEHOLDER_TOOLS = (
@@ -168,6 +171,7 @@ class RuntimeAssemblyConfig:
     pre_safety_checks: dict[str, str] = field(default_factory=dict)
     tool_listeners: tuple[ToolEventListener, ...] = ()
     max_validation_retries: int = 2
+    visual_history: VisualHistoryConfig = field(default_factory=VisualHistoryConfig.from_env)
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,12 +338,29 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     )
 
     planner = ToolCallingPlanner(
-        config.backend_factory(),
+        config.backend_factory(
+            max_vision_images=(
+                config.visual_history.planner_raw_image_capacity
+                + MAIN_PLANNER_AUX_IMAGE_RESERVE
+                if config.visual_history.enabled
+                else None
+            )
+        ),
         max_validation_retries=config.max_validation_retries,
         context_config=PlannerContextConfig(
             context_window_tokens=config.provider.context_window_tokens,
             token_estimator_model=config.provider.model,
+            host_task_policy_enabled=False,
+            visual_history=config.visual_history,
         ),
+    )
+    visual_history = (
+        VisualHistoryManager(
+            config=config.visual_history,
+            backend=config.backend_factory(max_tokens=384, max_vision_images=2),
+        )
+        if config.visual_history.enabled
+        else None
     )
     skill_review_config = SelfImprovementConfig(
         proposal_root=workspace.working_dir / "skill_reviews" / "pending",
@@ -363,12 +384,17 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         tools=tools,
         memory=AgentMemory(
             store=JsonMemoryStore(root=workspace.memory_root),
+            task_state_tracking_enabled=False,
             artifact_root=workspace.artifacts_dir,
         ),
         skills=workspace.skill_registry(),
-        pipeline=ActionPipeline(checker_subagents=checker_config),
+        pipeline=ActionPipeline(
+            checker_subagents=checker_config,
+            task_execution_gate_enabled=False,
+        ),
         self_improvement_reviewer=skill_reviewer,
         default_session_id=workspace.session_id,
+        visual_history=visual_history,
     )
     configure_runtime_self_improvement(
         runtime,

@@ -130,6 +130,10 @@ def _record_pending_sam3_selection(
     original_image_ref: str = "agentview.png",
     contact_sheet_ref: str = "selection.png",
     segmentation_mode: str = "point_prompt",
+    source_observation: dict | None = None,
+    evidence_role: str = "target_object",
+    result_id: str = "sam3-run-selection",
+    prompt: str = "alphabet soup",
 ) -> None:
     memory.add_action(
         EnvAction(
@@ -144,9 +148,15 @@ def _record_pending_sam3_selection(
                             "success": True,
                             "details": {
                                 "outputs": {
-                                    "result_id": "sam3-run-selection",
-                                    "prompt": "alphabet soup",
+                                    "result_id": result_id,
+                                    "prompt": prompt,
+                                    "evidence_role": evidence_role,
                                     "source_image": original_image_ref,
+                                    **(
+                                        {"source_observation": source_observation}
+                                        if source_observation is not None
+                                        else {}
+                                    ),
                                     "segmentation_mode": segmentation_mode,
                                     "ranking": "score_descending",
                                     "detection_count": 2,
@@ -1404,6 +1414,7 @@ def test_planner_context_attaches_primary_current_rgb_artifact() -> None:
         {
             "kind": "depth",
             "frame_id": "agentview",
+            "packet_id": "packet-current",
             "path": "/exact/session/cameras.0.agentview.depth.png",
         },
         {
@@ -1414,6 +1425,7 @@ def test_planner_context_attaches_primary_current_rgb_artifact() -> None:
         {
             "kind": "rgb",
             "frame_id": "agentview",
+            "packet_id": "packet-current",
             "path": "/exact/session/cameras.0.agentview.rgb.png",
             "format": "png",
         },
@@ -1427,6 +1439,18 @@ def test_planner_context_attaches_primary_current_rgb_artifact() -> None:
     )
 
     assert context["vision_image_paths"] == ["/exact/session/cameras.0.agentview.rgb.png"]
+    assert context["current_camera_artifacts"][0]["packet_id"] == "packet-current"
+    assert context["vision_evidence"] == [
+        {
+            "evidence_id": "current_observation:1:agentview",
+            "role": "current_scene",
+            "camera_role": "scene",
+            "frame_id": "agentview",
+            "path": "/exact/session/cameras.0.agentview.rgb.png",
+            "freshness": "current",
+            "observation_step": 1,
+        }
+    ]
     assert [item["frame_id"] for item in context["current_camera_artifacts"]] == [
         "agentview",
         "agentview",
@@ -3119,15 +3143,23 @@ def test_combined_pick_place_requires_placement_mask_on_retained_rgb() -> None:
     planner = ToolCallingPlanner(
         StaticPlannerBackend(
             [
-                {
-                    "kind": "tool_call",
-                    "name": "sam3",
-                    "parameters": {"image": "tmp/latest.png", "prompt": "basket"},
-                },
-                {
-                    "kind": "tool_call",
-                    "name": "sam3",
-                    "parameters": {"image": "tmp/rgb.png", "prompt": "basket"},
+                    {
+                        "kind": "tool_call",
+                        "name": "sam3",
+                        "parameters": {
+                            "image": "tmp/latest.png",
+                            "prompt": "basket",
+                            "evidence_role": "placement_region",
+                        },
+                    },
+                    {
+                        "kind": "tool_call",
+                        "name": "sam3",
+                        "parameters": {
+                            "image": "tmp/rgb.png",
+                            "prompt": "basket",
+                            "evidence_role": "placement_region",
+                        },
                 },
             ]
         ),
@@ -3166,7 +3198,11 @@ def test_placement_mask_accepts_byte_identical_same_epoch_rgb_copy(tmp_path) -> 
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": str(rematerialized_rgb), "prompt": "basket"},
+                "parameters": {
+                    "image": str(rematerialized_rgb),
+                    "prompt": "basket",
+                    "evidence_role": "placement_region",
+                },
             }
         )
     )
@@ -3426,6 +3462,170 @@ def test_targeted_grasp_obligation_prefers_usable_enhanced_depth(
     )
     assert required["hints"]["collision_check"] is False
     assert required["hints"]["depth_enhancement"]["requires_sensor_safety_check"] is True
+
+
+def test_agent_owned_planner_canonicalizes_byte_identical_target_mask_source(
+    tmp_path: Path,
+) -> None:
+    selected_dir = tmp_path / "rgb" / "selected-packet"
+    current_rgb_dir = tmp_path / "rgb" / "current-packet"
+    current_depth_dir = tmp_path / "depth" / "current-packet"
+    selected_rgb = selected_dir / "cameras.0.agentview.rgb.png"
+    current_rgb = current_rgb_dir / "cameras.0.agentview.rgb.png"
+    current_depth = current_depth_dir / "cameras.0.agentview.depth.png"
+    selected_dir.mkdir(parents=True)
+    current_rgb_dir.mkdir(parents=True)
+    current_depth_dir.mkdir(parents=True)
+    selected_rgb.write_bytes(b"same-agentview-scene")
+    current_rgb.write_bytes(b"same-agentview-scene")
+    current_depth.write_bytes(b"depth")
+    memory = AgentMemory()
+    _record_pending_sam3_selection(memory, original_image_ref=str(selected_rgb))
+    memory.resolve_sam3_selection(
+        result_id="sam3-run-selection",
+        detection_id="detection_000",
+        selection_source="main_agent_vlm",
+    )
+    observation = EnvObservation(
+        task="pick alphabet soup",
+        cameras=[
+            CameraFrame(
+                frame_id="agentview",
+                rgb=[[[0, 0, 0]]],
+                depth=[[1.0]],
+                intrinsics={"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5},
+            )
+        ],
+        robot=RobotState(),
+        metadata={
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "agentview",
+                    "packet_id": "current-packet",
+                    "path": str(current_rgb),
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "agentview",
+                    "packet_id": "current-packet",
+                    "path": str(current_depth),
+                },
+            ]
+        },
+    )
+    proposed = {
+        "mode": "targeted",
+        "rgb": str(current_rgb),
+        "depth": str(current_depth),
+        "intrinsics": {"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5, "scale": 1000},
+        "object_mask": {
+            "mask_ref": "tmp/mask_000.png",
+            "source_image": str(selected_rgb),
+            "result_id": "sam3-run-selection",
+            "detection_id": "detection_000",
+        },
+        "camera_frame_id": "agentview",
+        "scene_epoch": 0,
+    }
+    planner = ToolCallingPlanner(
+        StaticPlannerBackend(
+            {
+                "kind": "tool_call",
+                "name": "grasp_pose_estimate",
+                "parameters": proposed,
+            }
+        ),
+        context_config=PlannerContextConfig(host_task_policy_enabled=False),
+    )
+
+    decision = planner.plan(
+        observation,
+        memory=memory,
+        tools=_tools_with_handlers("grasp_pose_estimate"),
+        skills=build_default_skill_registry(),
+    )
+
+    assert decision.action == "grasp_pose_estimate"
+    assert decision.parameters["object_mask"]["source_image"] == str(current_rgb)
+    assert decision.metadata["host_parameter_canonicalizations"] == [
+        {
+            "field": "object_mask.source_image",
+            "tool": "grasp_pose_estimate",
+            "reason": "bind_byte_identical_mask_source_to_selected_rgbd_packet",
+            "supplied": str(selected_rgb),
+            "canonical": str(current_rgb),
+        }
+    ]
+
+    selected_rgb.write_bytes(b"different-agentview-scene")
+    mismatched_planner = ToolCallingPlanner(
+        StaticPlannerBackend(
+            {
+                "kind": "tool_call",
+                "name": "grasp_pose_estimate",
+                "parameters": proposed,
+            }
+        ),
+        context_config=PlannerContextConfig(host_task_policy_enabled=False),
+    )
+
+    mismatched = mismatched_planner.plan(
+        observation,
+        memory=memory,
+        tools=_tools_with_handlers("grasp_pose_estimate"),
+        skills=build_default_skill_registry(),
+    )
+
+    assert mismatched.action == "talk"
+    assert any(
+        "object_mask.source_image must be the exact RGB artifact" in error
+        for error in mismatched.metadata["validation_errors"]
+    )
+
+    selected_depth = tmp_path / "depth" / "selected-packet" / "depth.png"
+    selected_depth.parent.mkdir(parents=True)
+    selected_depth.write_bytes(b"selected-depth")
+    source_observation = {
+        "packet_id": "selected-packet",
+        "frame_id": "agentview",
+        "rgb": str(selected_rgb),
+        "depth": str(selected_depth),
+        "intrinsics": {"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5, "scale": 1000},
+    }
+    selected = memory.selected_sam3_detection()
+    assert selected is not None
+    selected["source_observation"] = source_observation
+    memory.save_fact("selected_sam3_detection", selected, source="test")
+    bundle_planner = ToolCallingPlanner(
+        StaticPlannerBackend(
+            {
+                "kind": "tool_call",
+                "name": "grasp_pose_estimate",
+                "parameters": proposed,
+            }
+        ),
+        context_config=PlannerContextConfig(host_task_policy_enabled=False),
+    )
+
+    bundled = bundle_planner.plan(
+        observation,
+        memory=memory,
+        tools=_tools_with_handlers("grasp_pose_estimate"),
+        skills=build_default_skill_registry(),
+    )
+
+    assert bundled.action == "grasp_pose_estimate"
+    assert bundled.parameters["rgb"] == str(selected_rgb)
+    assert bundled.parameters["depth"] == str(selected_depth)
+    assert bundled.parameters["object_mask"]["source_image"] == str(selected_rgb)
+    assert {
+        item["field"] for item in bundled.metadata["host_parameter_canonicalizations"]
+    } == {"rgb", "depth"}
+    assert all(
+        item["reason"] == "bind_selected_mask_to_source_observation_packet"
+        for item in bundled.metadata["host_parameter_canonicalizations"]
+    )
 
 
 def test_matching_depth_enhancement_rejects_stale_digest_and_epoch(
@@ -5701,6 +5901,8 @@ def test_placement_obligation_joins_receptacle_mask_to_frozen_grasp() -> None:
     _record_pending_sam3_selection(
         memory,
         original_image_ref="tmp/rgb.png",
+        evidence_role="placement_region",
+        prompt="basket",
     )
     memory.resolve_sam3_selection(
         result_id="sam3-run-selection",
@@ -7618,7 +7820,12 @@ def test_anyplace_host_dispatches_exact_final_grasp_packet() -> None:
         {"status": "resolved", "verdict": "PASS", "candidate_id": active["id"]},
         source="test",
     )
-    _record_pending_sam3_selection(memory, original_image_ref="tmp/rgb.png")
+    _record_pending_sam3_selection(
+        memory,
+        original_image_ref="tmp/rgb.png",
+        evidence_role="placement_region",
+        prompt="basket",
+    )
     memory.resolve_sam3_selection(
         result_id="sam3-run-selection",
         detection_id="detection_000",
@@ -7718,7 +7925,7 @@ def test_anyplace_host_does_not_repeat_a_deterministic_failure() -> None:
     assert context["placement_obligation"] is None
 
 
-def test_combined_pick_place_blocks_receptacle_segmentation_before_anygrasp() -> None:
+def test_combined_pick_place_requires_explicit_placement_evidence_role() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick cube and place it in basket")
     _record_pending_sam3_selection(memory)
@@ -7770,7 +7977,7 @@ def test_combined_pick_place_blocks_receptacle_segmentation_before_anygrasp() ->
 
     assert decision.action == "anygrasp"
     first_errors = decision.metadata["validation_attempt_history"][0]["validation_errors"]
-    assert any("one active SAM3 selection slot" in error for error in first_errors)
+    assert any("evidence_role='placement_region'" in error for error in first_errors)
 
 
 def test_replacement_anygrasp_requires_reopening_after_accepted_motion() -> None:
@@ -9320,6 +9527,141 @@ def test_runtime_selection_tool_resolves_obligation_and_unblocks_anygrasp() -> N
     assert allowed.status.value == "executed"
 
 
+def test_sam3_semantic_roles_preserve_target_while_selecting_placement() -> None:
+    runtime = OpenEtaAgentRuntime(
+        tools=bind_dummy_tool_handlers(build_default_tool_registry())
+    )
+    runtime.start_session(task="pick alphabet soup and place it in the basket")
+    _record_pending_sam3_selection(
+        runtime.memory,
+        result_id="sam3-target",
+        evidence_role="target_object",
+        prompt="alphabet soup",
+    )
+
+    target_action = runtime.pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="select_sam3_detection",
+            parameters={
+                "sam3_result_id": "sam3-target",
+                "detection_id": "detection_001",
+                "evidence_role": "target_object",
+                "reason": "The crop matches the soup package.",
+            },
+        ),
+        observation=_observation(),
+        tools=runtime.tools,
+        skills=runtime.skills,
+        memory=runtime.memory,
+    )
+    assert target_action.status.value == "executed"
+    target = dict(runtime.memory.selected_sam3_detection() or {})
+    assert target["result_id"] == "sam3-target"
+    assert target["evidence_role"] == "target_object"
+
+    _record_pending_sam3_selection(
+        runtime.memory,
+        result_id="sam3-placement",
+        evidence_role="placement_region",
+        prompt="basket",
+    )
+    assert runtime.memory.pending_sam3_selection()["evidence_role"] == (
+        "placement_region"
+    )
+    assert runtime.memory.selected_sam3_detection() == target
+
+    placement_action = runtime.pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="select_sam3_detection",
+            parameters={
+                "sam3_result_id": "sam3-placement",
+                "detection_id": "detection_000",
+                "evidence_role": "placement_region",
+                "reason": "The mask covers the basket interior.",
+            },
+        ),
+        observation=_observation(),
+        tools=runtime.tools,
+        skills=runtime.skills,
+        memory=runtime.memory,
+    )
+
+    assert placement_action.status.value == "executed"
+    selections = runtime.memory.selected_sam3_detections()
+    assert selections["target_object"] == target
+    assert selections["placement_region"]["result_id"] == "sam3-placement"
+    assert runtime.memory.selected_sam3_detection() == target
+    world = runtime.memory.world_evidence_context()
+    assert world["selected_target"]["value"] == target
+    assert world["placement_region"]["value"]["target_prompt"] == "basket"
+
+
+def test_select_sam3_detection_rejects_role_mismatch() -> None:
+    runtime = OpenEtaAgentRuntime(
+        tools=bind_dummy_tool_handlers(build_default_tool_registry())
+    )
+    runtime.start_session(task="pick alphabet soup and place it in the basket")
+    _record_pending_sam3_selection(
+        runtime.memory,
+        result_id="sam3-placement",
+        evidence_role="placement_region",
+        prompt="basket",
+    )
+
+    action = runtime.pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="select_sam3_detection",
+            parameters={
+                "sam3_result_id": "sam3-placement",
+                "detection_id": "detection_000",
+                "evidence_role": "target_object",
+                "reason": "This is the basket.",
+            },
+        ),
+        observation=_observation(),
+        tools=runtime.tools,
+        skills=runtime.skills,
+        memory=runtime.memory,
+    )
+
+    assert action.status.value == "failed"
+    assert runtime.memory.pending_sam3_selection() is not None
+    assert runtime.memory.selected_sam3_detection("placement_region") is None
+
+
+def test_rejected_placement_selection_does_not_invalidate_target() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick alphabet soup and place it in the basket")
+    _record_pending_sam3_selection(memory, result_id="sam3-target")
+    memory.resolve_sam3_selection(
+        result_id="sam3-target",
+        detection_id="detection_001",
+        selection_source="main_agent_vlm",
+    )
+    target = dict(memory.selected_sam3_detection() or {})
+    _record_pending_sam3_selection(
+        memory,
+        result_id="sam3-placement",
+        evidence_role="placement_region",
+        prompt="basket",
+    )
+
+    rejected = memory.reject_sam3_detections(
+        result_id="sam3-placement",
+        reason="No candidate covers the basket interior.",
+    )
+
+    assert rejected["evidence_role"] == "placement_region"
+    assert memory.selected_sam3_detection() == target
+    assert memory.sam3_no_detection() is None
+    assert memory.sam3_no_detection("placement_region")["result_id"] == (
+        "sam3-placement"
+    )
+
+
 def test_runtime_can_reject_all_pending_sam3_detections() -> None:
     runtime = OpenEtaAgentRuntime(tools=bind_dummy_tool_handlers(build_default_tool_registry()))
     runtime.start_session(task="pick alphabet soup")
@@ -10411,9 +10753,11 @@ def test_openai_compatible_backend_attaches_pending_selection_images(tmp_path: P
         "text",
         "image_url",
         "image_url",
+        "text",
     ]
     assert all(
-        part["image_url"]["url"].startswith("data:image/png;base64,") for part in user_content[1:]
+        part["image_url"]["url"].startswith("data:image/png;base64,")
+        for part in user_content[1:3]
     )
     assert [item["path"] for item in result.details["vision_attachments"]] == [
         str(original),
@@ -10481,6 +10825,7 @@ def test_openai_compatible_backend_labels_reviewer_vision_evidence(tmp_path: Pat
         "image_url",
         "text",
         "image_url",
+        "text",
     ]
     assert user_content[1]["text"] == (
         "Image #1 role: current_scene. This is the current state used for action review."
@@ -10550,6 +10895,7 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
         "text",
         "image_url",
         "image_url",
+        "text",
     ]
     assert [item["path"] for item in result.details["vision_attachments"]] == [
         str(scene),

@@ -1231,7 +1231,18 @@ def action_token_usage(action: EnvAction) -> tuple[int, dict[str, int]]:
         for key, value in sources.items()
         if _non_negative_int(value) > 0
     }
-    return _non_negative_int(usage.get("total_tokens")), normalized_sources
+    total_tokens = _non_negative_int(usage.get("total_tokens"))
+    visual_delta = planner_metadata.get("visual_delta_usage")
+    if isinstance(visual_delta, dict):
+        delta_usage = visual_delta.get("usage")
+        if isinstance(delta_usage, dict):
+            delta_tokens = _non_negative_int(delta_usage.get("total_tokens"))
+            total_tokens += delta_tokens
+            if delta_tokens > 0:
+                source = str(delta_usage.get("usage_source") or "unknown")
+                key = f"visual_delta:{source}"
+                normalized_sources[key] = normalized_sources.get(key, 0) + 1
+    return total_tokens, normalized_sources
 
 
 def action_total_tokens(action: EnvAction) -> int:

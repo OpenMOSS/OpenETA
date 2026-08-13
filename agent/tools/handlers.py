@@ -52,6 +52,8 @@ DEFAULT_SAM3_SELECTION_VISUAL_LIMIT = 8
 DEFAULT_SAM3_ROI_PADDING_RATIO = 0.12
 DEFAULT_SAM3_ROI_FALLBACK_PROMPT = "foreground object"
 SAM3_MAX_POINT_COUNT = 64
+DEFAULT_SAM3_EVIDENCE_ROLE = "target_object"
+SAM3_EVIDENCE_ROLES = frozenset({DEFAULT_SAM3_EVIDENCE_ROLE, "placement_region"})
 DEFAULT_ANYPLACE_OUTPUT_ROOT = Path("tmp") / "tool_result" / "anyplace"
 DEFAULT_MOLMOPOINT_OUTPUT_ROOT = Path("tmp") / "tool_result" / "molmopoint"
 DEFAULT_GRASPGENX_OUTPUT_ROOT = Path("tmp") / "tool_result" / "graspgenx"
@@ -202,9 +204,17 @@ def build_sam3_handler(
             context.observation,
         )
         prompt = _string_param(context.parameters.get("prompt"))
+        evidence_role = (
+            _string_param(context.parameters.get("evidence_role")).lower()
+            or DEFAULT_SAM3_EVIDENCE_ROLE
+        )
         roi_bbox_value = context.parameters.get("roi_bbox_xyxy")
         points: list[JsonDict] = []
-        request: JsonDict = {"mode": mode, "image": image}
+        request: JsonDict = {
+            "mode": mode,
+            "image": image,
+            "evidence_role": evidence_role,
+        }
         if mode == "text":
             request["prompt"] = prompt
         elif mode == "points":
@@ -258,6 +268,23 @@ def build_sam3_handler(
                 },
             )
             return result
+
+        if evidence_role not in SAM3_EVIDENCE_ROLES:
+            return finish(
+                _sam3_failure(
+                    mode=mode,
+                    prompt=prompt,
+                    points=[],
+                    source_image=image,
+                    reason="invalid_evidence_role",
+                    content=(
+                        "SAM3 segmentation failed: evidence_role must be "
+                        "target_object or placement_region."
+                    ),
+                ),
+                mcp_called=False,
+                reason="invalid_evidence_role",
+            )
 
         if mode not in {"text", "points"}:
             return finish(
@@ -518,6 +545,7 @@ def build_sam3_handler(
             request={
                 "image": image,
                 "mode": mode,
+                "evidence_role": evidence_role,
                 "image_format": image_format,
                 "prompt": prompt,
                 **roi_metadata,
@@ -540,6 +568,7 @@ def build_sam3_handler(
                     if roi_metadata
                     else "full_frame"
                 ),
+                "evidence_role": evidence_role,
                 "sam_prompt_used": sam_prompt_used,
                 "fallback_attempted": fallback_attempted,
                 "fallback_prompt": (
@@ -594,12 +623,58 @@ def _current_observation_rgb_metadata(image: str, observation: Any) -> JsonDict:
         if not _same_resolved_path(path, image):
             continue
         provenance: JsonDict = {}
+        packet_id = _string_param(artifact.get("packet_id"))
+        if not packet_id:
+            try:
+                packet_id = Path(path).parent.name
+            except (OSError, ValueError):
+                packet_id = ""
         frame_id = str(artifact.get("frame_id") or "")
         role = str(artifact.get("role") or "")
-        # Preserve the legacy LIBERO result payload exactly. Only role-aware
-        # adapters need additive source-camera provenance.
+        if packet_id:
+            provenance["source_packet_id"] = packet_id
+        source_observation: JsonDict = {
+            "packet_id": packet_id,
+            "frame_id": frame_id,
+            "rgb": path,
+        }
+        for candidate in artifacts:
+            if (
+                not isinstance(candidate, dict)
+                or candidate.get("kind") != "depth"
+                or str(candidate.get("frame_id") or "") != frame_id
+            ):
+                continue
+            candidate_path = candidate.get("path")
+            if not isinstance(candidate_path, str) or not candidate_path:
+                continue
+            candidate_packet_id = _string_param(candidate.get("packet_id"))
+            if not candidate_packet_id:
+                try:
+                    candidate_packet_id = Path(candidate_path).parent.name
+                except (OSError, ValueError):
+                    candidate_packet_id = ""
+            if packet_id and candidate_packet_id == packet_id:
+                source_observation["depth"] = candidate_path
+                break
+        cameras = getattr(observation, "cameras", None)
+        if isinstance(cameras, list):
+            camera = next(
+                (
+                    candidate
+                    for candidate in cameras
+                    if str(getattr(candidate, "frame_id", "") or "") == frame_id
+                ),
+                None,
+            )
+            intrinsics = getattr(camera, "intrinsics", None)
+            if isinstance(intrinsics, dict) and intrinsics:
+                source_observation["intrinsics"] = dict(intrinsics)
+        provenance["source_observation"] = source_observation
+        # Keep the legacy role-less payload shape while adding packet provenance.
+        # Frame/camera labels are only part of the role-aware adapter contract.
         if not role:
-            return {}
+            return provenance
         if frame_id:
             provenance["source_frame_id"] = frame_id
         provenance["source_camera_role"] = role
@@ -1954,6 +2029,10 @@ def _scene_detector_handler(context: ToolExecutionContext) -> ToolResult:
 
 def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
     prompt = context.parameters.get("prompt", "object")
+    evidence_role = (
+        _string_param(context.parameters.get("evidence_role")).lower()
+        or DEFAULT_SAM3_EVIDENCE_ROLE
+    )
     mask_id = f"mask-{str(prompt).replace(' ', '-')}-001"
     return make_tool_result(
         context,
@@ -1962,6 +2041,7 @@ def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
         outputs={
             "image": context.parameters.get("image"),
             "prompt": prompt,
+            "evidence_role": evidence_role,
             "masks": [
                 {
                     "mask_id": mask_id,
@@ -3052,6 +3132,12 @@ def _normalise_sam3_response(
                 "bbox_xyxy": bbox_xyxy,
                 "mask_ref": str(mask_ref),
                 "area_px": area_px,
+                **(
+                    {"source_packet_id": output_metadata["source_packet_id"]}
+                    if isinstance(output_metadata, dict)
+                    and output_metadata.get("source_packet_id")
+                    else {}
+                ),
             }
         )
         mask_artifacts.append(
@@ -3067,6 +3153,12 @@ def _normalise_sam3_response(
                 "path": str(mask_ref),
                 "mask_ref": str(mask_ref),
                 "source_image": source_image,
+                **(
+                    {"source_packet_id": output_metadata["source_packet_id"]}
+                    if isinstance(output_metadata, dict)
+                    and output_metadata.get("source_packet_id")
+                    else {}
+                ),
                 "score": score,
                 "bbox_xyxy": bbox_xyxy,
                 "area_px": area_px,

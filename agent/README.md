@@ -153,7 +153,10 @@ Current runtime pieces:
 - SAM3 multi-candidate selection is explicit: runtime memory persists a
   `selection_obligation`, the main VLM calls `select_sam3_detection`, and the
   pipeline blocks targeted `grasp_pose_estimate` or world-mutating tools until
-  the selected mask is recorded.
+  the selected mask is recorded. Selections are retained by semantic
+  `evidence_role`: `target_object` remains the backward-compatible default,
+  while receptacles use `placement_region`, so selecting a basket cannot replace
+  the pickup target or its RGB-D provenance.
 - Grasp estimation is exposed as one normalized façade over AnyGrasp,
   Contact-GraspNet, and GraspGenX. Compatible backend failures fall through in
   host-owned order; backend-local scores are never compared across estimators.

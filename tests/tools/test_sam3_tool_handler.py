@@ -52,18 +52,34 @@ def _observation_with_rgb_artifact(
     path: Path,
     *,
     role: str = "",
+    packet_id: str = "",
 ) -> EnvObservation:
     artifact = {"kind": "rgb", "frame_id": frame_id, "path": str(path)}
+    depth_artifact = {
+        "kind": "depth",
+        "frame_id": frame_id,
+        "path": "other-depth.png",
+    }
     if role:
         artifact["role"] = role
+    if packet_id:
+        artifact["packet_id"] = packet_id
+        depth_artifact["packet_id"] = packet_id
     return EnvObservation(
         task="pick object",
-        cameras=[CameraFrame(frame_id=frame_id, role=role, rgb=[])],
+        cameras=[
+            CameraFrame(
+                frame_id=frame_id,
+                role=role,
+                rgb=[],
+                intrinsics={"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5},
+            )
+        ],
         robot=RobotState(),
         metadata={
             "image_artifacts": [
                 artifact,
-                {"kind": "depth", "frame_id": frame_id, "path": "other-depth.png"},
+                depth_artifact,
             ]
         },
     )
@@ -151,7 +167,9 @@ def test_sam3_default_roots_use_repo_tmp_layout() -> None:
 def test_sam3_spec_exposes_text_and_point_modes() -> None:
     spec = build_default_tool_registry().get("sam3")
 
-    assert {"mode", "image", "prompt", "points"}.issubset(spec.parameters)
+    assert {"mode", "image", "prompt", "points", "evidence_role"}.issubset(
+        spec.parameters
+    )
     assert "label=1" in spec.parameters["points"]
 
 
@@ -570,7 +588,11 @@ def test_sam3_handler_encodes_image_path_and_materializes_success(tmp_path: Path
     handler = build_sam3_handler(segment, output_root=tmp_path)
     result = handler(
         _context(
-            {"image": str(FIXTURE_IMAGE), "prompt": "black shoe"},
+            {
+                "image": str(FIXTURE_IMAGE),
+                "prompt": "black shoe",
+                "evidence_role": "placement_region",
+            },
             session_id="sam-session",
         )
     )
@@ -580,6 +602,7 @@ def test_sam3_handler_encodes_image_path_and_materializes_success(tmp_path: Path
     assert base64.b64decode(calls[0]["image_base64"])
     assert result.success is True
     assert result.details["source_image"] == str(FIXTURE_IMAGE)
+    assert result.details["evidence_role"] == "placement_region"
     assert Path(result.details["raw_output_ref"]).exists()
     assert Path(result.details["raw_output_ref"]).relative_to(tmp_path).parts[0] == (
         "sam-session"
@@ -651,6 +674,37 @@ def test_sam3_handler_preserves_role_aware_source_camera_provenance(
     assert result.success is True
     assert result.details["source_frame_id"] == "zed_head"
     assert result.details["source_camera_role"] == "scene_primary"
+
+
+def test_sam3_handler_preserves_observation_packet_provenance(tmp_path: Path) -> None:
+    handler = build_sam3_handler(
+        lambda request: {
+            "success": True,
+            "details": {"detection_count": 0, "detections": []},
+        },
+        output_root=tmp_path,
+    )
+
+    result = handler(
+        _context(
+            {"image": "agentview", "prompt": "cube"},
+            observation=_observation_with_rgb_artifact(
+                "agentview",
+                FIXTURE_IMAGE,
+                packet_id="observation-packet-7",
+            ),
+        )
+    )
+
+    assert result.success is True
+    assert result.details["source_packet_id"] == "observation-packet-7"
+    assert result.details["source_observation"] == {
+        "packet_id": "observation-packet-7",
+        "frame_id": "agentview",
+        "rgb": str(FIXTURE_IMAGE),
+        "depth": "other-depth.png",
+        "intrinsics": {"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5},
+    }
 
 
 def test_sam3_handler_resolves_stale_path_to_current_observation(tmp_path: Path) -> None:

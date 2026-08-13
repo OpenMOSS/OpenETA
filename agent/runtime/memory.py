@@ -27,11 +27,13 @@ from agent.runtime.structured_artifacts import materialize_structured_tool_outpu
 
 PENDING_SAM3_SELECTION_KEY = "pending_sam3_selection"
 SELECTED_SAM3_DETECTION_KEY = "selected_sam3_detection"
+SELECTED_SAM3_DETECTIONS_KEY = "selected_sam3_detections"
 PENDING_REFERENCE_LOCALIZATION_KEY = "pending_reference_localization"
 REFERENCE_LOCALIZATION_FAILURE_KEY = "reference_localization_failure"
 TARGET_LOCALIZATION_BUDGET_KEY = "target_localization_budget"
 TARGET_ASSET_REFERENCE_KEY = "target_asset_reference"
 SAM3_NO_DETECTION_KEY = "sam3_no_detection"
+SAM3_NO_DETECTIONS_KEY = "sam3_no_detections"
 GRASP_CANDIDATE_POLICY_KEY = "grasp_candidate_policy"
 LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY = "anygrasp_candidate_policy"
 GRASP_REESTIMATION_KEY = "grasp_reestimation"
@@ -67,6 +69,8 @@ GRASP_GEOMETRY_FAMILIES = {
     "other",
     "unknown",
 }
+DEFAULT_SAM3_EVIDENCE_ROLE = "target_object"
+SAM3_EVIDENCE_ROLES = frozenset({DEFAULT_SAM3_EVIDENCE_ROLE, "placement_region"})
 
 
 class MemoryStore(Protocol):
@@ -128,6 +132,7 @@ class AgentMemory:
         self.events: list[MemoryEvent] = []
         self.conversation = ConversationHistory()
         self.facts: dict[str, JsonDict] = {}
+        self.agent_working_state: dict[str, JsonDict] = {}
         self.artifacts: dict[str, JsonDict] = {}
         self.skill_notes: dict[str, list[JsonDict]] = {}
         self.compact_summary: str = ""
@@ -140,6 +145,7 @@ class AgentMemory:
         session_id: str | None = None,
     ) -> None:
         boot_facts = dict(self.facts) if self.session_id is None else {}
+        boot_agent_state = dict(self.agent_working_state) if self.session_id is None else {}
         boot_artifacts = dict(self.artifacts) if self.session_id is None else {}
         self.session_id = session_id or str(uuid4())
         self.task = task
@@ -148,6 +154,7 @@ class AgentMemory:
         self.events.clear()
         self.conversation.clear()
         self.facts = boot_facts
+        self.agent_working_state = boot_agent_state
         self.facts.setdefault(
             SCENE_EPOCH_KEY,
             _memory_fact_entry({"epoch": 0}, source="runtime"),
@@ -196,6 +203,7 @@ class AgentMemory:
         self.events.clear()
         self.conversation.clear()
         self.facts.clear()
+        self.agent_working_state.clear()
         self.artifacts.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
@@ -265,6 +273,10 @@ class AgentMemory:
 
     def add_observation(self, observation: EnvObservation) -> None:
         summary = summarize_observation(observation)
+        summary["observation_index"] = self._next_observation_index()
+        environment_step = observation.metadata.get("step_idx")
+        if isinstance(environment_step, int) and not isinstance(environment_step, bool):
+            summary["environment_step"] = environment_step
         summary["scene_epoch"] = self.scene_epoch()
         summary["runtime_camera_calibrations"] = [
             {
@@ -275,7 +287,37 @@ class AgentMemory:
             if isinstance(camera.extrinsics, dict) and camera.extrinsics
         ]
         runtime_sources: list[JsonDict] = []
+        visual_artifacts: list[JsonDict] = []
         seen_sources: set[tuple[str, str]] = set()
+        cameras = {camera.frame_id: camera for camera in observation.cameras}
+        for artifact in observation.metadata.get("image_artifacts", []):
+            if (
+                not isinstance(artifact, dict)
+                or artifact.get("kind") not in {"rgb", "depth"}
+                or not isinstance(artifact.get("path"), str)
+            ):
+                continue
+            frame_id = str(artifact.get("frame_id") or "")
+            camera = cameras.get(frame_id)
+            visual_artifact: JsonDict = {
+                "kind": str(artifact["kind"]),
+                "frame_id": frame_id,
+                "path": str(artifact["path"]),
+            }
+            role = str(
+                artifact.get("role")
+                or getattr(camera, "role", "")
+                or ""
+            )
+            if role:
+                visual_artifact["role"] = role
+            timestamp_s = getattr(camera, "timestamp_s", None)
+            if timestamp_s is not None:
+                visual_artifact["timestamp_s"] = timestamp_s
+            for field_name in ("packet_id", "width", "height", "format", "index"):
+                if artifact.get(field_name) is not None:
+                    visual_artifact[field_name] = artifact[field_name]
+            visual_artifacts.append(visual_artifact)
         for artifact in observation.metadata.get("image_artifacts", []):
             if (
                 not isinstance(artifact, dict)
@@ -300,6 +342,7 @@ class AgentMemory:
                 seen_sources.add(key)
                 runtime_sources.append({"frame_id": frame_id, "rgb_path": rgb_path})
         summary["runtime_camera_sources"] = runtime_sources
+        summary["visual_artifacts"] = visual_artifacts
         self.record("observation", summary)
         self._capture_grasp_reestimation_observation()
         reconciliation_updated = self._reconcile_unknown_motion(observation)
@@ -310,6 +353,27 @@ class AgentMemory:
             or attachment_updated
         ):
             self._save_working_memory()
+
+    def _next_observation_index(self) -> int:
+        for event in reversed(self.events):
+            if event.event_type != "observation":
+                continue
+            value = event.payload.get("observation_index")
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value + 1
+        if self.store is not None and self.session_id is not None:
+            try:
+                rows = self.store.load_events(self.session_id, limit=None)
+            except (OSError, ValueError, json.JSONDecodeError):
+                rows = []
+            for row in reversed(rows):
+                if not isinstance(row, dict) or row.get("event_type") != "observation":
+                    continue
+                payload = row.get("payload")
+                value = payload.get("observation_index") if isinstance(payload, dict) else None
+                if isinstance(value, int) and not isinstance(value, bool):
+                    return value + 1
+        return sum(event.event_type == "observation" for event in self.events)
 
     def _capture_grasp_reestimation_observation(self) -> bool:
         reestimate = _memory_fact_value(self.facts.get(GRASP_REESTIMATION_KEY))
@@ -323,6 +387,9 @@ class AgentMemory:
         for key in (
             PENDING_SAM3_SELECTION_KEY,
             SELECTED_SAM3_DETECTION_KEY,
+            SELECTED_SAM3_DETECTIONS_KEY,
+            SAM3_NO_DETECTION_KEY,
+            SAM3_NO_DETECTIONS_KEY,
             GRASP_CANDIDATE_POLICY_KEY,
             LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY,
             GRASP_LIFT_PROBE_KEY,
@@ -372,22 +439,43 @@ class AgentMemory:
             }
         world_mutated = self._record_successful_world_mutation(action)
         gripper_state_updated = self._capture_gripper_command_state(action)
-        placement_release_denied = self._capture_placement_release_denial(action)
-        placement_release_updated = self._capture_placement_release(action)
-        attachment_updated = self._capture_attachment_verdict(action)
-        articulated_assessment_updated = self._capture_articulated_attachment_assessment(
-            action
-        )
-        articulated_probe_prepared = self._capture_articulated_attachment_probe(action)
-        articulated_probe_updated = self._capture_articulated_attachment_probe_result(action)
-        lift_probe_updated = self._capture_grasp_lift_probe_result(action)
-        execution_updated = self._advance_grasp_execution(action)
+        placement_release_denied = False
+        placement_release_updated = False
+        attachment_updated = False
+        articulated_assessment_updated = False
+        articulated_probe_prepared = False
+        articulated_probe_updated = False
+        lift_probe_updated = False
+        execution_updated = False
+        if self.task_state_tracking_enabled:
+            placement_release_denied = self._capture_placement_release_denial(action)
+            placement_release_updated = self._capture_placement_release(action)
+            attachment_updated = self._capture_attachment_verdict(action)
+            articulated_assessment_updated = self._capture_articulated_attachment_assessment(
+                action
+            )
+            articulated_probe_prepared = self._capture_articulated_attachment_probe(action)
+            articulated_probe_updated = self._capture_articulated_attachment_probe_result(action)
+            lift_probe_updated = self._capture_grasp_lift_probe_result(action)
+            execution_updated = self._advance_grasp_execution(action)
         reconciliation_updated = self._capture_motion_reconciliation(action)
-        recovery_updated = self._advance_grasp_recovery(action)
-        estimation_recovery_updated = self._advance_grasp_estimation_recovery(action)
-        candidate_advanced = self._advance_anygrasp_candidate_after_rejection(action)
+        recovery_updated = (
+            self._advance_grasp_recovery(action) if self.task_state_tracking_enabled else False
+        )
+        estimation_recovery_updated = (
+            self._advance_grasp_estimation_recovery(action)
+            if self.task_state_tracking_enabled
+            else False
+        )
+        candidate_advanced = (
+            self._advance_anygrasp_candidate_after_rejection(action)
+            if self.task_state_tracking_enabled
+            else False
+        )
         candidate_accepted = (
-            False if candidate_advanced else self._accept_anygrasp_candidate_after_motion(action)
+            False
+            if candidate_advanced or not self.task_state_tracking_enabled
+            else self._accept_anygrasp_candidate_after_motion(action)
         )
         if candidate_advanced:
             self.facts.pop(GRASP_LIFT_PROBE_KEY, None)
@@ -507,8 +595,9 @@ class AgentMemory:
                 "max_attempts": 2,
                 "status": "exhausted" if exhausted else "retry_required",
             }
-            self.facts[SELECTED_SAM3_DETECTION_KEY] = _memory_fact_entry(
+            self._store_selected_sam3_detection(
                 selected,
+                evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE,
                 source=failure_key,
             )
             self.record(
@@ -532,8 +621,9 @@ class AgentMemory:
             and dense_sampling is not True
         ):
             selected["dense_grasp_retry_required"] = True
-            self.facts[SELECTED_SAM3_DETECTION_KEY] = _memory_fact_entry(
+            self._store_selected_sam3_detection(
                 selected,
+                evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE,
                 source="anygrasp_dense_retry",
             )
             self.record(
@@ -545,9 +635,11 @@ class AgentMemory:
             )
             return True
         source_image = outputs.get("source_rgb") or selected.get("source_image")
-        self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
+        self._remove_selected_sam3_detection(
+            evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE
+        )
         self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-        self.facts[SAM3_NO_DETECTION_KEY] = _memory_fact_entry(
+        self._store_sam3_no_detection(
             {
                 "result_id": selected.get("result_id"),
                 "source_image": source_image,
@@ -555,7 +647,9 @@ class AgentMemory:
                 "reason": reason,
                 "segmentation_mode": selected.get("segmentation_mode"),
                 "bbox_xyxy": selected.get("bbox_xyxy"),
+                "evidence_role": DEFAULT_SAM3_EVIDENCE_ROLE,
             },
+            evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE,
             source="anygrasp",
         )
         self.record(
@@ -580,7 +674,14 @@ class AgentMemory:
         if key == LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY:
             key = GRASP_CANDIDATE_POLICY_KEY
             self.facts.pop(LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY, None)
-        self.facts[key] = {"value": dict(value), "source": source, "timestamp_s": time.time()}
+        entry = {"value": dict(value), "source": source, "timestamp_s": time.time()}
+        self.facts[key] = entry
+        if source == "save_memory":
+            self.agent_working_state[key] = {
+                **entry,
+                "ownership": "agent",
+                "freshness": "agent_managed",
+            }
         self.record("memory_fact_saved", {"key": key, "source": source})
         self._save_working_memory()
 
@@ -679,8 +780,65 @@ class AgentMemory:
     def pending_sam3_selection(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(PENDING_SAM3_SELECTION_KEY))
 
-    def selected_sam3_detection(self) -> JsonDict | None:
-        return _memory_fact_value(self.facts.get(SELECTED_SAM3_DETECTION_KEY))
+    def selected_sam3_detection(
+        self,
+        evidence_role: str = DEFAULT_SAM3_EVIDENCE_ROLE,
+    ) -> JsonDict | None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        selections = _memory_fact_value(self.facts.get(SELECTED_SAM3_DETECTIONS_KEY))
+        if isinstance(selections, dict):
+            selected = selections.get(role)
+            if isinstance(selected, dict):
+                return selected
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            return _memory_fact_value(self.facts.get(SELECTED_SAM3_DETECTION_KEY))
+        return None
+
+    def selected_sam3_detections(self) -> JsonDict:
+        selections = _memory_fact_value(self.facts.get(SELECTED_SAM3_DETECTIONS_KEY))
+        result = {
+            str(role): dict(selected)
+            for role, selected in (selections.items() if isinstance(selections, dict) else [])
+            if role in SAM3_EVIDENCE_ROLES and isinstance(selected, dict)
+        }
+        legacy = _memory_fact_value(self.facts.get(SELECTED_SAM3_DETECTION_KEY))
+        if DEFAULT_SAM3_EVIDENCE_ROLE not in result and isinstance(legacy, dict):
+            result[DEFAULT_SAM3_EVIDENCE_ROLE] = dict(legacy)
+        return result
+
+    def _store_selected_sam3_detection(
+        self,
+        selected: JsonDict,
+        *,
+        evidence_role: str,
+        source: str,
+    ) -> None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        selections = self.selected_sam3_detections()
+        selections[role] = dict(selected)
+        self.facts[SELECTED_SAM3_DETECTIONS_KEY] = _memory_fact_entry(
+            selections,
+            source=source,
+        )
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            self.facts[SELECTED_SAM3_DETECTION_KEY] = _memory_fact_entry(
+                selected,
+                source=source,
+            )
+
+    def _remove_selected_sam3_detection(self, *, evidence_role: str) -> None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        selections = self.selected_sam3_detections()
+        selections.pop(role, None)
+        if selections:
+            self.facts[SELECTED_SAM3_DETECTIONS_KEY] = _memory_fact_entry(
+                selections,
+                source="sam3_selection_removed",
+            )
+        else:
+            self.facts.pop(SELECTED_SAM3_DETECTIONS_KEY, None)
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
 
     def pending_reference_localization(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(PENDING_REFERENCE_LOCALIZATION_KEY))
@@ -691,8 +849,65 @@ class AgentMemory:
     def reference_localization_failure(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(REFERENCE_LOCALIZATION_FAILURE_KEY))
 
-    def sam3_no_detection(self) -> JsonDict | None:
-        return _memory_fact_value(self.facts.get(SAM3_NO_DETECTION_KEY))
+    def sam3_no_detection(
+        self,
+        evidence_role: str = DEFAULT_SAM3_EVIDENCE_ROLE,
+    ) -> JsonDict | None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        failures = _memory_fact_value(self.facts.get(SAM3_NO_DETECTIONS_KEY))
+        if isinstance(failures, dict):
+            failure = failures.get(role)
+            if isinstance(failure, dict):
+                return failure
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            return _memory_fact_value(self.facts.get(SAM3_NO_DETECTION_KEY))
+        return None
+
+    def sam3_no_detections(self) -> JsonDict:
+        failures = _memory_fact_value(self.facts.get(SAM3_NO_DETECTIONS_KEY))
+        result = {
+            str(role): dict(failure)
+            for role, failure in (failures.items() if isinstance(failures, dict) else [])
+            if role in SAM3_EVIDENCE_ROLES and isinstance(failure, dict)
+        }
+        legacy = _memory_fact_value(self.facts.get(SAM3_NO_DETECTION_KEY))
+        if DEFAULT_SAM3_EVIDENCE_ROLE not in result and isinstance(legacy, dict):
+            result[DEFAULT_SAM3_EVIDENCE_ROLE] = dict(legacy)
+        return result
+
+    def _store_sam3_no_detection(
+        self,
+        failure: JsonDict,
+        *,
+        evidence_role: str,
+        source: str,
+    ) -> None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        failures = self.sam3_no_detections()
+        failures[role] = dict(failure)
+        self.facts[SAM3_NO_DETECTIONS_KEY] = _memory_fact_entry(
+            failures,
+            source=source,
+        )
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            self.facts[SAM3_NO_DETECTION_KEY] = _memory_fact_entry(
+                failure,
+                source=source,
+            )
+
+    def _remove_sam3_no_detection(self, *, evidence_role: str) -> None:
+        role = _normalize_sam3_evidence_role(evidence_role)
+        failures = self.sam3_no_detections()
+        failures.pop(role, None)
+        if failures:
+            self.facts[SAM3_NO_DETECTIONS_KEY] = _memory_fact_entry(
+                failures,
+                source="sam3_no_detection_removed",
+            )
+        else:
+            self.facts.pop(SAM3_NO_DETECTIONS_KEY, None)
+        if role == DEFAULT_SAM3_EVIDENCE_ROLE:
+            self.facts.pop(SAM3_NO_DETECTION_KEY, None)
 
     def grasp_candidate_policy(self) -> JsonDict | None:
         return _memory_fact_value(
@@ -962,6 +1177,120 @@ class AgentMemory:
     def latest_environment_receipt(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get("latest_environment_receipt"))
 
+    def world_evidence_context(self) -> JsonDict:
+        """Derive planner evidence with provenance and explicit freshness.
+
+        This is a projection of the event-backed runtime facts, not another
+        mutable task-state store. Values that refer to an older scene epoch are
+        exposed as stale rather than silently treated as the current world.
+        """
+
+        specs = (
+            ("selected_target", SELECTED_SAM3_DETECTION_KEY, "perception_result"),
+            ("target_asset_reference", TARGET_ASSET_REFERENCE_KEY, "reference_result"),
+            ("grasp_candidates", GRASP_CANDIDATE_POLICY_KEY, "tool_result"),
+            ("gripper_command", GRIPPER_COMMAND_STATE_KEY, "commanded_state"),
+            ("attachment_verdict", ATTACHMENT_GATE_KEY, "verifier_result"),
+            ("motion_reconciliation", MOTION_RECONCILIATION_KEY, "safety_constraint"),
+            ("environment_receipt", "latest_environment_receipt", "trusted_receipt"),
+        )
+        current_epoch = self.scene_epoch()
+        evidence: JsonDict = {}
+        for output_key, fact_key, evidence_kind in specs:
+            if not self.task_state_tracking_enabled and output_key in {
+                "grasp_candidates",
+                "attachment_verdict",
+            }:
+                continue
+            entry = self.facts.get(fact_key)
+            if not isinstance(entry, dict):
+                continue
+            value = _memory_fact_value(entry)
+            if not isinstance(value, dict):
+                continue
+            value_epoch = value.get("scene_epoch")
+            if evidence_kind == "trusted_receipt":
+                freshness = "authoritative_receipt"
+            elif evidence_kind == "commanded_state":
+                freshness = "commanded_not_observed"
+            elif isinstance(value_epoch, int) and not isinstance(value_epoch, bool):
+                freshness = (
+                    "current_scene_epoch" if value_epoch == current_epoch else "stale_scene_epoch"
+                )
+            else:
+                freshness = "session_evidence"
+            evidence[output_key] = {
+                "value": value,
+                "provenance": {
+                    "source": str(entry.get("source") or "runtime"),
+                    "timestamp_s": entry.get("timestamp_s"),
+                    "evidence_kind": evidence_kind,
+                },
+                "freshness": freshness,
+                "scene_epoch": value_epoch,
+                "current_scene_epoch": current_epoch,
+            }
+        placement = self.selected_sam3_detection("placement_region")
+        selections_entry = self.facts.get(SELECTED_SAM3_DETECTIONS_KEY)
+        if isinstance(placement, dict) and isinstance(selections_entry, dict):
+            placement_epoch = placement.get("scene_epoch")
+            placement_freshness = (
+                "current_scene_epoch"
+                if isinstance(placement_epoch, int)
+                and not isinstance(placement_epoch, bool)
+                and placement_epoch == current_epoch
+                else "stale_scene_epoch"
+                if isinstance(placement_epoch, int)
+                and not isinstance(placement_epoch, bool)
+                else "session_evidence"
+            )
+            evidence["placement_region"] = {
+                "value": placement,
+                "provenance": {
+                    "source": str(selections_entry.get("source") or "runtime"),
+                    "timestamp_s": selections_entry.get("timestamp_s"),
+                    "evidence_kind": "perception_result",
+                },
+                "freshness": placement_freshness,
+                "scene_epoch": placement_epoch,
+                "current_scene_epoch": current_epoch,
+            }
+        if not self.task_state_tracking_enabled:
+            candidate_entry = max(
+                (
+                    entry
+                    for entry in self.artifacts.values()
+                    if isinstance(entry, dict)
+                    and isinstance(entry.get("value"), dict)
+                    and entry["value"].get("type") == "grasp_candidates"
+                ),
+                key=lambda entry: float(entry.get("timestamp_s") or 0.0),
+                default=None,
+            )
+            if isinstance(candidate_entry, dict):
+                candidate_value = dict(candidate_entry["value"])
+                value_epoch = candidate_value.get("scene_epoch")
+                evidence["grasp_candidates"] = {
+                    "value": candidate_value,
+                    "provenance": {
+                        "source": str(
+                            candidate_value.get("source_tool")
+                            or candidate_entry.get("source")
+                            or "tool_result"
+                        ),
+                        "timestamp_s": candidate_entry.get("timestamp_s"),
+                        "evidence_kind": "tool_result",
+                    },
+                    "freshness": (
+                        "current_scene_epoch"
+                        if value_epoch == current_epoch
+                        else "stale_scene_epoch"
+                    ),
+                    "scene_epoch": value_epoch,
+                    "current_scene_epoch": current_epoch,
+                }
+        return evidence
+
     def active_environment_task(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(ACTIVE_ENVIRONMENT_TASK_KEY))
 
@@ -1032,6 +1361,8 @@ class AgentMemory:
         tool_name: str,
         parameters: JsonDict,
     ) -> str | None:
+        if not self.task_state_tracking_enabled:
+            return None
         policy = self.grasp_candidate_policy()
         if policy is None:
             return None
@@ -1139,6 +1470,7 @@ class AgentMemory:
         *,
         tool_name: str,
         parameters: JsonDict,
+        allow_task_policy: bool = True,
     ) -> str | None:
         reconciliation = self.motion_reconciliation()
         if isinstance(reconciliation, dict) and reconciliation.get("status") in {
@@ -1152,6 +1484,8 @@ class AgentMemory:
                 "environment handle before issuing another action. Do not resend a "
                 "partial move because the original controller may still be running."
             )
+        if not allow_task_policy:
+            return None
         execution = self.grasp_execution()
         if not isinstance(execution, dict) or execution.get("status") != "required":
             return None
@@ -1261,6 +1595,7 @@ class AgentMemory:
         result_id: str,
         detection_id: str,
         selection_source: str,
+        evidence_role: str = "",
         confidence: float | None = None,
         reason: str = "",
         target_geometry_family: str = "",
@@ -1271,6 +1606,14 @@ class AgentMemory:
         expected_result_id = str(pending.get("result_id") or "")
         if not result_id or result_id != expected_result_id:
             raise ValueError("select_sam3_detection requires the exact pending sam3_result_id.")
+        pending_role = _normalize_sam3_evidence_role(pending.get("evidence_role"))
+        requested_role = (
+            _normalize_sam3_evidence_role(evidence_role) if evidence_role else pending_role
+        )
+        if requested_role != pending_role:
+            raise ValueError(
+                "select_sam3_detection evidence_role must match the pending SAM3 result."
+            )
         candidates = pending.get("candidates")
         if not isinstance(candidates, list):
             candidates = []
@@ -1295,11 +1638,14 @@ class AgentMemory:
             {
                 "result_id": result_id,
                 "source_image": pending.get("source_image"),
+                "source_packet_id": pending.get("source_packet_id"),
+                "source_observation": pending.get("source_observation"),
                 "target_prompt": pending.get("target_prompt"),
                 "segmentation_mode": pending.get("segmentation_mode"),
                 "selection_source": selection_source or "main_agent_vlm",
                 "selection_confidence": confidence,
                 "selection_reason": reason,
+                "evidence_role": pending_role,
                 "selected_at_s": time.time(),
                 "scene_epoch": _optional_int(
                     pending.get("scene_epoch"),
@@ -1310,10 +1656,12 @@ class AgentMemory:
         if geometry_family and geometry_family != "unknown":
             selected["target_geometry_family"] = geometry_family
         self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-        self.facts[SELECTED_SAM3_DETECTION_KEY] = _memory_fact_entry(
+        self._store_selected_sam3_detection(
             selected,
+            evidence_role=pending_role,
             source="select_sam3_detection",
         )
+        self._remove_sam3_no_detection(evidence_role=pending_role)
         self.facts.pop(TARGET_LOCALIZATION_BUDGET_KEY, None)
         self.record(
             "sam3_detection_selected",
@@ -1322,6 +1670,7 @@ class AgentMemory:
                 "detection_id": detection_id,
                 "selection_source": selected["selection_source"],
                 "selection_confidence": confidence,
+                "evidence_role": pending_role,
             },
         )
         self._save_working_memory()
@@ -1346,16 +1695,23 @@ class AgentMemory:
         no_detection = {
             "result_id": result_id,
             "source_image": pending.get("source_image"),
+            "source_packet_id": pending.get("source_packet_id"),
+            "source_observation": pending.get("source_observation"),
             "target_prompt": pending.get("target_prompt"),
             "reason": "semantic_candidates_rejected",
             "segmentation_mode": pending.get("segmentation_mode"),
             "rejected_detection_ids": rejected_ids,
             "rejection_reason": rejection_reason,
+            "evidence_role": _normalize_sam3_evidence_role(
+                pending.get("evidence_role")
+            ),
         }
         self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-        self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
-        self.facts[SAM3_NO_DETECTION_KEY] = _memory_fact_entry(
+        role = str(no_detection["evidence_role"])
+        self._remove_selected_sam3_detection(evidence_role=role)
+        self._store_sam3_no_detection(
             no_detection,
+            evidence_role=role,
             source="reject_sam3_detections",
         )
         self.record("sam3_detections_rejected", dict(no_detection))
@@ -1484,7 +1840,12 @@ class AgentMemory:
                 selection_bundle = {}
             parameters = details.get("parameters")
             if not isinstance(parameters, dict):
+                parameters = call.get("parameters")
+            if not isinstance(parameters, dict):
                 parameters = {}
+            evidence_role = _normalize_sam3_evidence_role(
+                outputs.get("evidence_role") or parameters.get("evidence_role")
+            )
             source_camera_role = str(
                 outputs.get("source_camera_role")
                 or details.get("source_camera_role")
@@ -1504,12 +1865,15 @@ class AgentMemory:
                 "result_id": result_id,
                 "target_prompt": outputs.get("prompt") or parameters.get("prompt"),
                 "source_image": outputs.get("source_image") or parameters.get("image"),
+                "source_packet_id": outputs.get("source_packet_id"),
+                "source_observation": outputs.get("source_observation"),
                 "frame_id": source_frame_id,
                 "ranking": outputs.get("ranking") or "score_descending",
                 "candidate_count": len(candidates),
                 "candidates": candidates,
                 "selection_bundle": dict(selection_bundle),
                 "segmentation_mode": outputs.get("segmentation_mode"),
+                "evidence_role": evidence_role,
                 "scene_epoch": self.scene_epoch(),
             }
             if source_camera_role:
@@ -1527,9 +1891,8 @@ class AgentMemory:
                 ):
                     base["reference_verification"] = dict(verification)
             self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-            self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
             if candidates:
-                self.facts.pop(SAM3_NO_DETECTION_KEY, None)
+                self._remove_sam3_no_detection(evidence_role=evidence_role)
                 self.facts[PENDING_SAM3_SELECTION_KEY] = _memory_fact_entry(
                     base,
                     source="sam3",
@@ -1539,21 +1902,31 @@ class AgentMemory:
                     {
                         "result_id": result_id,
                         "candidate_count": len(candidates),
+                        "evidence_role": evidence_role,
                         "verification_scope": (
                             "single_detection" if len(candidates) == 1 else "multiple_detections"
                         ),
                     },
                 )
             else:
-                self.facts[SAM3_NO_DETECTION_KEY] = _memory_fact_entry(
+                self._remove_selected_sam3_detection(evidence_role=evidence_role)
+                self._store_sam3_no_detection(
                     base,
+                    evidence_role=evidence_role,
                     source="sam3",
                 )
                 self._capture_grasp_fallback_segmentation_failure(base)
-                self.record("sam3_no_detection", {"result_id": result_id})
+                self.record(
+                    "sam3_no_detection",
+                    {"result_id": result_id, "evidence_role": evidence_role},
+                )
             self._save_working_memory()
 
     def _capture_grasp_fallback_segmentation_failure(self, sam3_result: JsonDict) -> None:
+        if _normalize_sam3_evidence_role(
+            sam3_result.get("evidence_role")
+        ) != DEFAULT_SAM3_EVIDENCE_ROLE:
+            return
         policy = self.grasp_candidate_policy()
         if not isinstance(policy, dict) or policy.get("fallback_required") is not True:
             return
@@ -1795,7 +2168,9 @@ class AgentMemory:
                     source=name,
                 )
                 self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-                self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
+                self._remove_selected_sam3_detection(
+                    evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE
+                )
                 self.record(
                     "asset_reference_localization_required",
                     {
@@ -1866,7 +2241,9 @@ class AgentMemory:
                 )
                 self.facts.pop(REFERENCE_LOCALIZATION_FAILURE_KEY, None)
                 self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
-                self.facts.pop(SELECTED_SAM3_DETECTION_KEY, None)
+                self._remove_selected_sam3_detection(
+                    evidence_role=DEFAULT_SAM3_EVIDENCE_ROLE
+                )
                 self.record(
                     "molmopoint_localization_required",
                     {
@@ -3522,9 +3899,11 @@ class AgentMemory:
         for key in (
             PENDING_SAM3_SELECTION_KEY,
             SELECTED_SAM3_DETECTION_KEY,
+            SELECTED_SAM3_DETECTIONS_KEY,
             PENDING_REFERENCE_LOCALIZATION_KEY,
             TARGET_ASSET_REFERENCE_KEY,
             SAM3_NO_DETECTION_KEY,
+            SAM3_NO_DETECTIONS_KEY,
             GRASP_CANDIDATE_POLICY_KEY,
             LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY,
             GRASP_LIFT_PROBE_KEY,
@@ -3571,9 +3950,11 @@ class AgentMemory:
         for key in (
             PENDING_SAM3_SELECTION_KEY,
             SELECTED_SAM3_DETECTION_KEY,
+            SELECTED_SAM3_DETECTIONS_KEY,
             PENDING_REFERENCE_LOCALIZATION_KEY,
             TARGET_ASSET_REFERENCE_KEY,
             SAM3_NO_DETECTION_KEY,
+            SAM3_NO_DETECTIONS_KEY,
             GRASP_CANDIDATE_POLICY_KEY,
             LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY,
             GRASP_LIFT_PROBE_KEY,
@@ -4596,6 +4977,7 @@ class AgentMemory:
         deleted: JsonDict = {}
         if namespace in {"all", "facts"}:
             deleted["facts"] = self.facts.pop(key, None) is not None
+            self.agent_working_state.pop(key, None)
         if namespace in {"all", "artifacts"}:
             deleted["artifacts"] = self.artifacts.pop(key, None) is not None
         if namespace in {"all", "skill_notes"}:
@@ -4608,6 +4990,7 @@ class AgentMemory:
         """Clear persisted working memory without deleting session trace files."""
 
         self.facts.clear()
+        self.agent_working_state.clear()
         self.artifacts.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
@@ -4622,6 +5005,7 @@ class AgentMemory:
             f"task={self.task}",
             f"current_user_request={self.current_user_request}",
             f"facts={list(self.facts)}",
+            f"agent_working_state={list(self.agent_working_state)}",
             f"artifacts={list(self.artifacts)}",
             f"skill_notes={list(self.skill_notes)}",
             "recent_events=" + ",".join(event.event_type for event in recent),
@@ -4695,26 +5079,56 @@ class AgentMemory:
             "metadata": self.metadata,
             "selection_obligation": self.pending_sam3_selection(),
             "selected_sam3_detection": self.selected_sam3_detection(),
+            "selected_sam3_detections": self.selected_sam3_detections(),
             "reference_localization_obligation": self.pending_reference_localization(),
             "target_asset_reference": self.target_asset_reference(),
             "reference_localization_failure": self.reference_localization_failure(),
             "sam3_no_detection": self.sam3_no_detection(),
-            "grasp_candidate_policy": self.anygrasp_candidate_policy(),
-            "retained_targeted_grasp": self.retained_targeted_grasp(),
-            "grasp_lift_probe": self.grasp_lift_probe(),
-            "articulated_attachment_probe": self.articulated_attachment_probe(),
-            "grasp_execution": self.grasp_execution(),
-            "grasp_recovery": self.grasp_recovery(),
-            "grasp_estimation_recovery": self.grasp_estimation_recovery(),
+            "sam3_no_detections": self.sam3_no_detections(),
+            "grasp_candidate_policy": (
+                self.anygrasp_candidate_policy()
+                if self.task_state_tracking_enabled
+                else None
+            ),
+            "retained_targeted_grasp": (
+                self.retained_targeted_grasp()
+                if self.task_state_tracking_enabled
+                else None
+            ),
+            "grasp_lift_probe": (
+                self.grasp_lift_probe() if self.task_state_tracking_enabled else None
+            ),
+            "articulated_attachment_probe": (
+                self.articulated_attachment_probe()
+                if self.task_state_tracking_enabled
+                else None
+            ),
+            "grasp_execution": (
+                self.grasp_execution() if self.task_state_tracking_enabled else None
+            ),
+            "grasp_recovery": (
+                self.grasp_recovery() if self.task_state_tracking_enabled else None
+            ),
+            "grasp_estimation_recovery": (
+                self.grasp_estimation_recovery()
+                if self.task_state_tracking_enabled
+                else None
+            ),
             "gripper_command_state": self.gripper_command_state(),
-            "attachment_gate": self.attachment_gate(),
-            "placement_release": self.placement_release(),
+            "attachment_gate": (
+                self.attachment_gate() if self.task_state_tracking_enabled else None
+            ),
+            "placement_release": (
+                self.placement_release() if self.task_state_tracking_enabled else None
+            ),
             "motion_reconciliation": self.motion_reconciliation(),
             "scene_epoch": self.scene_epoch(),
             "transition_ledger": self.transition_ledger()[-12:],
             "latest_environment_receipt": self.latest_environment_receipt(),
+            "world_evidence": self.world_evidence_context(),
             "latest_human_interaction": self.latest_human_interaction(),
             "latest_guidance_interaction": self.latest_guidance_interaction(),
+            "agent_working_state": dict(self.agent_working_state),
             "working_memory": {
                 "facts": {
                     key: value
@@ -4723,10 +5137,12 @@ class AgentMemory:
                     not in {
                         PENDING_SAM3_SELECTION_KEY,
                         SELECTED_SAM3_DETECTION_KEY,
+                        SELECTED_SAM3_DETECTIONS_KEY,
                         PENDING_REFERENCE_LOCALIZATION_KEY,
                         REFERENCE_LOCALIZATION_FAILURE_KEY,
                         TARGET_ASSET_REFERENCE_KEY,
                         SAM3_NO_DETECTION_KEY,
+                        SAM3_NO_DETECTIONS_KEY,
                         GRASP_CANDIDATE_POLICY_KEY,
                         LEGACY_ANYGRASP_CANDIDATE_POLICY_KEY,
                         GRASP_LIFT_PROBE_KEY,
@@ -4764,10 +5180,23 @@ class AgentMemory:
             return
         memory = self.store.load_working_memory()
         facts = memory.get("facts", {})
+        agent_working_state = memory.get("agent_working_state", {})
         artifacts = memory.get("artifacts", {})
         skill_notes = memory.get("skill_notes", {})
         if isinstance(facts, dict):
             self.facts = dict(facts)
+        if isinstance(agent_working_state, dict) and agent_working_state:
+            self.agent_working_state = dict(agent_working_state)
+        else:
+            self.agent_working_state = {
+                str(key): {
+                    **dict(entry),
+                    "ownership": "agent",
+                    "freshness": "agent_managed",
+                }
+                for key, entry in self.facts.items()
+                if isinstance(entry, dict) and entry.get("source") == "save_memory"
+            }
         if isinstance(artifacts, dict):
             self.artifacts = dict(artifacts)
         if isinstance(skill_notes, dict):
@@ -5780,6 +6209,15 @@ def _optional_int(value: Any, *, default: int) -> int:
         return default
 
 
+def _normalize_sam3_evidence_role(value: object) -> str:
+    role = str(value or DEFAULT_SAM3_EVIDENCE_ROLE).strip().lower()
+    if role not in SAM3_EVIDENCE_ROLES:
+        raise ValueError(
+            "evidence_role must be one of " + ", ".join(sorted(SAM3_EVIDENCE_ROLES)) + "."
+        )
+    return role
+
+
 def _is_anyplace_pose(parameters: JsonDict) -> bool:
     pose = parameters.get("camera_pose")
     if not isinstance(pose, dict):
@@ -6362,6 +6800,7 @@ def _extract_action_artifacts(action: EnvAction) -> list[JsonDict]:
         artifacts.extend(_extract_depth_enhancement_artifacts(call, details))
         artifacts.extend(_extract_sensor_safety_check_artifacts(call, details))
         artifacts.extend(_extract_grasp_candidate_artifacts(call, details))
+        artifacts.extend(_extract_compiled_grasp_artifacts(call, details))
         artifacts.extend(_extract_placement_candidate_artifacts(call, details))
         artifacts.extend(_extract_world_pose_artifacts(call, details))
     return artifacts
@@ -6790,6 +7229,36 @@ def _extract_placement_candidate_artifacts(
     ]
 
 
+def _extract_compiled_grasp_artifacts(
+    call: JsonDict,
+    details: JsonDict,
+) -> list[JsonDict]:
+    """Retain compiled pose evidence without creating a task-stage obligation."""
+
+    if str(call.get("name") or "") != "compile_grasp_seed":
+        return []
+    outputs = details.get("outputs")
+    if (
+        not isinstance(outputs, dict)
+        or outputs.get("schema_version") != "openeta.compiled_grasp_seed.v1"
+    ):
+        return []
+    return [
+        {
+            **dict(outputs),
+            "type": "compiled_grasp",
+            "kind": "compiled_grasp",
+            "tool": "compile_grasp_seed",
+            "index": str(outputs.get("compiled_grasp_id") or "latest"),
+            "next_tool_hint": (
+                "This is read-only pose evidence, not a required next action. "
+                "If the agent chooses to execute this candidate, open the gripper "
+                "if needed and use hover_pose before contact_pose."
+            ),
+        }
+    ]
+
+
 def _extract_world_pose_artifacts(call: JsonDict, details: JsonDict) -> list[JsonDict]:
     if str(call.get("name") or "") != "camera_pose_to_world":
         return []
@@ -6934,6 +7403,14 @@ def summarize_memory_artifact(artifact: JsonDict) -> JsonDict:
             "rotation_matrix",
             "gripper_tip_position_xyz",
             "source_grasp_id",
+            "schema_version",
+            "compiled_grasp_id",
+            "candidate_id",
+            "scene_epoch",
+            "hover_pose",
+            "contact_pose",
+            "retreat_pose",
+            "approach_world_xyz",
             "next_tool_hint",
         ):
             if field in value:
@@ -6949,6 +7426,10 @@ def summarize_memory_artifact(artifact: JsonDict) -> JsonDict:
                     "anygrasp_intrinsics",
                     "alignment",
                     "quality",
+                    "hover_pose",
+                    "contact_pose",
+                    "retreat_pose",
+                    "approach_world_xyz",
                 }
                 max_depth = 4 if field in structured_fields else 2
                 max_items = 16 if field in structured_fields else 8

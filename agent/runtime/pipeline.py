@@ -31,10 +31,12 @@ class ActionPipeline:
         execute_safe_checks: bool = True,
         checker_subagents: CheckerSubagentConfig | None = None,
         interfaces: ActionInterfaceRegistry | None = None,
+        task_execution_gate_enabled: bool = True,
     ) -> None:
         self.execute_safe_checks = execute_safe_checks
         self.checker_subagents = checker_subagents or CheckerSubagentConfig()
         self.interfaces = interfaces or build_default_action_interfaces()
+        self.task_execution_gate_enabled = task_execution_gate_enabled
 
     def compile(
         self,
@@ -189,6 +191,7 @@ class ActionPipeline:
                 memory.grasp_execution_gate_error(
                     tool_name=request.name,
                     parameters=request.parameters,
+                    allow_task_policy=self.task_execution_gate_enabled,
                 )
                 if memory is not None
                 else None
@@ -534,6 +537,7 @@ class ActionPipeline:
                 memory.grasp_execution_gate_error(
                     tool_name=name,
                     parameters=parameters,
+                    allow_task_policy=self.task_execution_gate_enabled,
                 )
                 if memory is not None
                 else None

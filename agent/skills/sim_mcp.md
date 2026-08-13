@@ -111,10 +111,11 @@ grasp pose directly to `camera_pose_to_world` or simulator control tools.
 Simulator control tools should accept world-frame targets. If a `move_to`
 argument carries `target_pose.frame`, it must be `world`.
 
-For normalized grasps, `grasp_execution` has two condition-bearing control states:
-hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed world
-`+Z`), and binary latched close (`gripper_control position=0`). Alignment, contact,
-probe, and attachment verdict are ordered one-shot obligations/evidence gates.
+For normalized grasps, the Agent owns the execution sequence. It should normally
+use a hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed
+world `+Z`) and binary latched close (`gripper_control position=0`). Alignment,
+contact, probe, and attachment verification are separate observed steps, not a
+host-authored required-next-action state machine.
 Portable objects use the fixed vertical lift probe and full lift. Host-classified
 articulated handles use `prepare_attachment_probe` to freeze a 5 cm linear or arc
 path, retain its endpoint on PASS, and never receive vertical full lift. Each edge

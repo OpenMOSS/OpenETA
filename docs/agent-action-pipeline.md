@@ -265,7 +265,11 @@ materializing the result; any inconsistency rejects the complete response.
 The next VLM planner request attaches the original image and contact sheet as
 multimodal image parts. The main agent resolves the obligation with
 `select_sam3_detection(sam3_result_id, detection_id, ...)`. The handler validates
-that both ids belong to the pending result and records the selected mask.
+that both ids belong to the pending result and records the selected mask under
+the SAM3 request's explicit `evidence_role`. `target_object` is the compatible
+default; `placement_region` retains a receptacle independently. Starting or
+resolving one role never deletes the other role's mask or source-observation
+bundle, and a selection cannot change the role declared by its pending result.
 Targeted AnyGrasp, GraspGenX, and world-mutating tools are blocked while an
 obligation is pending. After selection, both grasp predictors must use the
 selected mask; GraspGenX consumes the complete SAM3 artifact so the handler can

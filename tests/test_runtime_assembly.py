@@ -57,6 +57,7 @@ def _contract_snapshot(assembly):
             spec.name for spec in tools.list() if tools.can_execute(spec.name)
         ),
         "max_validation_retries": assembly.runtime.planner.max_validation_retries,
+        "visual_history": assembly.runtime.visual_history.descriptor(),
     }
 
 
@@ -131,6 +132,11 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
     assert batch.runtime.memory.session_id == batch_workspace.session_id
     assert tui.runtime.memory.store.session_path("tui") == tui_workspace.root / "trace.jsonl"
     assert batch.runtime.memory.store.session_path("batch") == batch_workspace.root / "trace.jsonl"
+    assert tui.runtime.visual_history is not batch.runtime.visual_history
+    assert tui.runtime.visual_history.config == batch.runtime.visual_history.config
+    assert tui.runtime.planner.context_config.visual_history == (
+        batch.runtime.planner.context_config.visual_history
+    )
 
 
 def test_shared_runtime_fails_closed_without_remote_backends(
@@ -165,6 +171,45 @@ def test_shared_runtime_fails_closed_without_remote_backends(
 
     assert assembly.runtime.tools.can_execute("prepare_attachment_probe") is True
     assert assembly.runtime.tools.can_execute("assess_attachment_probe") is True
+
+
+def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "agent.runtime.runtime_assembly.load_configured_object_memory_bank",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "agent.runtime.runtime_assembly.load_configured_asset_reference_catalog",
+        lambda: None,
+    )
+    calls = []
+
+    def backend_factory(**kwargs):
+        calls.append(dict(kwargs))
+        return StaticPlannerBackend(
+            {"kind": "response", "name": "talk", "parameters": {"message": "ok"}}
+        )
+
+    assembly = assemble_runtime(
+        RuntimeAssemblyConfig(
+            workspace=SessionWorkspace.create("visual-history", root=tmp_path),
+            provider=PlannerProviderConfig(
+                model="fixture",
+                api_base="http://provider.example/v1",
+                api_key="test",
+            ),
+            backend_factory=backend_factory,
+            supervision_policy=SupervisionPolicy.for_profile("standard"),
+            web_access_config=WebAccessConfig(),
+        )
+    )
+
+    assert {"max_vision_images": 9} in calls
+    assert {"max_tokens": 384, "max_vision_images": 2} in calls
+    assert assembly.runtime.visual_history.backend is not assembly.runtime.planner.backend
 
 
 def test_shared_endpoint_resolution_owns_names_aliases_and_overrides() -> None:

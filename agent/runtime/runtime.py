@@ -29,6 +29,7 @@ from agent.runtime.planner import BasePlanner, ToolCallingPlanner
 from agent.runtime.rollout import RolloutRecorder, build_rollout_provenance
 from agent.runtime.self_improvement import SelfImprovementReviewer
 from agent.runtime.skills import SkillRegistry, build_default_skill_registry
+from agent.runtime.visual_history import VisualHistoryManager
 from agent.tools.coding import PythonExecRuntime
 from agent.tools.registry import (
     ToolExecutionContext,
@@ -66,6 +67,7 @@ class OpenEtaAgentRuntime:
         rollout_recorder: RolloutRecorder | None = None,
         rollout_enabled: bool = True,
         default_session_id: str | None = None,
+        visual_history: VisualHistoryManager | None = None,
     ) -> None:
         self.planner = planner or ToolCallingPlanner()
         self.memory = memory or AgentMemory(store=memory_store)
@@ -75,6 +77,7 @@ class OpenEtaAgentRuntime:
         self.pipeline = pipeline or ActionPipeline(interfaces=self.interfaces)
         self.self_improvement_reviewer = self_improvement_reviewer or SelfImprovementReviewer()
         self.default_session_id = default_session_id
+        self.visual_history = visual_history
         self.rollout_recorder = rollout_recorder
         if self.rollout_recorder is None and rollout_enabled:
             store_root = getattr(self.memory.store, "root", None)
@@ -82,6 +85,8 @@ class OpenEtaAgentRuntime:
                 self.rollout_recorder = RolloutRecorder(store_root)
         if isinstance(self.planner, ToolCallingPlanner):
             self.planner.set_rollout_recorder(self.rollout_recorder)
+        if self.visual_history is not None:
+            self.visual_history.set_rollout_recorder(self.rollout_recorder)
         if self.rollout_recorder is not None:
             self.tools.add_listener(self.rollout_recorder.record_tool_event)
         self._act_lock = threading.Lock()
@@ -114,6 +119,11 @@ class OpenEtaAgentRuntime:
                 "interfaces": [interface.descriptor() for interface in self.interfaces.list()],
                 "tools": [tool.name for tool in self.tools.list()],
                 "skills": [skill.name for skill in self.skills.list()],
+                "visual_history": (
+                    self.visual_history.descriptor()
+                    if self.visual_history is not None
+                    else {"enabled": False}
+                ),
             },
         )
 
@@ -146,6 +156,9 @@ class OpenEtaAgentRuntime:
         with self._act_lock:
             _raise_if_execution_cancelled(cancel_event)
             self.memory.add_observation(observation)
+            visual_delta: JsonDict | None = None
+            if self.visual_history is not None:
+                visual_delta = self.visual_history.observe(observation, memory=self.memory)
             execution_metadata: JsonDict = {
                 "execution_id": execution_id,
                 "session_id": self.memory.session_id or "",
@@ -163,6 +176,12 @@ class OpenEtaAgentRuntime:
                     tools=self.tools,
                     skills=self.skills,
                 )
+                if visual_delta is not None:
+                    decision.metadata["visual_delta_usage"] = {
+                        key: visual_delta.get(key)
+                        for key in ("delta_id", "status", "provider", "model", "usage")
+                        if visual_delta.get(key) is not None
+                    }
                 _raise_if_execution_cancelled(cancel_event)
                 plan = self.pipeline.compile(
                     decision,
@@ -473,6 +492,7 @@ class OpenEtaAgentRuntime:
                 result_id=result_id,
                 detection_id=detection_id,
                 selection_source="main_agent_vlm",
+                evidence_role=str(context.parameters.get("evidence_role") or ""),
                 confidence=confidence,
                 reason=str(context.parameters.get("reason") or ""),
                 target_geometry_family=str(
@@ -508,6 +528,7 @@ class OpenEtaAgentRuntime:
                 "selected_detection": selected,
                 "mask_ref": mask_ref,
                 "selection_source": selected.get("selection_source"),
+                "evidence_role": selected.get("evidence_role"),
                 "target_geometry_family": selected.get("target_geometry_family"),
             },
             artifacts=artifacts,

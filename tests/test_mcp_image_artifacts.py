@@ -55,6 +55,8 @@ def test_materialize_mcp_images_writes_files_and_scrubs_payload(tmp_path: Path) 
     assert camera["depth_ref"] == "observation.cameras.0.front.depth"
     assert {image.role for image in bundle.images} == {"scene_primary"}
     assert {image.to_dict()["role"] for image in bundle.images} == {"scene_primary"}
+    assert {image.packet_id for image in bundle.images} == {"bundle-a"}
+    assert {image.to_dict()["packet_id"] for image in bundle.images} == {"bundle-a"}
     assert len(bundle.images) == 2
     for image in bundle.images:
         path = Path(image.path)

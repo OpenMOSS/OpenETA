@@ -70,24 +70,26 @@ Use as text guidance only, not an executable macro. Inspect each result.
    `candidate_depth_png` for grasp generation only when its quality flag allows
    it. Collision evidence must use `safety_depth_png` or the safety point cloud,
    never mono-filled geometry.
-6. Call `grasp_pose_estimate` with the exact
-   `targeted_grasp_obligation.required_parameters`. The host joins:
-   - `rgb`/`depth`: exact current artifact paths for the same camera.
+6. Call `grasp_pose_estimate` with exact values from the selected current-scene
+   evidence. When `world_evidence.selected_target.value.source_observation` is
+   present, treat it as one indivisible provenance bundle: copy its `rgb`,
+   `depth`, and `intrinsics`, and set `object_mask.source_image` to that exact
+   `rgb`. A later read-only `observe` does not migrate an existing mask to the
+   new image packet. If the world changed, segment the new packet instead.
+   Preserve:
+   - `rgb`/`depth`: exact artifact paths from one observation packet and camera.
    - `intrinsics`: same camera intrinsics with `fx`, `fy`, `cx`, `cy`, and `scale`.
    - `object_mask`: selected artifact with exact `mask_ref` and `source_image`;
      never pass a bare path or default to `detections[0]`.
    - `camera_frame_id` and `scene_epoch`: exact host provenance.
-   Backend-specific options and fallback are host-owned. Do not call AnyGrasp,
-   Contact-GraspNet, or GraspGenX directly.
-   If candidate depth was used, follow the host-generated
-   `grasp_sensor_safety_obligation`: `obstacle_avoidance` must return
-   `clear=true` for the exact candidate, scene epoch, report, and sensor-only
-   safety artifacts before `compile_grasp_seed` becomes available.
+   Deployment fallback stays inside the facade; do not call a concrete grasp
+   backend directly. For enhanced depth, require candidate-linked sensor-only
+   `obstacle_avoidance clear=true`; mono-filled depth is not collision evidence.
 7. Read the normalized grasp candidate list. Candidate poses use the
    camera/OpenCV GraspNet convention and are sorted by backend-local score.
-   Scores are not comparable across backends. The runtime records
-   `grasp_candidate_policy`: rank 0 is the initial `active_candidate`; lower
-   ranked candidates are fallbacks and must not be selected early.
+   Scores are backend-local. Choose using identity, width/calibration, collision,
+   geometry, and prior outcomes. Record the id and rationale in Agent memory;
+   no host task phase chooses it.
    When selecting the SAM3 mask, include truthful
    `target_geometry_family` (`upright_can`, `upright_bottle`, `boxed_item`,
    `bowl`, `apple`, `drawer_handle`, or `other`) only when visually clear. It is
@@ -104,11 +106,10 @@ Use as text guidance only, not an executable macro. Inspect each result.
    - `strategy_id`: optional session-local strategy backed by prior evidence.
    Calibration is not an object allowlist; no strategy match is required. Compiled
    poses are references. Do not use `camera_pose_to_world` for normalized grasps.
-9. Follow `grasp_execution` one observed atomic edge at a time. The host opens only
-   when the latched command is not already open. Hover is at least 0.15 m opposite
-   world-frame `approach_world_xyz`, not unconditionally world `+Z`. At hover, use
-   fresh matching wrist RGB-D to call `compute_wrist_alignment`; bounded feedback
-   corrections must preserve world frame and candidate provenance. Accept only at contact.
+9. Plan one observed atomic edge at a time. Open only if not already open. Hover
+   at least 0.15 m opposite world-frame `approach_world_xyz`, not fixed world
+   `+Z`; use fresh wrist RGB-D for alignment. Preserve frame and provenance, and
+   move to contact only after evidence and deterministic checks support it.
 10. After contact, execute binary `gripper_control position=0`; `0=closed`, `1=open`,
    and the command stays latched across motion. Its acknowledgement and observed
    openness do not prove attachment; a static post-close image is not evidence.
@@ -119,11 +120,10 @@ Use as text guidance only, not an executable macro. Inspect each result.
     Observe the same handle and reconcile state before retry or a new action. A structured,
     candidate-linked rejection advances to the next candidate; calibration errors,
     unrelated failures, timeout, and interruption keep the current candidate active.
-    For host-classified `perception_refinable` or `uncertain_review` exhaustion,
-    follow `grasp_estimation_fallback_obligation` exactly: passive RGB-D views,
-    one IK/collision-checked hover plus fresh wrist re-estimation, then another
-    backend. Never invent a hover. Safety, IK, collision, wrong-target, malformed
-    pose, stale scene, and invalid calibration rejection remain hard stops.
+    After candidate-specific rejection, choose from evidence: another valid
+    candidate, passive RGB-D, one checked hover plus wrist re-estimation, or stop.
+    Never invent a hover; safety, wrong-target, malformed-pose, stale-scene, and
+    calibration rejections remain hard stops.
 
 ## Recovery Notes
 

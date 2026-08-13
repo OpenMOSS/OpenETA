@@ -200,7 +200,12 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         root=tmp_path,
         compiled_plan=compiled_plan_payload(plan, jobs),
     )
-    rollout = tmp_path / "session" / "rollout"
+    rollout = (
+        store.attempt_dir(jobs[0].job_id, 1)
+        / "sessions"
+        / "agent-session"
+        / "rollout"
+    )
     rollout.mkdir(parents=True)
     planner_context = {
         "schema_version": "openeta.agent_context.v2",
@@ -241,6 +246,22 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         ],
     )
     store.start_attempt(jobs[0], attempt=1, spec={"episode_id": jobs[0].job_id})
+    (store.attempt_dir(jobs[0].job_id, 1) / "session_index.json").write_text(
+        json.dumps(
+            {
+                "sessions": {
+                    "agent-session": {
+                        "session_id": "agent-session",
+                        "metadata": {
+                            "episode_id": jobs[0].job_id,
+                            "evaluation": {"job_id": jobs[0].job_id},
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     outcome = {
         "episode_id": jobs[0].job_id,
         "seed": 0,
@@ -248,7 +269,7 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         "duration_s": 1.0,
         "cleanup": {"ok": True},
         "episode": {
-            "metadata": {"workspace": {"root": str(rollout.parent)}},
+            "metadata": {},
             "steps": [
                 {
                     "step_result": {

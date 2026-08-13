@@ -37,9 +37,12 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         episode = episode if isinstance(episode, dict) else {}
         metadata = episode.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
-        workspace = metadata.get("workspace")
-        workspace = workspace if isinstance(workspace, dict) else {}
-        rollout_dir = Path(str(workspace.get("root") or "")) / "rollout"
+        rollout_dir = _rollout_dir(
+            store=store,
+            job_id=job_id,
+            final=final,
+            metadata=metadata,
+        )
         model_calls = _jsonl(rollout_dir / "model_calls.jsonl")
         transitions = _jsonl(rollout_dir / "transitions.jsonl")
         planner_calls = [row for row in model_calls if _is_main_planner_call(row)]
@@ -149,6 +152,74 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
     report["state_probe_cases_path"] = str(output / "state_probe_cases.jsonl")
     report["metrics_path"] = str(output / "metrics.json")
     return report
+
+
+def _rollout_dir(
+    *,
+    store: EvaluationRunStore,
+    job_id: str,
+    final: JsonDict,
+    metadata: JsonDict,
+) -> Path:
+    """Resolve a rollout from durable evaluator ownership, with legacy fallback.
+
+    Batch run metadata is recorded in ``session_index.json``.  The reduced
+    episode outcome deliberately does not duplicate that workspace payload, so
+    extractors must not rely on ``outcome.episode.metadata.workspace`` being
+    present.
+    """
+
+    attempt = int(final.get("attempt") or 0)
+    if attempt > 0:
+        attempt_root = store.attempt_dir(job_id, attempt)
+        index_path = attempt_root / "session_index.json"
+        if index_path.is_file():
+            try:
+                payload = json.loads(index_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                payload = {}
+            sessions = payload.get("sessions") if isinstance(payload, dict) else {}
+            if isinstance(sessions, dict):
+                entries = list(sessions.items())
+            elif isinstance(sessions, list):
+                entries = [
+                    (str(item.get("session_id") or ""), item)
+                    for item in sessions
+                    if isinstance(item, dict)
+                ]
+            else:
+                entries = []
+            matching = []
+            for session_id, entry in entries:
+                entry = entry if isinstance(entry, dict) else {}
+                session_metadata = entry.get("metadata")
+                session_metadata = (
+                    session_metadata if isinstance(session_metadata, dict) else {}
+                )
+                evaluation = session_metadata.get("evaluation")
+                evaluation = evaluation if isinstance(evaluation, dict) else {}
+                if evaluation.get("job_id") == job_id or session_metadata.get(
+                    "episode_id"
+                ) == job_id:
+                    matching.append((session_id, entry))
+            candidates = matching or entries
+            for session_id, entry in candidates:
+                if session_id:
+                    derived = attempt_root / "sessions" / session_id / "rollout"
+                    if derived.is_dir():
+                        return derived
+                session_path = str(entry.get("session_path") or "")
+                if session_path:
+                    stored = Path(session_path).parent / "rollout"
+                    if stored.is_dir():
+                        return stored
+        discovered = sorted((attempt_root / "sessions").glob("*/rollout"))
+        if len(discovered) == 1:
+            return discovered[0]
+
+    workspace = metadata.get("workspace")
+    workspace = workspace if isinstance(workspace, dict) else {}
+    return Path(str(workspace.get("root") or "")) / "rollout"
 
 
 def _state_probe_cases(

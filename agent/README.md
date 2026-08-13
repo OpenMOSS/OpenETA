@@ -162,6 +162,13 @@ Current runtime pieces:
   inference replaces the active policy, candidate-linked safety or motion
   rejection advances to the next score-ranked pose, and successful `move_to`
   accepts the queue and releases its downstream gate.
+- `python_exec` is a general session-local analysis tool, not a simulator
+  control path. Restricted code can read the current session's rollout, working
+  memory, and artifact files, and can write derived outputs only to its sandbox.
+  Full grasp and placement candidate lists are stored as immutable JSON
+  artifacts; planner memory keeps a bounded preview plus an explicit query
+  reference. Simulator side effects remain behind stable AgentTools, so
+  `python_exec` is classified as `planning` and does not request a scene refresh.
 - Public web access is exposed through host-owned `web_search` and `web_fetch`
   tools, never through `python_exec`. `web_search` reuses the configured planner
   provider's `/v1/responses` hosted `web_search` capability, tries the configured

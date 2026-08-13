@@ -22,6 +22,7 @@ from agent.runtime.calibration_registry import (
     DEFAULT_GRASP_CALIBRATION_PROFILE,
     load_grasp_calibration_capabilities,
 )
+from agent.runtime.structured_artifacts import materialize_structured_tool_output
 
 
 PENDING_SAM3_SELECTION_KEY = "pending_sam3_selection"
@@ -110,8 +111,16 @@ class AgentMemory:
     events are written to JSONL and working memory is loaded/saved as JSON.
     """
 
-    def __init__(self, *, store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        store: MemoryStore | None = None,
+        task_state_tracking_enabled: bool = True,
+        artifact_root: str | Path | None = None,
+    ) -> None:
         self.store = store
+        self.task_state_tracking_enabled = task_state_tracking_enabled
+        self.artifact_root = Path(artifact_root).resolve() if artifact_root else None
         self.session_id: str | None = None
         self.task: str | None = None
         self.current_user_request: str = ""
@@ -339,12 +348,22 @@ class AgentMemory:
         environment_task_updated = self._capture_active_environment_task(action)
         self._capture_reference_localization_state(action)
         self._capture_sam3_selection_state(action)
-        target_mask_invalidated = self._invalidate_failed_anygrasp_target_mask(action)
-        self._capture_anygrasp_candidate_policy(action)
-        self._capture_compiled_grasp(action)
-        self._capture_wrist_alignment(action)
+        target_mask_invalidated = (
+            self._invalidate_failed_anygrasp_target_mask(action)
+            if self.task_state_tracking_enabled
+            else False
+        )
+        if self.task_state_tracking_enabled:
+            self._capture_anygrasp_candidate_policy(action)
+            self._capture_compiled_grasp(action)
+            self._capture_wrist_alignment(action)
+        self._materialize_complete_structured_outputs(action)
         captured_artifacts = _extract_action_artifacts(action)
         for artifact in captured_artifacts:
+            if artifact.get("type") == "grasp_candidates" and artifact.get(
+                "scene_epoch"
+            ) is None:
+                artifact["scene_epoch"] = self.scene_epoch()
             key = _artifact_memory_key(artifact, fallback_index=len(self.artifacts))
             self.artifacts[key] = {
                 "value": artifact,
@@ -564,6 +583,64 @@ class AgentMemory:
         self.facts[key] = {"value": dict(value), "source": source, "timestamp_s": time.time()}
         self.record("memory_fact_saved", {"key": key, "source": source})
         self._save_working_memory()
+
+    def _materialize_complete_structured_outputs(self, action: EnvAction) -> None:
+        """Persist complete candidate sets before working memory keeps only previews."""
+
+        if self.artifact_root is None:
+            return
+        command = action.command if isinstance(action.command, dict) else {}
+        for call in command.get("tool_calls", []) or []:
+            if not isinstance(call, dict):
+                continue
+            tool_name = str(call.get("name") or "")
+            if tool_name not in {
+                "grasp_pose_estimate",
+                "anygrasp",
+                "graspgenx",
+                "contact_graspnet",
+                "anyplace",
+            }:
+                continue
+            result = call.get("result")
+            if not isinstance(result, dict) or result.get("success") is not True:
+                continue
+            details = result.get("details")
+            if not isinstance(details, dict) or isinstance(
+                details.get("structured_artifact"), dict
+            ):
+                continue
+            structured_source = details.get("outputs")
+            if not isinstance(structured_source, dict):
+                structured_source = details
+            candidate_key = (
+                "placement_candidates" if tool_name == "anyplace" else "grasp_candidates"
+            )
+            if not isinstance(structured_source.get(candidate_key), list):
+                continue
+            try:
+                snapshot = json.loads(json.dumps(structured_source, ensure_ascii=False))
+                reference = materialize_structured_tool_output(
+                    output_root=self.artifact_root,
+                    tool=tool_name,
+                    outputs=snapshot,
+                    result_id=str(structured_source.get("result_id") or tool_name),
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                diagnostics = details.setdefault("diagnostics", [])
+                if isinstance(diagnostics, list):
+                    diagnostics.append(
+                        {
+                            "code": "structured_artifact_persistence_failed",
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    )
+                continue
+            details["structured_artifact"] = reference
+            artifacts = details.setdefault("artifacts", [])
+            if isinstance(artifacts, list):
+                artifacts.append(dict(reference))
 
     def save_artifact(self, key: str, value: JsonDict, *, source: str = "") -> None:
         self.artifacts[key] = {"value": dict(value), "source": source, "timestamp_s": time.time()}
@@ -6596,6 +6673,14 @@ def _extract_grasp_candidate_artifacts(call: JsonDict, details: JsonDict) -> lis
     grasp_source = source.get("source")
     if not isinstance(grasp_source, dict):
         grasp_source = {}
+    structured_artifact = details.get("structured_artifact")
+    if not isinstance(structured_artifact, dict):
+        structured_artifact = source.get("structured_artifact")
+    if not isinstance(structured_artifact, dict):
+        structured_artifact = {}
+    artifact_path = str(structured_artifact.get("path") or "")
+    preview_count = len(compact_candidates)
+    truncated = preview_count < len(candidates)
     return [
         {
             "type": "grasp_candidates",
@@ -6603,6 +6688,8 @@ def _extract_grasp_candidate_artifacts(call: JsonDict, details: JsonDict) -> lis
             "tool": tool_name,
             "index": "latest",
             "candidate_count": len(candidates),
+            "preview_count": preview_count,
+            "truncated": truncated,
             "best_grasp_candidate": compact_candidates[0],
             "grasp_candidates": compact_candidates,
             "source_rgb": source.get("source_rgb") or grasp_source.get("rgb"),
@@ -6613,12 +6700,23 @@ def _extract_grasp_candidate_artifacts(call: JsonDict, details: JsonDict) -> lis
             "source_backend": grasp_source.get("source_backend")
             or source.get("selected_backend")
             or tool_name,
+            "scene_epoch": source.get("scene_epoch"),
             "gripper_name": grasp_source.get("gripper_name"),
-            "raw_output_ref": source.get("raw_output_ref"),
+            "raw_output_ref": source.get("raw_output_ref") or artifact_path or None,
+            "complete_outputs_artifact": structured_artifact or None,
+            "query_hint": (
+                "Use python_exec artifacts.read_json(path) and inspect "
+                "payload['outputs']['grasp_candidates']; filter/rank the complete list "
+                "in code before asking a human."
+                if artifact_path and truncated
+                else None
+            ),
             "next_tool_hint": (
-                "Call compile_grasp_seed with the active normalized candidate, "
+                "If this preview is insufficient, query complete_outputs_artifact with "
+                "python_exec. Choose a normalized candidate from current evidence, then call "
+                "compile_grasp_seed with that complete candidate, "
                 "matching camera extrinsics/frame id, and current scene_epoch; "
-                "then follow host-generated grasp_execution stages."
+                "plan each safe observed manipulation edge independently."
             ),
         }
     ]
@@ -6653,6 +6751,14 @@ def _extract_placement_candidate_artifacts(
     ]
     if not compact_candidates:
         return []
+    structured_artifact = details.get("structured_artifact")
+    if not isinstance(structured_artifact, dict):
+        structured_artifact = source.get("structured_artifact")
+    if not isinstance(structured_artifact, dict):
+        structured_artifact = {}
+    artifact_path = str(structured_artifact.get("path") or "")
+    preview_count = len(compact_candidates)
+    truncated = preview_count < len(candidates)
     return [
         {
             "type": "placement_candidates",
@@ -6660,12 +6766,23 @@ def _extract_placement_candidate_artifacts(
             "tool": "anyplace",
             "index": "latest",
             "candidate_count": len(candidates),
+            "preview_count": preview_count,
+            "truncated": truncated,
             "selected_grasp_id": source.get("selected_grasp_id"),
             "placement_candidates": compact_candidates,
             "source": source.get("source"),
-            "raw_output_ref": source.get("raw_output_ref"),
+            "raw_output_ref": source.get("raw_output_ref") or artifact_path or None,
+            "complete_outputs_artifact": structured_artifact or None,
+            "query_hint": (
+                "Use python_exec artifacts.read_json(path) and inspect "
+                "payload['outputs']['placement_candidates']; filter/rank the complete list "
+                "in code before asking a human."
+                if artifact_path and truncated
+                else None
+            ),
             "next_tool_hint": (
-                "After pickup is visually verified, choose one complete "
+                "If this preview is insufficient, query complete_outputs_artifact with "
+                "python_exec. After pickup is visually verified, choose one complete "
                 "placement_candidates[i].place_grasp_pose and transform it with "
                 "camera_pose_to_world using the matching pre-grasp camera extrinsics."
             ),

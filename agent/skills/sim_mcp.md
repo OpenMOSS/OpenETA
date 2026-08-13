@@ -45,10 +45,10 @@ the currently bound handle and clears runtime state atomically. Do not route
 `close_env` through `python_exec` or ask the planner to rediscover the handle.
 
 The MCP server's live catalog, tool docstrings, and input schemas are
-authoritative for simulator operations that do not have a stable AgentTool.
-Use `python_exec` to inspect `mcp.list_tools()` and read the saved full catalog
-with `artifacts.read_json(...)` when exact fields matter. If this skill
-conflicts with the MCP catalog/docstring/schema, follow the MCP documentation.
+authoritative, but Simulator MCP access is host-owned and exposed to the planner
+only through stable AgentTools. `python_exec` does not expose an MCP client. If
+this skill conflicts with the MCP catalog/docstring/schema, follow the MCP
+documentation and update the corresponding stable AgentTool adapter.
 If a simulator MCP call fails, first inspect the saved error response and the
 relevant MCP catalog/docstring/schema before changing parameters or retrying.
 `remote_capability_missing` means the configured server does not expose the
@@ -56,31 +56,30 @@ required MCP tool. It is not a grasp-candidate rejection: do not retry the
 same action or advance to another grasp candidate. Stop the workflow until a
 compatible simulator MCP deployment is available.
 
-Use `python_exec` for simulator MCP operations that are not exposed as stable
-OpenETA atom tools. The coding tool exposes:
-
 When `observe`, `move_to`, or `gripper_control` has a
 registered handler, call that stable atom tool directly. Do not route those
 operations through `python_exec`; direct atom tools preserve structured
 observation, motion, collision, and memory artifacts for the next planner turn.
 
+Use `python_exec` as a session-local analysis tool. It can read all files in the
+current Agent session, including complete structured tool outputs, and can write
+derived files only below the session sandbox. It has no Simulator MCP or network
+capability. The restricted coding globals include:
+
 ```python
-mcp.list_tools()
-mcp.call_tool(name, arguments)
-artifacts.materialize_images(payload, bundle_id="optional-id")
+artifacts.describe()
+artifacts.list_files(pattern="*.json", limit=100)
 artifacts.list_images(limit=20)
 artifacts.read_json(path)
+artifacts.read_text(path, max_chars=200000)
 artifacts.grep_text(path, pattern, max_matches=20)
 ```
 
 Set a JSON-serializable `result` variable before the code exits. Use sandboxed
 execution by default. `outside_sandbox` is a general-purpose, separately
-approved host subprocess and is not needed for configured MCP helpers.
-
-`mcp.call_tool` returns a lightweight reference. It automatically materializes
-MCP image payloads into local files and saves full JSON responses under
-`response_path`. Do not pass base64 images through planner context. Use returned
-paths, response artifacts, or `artifacts.list_images(...)` instead.
+approved host subprocess; it does not receive in-process AgentTool or artifact
+helpers. Do not pass base64 images through planner context. Use materialized
+paths and artifact references instead.
 
 The current simulator MCP camera calibration contract for MuJoCo-backed
 MetaWorld/LIBERO observations is `pos + mat`:

@@ -262,13 +262,12 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         "python_exec",
         PythonExecRuntime(
             PythonExecConfig(
-                mcp_transport=config.simulator_transport,
                 image_output_root=str(artifact_root / "images"),
                 text_output_root=str(artifact_root / "text"),
                 response_output_root=str(artifact_root / "responses"),
                 allow_outside_sandbox=config.allow_outside_sandbox,
                 approve_outside_sandbox=config.approve_outside_sandbox,
-                mcp_response_callback=config.mcp_response_callback,
+                session_root=str(workspace.root),
                 workspace_root=str(workspace.sandbox_dir),
             )
         ).handler,
@@ -362,7 +361,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     runtime = OpenEtaAgentRuntime(
         planner=planner,
         tools=tools,
-        memory=AgentMemory(store=JsonMemoryStore(root=workspace.memory_root)),
+        memory=AgentMemory(
+            store=JsonMemoryStore(root=workspace.memory_root),
+            artifact_root=workspace.artifacts_dir,
+        ),
         skills=workspace.skill_registry(),
         pipeline=ActionPipeline(checker_subagents=checker_config),
         self_improvement_reviewer=skill_reviewer,

@@ -356,19 +356,24 @@ the requested gripper position.
 Environment creation is a stable AgentTool operation. `create_simulator_env`
 is the only planner-facing creation path and owns the MCP
 `create_env -> reset_env` sequence, 512x512 defaults, artifact materialization,
-and active handle/session synchronization. The generic `python_exec` MCP helper
-rejects direct `create_env` calls so creation cannot bypass this lifecycle.
-Low-frequency discovery and experimental MCP calls such as `search_envs` may
-still use `mcp.call_tool(name, arguments)` from restricted `python_exec`.
+and active handle/session synchronization. Environment cleanup and simulator
+control likewise use stable AgentTools. The restricted `python_exec` runtime has
+no Simulator MCP client, so code cannot bypass those lifecycles.
 
-`python_exec` defaults to the restricted in-process globals. A request for
+`python_exec` is a `planning` tool for coding-agent-style inspection, filtering,
+computation, and derived artifacts. It can read the full current session tree
+(rollout, working memory, and artifacts), while writes are confined to the
+session sandbox. Complete high-cardinality outputs such as grasp or placement
+candidate lists are persisted as immutable JSON; working memory carries a
+bounded preview, count, truncation flag, and queryable artifact reference. A
+request for
 `sandbox="outside_sandbox"` requires explicit approval for each invocation and
 runs in a disposable host subprocess using the current OpenETA Python
 interpreter and working directory. It has host-level imports, filesystem, and
 network permissions, receives only JSON observation/parameter inputs, does not
-receive in-process MCP or artifact helper objects, and is terminated when its
-bounded timeout expires. This escape path is general-purpose and is not needed
-for configured simulator MCP operations.
+receive in-process AgentTool or artifact helper objects, and is terminated when
+its bounded timeout expires. Because normal `python_exec` has `planning` effect,
+its feedback does not require a fresh simulator observation.
 
 The remote simulator MCP server currently exposes stable environment-level MCP
 tools such as `create_env`, `reset_env`, `step_env`, `render_env`, and

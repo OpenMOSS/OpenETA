@@ -848,9 +848,10 @@ def build_default_tool_registry() -> ToolRegistry:
             name="python_exec",
             category="coding",
             description=(
-                "Execute a small restricted Python snippet with OpenETA helper APIs. "
-                "Use this for one-off API/MCP orchestration that does not deserve a "
-                "dedicated agent tool."
+                "Execute a restricted Python snippet for session-local data inspection, "
+                "filtering, computation, and derived artifacts. The sandbox can read the "
+                "current Agent session and write only its sandbox; it has no Simulator MCP "
+                "or network capability. Use stable Agent tools for external side effects."
             ),
             parameters={
                 "code": "Python code. Set a JSON-serializable `result` variable.",
@@ -860,7 +861,8 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 "timeout_s": "optional execution timeout; outside_sandbox is capped at 600s",
             },
-            effect=ToolEffect.WORLD_MUTATING,
+            safe_by_default=True,
+            effect=ToolEffect.PLANNING,
             batchable=False,
         ),
         ToolSpec(

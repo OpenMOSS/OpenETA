@@ -1,0 +1,71 @@
+{
+  "schema_version": "openeta.visual_state_eval_manifest.v1",
+  "cases": [
+    {
+      "case_id": "shoe-current-scene",
+      "group_id": "shoe-visibility",
+      "variant": "current_scene",
+      "task": "Locate the black-and-white shoe before manipulating it.",
+      "expected_state_label": "target_visible",
+      "state_label_options": [
+        "target_visible",
+        "target_not_visible",
+        "visual_state_unverified"
+      ],
+      "image_paths": ["tests/fixtures/sam3/sam_test.png"],
+      "allowed_next_actions": ["sam3", "observe"],
+      "world_facts": [
+        {
+          "claim": "the target was not visible in an earlier frame",
+          "source": "legacy_task_state",
+          "freshness": "stale_scene_epoch"
+        }
+      ],
+      "observation_metadata": {
+        "step_idx": 1,
+        "frame_ids": ["agentview"],
+        "camera_roles": ["scene_primary"]
+      }
+    },
+    {
+      "case_id": "shoe-contradictory-image",
+      "group_id": "shoe-visibility",
+      "variant": "contradictory_image",
+      "task": "Locate the black-and-white shoe before manipulating it.",
+      "expected_state_label": "target_not_visible",
+      "state_label_options": [
+        "target_visible",
+        "target_not_visible",
+        "visual_state_unverified"
+      ],
+      "image_paths": ["docs/assets/openeta-framework-black.png"],
+      "allowed_next_actions": ["observe"],
+      "world_facts": [
+        {
+          "claim": "the target was visible in an earlier frame",
+          "source": "legacy_task_state",
+          "freshness": "stale_scene_epoch"
+        }
+      ],
+      "observation_metadata": {
+        "step_idx": 1,
+        "frame_ids": ["agentview"],
+        "camera_roles": ["scene_primary"]
+      }
+    },
+    {
+      "case_id": "shoe-no-image",
+      "group_id": "shoe-visibility",
+      "variant": "no_image",
+      "task": "Locate the black-and-white shoe before manipulating it.",
+      "expected_state_label": "visual_state_unverified",
+      "state_label_options": [
+        "target_visible",
+        "target_not_visible",
+        "visual_state_unverified"
+      ],
+      "allowed_next_actions": ["observe"],
+      "image_paths": []
+    }
+  ]
+}

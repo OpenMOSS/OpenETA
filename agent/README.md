@@ -309,6 +309,20 @@ provider usage when available, and contain only redacted provider configuration.
 Skill Author receives a 4096-token output budget in both the TUI and parallel
 harness; bounded decision reviewers retain the 512-token default.
 
+Visual state grounding and counterfactual sensitivity can be evaluated separately
+from the production task-policy context:
+
+```bash
+uv run --extra dev openeta-visual-state-eval \
+  --manifest tests/fixtures/visual_state/scene_counterfactuals.json \
+  --list-cases
+```
+
+Remove `--list-cases` to call the configured VLM provider. Live mode sends the
+manifest images and minimal probe context to that provider, so the inputs require
+explicit approval for external transmission. See
+`docs/agent-context-memory-refactor.md` for the context and memory boundaries.
+
 ## Local Provider GUI
 
 OpenETA has a minimal local GUI for the same provider configuration path:

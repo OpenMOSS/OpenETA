@@ -242,6 +242,7 @@ class ParallelEpisodeHarness:
         specs: list[ParallelEpisodeSpec],
         *,
         batch_id: str | None = None,
+        on_outcome: Callable[[ParallelEpisodeOutcome], None] | None = None,
     ) -> ParallelEpisodeBatchResult:
         if not specs:
             raise ValueError("parallel episode batch requires at least one episode")
@@ -260,7 +261,10 @@ class ParallelEpisodeHarness:
                 for index, spec in enumerate(specs)
             }
             for future in as_completed(futures):
-                outcomes.append(future.result())
+                outcome = future.result()
+                outcomes.append(outcome)
+                if on_outcome is not None:
+                    on_outcome(outcome)
         except BaseException:
             self.interrupt()
             for future in futures:

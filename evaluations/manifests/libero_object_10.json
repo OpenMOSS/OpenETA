@@ -1,0 +1,14 @@
+{
+  "episodes": [
+    {"episode_id": "libero-object-0", "env_id": "openeta/libero_libero_object_task0-v0", "task": "pick up the alphabet soup and place it in the basket", "seed": 0, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-1", "env_id": "openeta/libero_libero_object_task1-v0", "task": "pick up the cream cheese and place it in the basket", "seed": 1, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-2", "env_id": "openeta/libero_libero_object_task2-v0", "task": "pick up the salad dressing and place it in the basket", "seed": 2, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-3", "env_id": "openeta/libero_libero_object_task3-v0", "task": "pick up the bbq sauce and place it in the basket", "seed": 3, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-4", "env_id": "openeta/libero_libero_object_task4-v0", "task": "pick up the ketchup and place it in the basket", "seed": 4, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-5", "env_id": "openeta/libero_libero_object_task5-v0", "task": "pick up the tomato sauce and place it in the basket", "seed": 5, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-6", "env_id": "openeta/libero_libero_object_task6-v0", "task": "pick up the butter and place it in the basket", "seed": 6, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-7", "env_id": "openeta/libero_libero_object_task7-v0", "task": "pick up the milk and place it in the basket", "seed": 7, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-8", "env_id": "openeta/libero_libero_object_task8-v0", "task": "pick up the chocolate pudding and place it in the basket", "seed": 8, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000},
+    {"episode_id": "libero-object-9", "env_id": "openeta/libero_libero_object_task9-v0", "task": "pick up the orange juice and place it in the basket", "seed": 9, "max_turns": 100, "max_tool_calls": 200, "timeout_s": 3600, "max_total_tokens": 5000000}
+  ]
+}

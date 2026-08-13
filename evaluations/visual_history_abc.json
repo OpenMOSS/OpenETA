@@ -1,0 +1,61 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "visual-history-abc-v1",
+  "description": "Paired rollout evaluation of current-only, bounded-raw, and bounded-raw-plus-main-view-VDM context policies.",
+  "episode_manifest": "manifests/libero_object_10.json",
+  "variants": [
+    {
+      "variant_id": "A_current_main_only",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 1,
+          "include_initial_main": false,
+          "include_current_wrist": false,
+          "include_vdm": false
+        }
+      }
+    },
+    {
+      "variant_id": "B_bounded_raw_no_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": false
+        }
+      }
+    },
+    {
+      "variant_id": "C_bounded_raw_main_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260813
+  },
+  "execution": {
+    "concurrency": 4,
+    "provider_concurrency": 2,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "canary",
+    "paired_fields": ["source_episode_id", "seed", "repeat_index"]
+  }
+}

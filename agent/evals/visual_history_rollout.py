@@ -62,6 +62,8 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             current == previous and bool(current)
             for previous, current in zip(signatures, signatures[1:])
         )
+        action_names = [_action_name(row) for row in transitions]
+        alternating_tool_cycles = _alternating_tool_cycle_count(action_names)
         vdm_success = sum(
             bool((row.get("validation") or {}).get("accepted")) for row in vdm_calls
         )
@@ -89,6 +91,7 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "planner_turn_count": len(planner_calls),
             "transition_count": len(transitions),
             "consecutive_repeated_action_count": repeated_actions,
+            "alternating_tool_cycle_count": alternating_tool_cycles,
             "mean_raw_visual_evidence_per_turn": _mean(raw_counts),
             "max_raw_visual_evidence_per_turn": max(raw_counts, default=0),
             "mean_compressed_delta_count_per_turn": _mean(compressed_counts),
@@ -123,6 +126,9 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             ),
             "mean_consecutive_repeated_action_count": _mean(
                 [int(row["consecutive_repeated_action_count"]) for row in selected]
+            ),
+            "mean_alternating_tool_cycle_count": _mean(
+                [int(row["alternating_tool_cycle_count"]) for row in selected]
             ),
             "mean_raw_visual_evidence_per_turn": _mean(
                 [float(row["mean_raw_visual_evidence_per_turn"]) for row in selected]
@@ -282,6 +288,37 @@ def _action_signature(row: JsonDict) -> str:
     if not isinstance(command, dict):
         return ""
     return json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _action_name(row: JsonDict) -> str:
+    action = row.get("action")
+    action = action if isinstance(action, dict) else {}
+    command = action.get("command")
+    command = command if isinstance(command, dict) else {}
+    request = command.get("request")
+    request = request if isinstance(request, dict) else {}
+    name = request.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    tool_calls = command.get("tool_calls")
+    if isinstance(tool_calls, list) and len(tool_calls) == 1:
+        call = tool_calls[0]
+        call = call if isinstance(call, dict) else {}
+        name = call.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return ""
+
+
+def _alternating_tool_cycle_count(names: list[str]) -> int:
+    """Count semantic A/B/A recurrences even when tool arguments differ."""
+
+    return sum(
+        bool(current)
+        and current == two_back
+        and current != previous
+        for two_back, previous, current in zip(names, names[1:], names[2:])
+    )
 
 
 def _usage_tokens(row: JsonDict) -> int:

@@ -14,7 +14,10 @@ from agent.evals.plan import (
 )
 from agent.evals.runner import EvaluationScheduler, classify_evaluation_failure
 from agent.evals.store import EvaluationRunStore
-from agent.evals.visual_history_rollout import extract_visual_history_rollouts
+from agent.evals.visual_history_rollout import (
+    _alternating_tool_cycle_count,
+    extract_visual_history_rollouts,
+)
 from agent.runtime.episode import EpisodeResult
 from agent.runtime.parallel import ParallelEpisodeSpec, ParallelEpisodeWorker
 
@@ -295,6 +298,13 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
     assert report["variants"]["C"]["vdm_total_tokens"] == 12
     assert report["jobs"][0]["mean_raw_visual_evidence_per_turn"] == 2.0
     assert Path(report["state_probe_cases_path"]).is_file()
+
+
+def test_alternating_tool_cycle_count_detects_semantic_loops() -> None:
+    assert _alternating_tool_cycle_count(
+        ["sam3", "select_sam3_detection", "sam3", "select_sam3_detection"]
+    ) == 2
+    assert _alternating_tool_cycle_count(["sam3", "sam3", "move_to"]) == 0
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

@@ -302,6 +302,14 @@ around LIBERO, MetaWorld, ManiSkill, RoboCasa, BEHAVIOR, MuJoCo, SAPIEN, and Omn
 perception and manipulation capabilities benefit from SAM 3, UniDepth, AnyGrasp, AnyPlace,
 Contact-GraspNet, GraspGenX, and Molmo.
 
+## Community
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/SII-ZhangYiFei/group-qr/main/group.png" alt="OpenETA WeChat community" width="240">
+</p>
+
+Join the OpenETA community on WeChat (微信技术交流群). Scan the QR code to enter.
+
 ## Citation and License
 
 If you find OpenETA useful in your research, please cite:

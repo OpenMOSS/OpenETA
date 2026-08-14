@@ -275,6 +275,14 @@ uv run pytest
 
 OpenETA 最初的模拟器集成迁移并改编自 [RLinf](https://github.com/RLinf/RLinf)。本项目建立在 LIBERO、MetaWorld、ManiSkill、RoboCasa、BEHAVIOR、MuJoCo、SAPIEN 和 OmniGibson 等开源机器人生态系统之上。其感知和操作能力受益于 SAM 3、UniDepth、AnyGrasp、AnyPlace、Contact-GraspNet、GraspGenX 和 Molmo。
 
+## 社区
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/SII-ZhangYiFei/group-qr/main/group.png" alt="OpenETA 微信交流群" width="240">
+</p>
+
+欢迎加入 OpenETA 微信技术交流群，扫描上方二维码即可入群。
+
 ## 引用与许可证
 
 如果 OpenETA 对你的研究有帮助，请引用：

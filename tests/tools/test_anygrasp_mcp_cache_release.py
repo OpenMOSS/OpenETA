@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("mcp")
 
 from tools import anygrasp_mcp_server
+from tools.anygrasp_core import AnyGraspBackend
 
 
 class _Backend:
@@ -30,6 +31,25 @@ def _request() -> dict[str, Any]:
         "mode": "targeted",
         "target_mask": {},
     }
+
+
+def test_get_capabilities_reports_deployment_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = AnyGraspBackend(
+        sdk_root=".",
+        checkpoint_path="checkpoint.tar",
+        max_gripper_width=0.08,
+    )
+    monkeypatch.setattr(anygrasp_mcp_server, "_BACKEND", backend)
+
+    result = anygrasp_mcp_server.get_capabilities()
+
+    assert result["success"] is True
+    assert result["details"]["capabilities"]["max_gripper_width_m"] == 0.08
+    assert result["details"]["capabilities"][
+        "geometry_change_requires_redeployment"
+    ] is True
 
 
 def test_detect_grasps_releases_cuda_cache_after_backend_result(monkeypatch: pytest.MonkeyPatch) -> None:

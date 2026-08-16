@@ -207,6 +207,8 @@ def test_start_all_dry_run_includes_seven_services(tmp_path: Path, capsys) -> No
     assert "tools/unidepth_v2_mcp_server.py" in output
     assert "--sdk-root /path/to/anygrasp_sdk" in output
     assert "--checkpoint-path /path/to/checkpoint_detection.tar" in output
+    assert "--max-gripper-width 0.08" in output
+    assert "--gripper-height 0.03" in output
     assert "--anyplace-root /path/to/anyplace" in output
     assert "--config-path /path/to/anyplace-config.yaml" in output
     assert "--contact-graspnet-root /path/to/contact-graspnet" in output
@@ -219,6 +221,35 @@ def test_start_all_dry_run_includes_seven_services(tmp_path: Path, capsys) -> No
     assert "--port 8778" in output
     assert "--model-id lpiccinelli/unidepth-v2-vitl14" in output
     assert "--port 8779" in output
+
+
+def test_anygrasp_service_geometry_is_explicitly_configurable(tmp_path: Path) -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "start",
+            "anygrasp",
+            "--state-dir",
+            str(tmp_path),
+            "--anygrasp-sdk-root",
+            "/sdk",
+            "--anygrasp-checkpoint-path",
+            "/checkpoint",
+            "--anygrasp-max-gripper-width",
+            "0.075",
+            "--anygrasp-gripper-height",
+            "0.025",
+            "--dry-run",
+        ]
+    )
+
+    command = cli._build_configs(args)[0].command
+
+    assert command[-4:] == [
+        "--max-gripper-width",
+        "0.075",
+        "--gripper-height",
+        "0.025",
+    ]
 
 
 def test_unidepth_v2_config_reads_environment(monkeypatch, tmp_path: Path) -> None:

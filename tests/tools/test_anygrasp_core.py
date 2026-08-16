@@ -21,6 +21,28 @@ def _intrinsics() -> dict[str, float]:
     return {"fx": 2.0, "fy": 2.0, "cx": 0.0, "cy": 0.0, "scale": 1000.0}
 
 
+def test_backend_reports_deployment_bound_capabilities_without_model_load() -> None:
+    backend = AnyGraspBackend(
+        sdk_root=".",
+        checkpoint_path="checkpoint.tar",
+        max_gripper_width=0.08,
+        gripper_height=0.03,
+        depth_truncation=1.2,
+        max_candidates=12,
+    )
+
+    assert backend.capabilities() == {
+        "schema_version": "openeta.anygrasp_capabilities.v1",
+        "backend": "anygrasp_mcp",
+        "model": "anygrasp_sdk",
+        "max_gripper_width_m": 0.08,
+        "gripper_height_m": 0.03,
+        "depth_truncation_m": 1.2,
+        "max_candidates": 12,
+        "geometry_change_requires_redeployment": True,
+    }
+
+
 def test_build_point_cloud_rejects_shape_mismatch() -> None:
     rgb = np.zeros((2, 2, 3), dtype=np.uint8)
     depth = np.ones((3, 2), dtype=np.uint16)

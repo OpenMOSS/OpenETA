@@ -39,6 +39,20 @@ PNG_1X1 = (
 @pytest.fixture(autouse=True)
 def isolate_cli_memory_store(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        runtime_assembly,
+        "query_anygrasp_capabilities",
+        lambda **_kwargs: {
+            "schema_version": "openeta.anygrasp_capabilities.v1",
+            "backend": "anygrasp_mcp",
+            "model": "anygrasp_sdk",
+            "max_gripper_width_m": 0.08,
+            "gripper_height_m": 0.03,
+            "depth_truncation_m": 1.0,
+            "max_candidates": 20,
+            "geometry_change_requires_redeployment": True,
+        },
+    )
 
 
 def _completion_texts(text: str) -> list[str]:

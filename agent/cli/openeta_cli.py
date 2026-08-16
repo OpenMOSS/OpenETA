@@ -1313,6 +1313,22 @@ class OpenEtaCli:
         )
         self.state.runtime = assembly.runtime
         self.state.supervision_gate = assembly.supervision_gate
+        anygrasp = assembly.perception_capabilities.get("backends", {}).get(
+            "anygrasp", {}
+        )
+        if (
+            isinstance(anygrasp, dict)
+            and anygrasp.get("configured") is True
+            and anygrasp.get("compatible") is not True
+        ):
+            print(
+                Theme.err(
+                    str(
+                        anygrasp.get("message")
+                        or "AnyGrasp is unavailable: deployment capability check failed."
+                    )
+                )
+            )
         self.state.runtime.memory.save_fact(
             "session_workspace",
             workspace.to_dict(),

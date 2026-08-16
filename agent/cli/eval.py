@@ -28,7 +28,10 @@ from agent.evals.runner import (
 )
 from agent.evals.store import DEFAULT_EVALUATION_ROOT, EvaluationRunStore
 from agent.runtime.planner import ToolCallingPlanner
+from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
 from agent.runtime.visual_history import VisualHistoryConfig
+from agent.tools.anygrasp_capabilities import check_anygrasp_compatibility
+from agent.tools.grasp_geometry import DEFAULT_GRASP_PROFILE
 from agent.tools.mcp_registry import load_mcp_server_url
 from agent.tools.sim_mcp import SseSimulatorMcpTransport
 
@@ -227,9 +230,19 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
     errors = [
         "planner provider config is missing: " + ", ".join(provider.missing_fields())
     ] if provider.missing_fields() else []
+    warnings: list[str] = []
     inputs = _resolved_execution_inputs(args, model=provider.model)
     sim_url = str(inputs.get("sim_url") or "")
     catalog: JsonDict = {"checked": False, "url": sim_url}
+    anygrasp_url = str(inputs.get("anygrasp_url") or "")
+    anygrasp: JsonDict = {
+        "backend": "anygrasp",
+        "configured": bool(anygrasp_url),
+        "url": anygrasp_url,
+        "available": False,
+        "compatible": False,
+        "checked": False,
+    }
     if not sim_url:
         errors.append("simulator MCP URL is required")
     elif not args.skip_mcp_check:
@@ -264,14 +277,41 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
                     "error": str(exc),
                 }
                 errors.append(f"simulator MCP list_tools failed: {exc}")
+    if anygrasp_url and not args.skip_mcp_check:
+        try:
+            physical = load_grasp_calibration_capabilities(
+                args.calibration_profile
+            )["max_gripper_width_m"]
+            anygrasp = {
+                **check_anygrasp_compatibility(
+                    url=anygrasp_url,
+                    physical_max_gripper_width_m=float(physical),
+                    timeout_s=args.mcp_timeout_s,
+                ),
+                "checked": True,
+            }
+        except Exception as exc:  # noqa: BLE001 - aggregate preflight diagnostics.
+            anygrasp = {
+                **anygrasp,
+                "checked": True,
+                "reason": "host_capability_preflight_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "message": "AnyGrasp is unavailable: host capability preflight failed.",
+            }
+        if anygrasp.get("compatible") is not True:
+            warnings.append(
+                str(anygrasp.get("message") or "AnyGrasp is unavailable")
+            )
     return {
         "ok": not errors,
         "errors": errors,
+        "warnings": warnings,
         "provider": {
             "provider": provider.provider,
             "model": provider.model,
         },
-        "mcp": {"simulator": catalog},
+        "mcp": {"simulator": catalog, "anygrasp": anygrasp},
         "execution_inputs": inputs,
     }
 
@@ -303,6 +343,7 @@ def _resolved_execution_inputs(args: argparse.Namespace, *, model: str) -> JsonD
         ),
         "molmopoint_url": args.molmopoint_url
         or load_mcp_server_url("openeta-molmopoint", aliases=("molmopoint",)),
+        "calibration_profile": str(args.calibration_profile),
     }
 
 
@@ -399,6 +440,10 @@ def _add_execution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--graspgenx-url", default="")
     parser.add_argument("--contact-graspnet-url", default="")
     parser.add_argument("--molmopoint-url", default="")
+    parser.add_argument(
+        "--calibration-profile",
+        default=str(DEFAULT_GRASP_PROFILE),
+    )
     parser.add_argument("--mcp-timeout-s", type=float, default=10.0)
     parser.add_argument("--skip-mcp-check", action="store_true")
 

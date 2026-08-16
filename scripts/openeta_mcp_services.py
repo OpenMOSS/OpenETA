@@ -23,6 +23,8 @@ DEFAULT_STATE_DIR = Path("outputs/mcp_services")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_SAM3_PORT = 8773
 DEFAULT_ANYGRASP_PORT = 8774
+DEFAULT_ANYGRASP_MAX_GRIPPER_WIDTH_M = 0.08
+DEFAULT_ANYGRASP_GRIPPER_HEIGHT_M = 0.03
 DEFAULT_ANYPLACE_PORT = 8775
 DEFAULT_CONTACT_GRASPNET_PORT = 8776
 DEFAULT_MOLMOPOINT_PORT = 8777
@@ -108,6 +110,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--unidepth-v2-python")
     parser.add_argument("--anygrasp-sdk-root")
     parser.add_argument("--anygrasp-checkpoint-path")
+    parser.add_argument(
+        "--anygrasp-max-gripper-width",
+        type=float,
+        default=DEFAULT_ANYGRASP_MAX_GRIPPER_WIDTH_M,
+        help="physical opening used by AnyGrasp candidate generation (metres)",
+    )
+    parser.add_argument(
+        "--anygrasp-gripper-height",
+        type=float,
+        default=DEFAULT_ANYGRASP_GRIPPER_HEIGHT_M,
+        help="finger height used by AnyGrasp collision geometry (metres)",
+    )
     parser.add_argument("--anyplace-root")
     parser.add_argument("--anyplace-config-path")
     parser.add_argument("--contact-graspnet-root")
@@ -239,6 +253,14 @@ def _build_config(name: str, args: argparse.Namespace) -> ServiceConfig:
             command.extend(["--sdk-root", sdk_root])
         if checkpoint_path:
             command.extend(["--checkpoint-path", checkpoint_path])
+        command.extend(
+            [
+                "--max-gripper-width",
+                str(args.anygrasp_max_gripper_width),
+                "--gripper-height",
+                str(args.anygrasp_gripper_height),
+            ]
+        )
         return ServiceConfig(
             name=name,
             python=python,

@@ -40,6 +40,7 @@ from agent.runtime.experiments import (
     write_grasp_strategy_evidence,
 )
 from agent.runtime.artifact_paths import safe_artifact_component
+from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
 from agent.runtime.grasp_strategy_lifecycle import (
     BackendGraspStrategyAuthor,
     BackendGraspStrategyReviewer,
@@ -62,6 +63,7 @@ from agent.runtime.skills import BUILTIN_SKILL_DIR, load_skill_markdown
 from agent.runtime.task_playbooks import DEFAULT_TASK_PLAYBOOK_ROOT
 from agent.runtime.supervision import SupervisionProfile
 from agent.tools.mcp_registry import load_mcp_server_url
+from agent.tools.anygrasp_capabilities import check_anygrasp_compatibility
 from agent.tools.grasp_geometry import DEFAULT_GRASP_PROFILE
 from agent.tools.grasp_strategies import (
     DEFAULT_GRASP_STRATEGY_ROOT,
@@ -137,6 +139,7 @@ def preflight(args: argparse.Namespace) -> JsonDict:
         if provider.missing_fields()
         else []
     )
+    warnings: list[str] = []
     (
         sim_url,
         sam3_url,
@@ -150,13 +153,6 @@ def preflight(args: argparse.Namespace) -> JsonDict:
         errors.append("simulator MCP URL is required")
     if args.require_perception and not sam3_url:
         errors.append("SAM3 MCP URL is required for embodied grasp experiments")
-    if args.require_perception and not any(
-        (anygrasp_url, contact_graspnet_url, graspgenx_url)
-    ):
-        errors.append(
-            "At least one grasp estimator MCP URL is required for embodied "
-            "grasp experiments"
-        )
     if args.require_perception and not anyplace_url:
         errors.append("AnyPlace MCP URL is required for embodied pick-and-place experiments")
     planner = ToolCallingPlanner()
@@ -214,10 +210,54 @@ def preflight(args: argparse.Namespace) -> JsonDict:
     )
     if not calibration_profile.is_file():
         errors.append(f"calibration profile does not exist: {calibration_profile}")
+    anygrasp_summary: JsonDict = {
+        "backend": "anygrasp",
+        "configured": bool(anygrasp_url),
+        "url": anygrasp_url,
+        "available": False,
+        "compatible": False,
+        "checked": False,
+    }
+    if anygrasp_url and not args.skip_mcp_check and calibration_profile.is_file():
+        try:
+            physical = load_grasp_calibration_capabilities(
+                calibration_profile
+            )["max_gripper_width_m"]
+            anygrasp_summary = {
+                **check_anygrasp_compatibility(
+                    url=anygrasp_url,
+                    physical_max_gripper_width_m=float(physical),
+                    timeout_s=args.mcp_timeout_s,
+                ),
+                "checked": True,
+            }
+        except Exception as exc:  # noqa: BLE001 - preflight reports all checks.
+            anygrasp_summary = {
+                **anygrasp_summary,
+                "checked": True,
+                "reason": "host_capability_preflight_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "message": "AnyGrasp is unavailable: host capability preflight failed.",
+            }
+        if anygrasp_summary.get("compatible") is not True:
+            warnings.append(
+                str(anygrasp_summary.get("message") or "AnyGrasp is unavailable")
+            )
+    if args.require_perception and not (
+        anygrasp_summary.get("compatible") is True
+        or (args.skip_mcp_check and bool(anygrasp_url))
+        or bool(graspgenx_url)
+    ):
+        errors.append(
+            "No compatible executable grasp estimator is available: redeploy "
+            "AnyGrasp with the calibration/gate gripper width or configure GraspGenX"
+        )
     return {
         "schema_version": "openeta.command_preflight.v1",
         "ok": not errors,
         "errors": errors,
+        "warnings": warnings,
         "episode_count": len(specs),
         "concurrency": min(args.concurrency, len(specs)),
         "provider": {
@@ -247,8 +287,7 @@ def preflight(args: argparse.Namespace) -> JsonDict:
                 ),
                 "backends": {
                     "anygrasp": {
-                        "configured": bool(anygrasp_url),
-                        "url": anygrasp_url,
+                        **anygrasp_summary,
                     },
                     "contact_graspnet": {
                         "configured": bool(contact_graspnet_url),

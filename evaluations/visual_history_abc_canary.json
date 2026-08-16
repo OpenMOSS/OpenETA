@@ -2,7 +2,7 @@
   "schema_version": "openeta.evaluation_plan.v1",
   "plan_id": "visual-history-abc-canary-v1",
   "description": "Single-task paired canary for the visual-history A/B/C rollout evaluation.",
-  "episode_manifest": "manifests/libero_object_task0.json",
+  "episode_manifest": "manifests/libero_object_task0_contract_canary.json",
   "variants": [
     {
       "variant_id": "A_current_main_only",

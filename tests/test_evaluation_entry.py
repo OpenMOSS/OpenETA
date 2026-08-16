@@ -77,6 +77,15 @@ def test_visual_history_abc_plan_validates_and_compiles(capsys) -> None:
     assert output["job_count"] == 30
 
 
+def test_visual_history_canary_has_a_bounded_episode_budget() -> None:
+    plan = load_evaluation_plan(Path("evaluations/visual_history_abc_canary.json"))
+    jobs = compile_evaluation_plan(plan)
+
+    assert len(jobs) == 3
+    assert all(job.spec.max_turns == 60 for job in jobs)
+    assert all(job.spec.max_tool_calls == 120 for job in jobs)
+
+
 def test_scheduler_persists_each_attempt_and_retries_infrastructure(tmp_path: Path) -> None:
     plan = EvaluationPlan(
         plan_id="retry-eval",
@@ -216,6 +225,7 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
     rollout.mkdir(parents=True)
     planner_context = {
         "schema_version": "openeta.agent_context.v2",
+        "decision_state": {"schema_version": "openeta.decision_state.v1"},
         "visual_history": {
             "raw_evidence": [{"path": "a"}, {"path": "b"}],
             "compressed_deltas": [{"delta_id": "d"}],
@@ -226,7 +236,11 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
         [
             {
                 "semantic_request": {"tool_context": planner_context, "metadata": {}},
-                "parsed_decision": {"tool": "move_to"},
+                "parsed_decision": {
+                    "kind": "tool_call",
+                    "name": "grasp_pose_estimate",
+                    "parameters": {"bundle_id": "grasp:host-issued"},
+                },
                 "validation": {"accepted": True},
                 "result": {
                     "details": {
@@ -334,12 +348,90 @@ def test_visual_history_extractor_reads_rollout_without_touching_generic_report(
     assert report["variants"]["C"]["max_raw_visual_evidence_per_turn"] == 2
     assert report["variants"]["C"]["mean_compressed_delta_count_per_turn"] == 1.0
     assert report["jobs"][0]["mean_raw_visual_evidence_per_turn"] == 2.0
+    assert report["jobs"][0]["decision_state_coverage"] == 1.0
+    assert report["jobs"][0]["gate_block_count"] == 0
+    assert report["jobs"][0]["repair_bundle_count"] == 0
+    assert report["jobs"][0]["grasp_bundle_call_count"] == 1
+    assert report["jobs"][0]["manual_grasp_input_call_count"] == 0
+    assert report["jobs"][0]["max_compressed_delta_count_per_turn"] == 1
+    assert report["terminal_job_count"] == 1
+    assert report["partial_job_count"] == 0
     assert Path(report["state_probe_cases_path"]).is_file()
 
     generic_report = build_evaluation_report(store, jobs)
     assert generic_report["wall_clock_s"] == 15.0
     assert generic_report["provider_concurrency"]["request_count"] == 7
     assert generic_report["provider_concurrency"]["active"] == 0
+
+
+def test_visual_history_extractor_includes_interrupted_partial_rollouts(
+    tmp_path: Path,
+) -> None:
+    plan = EvaluationPlan(
+        plan_id="partial-eval",
+        description="",
+        episodes=(ParallelEpisodeSpec("episode", "pick cube", "env", seed=4),),
+        variants=(EvaluationVariant("C"),),
+    )
+    jobs = compile_evaluation_plan(plan)
+    store = EvaluationRunStore.create(
+        "partial-run",
+        root=tmp_path,
+        compiled_plan=compiled_plan_payload(plan, jobs),
+    )
+    store.start_attempt(jobs[0], attempt=1, spec={"episode_id": jobs[0].job_id})
+    attempt = store.attempt_dir(jobs[0].job_id, 1)
+    rollout = attempt / "sessions" / "partial-session" / "rollout"
+    rollout.mkdir(parents=True)
+    (attempt / "session_index.json").write_text(
+        json.dumps(
+            {
+                "sessions": {
+                    "partial-session": {
+                        "metadata": {"evaluation": {"job_id": jobs[0].job_id}}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_jsonl(
+        rollout / "model_calls.jsonl",
+        [
+            {
+                "semantic_request": {
+                    "tool_context": {
+                        "schema_version": "openeta.agent_context.v2",
+                        "visual_history": {
+                            "raw_evidence": [{"path": "current.png"}],
+                            "compressed_deltas": [],
+                        },
+                    },
+                    "metadata": {},
+                },
+                "parsed_decision": {
+                    "kind": "tool_call",
+                    "name": "anyplace",
+                    "parameters": {"bundle_id": "anyplace:frozen"},
+                },
+                "result": {"details": {"usage": {"total_tokens": 9}}},
+            }
+        ],
+    )
+    _write_jsonl(rollout / "transitions.jsonl", [])
+    store.set_run_status("interrupted", error={"type": "KeyboardInterrupt"})
+
+    report = extract_visual_history_rollouts(store)
+
+    assert report["job_count"] == 1
+    assert report["terminal_job_count"] == 0
+    assert report["partial_job_count"] == 1
+    assert report["complete_pair_count"] == 0
+    assert report["jobs"][0]["record_kind"] == "partial"
+    assert report["jobs"][0]["status"] == "interrupted"
+    assert report["jobs"][0]["stop_reason"] == "scheduler_interrupted"
+    assert report["jobs"][0]["anyplace_bundle_call_count"] == 1
+    assert report["jobs"][0]["episode_total_tokens"] == 9
 
 
 def test_alternating_tool_cycle_count_detects_semantic_loops() -> None:

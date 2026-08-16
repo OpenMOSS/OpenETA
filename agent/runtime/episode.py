@@ -111,7 +111,13 @@ class OpenEtaEpisodeRunner:
         self.terminated = False
         self.truncated = False
         self.waiting_for_human = False
+        self.base_max_turns = 0
         self.max_turns = 0
+        self.hard_max_turns = 0
+        self.recovery_turns_per_branch = 0
+        self.max_recovery_turns = 0
+        self.recovery_turns_granted = 0
+        self._recovery_branch_ids: set[str] = set()
         self.max_tool_calls = DEFAULT_MAX_TOOL_CALLS
         self.timeout_s = DEFAULT_EPISODE_TIMEOUT_S
         self.max_total_tokens = DEFAULT_MAX_TOTAL_TOKENS
@@ -141,6 +147,8 @@ class OpenEtaEpisodeRunner:
         task: str,
         session_id: str | None = None,
         max_turns: int,
+        recovery_turns_per_branch: int = 0,
+        max_recovery_turns: int = 0,
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         timeout_s: float = DEFAULT_EPISODE_TIMEOUT_S,
         max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
@@ -154,7 +162,13 @@ class OpenEtaEpisodeRunner:
         self.terminated = False
         self.truncated = False
         self.waiting_for_human = False
-        self.max_turns = max(1, max_turns)
+        self.base_max_turns = max(1, max_turns)
+        self.max_turns = self.base_max_turns
+        self.recovery_turns_per_branch = max(0, int(recovery_turns_per_branch))
+        self.max_recovery_turns = max(0, int(max_recovery_turns))
+        self.hard_max_turns = self.base_max_turns + self.max_recovery_turns
+        self.recovery_turns_granted = 0
+        self._recovery_branch_ids.clear()
         self.max_tool_calls = max(1, max_tool_calls)
         self.timeout_s = max(0.001, timeout_s)
         self.max_total_tokens = max(1, max_total_tokens)
@@ -178,6 +192,10 @@ class OpenEtaEpisodeRunner:
         episode_metadata = {
             "source": type(self).__name__,
             "max_turns": self.max_turns,
+            "base_max_turns": self.base_max_turns,
+            "hard_max_turns": self.hard_max_turns,
+            "recovery_turns_per_branch": self.recovery_turns_per_branch,
+            "max_recovery_turns": self.max_recovery_turns,
             "max_tool_calls": self.max_tool_calls,
             "timeout_s": self.timeout_s,
             "max_total_tokens": self.max_total_tokens,
@@ -247,6 +265,10 @@ class OpenEtaEpisodeRunner:
                 "task": task,
                 "environment": type(self.environment).__name__,
                 "max_turns": self.max_turns,
+                "base_max_turns": self.base_max_turns,
+                "hard_max_turns": self.hard_max_turns,
+                "recovery_turns_per_branch": self.recovery_turns_per_branch,
+                "max_recovery_turns": self.max_recovery_turns,
                 "max_tool_calls": self.max_tool_calls,
                 "timeout_s": self.timeout_s,
                 "max_total_tokens": self.max_total_tokens,
@@ -361,6 +383,7 @@ class OpenEtaEpisodeRunner:
         self.stop_reason = (
             "ask_human" if self.waiting_for_human else _stop_reason_from_step_result(step_result)
         )
+        self._apply_recovery_turn_extension()
         self._enforce_resource_budgets()
         self.current_observation = step_result.observation
         if self.runtime.rollout_recorder is not None:
@@ -444,6 +467,8 @@ class OpenEtaEpisodeRunner:
         task: str,
         session_id: str | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
+        recovery_turns_per_branch: int = 0,
+        max_recovery_turns: int = 0,
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         timeout_s: float = DEFAULT_EPISODE_TIMEOUT_S,
         max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
@@ -457,6 +482,8 @@ class OpenEtaEpisodeRunner:
                 task=task,
                 session_id=session_id,
                 max_turns=max_turns,
+                recovery_turns_per_branch=recovery_turns_per_branch,
+                max_recovery_turns=max_recovery_turns,
                 max_tool_calls=max_tool_calls,
                 timeout_s=timeout_s,
                 max_total_tokens=max_total_tokens,
@@ -471,10 +498,10 @@ class OpenEtaEpisodeRunner:
 
     def continue_run(self, *, max_turns: int | None = None) -> EpisodeResult:
         steps: list[EpisodeStep] = []
-        turn_budget = self.remaining_turns
-        if max_turns is not None:
-            turn_budget = min(turn_budget, max(0, max_turns))
-        for _ in range(turn_budget):
+        requested_turns = max(0, max_turns) if max_turns is not None else None
+        while self.remaining_turns > 0 and (
+            requested_turns is None or len(steps) < requested_turns
+        ):
             self._enforce_resource_budgets()
             if self.terminated or self.truncated or self.waiting_for_human:
                 break
@@ -501,7 +528,10 @@ class OpenEtaEpisodeRunner:
                 "execution_id": self.execution_id,
                 "turn_index": self.turn_index,
                 "max_turns": self.max_turns,
+                "base_max_turns": self.base_max_turns,
+                "hard_max_turns": self.hard_max_turns,
                 "remaining_turns": self.remaining_turns,
+                "recovery_turns_granted": self.recovery_turns_granted,
                 "budget": {
                     "max_tool_calls": self.max_tool_calls,
                     "timeout_s": self.timeout_s,
@@ -565,6 +595,46 @@ class OpenEtaEpisodeRunner:
             },
         )
         return result
+
+    def _apply_recovery_turn_extension(self) -> None:
+        """Grant bounded turns for explicit post-close grasp branch switches."""
+
+        if (
+            self.recovery_turns_per_branch <= 0
+            or self.recovery_turns_granted >= self.max_recovery_turns
+        ):
+            return
+        new_branch_ids: list[str] = []
+        for event in self.runtime.memory.events:
+            if event.event_type != "grasp_provenance_switched":
+                continue
+            payload = event.payload
+            if payload.get("recovery_branch") is not True:
+                continue
+            evidence_id = str(payload.get("evidence_id") or "").strip()
+            if not evidence_id or evidence_id in self._recovery_branch_ids:
+                continue
+            self._recovery_branch_ids.add(evidence_id)
+            new_branch_ids.append(evidence_id)
+        if not new_branch_ids:
+            return
+        requested = self.recovery_turns_per_branch * len(new_branch_ids)
+        remaining_allowance = self.max_recovery_turns - self.recovery_turns_granted
+        granted = min(requested, remaining_allowance)
+        if granted <= 0:
+            return
+        self.max_turns = min(self.hard_max_turns, self.max_turns + granted)
+        self.recovery_turns_granted += granted
+        self.runtime.memory.record(
+            "episode_turn_budget_extended",
+            {
+                "reason": "confirmed_distinct_grasp_branch_switch",
+                "branch_evidence_ids": new_branch_ids,
+                "granted_turns": granted,
+                "effective_max_turns": self.max_turns,
+                "hard_max_turns": self.hard_max_turns,
+            },
+        )
 
     def _resolve_interaction(self, action: EnvAction) -> JsonDict | None:
         if not is_agent_waiting_for_human(action) or self.interaction_resolver is None:

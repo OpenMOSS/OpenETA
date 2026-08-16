@@ -447,6 +447,8 @@ def _spec_to_dict(spec: ParallelEpisodeSpec) -> JsonDict:
         "env_id": spec.env_id,
         "seed": spec.seed,
         "max_turns": spec.max_turns,
+        "recovery_turns_per_branch": spec.recovery_turns_per_branch,
+        "max_recovery_turns": spec.max_recovery_turns,
         "max_tool_calls": spec.max_tool_calls,
         "timeout_s": spec.timeout_s,
         "max_total_tokens": spec.max_total_tokens,

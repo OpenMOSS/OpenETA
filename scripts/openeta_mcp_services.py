@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import signal
 import subprocess
@@ -19,11 +20,24 @@ from typing import Any, Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from agent.runtime.calibration_registry import (  # noqa: E402
+    DEFAULT_GRASP_CALIBRATION_PROFILE,
+    load_grasp_calibration_capabilities,
+)
+from agent.tools.anygrasp_capabilities import (  # noqa: E402
+    ANYGRASP_WIDTH_TOLERANCE_M,
+    check_anygrasp_compatibility,
+    clear_anygrasp_capability_cache,
+)
+
+
 DEFAULT_STATE_DIR = Path("outputs/mcp_services")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_SAM3_PORT = 8773
 DEFAULT_ANYGRASP_PORT = 8774
-DEFAULT_ANYGRASP_MAX_GRIPPER_WIDTH_M = 0.08
 DEFAULT_ANYGRASP_GRIPPER_HEIGHT_M = 0.03
 DEFAULT_ANYPLACE_PORT = 8775
 DEFAULT_CONTACT_GRASPNET_PORT = 8776
@@ -35,6 +49,7 @@ DEFAULT_MOLMOPOINT_MODEL_ID = "allenai/MolmoPoint-8B"
 DEFAULT_MOLMOPOINT_MODEL_REVISION = "188130f961c8e0888a34e11121a1423c461a01ba"
 STOP_TIMEOUT_S = 5.0
 START_TIMEOUT_S = 8.0
+ANYGRASP_CAPABILITY_TIMEOUT_S = 10.0
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,9 @@ class ServiceConfig:
     command: list[str]
     env: dict[str, str]
     health_server_name: str | None = None
+    expected_max_gripper_width_m: float | None = None
+    grasp_calibration_profile: Path | None = None
+    capability_timeout_s: float = ANYGRASP_CAPABILITY_TIMEOUT_S
 
     @property
     def pid_file(self) -> Path:
@@ -111,16 +129,34 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--anygrasp-sdk-root")
     parser.add_argument("--anygrasp-checkpoint-path")
     parser.add_argument(
+        "--grasp-calibration-profile",
+        type=Path,
+        help=(
+            "host calibration profile that owns the physical gripper width; "
+            "defaults to OPENETA_GRASP_CALIBRATION_PROFILE or the repository "
+            "LIBERO Panda profile"
+        ),
+    )
+    parser.add_argument(
         "--anygrasp-max-gripper-width",
         type=float,
-        default=DEFAULT_ANYGRASP_MAX_GRIPPER_WIDTH_M,
-        help="physical opening used by AnyGrasp candidate generation (metres)",
+        default=None,
+        help=(
+            "optional deployment width override in metres; when supplied it must "
+            "match --grasp-calibration-profile"
+        ),
     )
     parser.add_argument(
         "--anygrasp-gripper-height",
         type=float,
         default=DEFAULT_ANYGRASP_GRIPPER_HEIGHT_M,
         help="finger height used by AnyGrasp collision geometry (metres)",
+    )
+    parser.add_argument(
+        "--anygrasp-capability-timeout-s",
+        type=float,
+        default=ANYGRASP_CAPABILITY_TIMEOUT_S,
+        help="timeout for pre/post-restart get_capabilities checks",
     )
     parser.add_argument("--anyplace-root")
     parser.add_argument("--anyplace-config-path")
@@ -239,6 +275,10 @@ def _build_config(name: str, args: argparse.Namespace) -> ServiceConfig:
         checkpoint_path = args.anygrasp_checkpoint_path or os.environ.get(
             "OPENETA_ANYGRASP_CHECKPOINT_PATH"
         )
+        (
+            max_gripper_width,
+            calibration_profile,
+        ) = _resolve_anygrasp_deployment_width(args)
         command = [
             python,
             str(REPO_ROOT / "tools" / "anygrasp_mcp_server.py"),
@@ -256,7 +296,7 @@ def _build_config(name: str, args: argparse.Namespace) -> ServiceConfig:
         command.extend(
             [
                 "--max-gripper-width",
-                str(args.anygrasp_max_gripper_width),
+                str(max_gripper_width),
                 "--gripper-height",
                 str(args.anygrasp_gripper_height),
             ]
@@ -269,6 +309,9 @@ def _build_config(name: str, args: argparse.Namespace) -> ServiceConfig:
             state_dir=state_dir,
             command=command,
             env=env,
+            expected_max_gripper_width_m=max_gripper_width,
+            grasp_calibration_profile=calibration_profile,
+            capability_timeout_s=float(args.anygrasp_capability_timeout_s),
         )
 
     if name == "anyplace":
@@ -532,6 +575,51 @@ def _validate_start_requirements(configs: Iterable[ServiceConfig]) -> None:
                 )
 
 
+def _resolve_anygrasp_deployment_width(
+    args: argparse.Namespace,
+) -> tuple[float, Path]:
+    profile_value = (
+        args.grasp_calibration_profile
+        or os.environ.get("OPENETA_GRASP_CALIBRATION_PROFILE")
+        or DEFAULT_GRASP_CALIBRATION_PROFILE
+    )
+    profile = Path(profile_value).expanduser()
+    if not profile.is_absolute():
+        profile = REPO_ROOT / profile
+    try:
+        capabilities = load_grasp_calibration_capabilities(profile)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"invalid grasp calibration profile {profile}: {exc}") from exc
+    expected = float(capabilities["max_gripper_width_m"])
+    explicit = args.anygrasp_max_gripper_width
+    if explicit is None:
+        environment_value = os.environ.get("OPENETA_ANYGRASP_MAX_GRIPPER_WIDTH_M")
+        if environment_value:
+            try:
+                explicit = float(environment_value)
+            except ValueError as exc:
+                raise ConfigError(
+                    "OPENETA_ANYGRASP_MAX_GRIPPER_WIDTH_M must be a number"
+                ) from exc
+    if explicit is not None:
+        explicit = float(explicit)
+        if not math.isfinite(explicit) or not 0.0 < explicit <= 0.2:
+            raise ConfigError("AnyGrasp deployment width must be in (0, 0.2] m")
+        if abs(explicit - expected) > ANYGRASP_WIDTH_TOLERANCE_M:
+            raise ConfigError(
+                "AnyGrasp deployment width "
+                f"{explicit:.6f} m does not match calibration profile {profile} "
+                f"width {expected:.6f} m"
+            )
+    timeout_s = float(args.anygrasp_capability_timeout_s)
+    if not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ConfigError("AnyGrasp capability timeout must be positive")
+    gripper_height = float(args.anygrasp_gripper_height)
+    if not math.isfinite(gripper_height) or gripper_height <= 0:
+        raise ConfigError("AnyGrasp gripper height must be positive")
+    return expected, profile
+
+
 def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
     pid = _read_pid(config.pid_file)
     if pid is not None and _pid_alive(pid):
@@ -545,6 +633,8 @@ def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
                 "url": config.sse_url,
                 "log": str(config.log_file),
             }
+        if config.name == "anygrasp" and not dry_run:
+            return _reconcile_running_anygrasp(config, pid=pid)
         return {
             "ok": False,
             "service": config.name,
@@ -556,7 +646,7 @@ def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
         }
 
     if dry_run:
-        return {
+        result = {
             "ok": True,
             "service": config.name,
             "action": "start",
@@ -565,6 +655,19 @@ def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
             "url": config.sse_url,
             "log": str(config.log_file),
         }
+        if config.expected_max_gripper_width_m is not None:
+            result.update(
+                {
+                    "expected_max_gripper_width_m": (
+                        config.expected_max_gripper_width_m
+                    ),
+                    "grasp_calibration_profile": str(
+                        config.grasp_calibration_profile or ""
+                    ),
+                    "reconcile": "check_capability_and_restart_if_incompatible",
+                }
+            )
+        return result
 
     config.state_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -592,7 +695,7 @@ def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
     ready = _wait_for_service_ready(config, process)
     if ready is not None:
         return ready
-    return {
+    result = {
         "ok": True,
         "service": config.name,
         "action": "start",
@@ -600,6 +703,82 @@ def _start_service(config: ServiceConfig, *, dry_run: bool) -> dict[str, Any]:
         "url": config.sse_url,
         "log": str(config.log_file),
     }
+    if config.name == "anygrasp":
+        compatibility = _anygrasp_compatibility(config)
+        result["capability"] = compatibility
+        if compatibility.get("compatible") is not True:
+            result.update(
+                {
+                    "ok": False,
+                    "reason": "post_start_capability_check_failed",
+                }
+            )
+    return result
+
+
+def _reconcile_running_anygrasp(
+    config: ServiceConfig,
+    *,
+    pid: int,
+) -> dict[str, Any]:
+    compatibility = _anygrasp_compatibility(config)
+    if compatibility.get("compatible") is True:
+        return {
+            "ok": True,
+            "service": config.name,
+            "action": "start",
+            "reason": "already_running_compatible",
+            "pid": pid,
+            "url": config.sse_url,
+            "log": str(config.log_file),
+            "capability": compatibility,
+        }
+
+    restart_reason = str(compatibility.get("reason") or "capability_incompatible")
+    stop_result = _stop_service(config, force=False, missing_ok=False)
+    if stop_result.get("ok") is not True:
+        return {
+            "ok": False,
+            "service": config.name,
+            "action": "reconcile",
+            "reason": "automatic_restart_stop_failed",
+            "restart_reason": restart_reason,
+            "previous_capability": compatibility,
+            "stop": stop_result,
+            "url": config.sse_url,
+            "log": str(config.log_file),
+        }
+    start_result = _start_service(config, dry_run=False)
+    return {
+        "ok": start_result.get("ok") is True,
+        "service": config.name,
+        "action": "reconcile",
+        "reason": "automatic_restart",
+        "restart_reason": restart_reason,
+        "previous_capability": compatibility,
+        "stop": stop_result,
+        "start": start_result,
+        "url": config.sse_url,
+        "log": str(config.log_file),
+    }
+
+
+def _anygrasp_compatibility(config: ServiceConfig) -> dict[str, Any]:
+    expected = config.expected_max_gripper_width_m
+    if expected is None:
+        return {
+            "configured": True,
+            "available": False,
+            "compatible": False,
+            "reason": "missing_expected_gripper_width",
+            "message": "AnyGrasp launcher has no host calibration width.",
+        }
+    clear_anygrasp_capability_cache()
+    return check_anygrasp_compatibility(
+        url=config.sse_url,
+        physical_max_gripper_width_m=expected,
+        timeout_s=config.capability_timeout_s,
+    )
 
 
 def _restart_dry_run(config: ServiceConfig) -> dict[str, Any]:
@@ -743,20 +922,23 @@ def _smoke_service(config: ServiceConfig) -> dict[str, Any]:
             "reason": str(exc),
         }
     expected_tools = {
+        "anygrasp": ("detect_grasps", "get_capabilities"),
         "anyplace": "predict_placement",
         "contact_graspnet": "predict_grasps",
         "molmopoint": "point_image",
         "graspgenx": "predict_grasps",
         "unidepth_v2": "estimate_depth",
     }
-    expected_tool = expected_tools.get(config.name)
-    if expected_tool is not None and expected_tool not in tools:
+    expected = expected_tools.get(config.name)
+    required_tools = (expected,) if isinstance(expected, str) else tuple(expected or ())
+    missing_tools = [tool for tool in required_tools if tool not in tools]
+    if missing_tools:
         return {
             "ok": False,
             "service": config.name,
             "smoke": "failed",
             "url": config.sse_url,
-            "reason": f"missing_tool:{expected_tool}",
+            "reason": "missing_tool:" + ",".join(missing_tools),
             "tools": tools,
         }
     return {

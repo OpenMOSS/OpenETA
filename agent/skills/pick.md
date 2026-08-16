@@ -72,12 +72,19 @@ Use as text guidance only, not an executable macro. Inspect each result.
 7. Read the normalized grasp candidate list. Candidate poses use the
    camera/OpenCV GraspNet convention and are sorted by backend-local score.
    Scores are backend-local. Choose using identity, width/calibration, collision,
-   geometry, and prior outcomes. Record the id and rationale in Agent memory;
+   geometry, and prior outcomes. When the ToolResult includes
+   `target_mask_candidate_projection`, compare each translation/tip pixel with
+   the mask bbox and centroid. A candidate anchored at a thin top/side boundary
+   is shallow-grasp evidence, especially after a prior slip; it is not an
+   automatic rejection. Record the id and rationale in Agent memory;
    no host task phase chooses it.
    When selecting the SAM3 mask, include truthful
    `target_geometry_family` (`upright_can`, `upright_bottle`, `boxed_item`,
    `bowl`, `apple`, `drawer_handle`, or `other`) only when visually clear. It is
-   task evidence for strategy matching, not a calibration allowlist.
+   task evidence for strategy matching, not a calibration allowlist. Only a
+   validated strategy may activate automatically from this hint. Candidate
+   strategies are experimental evidence and require an explicit `strategy_id`;
+   otherwise the compiler preserves the estimator pose.
 8. Before grasp motion, call `compile_grasp_seed` with:
    - `camera_pose`: the complete candidate that you selected from the current
      grasp ToolResult or its `complete_outputs_artifact`, preserving its id,
@@ -105,7 +112,18 @@ Use as text guidance only, not an executable macro. Inspect each result.
    to contact only after visual evidence and deterministic checks support it.
    Compiled poses are anchors. Dual-view evidence may justify `move_to` xyz
    correction within host-derived 2 cm/call and 10 cm total residual caps. Preserve
-   provenance and re-observe.
+   provenance and re-observe. These caps bound the offset from the compiled anchor;
+   they are not a limit on how far the EEF may travel to reach it. An exact compiled
+   hover/contact pose has zero residual and can be requested directly—do not split
+   that approach into 2 cm increments. If a distinct far transit waypoint is useful,
+   omit `compiled_grasp_id` and `waypoint_role`, keep it outside the contact safety
+   envelope, observe there, and then use the compiled anchor. For normal compiled
+   hover/contact reaches, omit `num_steps` and let `move_to` use its closed-loop
+   default budget. `num_steps` is a maximum controller-iteration budget, not a
+   distance or speed parameter; the environment's “3-5 steps for visible motion”
+   hint applies to raw `step_env`, not to completing a `move_to`. If a receipt says
+   `reached_target=false`, do not advance from hover to contact or from contact to
+   close. Use the reported actual EEF pose plus fresh images to retry or replan.
 10. After contact, execute exactly binary `gripper_control position=0`;
    `0=closed`, `1=open`, fractions are invalid, and the command stays latched
    across every later motion. Keep three signals separate:

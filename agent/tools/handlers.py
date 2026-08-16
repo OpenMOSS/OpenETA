@@ -72,6 +72,7 @@ GRASP_POSE_FALLBACK_REASONS = {
     "model_load_failed",
     "no_grasp_candidates",
     "no_executable_grasp_candidates",
+    "backend_gripper_width_mismatch",
     "target_mask_outside_depth_range",
     "unknown_error",
 }
@@ -1211,6 +1212,8 @@ def build_grasp_pose_estimate_handler(
                 reason = _grasp_backend_failure_reason(normalized)
                 attempt["status"] = "failed"
                 attempt["reason"] = reason
+                if reason == "backend_gripper_width_mismatch":
+                    attempt["message"] = normalized.content
                 diagnostics = _grasp_backend_diagnostics(normalized)
                 if diagnostics:
                     attempt["diagnostics"] = diagnostics
@@ -1225,15 +1228,37 @@ def build_grasp_pose_estimate_handler(
                     content=backend_result.content,
                 )
 
+        width_mismatch = next(
+            (
+                attempt
+                for attempt in attempts
+                if attempt.get("reason") == "backend_gripper_width_mismatch"
+            ),
+            None,
+        )
+        other_failures = any(
+            attempt.get("status") == "failed"
+            and attempt.get("reason") != "backend_gripper_width_mismatch"
+            for attempt in attempts
+        )
         reason = (
-            "all_backends_failed"
-            if any(attempt["status"] == "failed" for attempt in attempts)
-            else "no_compatible_backend"
+            "no_compatible_backend"
+            if width_mismatch is not None and not other_failures
+            else (
+                "all_backends_failed"
+                if any(attempt["status"] == "failed" for attempt in attempts)
+                else "no_compatible_backend"
+            )
         )
         return _grasp_pose_estimate_failure(
             reason,
             attempts=attempts,
             retryable=reason == "all_backends_failed",
+            content=(
+                str(width_mismatch.get("message") or "")
+                if width_mismatch is not None and not other_failures
+                else ""
+            ),
         )
 
     return handler
@@ -4000,6 +4025,96 @@ def _grasp_backend_diagnostics(result: ToolResult) -> JsonDict:
     return diagnostics
 
 
+def _target_mask_projection_diagnostic(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    object_mask: Mapping[str, Any] | None,
+    intrinsics: Mapping[str, Any],
+) -> JsonDict | None:
+    """Project candidate anchors into the target mask as bounded evidence.
+
+    Backend score alone does not reveal whether a grasp anchor lies near a thin
+    object edge.  This diagnostic gives the Agent image-relative evidence while
+    leaving candidate choice and recovery entirely model-owned.
+    """
+
+    mask_ref = _string_param(object_mask.get("mask_ref")) if object_mask else ""
+    fx = _finite_float(intrinsics.get("fx"))
+    fy = _finite_float(intrinsics.get("fy"))
+    cx = _finite_float(intrinsics.get("cx"))
+    cy = _finite_float(intrinsics.get("cy"))
+    if not mask_ref or None in {fx, fy, cx, cy} or fx <= 0 or fy <= 0:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(mask_ref) as image:
+            mask = image.convert("L")
+            width, height = mask.size
+            pixels = list(mask.tobytes())
+    except (OSError, ValueError):
+        return None
+    coords = [
+        (index % width, index // width)
+        for index, value in enumerate(pixels)
+        if int(value) > 0
+    ]
+    if not coords:
+        return None
+    xs = [value[0] for value in coords]
+    ys = [value[1] for value in coords]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    centroid = [sum(xs) / len(xs), sum(ys) / len(ys)]
+
+    def project(value: object) -> JsonDict | None:
+        point = _finite_vector(value, length=3)
+        if point is None or point[2] <= 0:
+            return None
+        u = float(fx) * point[0] / point[2] + float(cx)
+        v = float(fy) * point[1] / point[2] + float(cy)
+        px, py = int(round(u)), int(round(v))
+        inside_image = 0 <= px < width and 0 <= py < height
+        return {
+            "pixel_xy": [round(u, 2), round(v, 2)],
+            "inside_target_mask": bool(
+                inside_image and int(pixels[py * width + px]) > 0
+            ),
+            "bbox_fraction_xy": [
+                round((u - xmin) / max(1, xmax - xmin), 3),
+                round((v - ymin) / max(1, ymax - ymin), 3),
+            ],
+        }
+
+    projected: list[JsonDict] = []
+    for candidate in candidates[:20]:
+        translation = project(candidate.get("translation_xyz"))
+        tip = project(candidate.get("gripper_tip_position_xyz"))
+        if translation is None and tip is None:
+            continue
+        projected.append(
+            {
+                "candidate_id": str(candidate.get("id") or ""),
+                "rank": candidate.get("rank"),
+                "translation": translation,
+                "gripper_tip": tip,
+            }
+        )
+    if not projected:
+        return None
+    return {
+        "code": "target_mask_candidate_projection",
+        "coordinate_convention": "image_top_left_xy",
+        "mask_bbox_xyxy": [xmin, ymin, xmax, ymax],
+        "mask_centroid_xy": [round(centroid[0], 2), round(centroid[1], 2)],
+        "candidates": projected,
+        "interpretation": (
+            "Image-relative geometric evidence only; boundary proximity may indicate "
+            "a shallow or edge grasp but does not auto-reject or select a candidate."
+        ),
+    }
+
+
 def _normalise_grasp_pose_estimate_result(
     result: ToolResult,
     *,
@@ -4027,7 +4142,47 @@ def _normalise_grasp_pose_estimate_result(
     result_id = f"gpe-{uuid4().hex[:16]}"
     candidates: list[JsonDict] = []
     rejected_candidates: list[JsonDict] = []
+    diagnostics: list[JsonDict] = [
+        {
+            "code": "grasp_backend_fallback",
+            "backend": attempt["backend"],
+            "reason": attempt["reason"],
+        }
+        for attempt in attempts[:-1]
+        if attempt["status"] in {"failed", "unavailable"}
+    ]
     max_gripper_width_m = _finite_float(hints.get("max_gripper_width_m"))
+    backend_metadata = source_details.get("metadata")
+    backend_max_gripper_width_m = (
+        _finite_float(backend_metadata.get("max_gripper_width"))
+        if isinstance(backend_metadata, Mapping)
+        else None
+    )
+    if (
+        backend == "anygrasp"
+        and max_gripper_width_m is not None
+        and max_gripper_width_m > 0
+        and backend_max_gripper_width_m is not None
+        and abs(backend_max_gripper_width_m - max_gripper_width_m) > 1e-6
+    ):
+        return _grasp_pose_estimate_failure(
+            "backend_gripper_width_mismatch",
+            attempts=attempts,
+            retryable=False,
+            content=(
+                "AnyGrasp is unavailable: deployment max_gripper_width_m "
+                f"({backend_max_gripper_width_m:.6f} m) does not match the "
+                "execution gate/calibration width "
+                f"({max_gripper_width_m:.6f} m). Redeploy AnyGrasp with the "
+                "matching physical gripper width."
+            ),
+            diagnostics={
+                "backend": backend,
+                "backend_max_gripper_width_m": backend_max_gripper_width_m,
+                "physical_max_gripper_width_m": max_gripper_width_m,
+                "requires_redeployment": True,
+            },
+        )
     for backend_index, value in enumerate(raw_candidates):
         if not isinstance(value, Mapping):
             return _grasp_pose_estimate_failure(
@@ -4088,10 +4243,27 @@ def _normalise_grasp_pose_estimate_result(
                 "rejected_candidates": rejected_candidates,
             },
         )
+    if rejected_candidates and len(rejected_candidates) * 2 >= len(raw_candidates):
+        diagnostics.append(
+            {
+                "code": "high_infeasible_candidate_fraction",
+                "backend": backend,
+                "raw_candidate_count": len(raw_candidates),
+                "rejected_candidate_count": len(rejected_candidates),
+                "reason": "exceeds_physical_gripper_width",
+            }
+        )
     candidates.sort(key=lambda candidate: -float(candidate.get("score") or 0.0))
     for rank, candidate in enumerate(candidates):
         candidate["rank"] = rank
         candidate["id"] = f"{result_id}-{rank:03d}"
+    projection_diagnostic = _target_mask_projection_diagnostic(
+        candidates,
+        object_mask=object_mask,
+        intrinsics=intrinsics,
+    )
+    if projection_diagnostic is not None:
+        diagnostics.append(projection_diagnostic)
 
     source: JsonDict = {
         "source_tool": "grasp_pose_estimate",
@@ -4150,15 +4322,7 @@ def _normalise_grasp_pose_estimate_result(
             "ranking": "score_descending_backend_local",
             "backend_attempts": [dict(value) for value in attempts],
             "artifacts": artifacts,
-            "diagnostics": [
-                {
-                    "code": "grasp_backend_fallback",
-                    "backend": attempt["backend"],
-                    "reason": attempt["reason"],
-                }
-                for attempt in attempts[:-1]
-                if attempt["status"] in {"failed", "unavailable"}
-            ],
+            "diagnostics": diagnostics,
         },
     )
 

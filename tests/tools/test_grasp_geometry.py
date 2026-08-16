@@ -63,21 +63,21 @@ def test_compile_grasp_seed_applies_camera_and_eef_transforms() -> None:
     assert result["not_validated"] is True
     assert result["contact_pose"]["frame"] == "world"
     assert result["contact_pose"]["xyz"] == pytest.approx([0.1036, -0.2, -0.3])
-    assert result["hover_pose"]["xyz"] == pytest.approx([0.1036, -0.2, -0.15])
+    assert result["hover_pose"]["xyz"] == pytest.approx([-0.0464, -0.2, -0.3])
     assert result["hover_pose"]["waypoint_role"] == "grasp_clearance"
     assert "grasp_stage" not in result["hover_pose"]
-    assert result["approach_world_xyz"] == [0.0, 0.0, -1.0]
-    assert result["hover_offset_world_xyz"] == [0.0, 0.0, 0.15]
+    assert result["approach_world_xyz"] == [1.0, 0.0, 0.0]
+    assert result["hover_offset_world_xyz"] == [-0.15, 0.0, 0.0]
     assert result["requested_pregrasp_distance_m"] == 0.15
     assert result["pregrasp_distance_m"] == 0.15
     assert result["contact_pose"]["rotation_matrix"] == [
-        [1.0, 0.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, -1.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
     ]
-    assert result["orientation_clamped"] is True
-    assert result["strategy_id"] == "top-down-vertical-panda-p8"
-    assert result["strategy_selection"] == "automatic_geometry_family"
+    assert result["orientation_clamped"] is False
+    assert result["strategy_id"] is None
+    assert result["strategy_selection"] == "generic_fallback"
     assert result["scene_epoch"] == 0
 
 
@@ -196,12 +196,13 @@ def test_compile_grasp_seed_uses_generic_fallback_for_unlisted_object() -> None:
         ("drawer_handle", "top-down-drawer-handle-panda-p8"),
     ],
 )
-def test_compile_grasp_seed_selects_candidate_task_family_strategy(
+def test_compile_grasp_seed_accepts_explicit_candidate_task_family_strategy(
     geometry_family: str,
     strategy_id: str,
 ) -> None:
     parameters = _compile_parameters()
     parameters["target_class"] = geometry_family
+    parameters["strategy_id"] = strategy_id
     if geometry_family == "bowl":
         parameters["camera_pose"]["rotation_matrix"] = [
             [0.0, 1.0, 0.0],
@@ -217,7 +218,7 @@ def test_compile_grasp_seed_selects_candidate_task_family_strategy(
 
     assert result["strategy_id"] == strategy_id
     assert result["strategy_status"] == "candidate"
-    assert result["strategy_selection"] == "automatic_geometry_family"
+    assert result["strategy_selection"] == "explicit"
     assert result["orientation_clamped"] is True
     assert result["approach_world_xyz"] == [0.0, 0.0, -1.0]
     assert result["outside_validated_strategy_scope"] is True
@@ -295,6 +296,7 @@ def test_approach_mode_changes_compiled_id_and_rejects_incompatible_geometry() -
 def test_bowl_strategy_rejects_candidate_without_downward_native_approach() -> None:
     parameters = _compile_parameters()
     parameters["target_class"] = "bowl"
+    parameters["strategy_id"] = "top-down-bowl-panda-p8"
 
     with pytest.raises(GraspGeometryError, match="native downward alignment"):
         compile_grasp_seed(
@@ -307,6 +309,7 @@ def test_bowl_strategy_rejects_candidate_without_downward_native_approach() -> N
 def test_removed_fallback_markers_cannot_bypass_candidate_validation() -> None:
     parameters = _compile_parameters()
     parameters["target_class"] = "bowl"
+    parameters["strategy_id"] = "top-down-bowl-panda-p8"
     parameters["candidate_fallback"] = True
     parameters["camera_pose"]["candidate_fallback"] = True
     parameters["camera_pose"]["final_refinable_fallback"] = True
@@ -322,6 +325,7 @@ def test_removed_fallback_markers_cannot_bypass_candidate_validation() -> None:
 def test_bowl_candidate_filter_returns_structured_candidate_rejection() -> None:
     parameters = _compile_parameters()
     parameters["target_class"] = "bowl"
+    parameters["strategy_id"] = "top-down-bowl-panda-p8"
     spec = build_default_tool_registry().get("compile_grasp_seed")
 
     result = build_compile_grasp_seed_handler()(
@@ -355,7 +359,7 @@ def test_compile_grasp_seed_clamps_requested_hover_to_safe_normal_standoff() -> 
 
     assert result["requested_pregrasp_distance_m"] == 0.04
     assert result["pregrasp_distance_m"] == 0.15
-    assert result["hover_offset_world_xyz"] == [0.0, 0.0, 0.15]
+    assert result["hover_offset_world_xyz"] == [-0.15, 0.0, 0.0]
 
 
 def test_compile_grasp_seed_enforces_physical_gripper_width() -> None:
@@ -385,6 +389,7 @@ def test_compile_grasp_seed_rejects_strategy_above_physical_width() -> None:
     }
     parameters = _compile_parameters()
     parameters["target_class"] = "apple"
+    parameters["strategy_id"] = "oversized"
 
     with pytest.raises(GraspGeometryError, match="exceeds calibration"):
         compile_grasp_seed(
@@ -468,6 +473,7 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
     depth.save(depth_path)
     parameters = _compile_parameters()
     parameters["target_class"] = "bowl"
+    parameters["strategy_id"] = "top-down-bowl-panda-p8"
     parameters["camera_pose"]["rotation_matrix"] = [
         [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0],

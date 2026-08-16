@@ -212,6 +212,32 @@ def test_initial_overlap_and_recent_window_are_deduplicated(tmp_path: Path) -> N
     assert projection["visual_history"]["compressed_deltas"] == []
 
 
+def test_old_visual_deltas_are_rolled_up_into_a_bounded_model_projection(
+    tmp_path: Path,
+) -> None:
+    memory, _backend, observations = _record_trajectory(tmp_path, count=14)
+    projection = build_visual_history_projection(
+        observation=observations[-1],
+        memory=memory,
+        config=VisualHistoryConfig(vdm_recent_delta_limit=4),
+        current_camera_artifacts=[],
+    )
+    history = projection["visual_history"]
+
+    assert len(history["compressed_deltas"]) == 4
+    assert [
+        item["to_observation"]["observation_index"]
+        for item in history["compressed_deltas"]
+    ] == [8, 9, 10, 11]
+    summary = history["compressed_delta_summary"]
+    assert summary["schema_version"] == "openeta.visual_delta_summary.v1"
+    assert summary["compacted_delta_count"] == 7
+    assert summary["through_observation_index"] == 7
+    assert len(summary["visible_changes"]) <= 4
+    assert "Full visual_delta records remain" in summary["durable_history_query"]
+    assert len(visual_delta_history(memory)) == 13
+
+
 def test_missing_main_view_is_explicit_and_never_substitutes_wrist(tmp_path: Path) -> None:
     memory = AgentMemory()
     memory.start_session(task="move the cube")
@@ -314,6 +340,7 @@ def test_visual_history_config_has_deterministic_environment_defaults() -> None:
     assert config.enabled is True
     assert config.main_camera_role == "agentview"
     assert config.recent_main_turns == 3
+    assert config.vdm_recent_delta_limit == 6
     assert config.planner_raw_image_capacity == 5
 
     disabled = VisualHistoryConfig.from_env(
@@ -322,12 +349,14 @@ def test_visual_history_config_has_deterministic_environment_defaults() -> None:
             "OPENETA_VDM_CAMERA_ROLE": "scene_primary",
             "OPENETA_VISUAL_RECENT_MAIN_TURNS": "4",
             "OPENETA_VISUAL_INCLUDE_CURRENT_WRIST": "0",
+            "OPENETA_VISUAL_VDM_RECENT_DELTA_LIMIT": "4",
         }
     )
     assert disabled.enabled is False
     assert disabled.main_camera_role == "scene_primary"
     assert disabled.recent_main_turns == 4
     assert disabled.include_current_wrist is False
+    assert disabled.vdm_recent_delta_limit == 4
 
 
 def test_projection_ablation_exposes_raw_and_delta_tradeoffs(tmp_path: Path) -> None:

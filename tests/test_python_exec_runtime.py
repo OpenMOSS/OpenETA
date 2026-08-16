@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -34,6 +35,35 @@ def test_python_exec_runs_restricted_code_and_returns_result() -> None:
     assert result.details["outputs"]["result"] == {"value": 6}
     assert result.details["outputs"]["stdout"] == "hello\n"
     assert result.details["parameters"]["code"] == "<code omitted>"
+
+
+def test_python_exec_materializes_large_structured_result_with_clear_path(
+    tmp_path: Path,
+) -> None:
+    runtime = PythonExecRuntime(
+        PythonExecConfig(
+            structured_output_root=str(tmp_path / "artifacts"),
+            max_inline_structured_chars=100,
+        )
+    )
+
+    result = runtime.handler(
+        _context(
+            "result = {'placements': "
+            "[{'id': f'p{i}', 'matrix': list(range(16))} for i in range(5)]}"
+        )
+    )
+
+    outputs = result.details["outputs"]
+    artifact = outputs["result_artifact"]
+    assert result.success is True
+    assert outputs["result_inline_complete"] is False
+    assert outputs["result"]["collection_sizes"] == {"placements": 5}
+    assert outputs["result"]["complete_result_path"] == artifact["path"]
+    assert artifact in result.details["artifacts"]
+    assert artifact["path"] in result.content
+    persisted = json.loads(Path(artifact["path"]).read_text(encoding="utf-8"))
+    assert persisted["outputs"]["result"]["placements"][4]["id"] == "p4"
 
 
 def test_python_exec_allows_safe_imports_and_readonly_artifact_open(

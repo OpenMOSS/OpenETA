@@ -566,6 +566,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     headers,
                     active_endpoint.timeout_s,
                 )
+                # A syntactically successful HTTP response can still be unusable
+                # provider output. Validate it inside the retry/failover boundary
+                # so an empty or malformed chat message does not abort the whole
+                # episode before the configured fallback attempts are consumed.
+                _extract_chat_content(response)
                 completed_at_s = time.time()
                 provider_exchanges.append(
                     {
@@ -594,6 +599,9 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 )
             except Exception as exc:  # noqa: BLE001 - provider failures stay structured.
                 completed_at_s = time.time()
+                protocol_details = (
+                    dict(exc.details) if isinstance(exc, ProviderProtocolError) else None
+                )
                 switch_provider_next = (
                     self.config.fallback is not None and _is_provider_failover_error(exc)
                 )
@@ -616,6 +624,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "error": {
                             "type": type(exc).__name__,
                             "message": str(exc),
+                            **(
+                                {"provider_response": protocol_details}
+                                if protocol_details is not None
+                                else {}
+                            ),
                         },
                     }
                 )
@@ -638,6 +651,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "model": active_endpoint.model,
                         "error_type": type(exc).__name__,
                         "error": str(exc),
+                        **(
+                            {"provider_response": protocol_details}
+                            if protocol_details is not None
+                            else {}
+                        ),
                         "retry_delay_s": delay_s,
                         "failover_next": next_provider_role == "fallback",
                         "switch_provider_next": switch_provider_next,
@@ -789,7 +807,7 @@ def _planner_user_content(
         if isinstance(explicit_paths, list)
         else []
     )
-    localization = request.tool_context.get("reference_localization_obligation")
+    localization = request.tool_context.get("pending_reference_localization")
     if isinstance(localization, dict):
         if localization.get("required_parameter") != "positive_points":
             scene_image = localization.get("scene_image")
@@ -803,7 +821,7 @@ def _planner_user_content(
                     if len(paths) >= config.max_vision_images:
                         break
     else:
-        obligation = request.tool_context.get("selection_obligation")
+        obligation = request.tool_context.get("pending_target_selection")
         if isinstance(obligation, dict):
             bundle = obligation.get("selection_bundle")
             if not isinstance(bundle, dict):
@@ -988,7 +1006,17 @@ class ProviderHttpError(RuntimeError):
         self.status_code = status_code
 
 
+class ProviderProtocolError(RuntimeError):
+    """Provider returned a successful HTTP response without usable chat content."""
+
+    def __init__(self, message: str, *, details: JsonDict | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
 def _is_transient_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, ProviderProtocolError):
+        return True
     if isinstance(exc, ProviderHttpError):
         return exc.status_code in {408, 429, 500, 502, 503, 504} or (520 <= exc.status_code <= 527)
     if isinstance(exc, urllib.error.HTTPError):
@@ -999,6 +1027,8 @@ def _is_transient_provider_error(exc: Exception) -> bool:
 def _is_provider_failover_error(exc: Exception) -> bool:
     """Return whether a primary-provider failure should activate fallback."""
 
+    if isinstance(exc, ProviderProtocolError):
+        return True
     if isinstance(exc, ProviderHttpError):
         if exc.status_code == 500 and _provider_error_reports_capacity(exc):
             return True
@@ -1019,8 +1049,11 @@ def _provider_error_reports_capacity(exc: Exception) -> bool:
             "overloaded",
             "capacity",
             "concurrency",
+            "temporarily unavailable",
+            "temporary unavailable",
             "负载",
             "并发",
+            "暂时不可用",
         )
     )
 
@@ -1070,19 +1103,60 @@ def _coerce_positive_int(value: object) -> int | None:
 
 
 def _extract_chat_content(response: JsonDict) -> str:
+    response_diagnostic = _provider_chat_response_diagnostic(response)
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise RuntimeError("Provider response did not include choices.")
+        raise ProviderProtocolError(
+            "Provider response did not include choices.", details=response_diagnostic
+        )
     first = choices[0]
     if not isinstance(first, dict):
-        raise RuntimeError("Provider response choice is not an object.")
+        raise ProviderProtocolError(
+            "Provider response choice is not an object.", details=response_diagnostic
+        )
     message = first.get("message", {})
     if not isinstance(message, dict):
-        raise RuntimeError("Provider response choice did not include message.")
+        raise ProviderProtocolError(
+            "Provider response choice did not include message.", details=response_diagnostic
+        )
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Provider response message content is empty.")
+        raise ProviderProtocolError(
+            "Provider response message content is empty.", details=response_diagnostic
+        )
     return content
+
+
+def _provider_chat_response_diagnostic(response: JsonDict) -> JsonDict:
+    """Return compact non-content diagnostics for malformed chat responses."""
+
+    diagnostic: JsonDict = {}
+    choices = response.get("choices")
+    if isinstance(choices, list):
+        diagnostic["choice_count"] = len(choices)
+        first = choices[0] if choices else None
+        if isinstance(first, dict):
+            finish_reason = first.get("finish_reason")
+            if isinstance(finish_reason, str):
+                diagnostic["finish_reason"] = finish_reason
+            message = first.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                diagnostic["content_type"] = type(content).__name__
+                diagnostic["content_chars"] = len(content) if isinstance(content, str) else 0
+                diagnostic["refusal_present"] = bool(message.get("refusal"))
+    usage = response.get("usage")
+    if isinstance(usage, dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                diagnostic[key] = value
+        completion_details = usage.get("completion_tokens_details")
+        if isinstance(completion_details, dict):
+            reasoning_tokens = completion_details.get("reasoning_tokens")
+            if isinstance(reasoning_tokens, int):
+                diagnostic["reasoning_tokens"] = reasoning_tokens
+    return diagnostic
 
 
 def _extract_finish_reason(response: JsonDict) -> str | None:

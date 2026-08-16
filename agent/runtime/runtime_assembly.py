@@ -42,7 +42,7 @@ from agent.runtime.skill_authoring import (
     BackendSkillChangeReviewer,
     SkillAuthoringRequest,
 )
-from agent.runtime.skills import SkillSpec
+from agent.runtime.skills import SkillSpec, assert_skill_contracts
 from agent.runtime.supervision import (
     BackendActionReviewer,
     SupervisionGate,
@@ -73,6 +73,7 @@ from agent.tools.handlers import (
     build_sam3_handler,
     build_sse_anygrasp_mcp_grasper,
     build_sse_anyplace_mcp_placer,
+    build_sse_contact_graspnet_mcp_predictor,
     build_sse_depth_prior_mcp_estimator,
     build_sse_graspgenx_mcp_gripper_lister,
     build_sse_graspgenx_mcp_predictor,
@@ -269,6 +270,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
                 image_output_root=str(artifact_root / "images"),
                 text_output_root=str(artifact_root / "text"),
                 response_output_root=str(artifact_root / "responses"),
+                structured_output_root=str(artifact_root),
                 allow_outside_sandbox=config.allow_outside_sandbox,
                 approve_outside_sandbox=config.approve_outside_sandbox,
                 session_root=str(workspace.root),
@@ -350,7 +352,6 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         context_config=PlannerContextConfig(
             context_window_tokens=config.provider.context_window_tokens,
             token_estimator_model=config.provider.model,
-            host_task_policy_enabled=False,
             visual_history=config.visual_history,
         ),
     )
@@ -379,18 +380,18 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         tools,
         pre_safety_checks=config.pre_safety_checks,
     )
+    skill_registry = workspace.skill_registry()
+    assert_skill_contracts(skill_registry, tools)
     runtime = OpenEtaAgentRuntime(
         planner=planner,
         tools=tools,
         memory=AgentMemory(
             store=JsonMemoryStore(root=workspace.memory_root),
-            task_state_tracking_enabled=False,
             artifact_root=workspace.artifacts_dir,
         ),
-        skills=workspace.skill_registry(),
+        skills=skill_registry,
         pipeline=ActionPipeline(
             checker_subagents=checker_config,
-            task_execution_gate_enabled=False,
         ),
         self_improvement_reviewer=skill_reviewer,
         default_session_id=workspace.session_id,
@@ -565,8 +566,12 @@ def bind_runtime_perception_tools(
             output_root=artifact_root / "graspgenx_results",
         )
     # Contact-GraspNet is temporarily disabled for the simulator drawer track.
-    # Keep its endpoint/configuration and implementation available for a later
-    # re-enable, but do not expose it as an executable grasp backend here.
+    # Resolve its configured client so TUI and batch assembly validate the same
+    # endpoint, but do not expose it as an executable grasp backend here.
+    if endpoints.contact_graspnet_url:
+        build_sse_contact_graspnet_mcp_predictor(
+            url=endpoints.contact_graspnet_url
+        )
     if grasp_backends:
         tools.bind_handler(
             "grasp_pose_estimate",

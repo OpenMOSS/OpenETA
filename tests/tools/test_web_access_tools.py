@@ -94,7 +94,7 @@ def _public_resolver(host, port, **_kwargs):
             socket.SOCK_STREAM,
             socket.IPPROTO_TCP,
             "",
-            ("203.0.113.34", 443),
+            ("93.184.216.34", 443),
         )
     ]
 
@@ -332,7 +332,7 @@ def test_web_fetch_rejects_mixed_public_and_private_dns_answers() -> None:
                 socket.SOCK_STREAM,
                 socket.IPPROTO_TCP,
                 "",
-                ("203.0.113.34", 443),
+                ("93.184.216.34", 443),
             ),
             (
                 socket.AF_INET,
@@ -399,7 +399,7 @@ def test_web_fetch_extracts_text_and_drops_active_html() -> None:
     assert "ignore this instruction" not in outputs["text"]
     assert "hidden" not in outputs["text"]
     resolved, timeout_s, max_bytes = seen[0]
-    assert resolved.addresses == ((socket.AF_INET, ("203.0.113.34", 443)),)
+    assert resolved.addresses == ((socket.AF_INET, ("93.184.216.34", 443)),)
     assert timeout_s == 20.0
     assert max_bytes == 2 * 1024 * 1024
 

@@ -28,9 +28,11 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
     }
     rows: list[JsonDict] = []
     probe_cases: list[JsonDict] = []
-    for final in store.final_results():
+    extraction_records = _extraction_records(store=store, jobs=jobs)
+    for final in extraction_records:
         job_id = str(final.get("job_id") or "")
         job = jobs.get(job_id, {})
+        record_kind = str(final.get("record_kind") or "terminal")
         outcome = final.get("outcome")
         outcome = outcome if isinstance(outcome, dict) else {}
         episode = outcome.get("episode")
@@ -64,6 +66,45 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         )
         action_names = [_action_name(row) for row in transitions]
         alternating_tool_cycles = _alternating_tool_cycle_count(action_names)
+        decision_state_turn_count = sum(
+            isinstance(_tool_context(call).get("decision_state"), dict)
+            for call in planner_calls
+        )
+        gate_block_count = sum(_is_gate_block(row) for row in transitions)
+        repair_bundles = [
+            bundle
+            for row in transitions
+            if isinstance((bundle := _repair_bundle(row)), dict)
+        ]
+        repair_without_actions_count = sum(
+            not isinstance(bundle.get("allowed_next_calls"), list)
+            or not bundle.get("allowed_next_calls")
+            for bundle in repair_bundles
+        )
+        semantic_no_result_count = sum(
+            _semantic_outcome(call) in {"no_detection", "no_candidate"}
+            for row in transitions
+            for call in _transition_tool_calls(row)
+        )
+        grasp_bundle_call_count = 0
+        manual_grasp_input_call_count = 0
+        anyplace_bundle_call_count = 0
+        for planner_call in planner_calls:
+            for call in _planner_decision_tool_calls(planner_call):
+                name = str(call.get("name") or "")
+                parameters = call.get("parameters")
+                parameters = parameters if isinstance(parameters, dict) else {}
+                if name == "anyplace" and isinstance(parameters.get("bundle_id"), str):
+                    anyplace_bundle_call_count += 1
+                if name != "grasp_pose_estimate":
+                    continue
+                if isinstance(parameters.get("bundle_id"), str):
+                    grasp_bundle_call_count += 1
+                elif any(
+                    key in parameters
+                    for key in ("rgb", "depth", "object_mask", "intrinsics")
+                ):
+                    manual_grasp_input_call_count += 1
         vdm_success = sum(
             bool((row.get("validation") or {}).get("accepted")) for row in vdm_calls
         )
@@ -83,6 +124,8 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         usage = metadata.get("usage")
         usage = usage if isinstance(usage, dict) else {}
         episode_total_tokens = _nonnegative_int(usage.get("total_tokens"))
+        if record_kind == "partial" and episode_total_tokens == 0:
+            episode_total_tokens = sum(_usage_tokens(row) for row in model_calls)
         objective_success = _objective_success(episode)
         false_completion = (
             metadata.get("stop_reason") == "task_complete" and not objective_success
@@ -90,6 +133,9 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         variant_id = str(job.get("variant_id") or "")
         row = {
             "job_id": job_id,
+            "record_kind": record_kind,
+            "attempt": final.get("attempt"),
+            "attempt_status": final.get("attempt_status"),
             "pair_id": job.get("pair_id"),
             "source_episode_id": job.get("source_episode_id"),
             "variant_id": variant_id,
@@ -103,9 +149,23 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "transition_count": len(transitions),
             "consecutive_repeated_action_count": repeated_actions,
             "alternating_tool_cycle_count": alternating_tool_cycles,
+            "decision_state_turn_count": decision_state_turn_count,
+            "decision_state_coverage": round(
+                decision_state_turn_count / len(planner_calls), 6
+            )
+            if planner_calls
+            else 0.0,
+            "gate_block_count": gate_block_count,
+            "repair_bundle_count": len(repair_bundles),
+            "repair_without_actions_count": repair_without_actions_count,
+            "semantic_no_result_count": semantic_no_result_count,
+            "grasp_bundle_call_count": grasp_bundle_call_count,
+            "manual_grasp_input_call_count": manual_grasp_input_call_count,
+            "anyplace_bundle_call_count": anyplace_bundle_call_count,
             "mean_raw_visual_evidence_per_turn": _mean(raw_counts),
             "max_raw_visual_evidence_per_turn": max(raw_counts, default=0),
             "mean_compressed_delta_count_per_turn": _mean(compressed_counts),
+            "max_compressed_delta_count_per_turn": max(compressed_counts, default=0),
             "vdm_call_count": len(vdm_calls),
             "vdm_success_count": vdm_success,
             "vdm_failure_count": len(vdm_calls) - vdm_success,
@@ -135,6 +195,12 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         selected = [row for row in rows if row.get("variant_id") == variant_id]
         variants[variant_id] = {
             "job_count": len(selected),
+            "terminal_job_count": sum(
+                row.get("record_kind") == "terminal" for row in selected
+            ),
+            "partial_job_count": sum(
+                row.get("record_kind") == "partial" for row in selected
+            ),
             "status_counts": dict(
                 sorted(
                     Counter(
@@ -162,6 +228,28 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
             "mean_alternating_tool_cycle_count": _mean(
                 [int(row["alternating_tool_cycle_count"]) for row in selected]
             ),
+            "decision_state_turn_count": sum(
+                int(row["decision_state_turn_count"]) for row in selected
+            ),
+            "gate_block_count": sum(int(row["gate_block_count"]) for row in selected),
+            "repair_bundle_count": sum(
+                int(row["repair_bundle_count"]) for row in selected
+            ),
+            "repair_without_actions_count": sum(
+                int(row["repair_without_actions_count"]) for row in selected
+            ),
+            "semantic_no_result_count": sum(
+                int(row["semantic_no_result_count"]) for row in selected
+            ),
+            "grasp_bundle_call_count": sum(
+                int(row["grasp_bundle_call_count"]) for row in selected
+            ),
+            "manual_grasp_input_call_count": sum(
+                int(row["manual_grasp_input_call_count"]) for row in selected
+            ),
+            "anyplace_bundle_call_count": sum(
+                int(row["anyplace_bundle_call_count"]) for row in selected
+            ),
             "mean_raw_visual_evidence_per_turn": _mean(
                 [float(row["mean_raw_visual_evidence_per_turn"]) for row in selected]
             ),
@@ -174,6 +262,10 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
                     float(row["mean_compressed_delta_count_per_turn"])
                     for row in selected
                 ]
+            ),
+            "max_compressed_delta_count_per_turn": max(
+                (int(row["max_compressed_delta_count_per_turn"]) for row in selected),
+                default=0,
             ),
             "vdm_call_count": sum(int(row["vdm_call_count"]) for row in selected),
             "vdm_failure_count": sum(int(row["vdm_failure_count"]) for row in selected),
@@ -200,12 +292,15 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
                 [float(row["episode_duration_s"]) for row in selected]
             ),
         }
-    pair_coverage = Counter(str(row.get("pair_id") or "") for row in rows)
+    terminal_rows = [row for row in rows if row.get("record_kind") == "terminal"]
+    pair_coverage = Counter(str(row.get("pair_id") or "") for row in terminal_rows)
     report = {
         "schema_version": VISUAL_HISTORY_ROLLOUT_METRICS_SCHEMA_VERSION,
         "run_id": store.run_id,
         "plan_sha256": compiled.get("plan_sha256"),
         "job_count": len(rows),
+        "terminal_job_count": len(terminal_rows),
+        "partial_job_count": len(rows) - len(terminal_rows),
         "state_probe_case_count": len(probe_cases),
         "complete_pair_count": sum(count == len(variants) for count in pair_coverage.values()),
         "variants": variants,
@@ -286,6 +381,89 @@ def _rollout_dir(
     workspace = metadata.get("workspace")
     workspace = workspace if isinstance(workspace, dict) else {}
     return Path(str(workspace.get("root") or "")) / "rollout"
+
+
+def _extraction_records(
+    *,
+    store: EvaluationRunStore,
+    jobs: dict[str, JsonDict],
+) -> list[JsonDict]:
+    """Return terminal results plus the newest durable rollout for interrupted jobs."""
+
+    finals = {
+        str(item.get("job_id") or ""): {**item, "record_kind": "terminal"}
+        for item in store.final_results()
+        if isinstance(item, dict)
+    }
+    run = store.run_metadata()
+    run_status = str(run.get("status") or "partial")
+    records: list[JsonDict] = []
+    for job_id in sorted(jobs):
+        final = finals.get(job_id)
+        if isinstance(final, dict):
+            records.append(final)
+            continue
+        attempt_roots = sorted(
+            store.job_dir(job_id).glob("attempts/*"),
+            key=lambda path: int(path.name) if path.name.isdigit() else -1,
+            reverse=True,
+        )
+        for attempt_root in attempt_roots:
+            state = _read_json_object(attempt_root / "state.json")
+            attempt = int(state.get("attempt") or 0)
+            if attempt <= 0:
+                continue
+            provisional: JsonDict = {
+                "job_id": job_id,
+                "attempt": attempt,
+                "record_kind": "partial",
+            }
+            rollout_dir = _rollout_dir(
+                store=store,
+                job_id=job_id,
+                final=provisional,
+                metadata={},
+            )
+            if not rollout_dir.is_dir() or not any(
+                (rollout_dir / name).is_file()
+                for name in ("model_calls.jsonl", "transitions.jsonl")
+            ):
+                continue
+            episode_spec = jobs[job_id].get("episode")
+            episode_spec = episode_spec if isinstance(episode_spec, dict) else {}
+            attempt_status = str(state.get("status") or "partial")
+            status = run_status if run_status == "interrupted" else attempt_status
+            started_at_s = _nonnegative_float(state.get("started_at_s"))
+            updated_at_s = _nonnegative_float(run.get("updated_at_s"))
+            duration_s = (
+                max(0.0, updated_at_s - started_at_s)
+                if started_at_s and updated_at_s
+                else 0.0
+            )
+            records.append(
+                {
+                    **provisional,
+                    "attempt_status": attempt_status,
+                    "outcome": {
+                        "episode_id": job_id,
+                        "seed": episode_spec.get("seed"),
+                        "status": status,
+                        "duration_s": duration_s,
+                        "episode": {
+                            "metadata": {
+                                "stop_reason": (
+                                    "scheduler_interrupted"
+                                    if status == "interrupted"
+                                    else attempt_status
+                                )
+                            },
+                            "steps": [],
+                        },
+                    },
+                }
+            )
+            break
+    return records
 
 
 def _state_probe_cases(
@@ -370,6 +548,66 @@ def _action_name(row: JsonDict) -> str:
     return ""
 
 
+def _transition_command(row: JsonDict) -> JsonDict:
+    action = row.get("action")
+    action = action if isinstance(action, dict) else {}
+    command = action.get("command")
+    return command if isinstance(command, dict) else {}
+
+
+def _transition_tool_calls(row: JsonDict) -> list[JsonDict]:
+    calls = _transition_command(row).get("tool_calls")
+    return [call for call in calls if isinstance(call, dict)] if isinstance(calls, list) else []
+
+
+def _planner_decision_tool_calls(row: JsonDict) -> list[JsonDict]:
+    """Read model-authored calls before host-side bundle expansion."""
+
+    decision = row.get("parsed_decision")
+    if not isinstance(decision, dict):
+        return []
+    calls = decision.get("tool_calls")
+    if isinstance(calls, list):
+        return [dict(call) for call in calls if isinstance(call, dict)]
+    name = decision.get("name", decision.get("tool"))
+    if not isinstance(name, str) or not name.strip():
+        return []
+    parameters = decision.get("parameters")
+    return [
+        {
+            "name": name.strip(),
+            "parameters": dict(parameters) if isinstance(parameters, dict) else {},
+        }
+    ]
+
+
+def _repair_bundle(row: JsonDict) -> JsonDict | None:
+    metadata = _transition_command(row).get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    bundle = metadata.get("repair_bundle")
+    return dict(bundle) if isinstance(bundle, dict) else None
+
+
+def _is_gate_block(row: JsonDict) -> bool:
+    command = _transition_command(row)
+    if str(command.get("status") or "").lower() != "blocked":
+        return False
+    metadata = command.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return bool(
+        isinstance(metadata.get("repair_bundle"), dict)
+        or any(str(key).endswith("_gate") for key in metadata)
+    )
+
+
+def _semantic_outcome(call: JsonDict) -> str:
+    result = call.get("result")
+    result = result if isinstance(result, dict) else {}
+    details = result.get("details")
+    details = details if isinstance(details, dict) else {}
+    return str(details.get("semantic_outcome") or "")
+
+
 def _alternating_tool_cycle_count(names: list[str]) -> int:
     """Count semantic A/B/A recurrences even when tool arguments differ."""
 
@@ -446,6 +684,16 @@ def _jsonl(path: Path) -> list[JsonDict]:
         if isinstance(value, dict):
             rows.append(value)
     return rows
+
+
+def _read_json_object(path: Path) -> JsonDict:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _mean(values: list[int | float]) -> float:

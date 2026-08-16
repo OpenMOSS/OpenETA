@@ -306,3 +306,83 @@ def test_backend_fails_over_for_capacity_error_reported_as_http_500() -> None:
     assert result.details["provider_role"] == "fallback"
     assert result.details["provider_failover"] is True
     assert result.details["retry_errors"][0]["next_provider_role"] == "fallback"
+
+
+def test_backend_fails_over_for_temporarily_unavailable_http_500() -> None:
+    urls: list[str] = []
+
+    def unavailable_transport(url, body, headers, timeout_s):
+        del body, headers, timeout_s
+        urls.append(url)
+        if len(urls) == 1:
+            raise ProviderHttpError(500, "Service temporarily unavailable")
+        return _success_response()
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="primary-model",
+            api_base="https://primary.example.test",
+            api_key="primary-key",
+            max_attempts=2,
+            retry_backoff_s=0,
+            fallback=_fallback(),
+        ),
+        transport=unavailable_transport,
+    )
+
+    result = backend.decide(_request())
+
+    assert result.status.value == "planned"
+    assert urls == [
+        "https://primary.example.test/v1/chat/completions",
+        "https://fallback.example.test/v1/chat/completions",
+    ]
+    assert result.details["provider_role"] == "fallback"
+    assert result.details["provider_failover"] is True
+    assert result.details["retry_errors"][0]["next_provider_role"] == "fallback"
+
+
+def test_backend_fails_over_for_empty_success_response() -> None:
+    urls: list[str] = []
+
+    def empty_response_transport(url, body, headers, timeout_s):
+        del body, headers, timeout_s
+        urls.append(url)
+        if len(urls) == 1:
+            return {
+                "choices": [
+                    {"message": {"content": ""}, "finish_reason": "stop"},
+                ]
+            }
+        return _success_response()
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="primary-model",
+            api_base="https://primary.example.test",
+            api_key="primary-key",
+            max_attempts=2,
+            retry_backoff_s=0,
+            fallback=_fallback(),
+        ),
+        transport=empty_response_transport,
+    )
+
+    result = backend.decide(_request())
+
+    assert result.status.value == "planned"
+    assert urls == [
+        "https://primary.example.test/v1/chat/completions",
+        "https://fallback.example.test/v1/chat/completions",
+    ]
+    assert result.details["provider_role"] == "fallback"
+    assert result.details["provider_attempts"] == 2
+    assert result.details["provider_failover"] is True
+    assert result.details["retry_errors"][0]["error_type"] == "ProviderProtocolError"
+    assert result.details["retry_errors"][0]["provider_response"] == {
+        "choice_count": 1,
+        "finish_reason": "stop",
+        "content_type": "str",
+        "content_chars": 0,
+        "refusal_present": False,
+    }

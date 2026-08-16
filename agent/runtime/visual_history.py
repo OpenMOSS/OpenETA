@@ -42,6 +42,7 @@ class VisualHistoryConfig:
     include_vdm: bool = True
     vdm_max_output_items: int = 8
     vdm_max_item_chars: int = 500
+    vdm_recent_delta_limit: int = 6
 
     @classmethod
     def from_env(
@@ -75,6 +76,11 @@ class VisualHistoryConfig:
                 "OPENETA_VISUAL_VDM_ENABLED",
                 True,
             ),
+            vdm_recent_delta_limit=_env_positive_int(
+                source,
+                "OPENETA_VISUAL_VDM_RECENT_DELTA_LIMIT",
+                6,
+            ),
         )
 
     @classmethod
@@ -103,6 +109,7 @@ class VisualHistoryConfig:
             "include_vdm",
             "vdm_max_output_items",
             "vdm_max_item_chars",
+            "vdm_recent_delta_limit",
         }
         unknown = sorted(str(key) for key in value if key not in allowed)
         if unknown:
@@ -131,6 +138,7 @@ class VisualHistoryConfig:
             "recent_main_turns",
             "vdm_max_output_items",
             "vdm_max_item_chars",
+            "vdm_recent_delta_limit",
         ):
             observed = value.get(key, getattr(current, key))
             if isinstance(observed, bool) or not isinstance(observed, int) or observed < 1:
@@ -149,6 +157,7 @@ class VisualHistoryConfig:
             include_vdm=booleans["include_vdm"],
             vdm_max_output_items=integers["vdm_max_output_items"],
             vdm_max_item_chars=integers["vdm_max_item_chars"],
+            vdm_recent_delta_limit=integers["vdm_recent_delta_limit"],
         )
 
     @property
@@ -169,6 +178,7 @@ class VisualHistoryConfig:
             "include_current_wrist": self.include_current_wrist,
             "include_vdm": self.include_vdm,
             "vdm_camera_roles": [self.main_camera_role] if self.include_vdm else [],
+            "vdm_recent_delta_limit": self.vdm_recent_delta_limit,
         }
 
 
@@ -465,6 +475,9 @@ def build_visual_history_projection(
         set(range(1, bridge_target + 1)) if config.include_vdm else set()
     )
 
+    projected_deltas = compressed[-config.vdm_recent_delta_limit :]
+    compacted_deltas = compressed[: -config.vdm_recent_delta_limit]
+
     return {
         "vision_image_paths": paths,
         "vision_evidence": evidence,
@@ -472,7 +485,12 @@ def build_visual_history_projection(
             "schema_version": VISUAL_HISTORY_SCHEMA_VERSION,
             "policy": config.to_dict(),
             "raw_evidence": raw_evidence,
-            "compressed_deltas": [_model_delta(delta) for delta in compressed],
+            "compressed_deltas": [_model_delta(delta) for delta in projected_deltas],
+            "compressed_delta_summary": _compact_delta_summary(
+                compacted_deltas,
+                max_items=config.vdm_max_output_items * 2,
+                max_chars=config.vdm_max_item_chars,
+            ),
             "coverage": {
                 "from_observation_index": 0,
                 "through_observation_index": current_index,
@@ -685,6 +703,64 @@ def _model_delta(record: JsonDict) -> JsonDict:
             "prompt_sha256",
         )
         if record.get(key) is not None
+    }
+
+
+def _compact_delta_summary(
+    records: list[JsonDict],
+    *,
+    max_items: int,
+    max_chars: int,
+) -> JsonDict | None:
+    """Bound older VDM text while the full adjacent-delta history stays durable."""
+
+    if not records:
+        return None
+    per_field_limit = max(1, max_items // 4)
+    fields: JsonDict = {}
+    for key in (
+        "visible_changes",
+        "task_progress_evidence",
+        "completion_evidence",
+        "uncertainties",
+    ):
+        selected: list[str] = []
+        seen: set[str] = set()
+        for record in reversed(records):
+            values = record.get(key)
+            if not isinstance(values, list):
+                continue
+            for raw in reversed(values):
+                if not isinstance(raw, str):
+                    continue
+                value = raw.strip()[:max_chars]
+                if not value or value in seen:
+                    continue
+                selected.append(value)
+                seen.add(value)
+                if len(selected) >= per_field_limit:
+                    break
+            if len(selected) >= per_field_limit:
+                break
+        fields[key] = list(reversed(selected))
+    status_counts: dict[str, int] = {}
+    for record in records:
+        status = str(record.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    first_index = _delta_to_index(records[0])
+    last_index = _delta_to_index(records[-1])
+    return {
+        "schema_version": "openeta.visual_delta_summary.v1",
+        "summary_kind": "deterministic_bounded_rollup",
+        "compacted_delta_count": len(records),
+        "through_observation_index": last_index,
+        "from_observation_index": max(0, int(first_index or 1) - 1),
+        "status_counts": status_counts,
+        **fields,
+        "durable_history_query": (
+            "Full visual_delta records remain in the session event store and may be "
+            "queried with python_exec when this rollup is insufficient."
+        ),
     }
 
 

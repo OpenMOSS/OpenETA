@@ -127,11 +127,171 @@ def test_user_constraint_survives_many_operational_events() -> None:
 
     assert messages[0] == {"role": "user", "content": "pick milk"}
     assert any("keep the gripper closed" in message["content"] for message in messages)
+    assert len(messages) <= 20
+    assert any("compacted transcript summary" in message["content"] for message in messages)
     assert [message["role"] for message in messages[-2:]] == ["assistant", "user"]
     assert "OpenETA host execution evidence" in messages[-1]["content"]
     assert context["current_user_request"].startswith("You may pick the cube")
     assert context["task"] == context["current_user_request"]
     assert all(event["type"] != "user_message" for event in context["recent_events"])
+
+
+def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect grasp candidates")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "python_exec",
+                    "parameters": {"code": "result = candidates"},
+                },
+                "tool_calls": [
+                    {
+                        "name": "python_exec",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "python_exec completed",
+                            "details": {
+                                "outputs": {
+                                    "result": {
+                                        "candidates": [
+                                            {"id": "g0", "width": 0.081},
+                                            {"id": "g1", "width": 0.079},
+                                        ]
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    feedback = json.loads(memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1])
+    projected = feedback["openeta_host_result"]["tool_calls"][0]["result"]["result"]
+
+    assert projected["candidates"][0] == {"id": "g0", "width": 0.081}
+    assert projected["candidates"][1]["width"] == 0.079
+
+
+def test_every_tool_projects_bounded_outputs_and_artifact_paths() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect segmentation")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "sam3",
+                    "parameters": {"image": "/session/rgb.png", "prompt": "cube"},
+                },
+                "tool_calls": [
+                    {
+                        "name": "sam3",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "SAM3 produced one candidate.",
+                            "details": {
+                                "operational_success": True,
+                                "semantic_outcome": "detections_available",
+                                "outputs": {
+                                    "result_id": "sam3-1",
+                                    "detection_count": 1,
+                                    "detections": [
+                                        {
+                                            "id": "detection_000",
+                                            "score": 0.91,
+                                            "mask_ref": "/session/mask.png",
+                                        }
+                                    ],
+                                    "inline": "data:image/png;base64," + "A" * 10_000,
+                                },
+                                "artifacts": [
+                                    {"path": "/session/contact-sheet.png"},
+                                    {"crop_ref": "/session/candidate.crop.png"},
+                                ],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    feedback = json.loads(memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1])
+    result = feedback["openeta_host_result"]["tool_calls"][0]["result"]
+
+    assert result["outputs"]["result_id"] == "sam3-1"
+    assert result["outputs"]["detections"][0]["mask_ref"] == "/session/mask.png"
+    assert result["outputs"]["inline"] == "<inline_image_omitted>"
+    assert result["artifact_refs"] == [
+        "/session/contact-sheet.png",
+        "/session/candidate.crop.png",
+    ]
+    assert result["semantic_outcome"] == "detections_available"
+
+
+def test_large_tool_result_is_bounded_and_keeps_structured_artifact_path() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect AnyPlace candidates")
+    artifact_path = "/session/python_exec/structured-result-001.json"
+    candidates = [
+        {
+            "id": f"candidate-{index}",
+            "matrix": [[float(index + row + column) for column in range(4)] for row in range(4)],
+            "diagnostic": "x" * 2_000,
+        }
+        for index in range(20)
+    ]
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "python_exec",
+                    "parameters": {"code": "result = anyplace_candidates"},
+                },
+                "tool_calls": [
+                    {
+                        "name": "python_exec",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": (
+                                "Large structured result was materialized at " + artifact_path
+                            ),
+                            "details": {
+                                "outputs": {
+                                    "result": {"candidates": candidates},
+                                    "result_inline_complete": False,
+                                    "result_artifact": artifact_path,
+                                },
+                                "artifacts": [{"path": artifact_path}],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    result_message = memory.model_conversation_messages()[-1]["content"]
+    payload = json.loads(result_message.split("\n", 1)[1])["openeta_host_result"]
+
+    assert len(result_message) <= 8_500
+    assert artifact_path in result_message
+    assert payload["projection"]["bounded"] is True
 
 
 def test_environment_assigned_task_survives_many_tool_calls() -> None:

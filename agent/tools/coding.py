@@ -31,6 +31,7 @@ from agent.runtime.image_artifacts import (
     DEFAULT_MCP_IMAGE_OUTPUT_ROOT,
 )
 from agent.runtime.response_artifacts import DEFAULT_RESPONSE_ARTIFACT_OUTPUT_ROOT
+from agent.runtime.structured_artifacts import materialize_structured_tool_output
 from agent.tools.outside_python import OutsidePythonExecutor
 from agent.runtime.text_artifacts import (
     DEFAULT_MAX_INLINE_TEXT_CHARS,
@@ -82,7 +83,9 @@ class PythonExecConfig:
     image_output_root: str = str(DEFAULT_MCP_IMAGE_OUTPUT_ROOT)
     text_output_root: str = str(DEFAULT_TEXT_ARTIFACT_OUTPUT_ROOT)
     response_output_root: str = str(DEFAULT_RESPONSE_ARTIFACT_OUTPUT_ROOT)
+    structured_output_root: str = str(Path("tmp") / "tool_result")
     max_inline_text_chars: int = DEFAULT_MAX_INLINE_TEXT_CHARS
+    max_inline_structured_chars: int = 8000
     allow_outside_sandbox: bool = False
     approve_outside_sandbox: ApprovalCallback | None = None
     outside_executor: OutsidePythonExecutor = field(default_factory=OutsidePythonExecutor)
@@ -184,9 +187,33 @@ class PythonExecRuntime:
                 diagnostics=[diagnostic],
             )
 
-        result = safe_globals.get("result")
+        result = _json_safe(safe_globals.get("result"))
+        structured_artifacts: list[JsonDict] = []
+        result_artifact: JsonDict | None = None
+        try:
+            result_chars = len(json.dumps(result, ensure_ascii=False))
+        except (TypeError, ValueError):
+            result_chars = 0
+        if result_chars > self.config.max_inline_structured_chars:
+            result_artifact = materialize_structured_tool_output(
+                output_root=self.config.structured_output_root,
+                tool="python_exec",
+                outputs={"result": result},
+                result_id=f"python-exec-{invocation_id}",
+            )
+            structured_artifacts.append(result_artifact)
         outputs = {
-            "result": _json_safe(result),
+            "result": (
+                _structured_result_preview(result, complete_artifact=result_artifact)
+                if result_artifact is not None
+                else result
+            ),
+            "result_inline_complete": result_artifact is None,
+            **(
+                {"result_artifact": dict(result_artifact)}
+                if result_artifact is not None
+                else {}
+            ),
             "stdout": stdout.getvalue(),
             "artifacts": list(artifacts.outputs),
             "sandbox": sandbox_mode,
@@ -207,6 +234,7 @@ class PythonExecRuntime:
         )
         all_artifacts = [
             *artifacts.outputs,
+            *structured_artifacts,
             *_changed_file_artifacts(
                 self.config.workspace_root,
                 before=before_files,
@@ -217,7 +245,12 @@ class PythonExecRuntime:
         return _python_exec_result(
             context,
             success=True,
-            content="python_exec completed",
+            content=(
+                "python_exec completed; complete structured result saved to "
+                f"{result_artifact['path']}"
+                if result_artifact is not None
+                else "python_exec completed"
+            ),
             outputs=text_bundle.payload,
             artifacts=all_artifacts,
             diagnostics=[],
@@ -853,3 +886,39 @@ def _json_safe(value: Any) -> Any:
         return value
     except (TypeError, ValueError):
         return repr(value)
+
+
+def _structured_result_preview(
+    value: Any,
+    *,
+    complete_artifact: JsonDict,
+) -> JsonDict:
+    """Return a small index while the complete Python value remains queryable."""
+
+    preview: JsonDict = {
+        "inline_complete": False,
+        "complete_result_path": complete_artifact.get("path"),
+        "byte_size": complete_artifact.get("byte_size"),
+        "sha256": complete_artifact.get("sha256"),
+        "grep_hint": complete_artifact.get("grep_hint"),
+    }
+    if isinstance(value, dict):
+        preview["type"] = "object"
+        preview["top_level_keys"] = [str(key) for key in list(value)[:50]]
+        preview["collection_sizes"] = {
+            str(key): len(item)
+            for key, item in value.items()
+            if isinstance(item, (dict, list, tuple))
+        }
+    elif isinstance(value, list):
+        preview.update({"type": "array", "item_count": len(value)})
+        ids = [
+            item.get("id")
+            for item in value[:20]
+            if isinstance(item, dict) and item.get("id") is not None
+        ]
+        if ids:
+            preview["first_ids"] = ids
+    else:
+        preview["type"] = type(value).__name__
+    return preview

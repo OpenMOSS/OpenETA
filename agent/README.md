@@ -151,7 +151,7 @@ Current runtime pieces:
   connection failure, or timeout switches the next attempt to the other endpoint;
   consecutive switch-eligible failures alternate primary and fallback.
 - SAM3 multi-candidate selection is explicit: runtime memory persists a
-  `selection_obligation`, the main VLM calls `select_sam3_detection`, and the
+  `pending_target_selection` evidence, the main VLM calls `select_sam3_detection`, and the
   pipeline blocks targeted `grasp_pose_estimate` or world-mutating tools until
   the selected mask is recorded. Selections are retained by semantic
   `evidence_role`: `target_object` remains the backward-compatible default,
@@ -160,11 +160,9 @@ Current runtime pieces:
 - Grasp estimation is exposed as one normalized façade over AnyGrasp,
   Contact-GraspNet, and GraspGenX. Compatible backend failures fall through in
   host-owned order; backend-local scores are never compared across estimators.
-  Multi-candidate handling is greedy and stateful: memory
-  exposes rank 0 as `grasp_candidate_policy.active_candidate`; a later grasp
-  inference replaces the active policy, candidate-linked safety or motion
-  rejection advances to the next score-ranked pose, and successful `move_to`
-  accepts the queue and releases its downstream gate.
+  Multi-candidate outputs are immutable evidence. The Agent selects a proposal
+  using current views, calibration, geometry, and recorded outcomes; memory does
+  not activate rank 0, advance a queue, or choose a fallback.
 - `python_exec` is a general session-local analysis tool, not a simulator
   control path. Restricted code can read the current session's rollout, working
   memory, and artifact files, and can write derived outputs only to its sandbox.
@@ -197,6 +195,11 @@ Current runtime pieces:
   env/checker feedback can force `terminated`/`truncated`. Each turn runs in a
   daemon worker behind the remaining episode deadline; timeout abandons the
   turn, prevents late step commit, and requests environment cleanup.
+  Evaluation manifests may additionally grant a bounded
+  `recovery_turns_per_branch` allowance, capped by `max_recovery_turns`. The
+  runner extends the effective turn limit only after a distinct post-close
+  `compile_grasp_seed` switches to a new grasp evidence branch; repeated
+  perception or duplicate evidence cannot extend the episode.
 - `agent.runtime.parallel.ParallelEpisodeHarness`: bounded thread-pool harness
   for independent simulator episodes. It defaults to 10 concurrent workers,
   preserves a serial closed loop inside each worker, isolates failures, keeps

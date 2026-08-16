@@ -62,13 +62,19 @@ def cartesian_scales(meta: dict[str, Any], backend: str) -> tuple[float, float]:
             float(layout.get("position_scale_m", 0.05)),
             float(layout.get("rotation_scale_rad", 0.25)),
         )
-    return ({
-        "metaworld": 0.005,
-        "libero": 0.009,
-        "maniskill": 0.003,
-        "robocasa": 0.05,
-        "dummy": 0.005,
-    }.get(backend, 0.0), 0.05)
+    # These are controller command scales, not the empirically observed EEF
+    # displacement after one physics step. LIBERO uses robosuite OSC_POSE;
+    # its shipped controller config maps normalized XYZ to +/-0.05 m and
+    # axis-angle rotation to +/-0.5 rad. The old 0.009/0.05 values were motion
+    # hints accidentally reused as codec scales, overdriving the closed-loop
+    # controller (especially orientation by 10x).
+    return {
+        "metaworld": (0.005, 0.05),
+        "libero": (0.05, 0.5),
+        "maniskill": (0.003, 0.05),
+        "robocasa": (0.05, 0.05),
+        "dummy": (0.005, 0.05),
+    }.get(backend, (0.0, 0.0))
 
 
 def cartesian_command_frame(meta: dict[str, Any], backend: str) -> str:

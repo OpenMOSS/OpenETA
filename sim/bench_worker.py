@@ -709,9 +709,20 @@ async def create_env(request):
     elif be == "dummy":
         adesc = "dict {action_type,code}"
     hints = {
-        "metaworld": "~6mm/step at action=1.0, use 5-10 steps for visible motion",
-        "libero": "~9mm/step at action=1.0, use 3-5 steps for visible motion",
-        "maniskill": "use 3-5 steps for visible motion",
+        "metaworld": (
+            "raw step_env only: ~6mm/step at action=1.0; use 5-10 raw steps for "
+            "visible motion. For goal-directed move_to, omit num_steps or provide "
+            "a sufficient closed-loop iteration budget."
+        ),
+        "libero": (
+            "raw step_env only: ~9mm/step at action=1.0; use 3-5 raw steps for "
+            "visible motion. For goal-directed move_to, omit num_steps or provide "
+            "a sufficient closed-loop iteration budget."
+        ),
+        "maniskill": (
+            "raw step_env only: use 3-5 steps for visible motion. For goal-directed "
+            "move_to, omit num_steps or provide a sufficient closed-loop iteration budget."
+        ),
         "robocasa": (
             "fixed Panda: arm 0:6, gripper 6"
             if adim == 7

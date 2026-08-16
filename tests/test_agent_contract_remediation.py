@@ -478,6 +478,11 @@ def test_pipeline_reports_compiled_grasp_residual_budget_repair() -> None:
     )
     assert "per-call limit of 0.020 m" in blocked.tool_calls[0].reason
     assert "Last accepted residual" in blocked.tool_calls[0].reason
+    assert "not a limit on travel distance from the current EEF" in (
+        blocked.tool_calls[0].reason
+    )
+    assert "exact host reference xyz [0.1, 0.2, 0.15]" in blocked.tool_calls[0].reason
+    assert "omit compiled_grasp_id and waypoint_role" in blocked.tool_calls[0].reason
 
 
 def test_skill_contract_lint_rejects_stale_tool_references() -> None:

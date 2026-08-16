@@ -5,6 +5,7 @@ from agent.runtime.memory import (
     GRASP_PROVENANCE_KEY,
     AgentMemory,
     _memory_fact_entry,
+    _same_grasp_candidate,
 )
 
 
@@ -47,6 +48,18 @@ def _memory_with_grasp(source):
             "candidate": _candidate(),
             "source": source,
         },
+        source="test",
+    )
+    memory._store_selected_sam3_detection(
+        {
+            "id": "detection_target",
+            "result_id": "sam3-target-1",
+            "mask_ref": source["object_mask"],
+            "source_image": source["rgb"],
+            "target_prompt": "milk carton",
+            "evidence_role": "target_object",
+        },
+        evidence_role="target_object",
         source="test",
     )
     memory._store_selected_sam3_detection(
@@ -108,8 +121,24 @@ def test_anyplace_wrist_mismatch_requires_exact_repair_call() -> None:
     assert public["repair_call"] == {
         "tool": "sam3",
         "parameters": {
-            "image": _source(2, frame="robot0_eye_in_hand")["rgb"],
-            "prompt": "basket",
-            "evidence_role": "placement_region",
+            "image": _source(1)["rgb"],
+            "prompt": "milk carton",
+            "evidence_role": "target_object",
         },
     }
+    assert public["required_source_image"] == _source(1)["rgb"]
+    assert "fixed placement camera" in public["recovery"]
+
+
+def test_grasp_candidate_identity_tolerates_json_float_noise_only() -> None:
+    original = _candidate()
+    round_tripped = _candidate()
+    round_tripped["rotation_matrix"] = [row[:] for row in original["rotation_matrix"]]
+    round_tripped["rotation_matrix"][0][0] += 8e-14
+
+    assert _same_grasp_candidate(original, round_tripped) is True
+
+    edited = _candidate()
+    edited["rotation_matrix"] = [row[:] for row in original["rotation_matrix"]]
+    edited["rotation_matrix"][0][0] += 1e-6
+    assert _same_grasp_candidate(original, edited) is False

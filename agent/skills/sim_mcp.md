@@ -124,7 +124,15 @@ path; execute its `frozen_action` exactly and assess it by `probe_id`. Each edge
 remains one ordinary control call. Compiled poses are anchors. Fresh dual-view
 evidence may justify xyz adjustment with the same `move_to`; preserve provenance.
 The host caps derived residual changes at 2 cm/call and 10 cm total. Frozen
-attachment-probe paths and gripper parameters remain exact.
+attachment-probe paths and gripper parameters remain exact. The 2 cm cap measures
+offset from the compiled anchor, not EEF travel to it: call an exact compiled pose
+directly instead of dividing the approach into 2 cm steps. A separate far transit
+waypoint must omit compiled provenance fields and remain outside contact.
+For goal-directed `move_to`, normally omit `num_steps` so the server can use its
+closed-loop default budget. A small explicit `num_steps` intentionally caps the
+controller early; the raw-action “3-5 steps for visible motion” hint belongs to
+`step_env` and does not promise target attainment. Never advance a manipulation
+edge when the receipt reports `reached_target=false`.
 A close acknowledgement or numeric openness cannot replace post-probe co-motion
 evidence. Close stays latched until binary `position=1`.
 A transport timeout requires observation on the same handle before retry.

@@ -1375,8 +1375,14 @@ class AgentMemory:
                 f"{step:.4f} m, exceeding the per-call limit of "
                 f"{GRASP_ADJUSTMENT_STEP_LIMIT_M:.3f} m. Last accepted residual is "
                 f"{_rounded_xyz(prior_residual)} m and requested residual is "
-                f"{_rounded_xyz(residual)} m. Keep the same compiled_grasp_id and "
-                "move in one smaller visually justified increment."
+                f"{_rounded_xyz(residual)} m. This is an offset-from-anchor budget, "
+                "not a limit on travel distance from the current EEF. To execute this "
+                f"compiled waypoint, call move_to with the exact host reference xyz "
+                f"{_rounded_xyz(reference_xyz)} m (or an adjustment within the residual "
+                "limit); do not split the approach into residual-sized increments. If "
+                "you intentionally need a far transit waypoint, omit compiled_grasp_id "
+                "and waypoint_role, remain outside the contact safety envelope, and "
+                "observe before using the compiled anchor."
             )
         if (
             projected_cumulative
@@ -2667,19 +2673,61 @@ class AgentMemory:
                 )
             )
             if not source_matches and reusable_placement is None:
-                repair_parameters = {
-                    "image": expected_image,
-                    "prompt": placement.get("target_prompt") or "placement region",
-                    "evidence_role": "placement_region",
-                }
+                expected_frame = _camera_frame_hint(source, expected_image)
+                placement_observation = placement.get("source_observation")
+                placement_observation = (
+                    placement_observation
+                    if isinstance(placement_observation, dict)
+                    else {}
+                )
+                placement_frame = _camera_frame_hint(
+                    placement_observation,
+                    source_image,
+                )
+                # AnyPlace requires grasp/object/placement inputs to share one
+                # camera geometry. A wrist camera commonly cannot see the
+                # receptacle at all. If placement evidence already comes from
+                # a fixed scene camera, rebase the grasp evidence onto that
+                # camera instead of prescribing an impossible wrist SAM call.
+                rebase_grasp_to_fixed_camera = bool(
+                    _is_moving_camera_frame(expected_frame)
+                    and placement_frame
+                    and not _is_moving_camera_frame(placement_frame)
+                )
+                if rebase_grasp_to_fixed_camera:
+                    repair_parameters = {
+                        "image": source_image,
+                        "prompt": (
+                            target.get("target_prompt")
+                            if isinstance(target, dict)
+                            else None
+                        )
+                        or "target object",
+                        "evidence_role": DEFAULT_SAM3_EVIDENCE_ROLE,
+                    }
+                    recovery = (
+                        "segment the target object on the fixed placement camera, "
+                        "select it, estimate a grasp from its host bundle, and compile "
+                        "that candidate; keep the current placement-region selection"
+                    )
+                    required_source_image = source_image
+                else:
+                    repair_parameters = {
+                        "image": expected_image,
+                        "prompt": placement.get("target_prompt") or "placement region",
+                        "evidence_role": "placement_region",
+                    }
+                    recovery = (
+                        "segment the placement region on required_source_image and "
+                        "select that SAM3 detection"
+                    )
+                    required_source_image = expected_image
                 public.update(
                     {
                         "status": "placement_source_mismatch",
+                        "required_source_image": required_source_image,
                         "provided_source_image": source_image,
-                        "recovery": (
-                            "segment the placement region on required_source_image and "
-                            "select that SAM3 detection"
-                        ),
+                        "recovery": recovery,
                         "repair_call": {
                             "tool": "sam3",
                             "parameters": repair_parameters,
@@ -4124,18 +4172,48 @@ def _same_memory_artifact_path(left: object, right: object) -> bool:
 
 
 def _same_grasp_candidate(left: JsonDict, right: JsonDict) -> bool:
-    fields = (
-        "id",
-        "frame",
-        "camera_frame",
-        "translation_xyz",
-        "rotation_matrix",
-        "gripper_tip_position_xyz",
-        "depth",
-        "width",
-        "height",
+    # Candidate payloads make a JSON round-trip through the planner before the
+    # Agent explicitly compiles one. Requiring bit-identical floats makes a
+    # harmless representation change (observed at ~8e-14 in a rotation-matrix
+    # element) look like forged geometry and leaves the previous grasp branch
+    # active. Keep identity/frame fields exact and accept only machine-noise
+    # numeric drift; meaningful Agent-authored geometry edits still fail.
+    if any(
+        left.get(field) != right.get(field)
+        for field in ("id", "frame", "camera_frame")
+    ):
+        return False
+    return all(
+        _same_numeric_candidate_field(left.get(field), right.get(field))
+        for field in (
+            "translation_xyz",
+            "rotation_matrix",
+            "gripper_tip_position_xyz",
+            "depth",
+            "width",
+            "height",
+        )
     )
-    return all(left.get(field) == right.get(field) for field in fields)
+
+
+def _same_numeric_candidate_field(left: object, right: object) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        left_value = float(left)
+        right_value = float(right)
+        return math.isfinite(left_value) and math.isfinite(right_value) and math.isclose(
+            left_value,
+            right_value,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return len(left) == len(right) and all(
+            _same_numeric_candidate_field(left_item, right_item)
+            for left_item, right_item in zip(left, right)
+        )
+    return left == right
 
 
 def _placement_evidence_id(selected: JsonDict) -> str:

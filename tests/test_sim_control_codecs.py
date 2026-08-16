@@ -14,6 +14,7 @@ from sim.envs.behavior.direct_env import (
 from sim.mcp_server import collision, server, session
 from sim.mcp_server.action_codecs import (
     ControlCodecError,
+    cartesian_scales,
     make_cartesian_action,
     make_gripper_action,
 )
@@ -39,6 +40,10 @@ BEHAVIOR_META = {
         },
     },
 }
+
+
+def test_libero_cartesian_scales_match_robosuite_osc_pose_contract() -> None:
+    assert cartesian_scales({}, "libero") == (0.05, 0.5)
 
 
 def test_behavior_ik_config_and_runtime_layout_are_explicit() -> None:
@@ -104,6 +109,41 @@ def test_unknown_and_undeclared_backends_fail_closed() -> None:
         server._session_envs.pop("sid", None)
     assert result["ok"] is False
     assert result["code"] == "unsupported_cartesian_control"
+
+
+def test_move_to_stops_on_worker_error_and_preserves_last_pose(monkeypatch) -> None:
+    meta = {"backend": "libero", "action_dim": 7, "remote_handle": "remote"}
+    start = [0.1, 0.2, 0.3]
+    calls = 0
+
+    monkeypatch.setattr(server, "_session_envs", {"sid": {"handle": meta}})
+    monkeypatch.setattr(server, "_touch_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_proxy_observe",
+        lambda *_args, **_kwargs: {
+            "observation": {"robot": {"end_effector_pose": {"xyz": start}}}
+        },
+    )
+    monkeypatch.setattr(server, "_proxy_render", lambda *_args, **_kwargs: {})
+
+    def fail_step(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"error": "Step failed: executing action in terminated episode"}
+
+    monkeypatch.setattr(server, "_proxy_step", fail_step)
+
+    result = server.move_to.__wrapped__(
+        "handle", 0.2, 0.2, 0.3, num_steps=100, session_id="sid"
+    )
+
+    assert calls == 1
+    assert result["ok"] is False
+    assert result["code"] == "control_step_failed"
+    assert result["steps_executed"] == 1
+    assert result["end"]["xyz"] == start
+    assert "terminated episode" in result["error"]
 
 
 def test_trajectory_pose_arguments_accept_quaternion_and_validate_endpoint() -> None:

@@ -1577,7 +1577,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "authorization: after fresh visual review the Agent may adjust its xyz "
                 "while preserving compiled_grasp_id and waypoint_role. The "
                 "host derives the residual and enforces at most 0.02 m change per call "
-                "and 0.10 m cumulative residual travel per compiled grasp."
+                "and 0.10 m cumulative residual travel per compiled grasp. For a "
+                "goal-directed reach, normally omit num_steps and inspect the returned "
+                "reached_target value before advancing the manipulation."
             ),
             parameters={
                 "target_pose": (
@@ -1586,7 +1588,11 @@ def build_default_tool_registry() -> ToolRegistry:
                     "for a compiled grasp, copy its provenance fields unchanged even when "
                     "visually adjusting xyz"
                 ),
-                "num_steps": "optional controller step limit",
+                "num_steps": (
+                    "optional maximum closed-loop controller iterations; omit to use "
+                    "the server default reach budget. This is not a speed or distance "
+                    "parameter, and a small value may deliberately stop short"
+                ),
                 "tolerance": "optional position tolerance in metres",
                 "ori_tolerance": "optional orientation tolerance in radians",
                 "enable_collision_check": "optional simulator collision-check toggle",

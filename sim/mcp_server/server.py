@@ -794,6 +794,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
     final_result: dict = {}
     final_reward = 0.0
     final_terminated = False
+    control_error = ""
     total_steps = 0
 
     # ── collision state (initialized before loop) ──────────────────
@@ -901,11 +902,22 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             final_result = _proxy_step(meta, act, num_steps=1, render=do_render)
             total_steps += 1
             final_reward = final_result.get("reward", 0.0)
+            if final_result.get("error"):
+                # A worker-side control failure is not a motion sample.  Stop
+                # immediately instead of issuing the same action for the rest
+                # of num_steps and eventually returning an empty end pose.
+                # Keep current_xyz below as the last trustworthy pose so the
+                # caller can reconcile or reset from explicit feedback.
+                control_error = str(final_result.get("error"))
+                final_terminated = bool(
+                    final_result.get("terminated") or final_result.get("truncated")
+                )
+                break
             if final_result.get("terminated") or final_result.get("truncated"):
                 final_terminated = True
                 break
 
-        if final_terminated:
+        if final_terminated or control_error:
             break
 
         _refresh_attachment_proxy(meta, final_result)
@@ -959,7 +971,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     # ── final pose ─────────────────────────────────────────────────
     final_xyz = _extract_ee_xyz_from_result(final_result) if total_steps > 0 else start_xyz
+    if len(final_xyz) < 3:
+        final_xyz = current_xyz
     final_quat = _extract_ee_quat_from_result(final_result) if (use_ori and total_steps > 0) else []
+    if use_ori and len(final_quat) < 4:
+        final_quat = current_quat
 
     result: dict = {
         "target": {"x": x, "y": y, "z": z},
@@ -969,6 +985,10 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         "terminated": final_terminated,
         "reward": final_reward,
     }
+    if control_error:
+        result["ok"] = False
+        result["code"] = "control_step_failed"
+        result["error"] = control_error
     if use_ori:
         result["target"]["roll"] = roll
         result["target"]["pitch"] = pitch
@@ -1577,8 +1597,10 @@ def main() -> None:
 
     p = argparse.ArgumentParser(description="OpenETA MCP + Web Dashboard")
     p.add_argument("--transport", default="sse", choices=["sse", "stdio"])
+    p.add_argument("--host", default=os.environ.get("MCP_HOST", "0.0.0.0"))
     p.add_argument("--port", type=int, default=0)
     args = p.parse_args()
+    host = args.host
     port = args.port or int(os.environ.get("MCP_PORT", os.environ.get("PORT", "8765")))
     _init()
 
@@ -1671,10 +1693,10 @@ def main() -> None:
             _sweeper_flag[0] = True
             _asyncio.create_task(_stale_session_sweeper())
 
-    print(f"\n  OpenETA Dashboard:      http://0.0.0.0:{port}/")
-    print(f"  MCP (Streamable HTTP):  http://0.0.0.0:{port}/mcp")
-    print(f"  MCP (legacy SSE):       http://0.0.0.0:{port}/sse\n")
-    uvicorn.run(combined, host="0.0.0.0", port=port, log_level="warning")
+    print(f"\n  OpenETA Dashboard:      http://{host}:{port}/")
+    print(f"  MCP (Streamable HTTP):  http://{host}:{port}/mcp")
+    print(f"  MCP (legacy SSE):       http://{host}:{port}/sse\n")
+    uvicorn.run(combined, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

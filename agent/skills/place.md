@@ -47,8 +47,13 @@ before choosing the next tool call.
    retained the unchanged receptacle mask while rebinding RGB-D to a newer grasp
    source on the same fixed scene camera, so do not segment it again. If the bundle
    reports `placement_source_mismatch`, execute its exact `repair_call` parameters
-   instead of choosing a current or remembered image path yourself. Wrist/hand
-   cameras move and therefore do not qualify for fixed-camera reuse.
+   instead of choosing a current or remembered image path yourself. The repair
+   may request `placement_region` on the grasp source, or `target_object` on a
+   fixed scene camera when the active grasp came from wrist. In the latter case,
+   select the target, estimate and compile a grasp from the refreshed host bundle,
+   and retain the existing placement selection so the resolver can form a
+   same-camera bundle. Wrist/hand cameras move and therefore do not qualify for
+   fixed-camera reuse.
    Never run grasp estimation on the receptacle as a substitute for AnyPlace.
 4. Complete the pickup using the selected grasp. After closing the gripper,
    call `observe` and require positive evidence that the object moved with the

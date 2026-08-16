@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import math
 
 _logger = logging.getLogger("openeta.collision")
 
@@ -32,6 +33,8 @@ _checkers: dict[str, CollisionChecker] = {}
 
 # ── Graceful-degrade sentinel for when cuRobo / CUDA is missing ──────
 _curobo_available: bool | None = None
+
+_RECEPTACLE_CATEGORIES = frozenset({"basket", "bin", "bowl", "tray", "container"})
 
 
 def _detect_curobo() -> bool:
@@ -108,6 +111,126 @@ def _build_world_config(objects: list[dict]) -> object | None:
     if not cuboids:
         return None
     return WorldConfig(cuboid=cuboids)
+
+
+def check_attached_object_collision(
+    attachment: dict,
+    objects: list[dict],
+    predicted_eef_xyz: list[float],
+    *,
+    margin_m: float = 0.005,
+) -> tuple[bool, dict]:
+    """Check a conservative attached-object AABB against scene obstacles.
+
+    This is independent of cuRobo so the same attached-geometry contract can
+    later be populated by a real-robot perception adapter.  Receptacles expose
+    an interior placement corridor: entry is allowed only when the carried
+    object's centre clears the rim in XY.
+    """
+
+    relative = attachment.get("relative_xyz")
+    dims = attachment.get("dims")
+    if not _finite_xyz(relative) or not _finite_xyz(dims) or not _finite_xyz(predicted_eef_xyz):
+        return False, {"available": False, "reason": "attached_object_geometry_incomplete"}
+    held_dims = [max(0.01, float(value)) for value in dims]
+    held_center = [float(predicted_eef_xyz[i]) + float(relative[i]) for i in range(3)]
+    held_min = [held_center[i] - held_dims[i] / 2.0 - margin_m for i in range(3)]
+    held_max = [held_center[i] + held_dims[i] / 2.0 + margin_m for i in range(3)]
+    attached_name = str(attachment.get("object_name") or "")
+
+    for obstacle in objects:
+        if not isinstance(obstacle, dict) or str(obstacle.get("name") or "") == attached_name:
+            continue
+        bounds = _object_aabb(obstacle)
+        if bounds is None:
+            continue
+        obstacle_min, obstacle_max = bounds
+        if not _aabb_intersects(held_min, held_max, obstacle_min, obstacle_max):
+            continue
+        category = str(obstacle.get("category") or "").strip().lower()
+        if category in _RECEPTACLE_CATEGORIES and _inside_receptacle_corridor(
+            held_center,
+            held_dims,
+            obstacle_min,
+            obstacle_max,
+            margin_m=margin_m,
+        ):
+            continue
+        obstacle_name = str(obstacle.get("name") or category or "scene obstacle")
+        return True, {
+            "available": True,
+            "world_collision": True,
+            "self_collision": False,
+            "max_world_penetration": 0.0,
+            "max_self_penetration": 0.0,
+            "collision_type": "attached_object_world",
+            "attached_object": attached_name or None,
+            "obstacle": obstacle_name,
+            "predicted_attached_center_xyz": held_center,
+            "predicted_eef_xyz": [float(value) for value in predicted_eef_xyz],
+            "message": (
+                f"Attached object {attached_name or '<unknown>'} would collide with "
+                f"{obstacle_name}. Raise or reroute the carry waypoint; for a "
+                "receptacle, centre the object inside its placement corridor before "
+                "descending."
+            ),
+        }
+    return False, {"available": True, "attached_object_world_collision": False}
+
+
+def _finite_xyz(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) >= 3
+        and all(
+            isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and math.isfinite(float(item))
+            for item in value[:3]
+        )
+    )
+
+
+def _object_aabb(obj: dict) -> tuple[list[float], list[float]] | None:
+    lower = obj.get("aabb_min")
+    upper = obj.get("aabb_max")
+    if _finite_xyz(lower) and _finite_xyz(upper):
+        return ([float(value) for value in lower[:3]], [float(value) for value in upper[:3]])
+    position = obj.get("position")
+    dims = obj.get("dims")
+    if not _finite_xyz(position) or not _finite_xyz(dims):
+        return None
+    centre = [float(value) for value in position[:3]]
+    size = [max(0.01, float(value)) for value in dims[:3]]
+    return (
+        [centre[i] - size[i] / 2.0 for i in range(3)],
+        [centre[i] + size[i] / 2.0 for i in range(3)],
+    )
+
+
+def _aabb_intersects(
+    left_min: list[float],
+    left_max: list[float],
+    right_min: list[float],
+    right_max: list[float],
+) -> bool:
+    return all(left_min[i] <= right_max[i] and left_max[i] >= right_min[i] for i in range(3))
+
+
+def _inside_receptacle_corridor(
+    held_center: list[float],
+    held_dims: list[float],
+    receptacle_min: list[float],
+    receptacle_max: list[float],
+    *,
+    margin_m: float,
+) -> bool:
+    for axis in (0, 1):
+        lower = receptacle_min[axis] + held_dims[axis] / 2.0 + margin_m
+        upper = receptacle_max[axis] - held_dims[axis] / 2.0 - margin_m
+        if lower > upper or not lower <= held_center[axis] <= upper:
+            return False
+    return True
 
 
 # ══════════════════════════════════════════════════════════════════════

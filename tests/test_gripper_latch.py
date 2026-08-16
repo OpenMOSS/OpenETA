@@ -10,8 +10,6 @@ These tests exercise the pure action-builders directly.
 """
 from __future__ import annotations
 
-import asyncio
-
 import sim.mcp_server.server as s
 
 
@@ -40,16 +38,18 @@ def test_move_to_uses_latched_gripper_on_each_step(monkeypatch):
 
     monkeypatch.setattr(s, "_proxy_step", fake_step)
 
-    asyncio.run(
-        s.move_to(
-            handle="h",
-            x=0.1,
-            y=0.0,
-            z=0.0,
-            num_steps=6,
-            tolerance=0.001,
-            session_id="test",
-        )
+    # Exercise the synchronous implementation underneath FastMCP's async
+    # worker-thread adapter.  The adapter itself belongs to transport tests;
+    # nesting anyio.to_thread.run_sync inside asyncio.run can wait forever
+    # without an AnyIO task context.
+    s.move_to.__wrapped__(
+        handle="h",
+        x=0.1,
+        y=0.0,
+        z=0.0,
+        num_steps=6,
+        tolerance=0.001,
+        session_id="test",
     )
 
     assert sent_actions

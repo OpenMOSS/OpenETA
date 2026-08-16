@@ -22,6 +22,7 @@ allowed_tools:
   - observe
   - compile_grasp_seed
   - compute_wrist_alignment
+  - prepare_attachment_probe
   - camera_pose_to_world
   - move_to
   - gripper_control
@@ -116,12 +117,14 @@ use a hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed
 world `+Z`) and binary latched close (`gripper_control position=0`). Alignment,
 contact, probe, and attachment verification are separate observed steps, not a
 host-authored required-next-action state machine.
-Portable objects use the fixed vertical lift probe and full lift. Host-classified
-articulated handles use `prepare_attachment_probe` to freeze a 5 cm linear or arc
-path, retain its endpoint on PASS, and never receive vertical full lift. Each edge
-remains one ordinary control call. Compiled/aligned poses are references;
-fresh visual feedback may justify a bounded world-frame pose adjustment accepted by
-the runtime envelope. Frozen attachment probes and gripper commands remain exact.
+For portable objects, the Agent proposes a small lift and uses fresh dual-view
+co-motion evidence to decide whether to continue. Articulated handles use
+`prepare_attachment_probe(compiled_grasp_id=...)` to freeze a 5 cm linear or arc
+path; execute its `frozen_action` exactly and assess it by `probe_id`. Each edge
+remains one ordinary control call. Compiled poses are anchors. Fresh dual-view
+evidence may justify xyz adjustment with the same `move_to`; preserve provenance.
+The host caps derived residual changes at 2 cm/call and 10 cm total. Frozen
+attachment-probe paths and gripper parameters remain exact.
 A close acknowledgement or numeric openness cannot replace post-probe co-motion
 evidence. Close stays latched until binary `position=1`.
 A transport timeout requires observation on the same handle before retry.
@@ -143,8 +146,9 @@ the episode turn budget repeatedly calling an unchanged failing backend.
 When creating a simulator environment, call `create_simulator_env` with an
 explicit `env_id`. It defaults camera renders to 512x512 and seed 0, then resets
 the new handle and returns `initial_observation`. Use that result as the first
-observation frame. Only call `reset_env` explicitly when a new episode reset is
-intentionally requested.
+observation frame. If a genuinely new episode is required, use the stable
+environment lifecycle tools to close the current environment and create the
+requested episode; do not bypass them with a raw reset operation.
 
 If the user asks for local execution result image paths, inspect the latest MCP
 tool result or list materialized images:

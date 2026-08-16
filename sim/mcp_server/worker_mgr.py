@@ -650,6 +650,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
     if not render:
         body["render"] = False
     result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/step", method="POST", body=body)
+    _capture_internal_objects(meta, result)
     # Cache observation for streaming
     obs = result.get("observation")
     if obs:
@@ -666,7 +667,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
                 prev_cams = prev.get("cameras")
                 if prev_cams:
                     obs = {**obs, "cameras": prev_cams}
-            cache[key] = obs
+            cache[key] = _public_observation_result(meta, obs)
         # Physics advanced.  If this step rendered inline, the cached frame is
         # already current for this generation; otherwise mark dirty so the SSE
         # loop refreshes it.  (render=True here means the worker rendered as
@@ -676,7 +677,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
             _mark_obs_rendered(key, gen)
         else:
             _mark_obs_dirty(key)
-    return result
+    return _public_observation_result(meta, result)
 
 
 def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
@@ -684,9 +685,12 @@ def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
     mgr = _get_mgr()
     body = {"seed": seed} if seed is not None else {}
     result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/reset", method="POST", body=body)
+    _capture_internal_objects(meta, result)
     key = _obs_key(meta)
     with _session_last_obs_lock:
-        _session_last_obs.setdefault(meta.get("_sid", ""), {})[key] = result
+        _session_last_obs.setdefault(meta.get("_sid", ""), {})[key] = _public_observation_result(
+            meta, result
+        )
     # reset re-initialises physics → cached frame is stale.  If the reset
     # result already carries camera frames it's current for this generation;
     # otherwise mark dirty for the SSE loop to refresh.
@@ -699,19 +703,46 @@ def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
         _mark_obs_rendered(key, gen)
     else:
         _mark_obs_dirty(key)
-    return result
+    return _public_observation_result(meta, result)
 
 
 def _proxy_observe(meta: dict) -> dict:
     """Proxy an observe request to the worker."""
     mgr = _get_mgr()
-    return mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/observe", method="POST")
+    result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/observe", method="POST")
+    _capture_internal_objects(meta, result)
+    return _public_observation_result(meta, result)
 
 
 def _proxy_render(meta: dict) -> dict:
     """Proxy a render request to the worker."""
     mgr = _get_mgr()
-    return mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/render", method="POST")
+    result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/render", method="POST")
+    _capture_internal_objects(meta, result)
+    return _public_observation_result(meta, result)
+
+
+def _capture_internal_objects(meta: dict, result: dict) -> None:
+    """Keep privileged object geometry private but available to safety checks."""
+
+    observation = result.get("observation", result) if isinstance(result, dict) else {}
+    objects = observation.get("objects") if isinstance(observation, dict) else None
+    if isinstance(objects, list):
+        meta["_collision_objects"] = [dict(item) for item in objects if isinstance(item, dict)]
+
+
+def _public_observation_result(meta: dict, result: dict) -> dict:
+    """Redact internally requested object state unless the caller opted in."""
+
+    if meta.get("_expose_objects") is True or not isinstance(result, dict):
+        return result
+    public = dict(result)
+    observation = public.get("observation")
+    if isinstance(observation, dict):
+        public["observation"] = {**observation, "objects": []}
+    elif "objects" in public:
+        public["objects"] = []
+    return public
 
 
 def _proxy_render_all(worker_url: str, remote_handles: list[str]) -> dict:

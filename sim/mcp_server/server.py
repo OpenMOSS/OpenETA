@@ -11,6 +11,7 @@ The heavy lifting is delegated to sibling modules:
 from __future__ import annotations
 
 import functools
+import math
 import os
 import sys
 import threading
@@ -42,7 +43,11 @@ from sim.mcp_server.worker_mgr import (
     _proxy_reset,
     _proxy_step,
 )
-from sim.mcp_server.collision import get_checker, remove_checker
+from sim.mcp_server.collision import (
+    check_attached_object_collision,
+    get_checker,
+    remove_checker,
+)
 from sim.mcp_server.action_codecs import (
     ControlCodecError,
     cartesian_command_frame,
@@ -215,7 +220,9 @@ def create_env(env_id: str, *, render_mode: str = "rgb_array", seed: int = 0,
         body["image_width"] = image_width
     if image_height is not None:
         body["image_height"] = image_height
-    body["include_objects"] = include_objects
+    # Safety always receives privileged geometry internally.  The worker proxy
+    # redacts it from public observations unless include_objects was requested.
+    body["include_objects"] = True
     if robot:
         body["robot"] = robot
     # Acquire one pool worker, create the env on it, and pin the handle to
@@ -234,6 +241,8 @@ def create_env(env_id: str, *, render_mode: str = "rgb_array", seed: int = 0,
         "action_dim": result.get("action_dim"),
         "robot": result.get("robot") or robot,
         "control_spec": result.get("control_spec", {}),
+        "_expose_objects": bool(include_objects),
+        "_collision_objects": [],
         "_sid": sid,
     }
     _session_envs.setdefault(sid, {})[h] = meta
@@ -379,6 +388,7 @@ def reset_env(handle: str, *, seed: int | None = None, session_id: str = "") -> 
     # latched gripper command: subsequent motion steps go back to not forcing
     # the gripper dim until the user explicitly calls gripper_open/close again.
     meta.pop("_gripper_cmd", None)
+    meta.pop("_attachment_proxy", None)
     reset_obs = _proxy_reset(meta, seed=seed)
     # Let physics settle before returning — objects can spawn hovering /
     # jittering right after reset; a few hold steps bring them to rest.
@@ -419,7 +429,9 @@ def step_env(handle: str, action: list | None = None, *, num_steps: int = 1, ses
     meta = _session_envs.get(sid, {}).get(handle)
     if not meta:
         return {"error": f"Unknown: {handle}"}
-    return _proxy_step(meta, action, num_steps=num_steps)
+    result = _proxy_step(meta, action, num_steps=num_steps)
+    _refresh_attachment_proxy(meta, result)
+    return result
 
 
 def _extract_ee_xyz_from_result(result: dict) -> list[float]:
@@ -502,6 +514,114 @@ def _extract_objects_from_result(result: dict) -> list[dict]:
         return []
     objects = obs.get("objects", [])
     return objects if isinstance(objects, list) else []
+
+
+def _extract_gripper_state_from_result(result: dict) -> dict:
+    obs = result.get("observation", result) if isinstance(result, dict) else {}
+    robot = obs.get("robot", {}) if isinstance(obs, dict) else {}
+    state = robot.get("gripper_state", {}) if isinstance(robot, dict) else {}
+    return state if isinstance(state, dict) else {}
+
+
+def _arm_attachment_proxy(meta: dict, result: dict) -> None:
+    """Create a tentative held-object proxy after a non-empty close."""
+
+    state = _extract_gripper_state_from_result(result)
+    openness = state.get("openness")
+    if not isinstance(openness, (int, float)) or isinstance(openness, bool) or openness < 0.08:
+        meta.pop("_attachment_proxy", None)
+        return
+    eef = _extract_ee_xyz_from_result(result)
+    if len(eef) < 3:
+        return
+    nearest: tuple[float, dict] | None = None
+    for obj in meta.get("_collision_objects", []):
+        if not isinstance(obj, dict):
+            continue
+        category = str(obj.get("category") or "").strip().lower()
+        if category in {"basket", "bin", "bowl", "tray", "container"}:
+            continue
+        position = obj.get("position")
+        if not isinstance(position, list) or len(position) < 3:
+            continue
+        distance = math.dist(
+            [float(value) for value in eef[:3]],
+            [float(value) for value in position[:3]],
+        )
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance, obj)
+    if nearest is None or nearest[0] > 0.12:
+        meta.pop("_attachment_proxy", None)
+        return
+    obj = nearest[1]
+    position = [float(value) for value in obj.get("position", [])[:3]]
+    dims = obj.get("dims")
+    if not isinstance(dims, list) or len(dims) < 3:
+        dims = [0.06, 0.06, 0.10]
+    meta["_attachment_proxy"] = {
+        "status": "tentative",
+        "object_name": str(obj.get("name") or ""),
+        "category": str(obj.get("category") or ""),
+        "relative_xyz": [position[i] - float(eef[i]) for i in range(3)],
+        "dims": [max(0.01, float(value)) for value in dims[:3]],
+        "anchor_eef_xyz": [float(value) for value in eef[:3]],
+    }
+
+
+def _refresh_attachment_proxy(meta: dict, result: dict) -> None:
+    """Confirm co-motion or retire a lost tentative/confirmed proxy."""
+
+    proxy = meta.get("_attachment_proxy")
+    if not isinstance(proxy, dict):
+        return
+    state = _extract_gripper_state_from_result(result)
+    openness = state.get("openness")
+    if isinstance(openness, (int, float)) and not isinstance(openness, bool) and openness < 0.08:
+        meta.pop("_attachment_proxy", None)
+        return
+    eef = _extract_ee_xyz_from_result(result)
+    obj = next(
+        (
+            item
+            for item in meta.get("_collision_objects", [])
+            if isinstance(item, dict) and str(item.get("name") or "") == proxy.get("object_name")
+        ),
+        None,
+    )
+    position = obj.get("position") if isinstance(obj, dict) else None
+    if len(eef) < 3 or not isinstance(position, list) or len(position) < 3:
+        return
+    relative = [float(position[i]) - float(eef[i]) for i in range(3)]
+    prior_relative = proxy.get("relative_xyz")
+    if not isinstance(prior_relative, list) or len(prior_relative) < 3:
+        return
+    relative_error = math.dist(relative, [float(value) for value in prior_relative[:3]])
+    anchor = proxy.get("anchor_eef_xyz")
+    displacement = (
+        math.dist([float(value) for value in eef[:3]], [float(value) for value in anchor[:3]])
+        if isinstance(anchor, list) and len(anchor) >= 3
+        else 0.0
+    )
+    if proxy.get("status") == "tentative":
+        if displacement >= 0.015 and relative_error <= 0.025:
+            proxy["status"] = "confirmed"
+            proxy["relative_xyz"] = relative
+        elif relative_error > 0.05:
+            meta.pop("_attachment_proxy", None)
+    elif relative_error > 0.05:
+        meta.pop("_attachment_proxy", None)
+    else:
+        proxy["relative_xyz"] = relative
+
+
+def _collision_objects_without_attached(meta: dict) -> list[dict]:
+    proxy = meta.get("_attachment_proxy")
+    attached_name = str(proxy.get("object_name") or "") if isinstance(proxy, dict) else ""
+    return [
+        item
+        for item in meta.get("_collision_objects", [])
+        if isinstance(item, dict) and str(item.get("name") or "") != attached_name
+    ]
 
 
 # ── Quaternion helpers (no scipy dependency) ────────────────────────────
@@ -721,6 +841,25 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
         batch_steps = min(recheck_every, num_steps - batch_start)
 
+        attachment = meta.get("_attachment_proxy")
+        if (
+            enable_collision_check
+            and isinstance(attachment, dict)
+            and attachment.get("status") == "confirmed"
+        ):
+            predicted_eef = [
+                current_xyz[0] + ax * scale * batch_steps,
+                current_xyz[1] + ay * scale * batch_steps,
+                current_xyz[2] + az * scale * batch_steps,
+            ]
+            collision_detected, collision_info = check_attached_object_collision(
+                attachment,
+                list(meta.get("_collision_objects", [])),
+                predicted_eef,
+            )
+            if collision_detected:
+                break
+
         # RoboCasa's PandaOmron OSC consumes deltas in its moving base frame,
         # while the public OpenETA move_to contract is world-frame.  Rotate
         # both translational and rotational error vectors before encoding.
@@ -769,6 +908,8 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         if final_terminated:
             break
 
+        _refresh_attachment_proxy(meta, final_result)
+
         # Re-read pose from last step result (no extra HTTP call)
         new_xyz = _extract_ee_xyz_from_result(final_result)
         pose_result = final_result
@@ -784,7 +925,15 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         collision_info = {"available": False}
         if enable_collision_check and backend in ("libero", "maniskill"):
             jp = _extract_joint_positions_from_result(final_result)
-            objects = _extract_objects_from_result(final_result)
+            # Public include_objects remains the opt-in for cuRobo's generic
+            # robot-vs-world check; otherwise an intended grasp target would be
+            # treated as an obstacle before contact.  The attached-object proxy
+            # above always uses the private safety geometry after co-motion.
+            objects = (
+                _collision_objects_without_attached(meta)
+                if meta.get("_expose_objects") is True
+                else []
+            )
             if jp:
                 try:
                     checker = get_checker(handle, backend)
@@ -829,9 +978,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     # ── collision summary ──────────────────────────────────────────
     if enable_collision_check and collision_detected:
+        collision_message = str(collision_info.get("message") or "").strip()
         result["collision"] = {
             "detected": True,
-            "message": (
+            "message": collision_message
+            or (
                 f"Collision detected at step {total_steps}: "
                 f"world_penetration={collision_info.get('max_world_penetration', 0.0):.4f}m, "
                 f"self_penetration={collision_info.get('max_self_penetration', 0.0):.4f}m"
@@ -1076,6 +1227,7 @@ def gripper_open(handle: str, *, session_id: str = "") -> dict:
         return {"error": f"Unknown: {handle}"}
     backend = meta.get("backend", "")
     meta["_gripper_cmd"] = -1.0  # latch OPEN — held on every subsequent step
+    meta.pop("_attachment_proxy", None)
     try:
         act = make_gripper_action(meta, open_gripper=True, backend=backend)
     except ControlCodecError as exc:
@@ -1107,7 +1259,9 @@ def gripper_close(handle: str, *, session_id: str = "") -> dict:
         act = make_gripper_action(meta, open_gripper=False, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    return _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    result = _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    _arm_attachment_proxy(meta, result)
+    return result
 
 
 def _gripper_cmd(meta: dict) -> float:

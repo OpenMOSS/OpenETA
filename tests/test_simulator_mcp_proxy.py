@@ -922,11 +922,26 @@ def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcom
     result = tools.call("move_to", {"target_pose": {"xyz": [0.2, 0.0, 0.5]}})
 
     assert result.success is True
-    assert result.details["diagnostics"] == []
+    assert result.details["operational_success"] is True
+    assert result.details["semantic_outcome"] == "target_not_reached"
+    assert result.details["diagnostics"][0]["code"] == "simulator_mcp_collision"
+    assert result.details["diagnostics"][0]["position_error_m"] == pytest.approx(0.18)
+    assert {item["action"] for item in result.details["recovery_options"]} == {
+        "inspect_fresh_observation",
+        "replan_from_actual_pose",
+    }
+    assert "NOT reached" in result.content
+    assert "actual_end_xyz=[0.02, 0.0, 0.5]" in result.content
     motion = result.details["outputs"]["response"]["motion_summary"]
     assert motion["collision"]["detected"] is True
     assert motion["reached_target"] is False
     assert result.details["state_delta"]["motion"] == motion
+    pose_feedback = result.details["outputs"]["pose_feedback"]
+    assert pose_feedback["schema_version"] == "openeta.eef_pose_feedback.v1"
+    assert pose_feedback["requested_xyz"] == [0.2, 0.0, 0.5]
+    assert pose_feedback["actual_xyz"] == [0.02, 0.0, 0.5]
+    assert pose_feedback["position_error_m"] == pytest.approx(0.18)
+    assert "object-relative contact" in pose_feedback["interpretation"]
 
 
 def test_move_to_proxy_allows_unchanged_baseline_contact() -> None:

@@ -1002,17 +1002,56 @@ class UnifiedEnv(gym.Env):
                     qpos_addr = model.jnt_qposadr[jnt_id]
                     pos = qpos[qpos_addr:qpos_addr + 3].tolist()
                     quat = qpos[qpos_addr + 3:qpos_addr + 7].tolist()
+                    bounds = self._mujoco_object_world_bounds(model, data, body_id)
                 except Exception:
-                    pos, quat = None, None
-                objects.append({
+                    pos, quat, bounds = None, None, {}
+                object_state = {
                     "name": getattr(obj, "name", root_body),
                     "category": getattr(obj, "category_name", ""),
                     "position": pos,
                     "orientation": quat,
-                })
+                }
+                object_state.update(bounds)
+                objects.append(object_state)
             return objects
         except Exception:
             return []
+
+    @staticmethod
+    def _mujoco_object_world_bounds(model: Any, data: Any, root_body_id: int) -> dict[str, Any]:
+        """Return a conservative world AABB for one MuJoCo object subtree."""
+
+        body_parent = np.asarray(model.body_parentid).reshape(-1)
+
+        def belongs_to_root(body_id: int) -> bool:
+            current = int(body_id)
+            while current > 0 and current != root_body_id:
+                current = int(body_parent[current])
+            return current == root_body_id
+
+        minimum = np.full(3, np.inf, dtype=np.float64)
+        maximum = np.full(3, -np.inf, dtype=np.float64)
+        found = False
+        geom_body = np.asarray(model.geom_bodyid).reshape(-1)
+        geom_rbound = np.asarray(model.geom_rbound).reshape(-1)
+        geom_xpos = np.asarray(data.geom_xpos)
+        for geom_id, body_id in enumerate(geom_body):
+            if not belongs_to_root(int(body_id)):
+                continue
+            radius = float(geom_rbound[geom_id])
+            if not np.isfinite(radius) or radius <= 0:
+                continue
+            center = np.asarray(geom_xpos[geom_id], dtype=np.float64).reshape(-1)[:3]
+            minimum = np.minimum(minimum, center - radius)
+            maximum = np.maximum(maximum, center + radius)
+            found = True
+        if not found:
+            return {}
+        return {
+            "aabb_min": minimum.tolist(),
+            "aabb_max": maximum.tolist(),
+            "dims": (maximum - minimum).tolist(),
+        }
 
     def _normalise_metaworld(self, raw: dict) -> dict:
         """MetaWorld direct env returns numpy state array, not a dict."""

@@ -773,7 +773,7 @@ real = [
 requires-dist = [
     { name = "gymnasium", specifier = ">=1.0" },
     { name = "imageio", extras = ["ffmpeg"], specifier = ">=2.34" },
-    { name = "mcp", specifier = ">=1.0" },
+    { name = "mcp", specifier = ">=1.0,<2" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python", marker = "extra == 'real'", specifier = ">=4.8,<5" },
     { name = "pillow", specifier = ">=10" },

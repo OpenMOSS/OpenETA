@@ -37,6 +37,7 @@ build/
 outputs/
 runs/
 artifacts/
+.openeta_eval/
 tmp/
 *.log
 

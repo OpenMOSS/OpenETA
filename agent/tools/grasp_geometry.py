@@ -199,14 +199,9 @@ def compile_grasp_seed(
     # Hover is a clearance pose, not a task-tuned contact correction. Keep at
     # least 15 cm along the grasp approach normal before wrist alignment.
     pregrasp_distance = max(_MIN_SAFE_HOVER_DISTANCE_M, requested_pregrasp_distance)
-    candidate_fallback = (
-        parameters.get("candidate_fallback") is True
-        or candidate.get("candidate_fallback") is True
-    )
     _validate_profile(profile, target_class=target_geometry_family)
 
     candidate_id = str(candidate.get("id") or "").strip()
-    final_refinable_fallback = candidate.get("final_refinable_fallback") is True
     if not candidate_id:
         raise GraspGeometryError("camera_pose.id is required")
     if str(candidate.get("frame") or "") != "camera":
@@ -273,10 +268,7 @@ def compile_grasp_seed(
         width_bounds = (legacy_widths[0], legacy_widths[1])
     else:
         width_bounds = (0.0, max_gripper_width)
-    if (
-        not final_refinable_fallback
-        and (width < width_bounds[0] or width > width_bounds[1])
-    ):
+    if width < width_bounds[0] or width > width_bounds[1]:
         raise GraspCandidateRejected(
             f"candidate width {width:.4f} m is outside active strategy bounds "
             f"[{width_bounds[0]:.4f}, {width_bounds[1]:.4f}]",
@@ -304,12 +296,7 @@ def compile_grasp_seed(
     if strategy is not None:
         candidate_filter = strategy_candidate_filter(strategy)
         min_alignment = candidate_filter.get("min_downward_alignment")
-        if (
-            not final_refinable_fallback
-            and min_alignment is not None
-            and native_downward_alignment < float(min_alignment)
-            and not candidate_fallback
-        ):
+        if min_alignment is not None and native_downward_alignment < float(min_alignment):
             raise GraspCandidateRejected(
                 "candidate native downward alignment "
                 f"{native_downward_alignment:.3f} is below active strategy minimum "
@@ -372,7 +359,7 @@ def compile_grasp_seed(
         precontact_pose = {
             **pose_common,
             "xyz": _round_vector(p_precontact),
-            "grasp_stage": "precontact",
+            "waypoint_role": "grasp_precontact",
         }
     return {
         "schema_version": COMPILED_GRASP_SCHEMA,
@@ -393,7 +380,6 @@ def compile_grasp_seed(
             [-pregrasp_distance * component for component in approach_world]
         ),
         "gripper_width_m": width,
-        "final_refinable_fallback": final_refinable_fallback,
         "requested_pregrasp_distance_m": requested_pregrasp_distance,
         "pregrasp_distance_m": pregrasp_distance,
         "orientation_clamped": orientation_clamped,
@@ -403,26 +389,15 @@ def compile_grasp_seed(
         "outside_validated_strategy_scope": (
             strategy is None or strategy.get("status") != "validated"
         ),
-        "candidate_fallback": candidate_fallback,
-        **(
-            {
-                "fallback_reason": str(
-                    parameters.get("fallback_reason")
-                    or candidate.get("fallback_reason")
-                )
-            }
-            if parameters.get("fallback_reason") or candidate.get("fallback_reason")
-            else {}
-        ),
         "hover_pose": {
             **pose_common,
             "xyz": _round_vector(p_hover),
-            "grasp_stage": "hover",
+            "waypoint_role": "grasp_clearance",
         },
         "contact_pose": {
             **pose_common,
             "xyz": _round_vector(p_world_eef),
-            "grasp_stage": "contact",
+            "waypoint_role": "grasp_contact",
         },
         "precontact_pose": precontact_pose,
         "grasp_strategy": public_grasp_strategy(strategy),
@@ -440,29 +415,8 @@ def compile_grasp_seed(
             )
         )
         + (
-            (
-                "All articulated-handle approach modes failed; this is the one "
-                "global score-selected fallback and remains subject to motion and "
-                "attachment gates. "
-            )
-            if candidate_fallback
-            and str(
-                parameters.get("fallback_reason")
-                or candidate.get("fallback_reason")
-                or ""
-            )
-            == "all_approach_modes_failed"
-            else (
-                "All ranked candidates failed their strategy geometry checks; this is a "
-                "score-selected fallback and remains subject to motion and attachment "
-                "gates. "
-            )
-            if candidate_fallback
-            else ""
-        )
-        + (
-            "Calibration/strategy outputs remain references; hover alignment "
-            "and attachment gates are mandatory."
+            "Calibration and strategy outputs are geometric references; the Agent "
+            "owns candidate choice, waypoint sequencing, and recovery."
         ),
     }
 
@@ -531,7 +485,7 @@ def grasp_refinement_hover_pose(
                 p_world_target[2] + clearance,
             ]
         ),
-        "grasp_stage": "grasp_estimation_refinement_hover",
+        "waypoint_role": "grasp_refinement_clearance",
         "source_grasp_id": candidate_id,
         "recovery_id": recovery_id,
         "scene_epoch": _nonnegative_int(scene_epoch, "scene_epoch"),
@@ -596,7 +550,7 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
     aligned_hover.update(
         {
             "xyz": _round_vector(_add(current_xyz, delta_world)),
-            "grasp_stage": "align",
+            "waypoint_role": "grasp_alignment_reference",
             "alignment_id": "",
         }
     )
@@ -604,7 +558,7 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
     adjusted_contact.update(
         {
             "xyz": _round_vector(_add(contact_xyz, delta_world)),
-            "grasp_stage": "contact",
+            "waypoint_role": "grasp_contact",
             "alignment_id": "",
         }
     )
@@ -618,7 +572,7 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         adjusted_precontact.update(
             {
                 "xyz": _round_vector(_add(precontact_xyz, delta_world)),
-                "grasp_stage": "precontact",
+                "waypoint_role": "grasp_precontact",
                 "alignment_id": "",
             }
         )

@@ -231,7 +231,7 @@ refresh attempts without a snapshot truncate the episode with
 `fresh_observation_unavailable`, preventing an unbounded retry loop. Historical
 images remain in trace/memory but are never exposed as the current frame.
 
-### SAM3 detection selection obligation
+### SAM3 detection selection evidence
 
 The agent-facing `sam3` ToolSpec has two explicit modes. `mode="text"` (the
 default) consumes one local image path plus a natural-language `prompt`;
@@ -244,8 +244,8 @@ verbatim: the planner selects `image_sources[image_index]` and maps
 
 SAM3 detections are ranked by score while preserving `backend_index` and a
 stable ranked detection id. Score is only a ranking hint. Every non-empty SAM3
-result creates a durable `selection_obligation`, including the single-candidate
-case. The obligation contains the original image, candidate-specific overlay or
+result creates durable `pending_target_selection` evidence, including the single-candidate
+case. The evidence contains the original image, candidate-specific overlay or
 crop references, and a contact sheet so the main agent explicitly confirms the
 mask before downstream use.
 
@@ -253,7 +253,7 @@ For backward compatibility, the standalone text-mode handler still exposes its
 sole candidate through `selected_detection` and reports
 `selection_required=false` when exactly one detection is returned. That field
 is a handler convenience, not a closed-loop runtime bypass: `AgentMemory`
-creates the semantic-confirmation obligation for every non-empty result before
+creates the semantic-confirmation record for every non-empty result before
 targeted grasping or world-mutating execution. Point mode always has three
 candidates and therefore never uses the single-candidate convenience.
 
@@ -263,42 +263,24 @@ candidate ranks and backend indices, overlays, and coordinate metadata before
 materializing the result; any inconsistency rejects the complete response.
 
 The next VLM planner request attaches the original image and contact sheet as
-multimodal image parts. The main agent resolves the obligation with
+multimodal image parts. The main agent resolves the open question with
 `select_sam3_detection(sam3_result_id, detection_id, ...)`. The handler validates
 that both ids belong to the pending result and records the selected mask under
 the SAM3 request's explicit `evidence_role`. `target_object` is the compatible
 default; `placement_region` retains a receptacle independently. Starting or
 resolving one role never deletes the other role's mask or source-observation
 bundle, and a selection cannot change the role declared by its pending result.
-Targeted AnyGrasp, GraspGenX, and world-mutating tools are blocked while an
-obligation is pending. After selection, both grasp predictors must use the
-selected mask; GraspGenX consumes the complete SAM3 artifact so the handler can
-also validate `source_image`. This is a planning obligation rather than a
-safety/failure checker verdict.
+Targeted AnyGrasp and GraspGenX may consume only a mask whose semantic selection
+has been explicitly recorded; an unresolved result is rejected as unverified
+provenance, with the result id and reason returned to the Agent. After selection,
+both predictors must use that exact mask. This is evidence integrity, not an
+instruction to call a particular tool next.
 
-AnyGrasp and GraspGenX pose ambiguity use the same existing greedy policy.
-
-Physical gripper-width rejection has a bounded host-owned recovery path. When
-every raw candidate from a successful estimator response exceeds the calibrated
-Panda width limit, memory records the backend, camera artifact, and outcome.
-The planner then segments the same target on each remaining aligned RGB-D view
-and retries the normalized `grasp_pose_estimate` facade. After all views are
-exhausted it passes an `excluded_backends` hint to the facade, which skips the
-over-width backend and tries the next compatible estimator. This obligation is
-dispatched before unchanged-scene ROI recovery, so width exhaustion cannot lock
-both perception and motion. Once all compatible backends are recorded as
-over-width, recovery ends explicitly instead of re-entering validation retries.
-Candidates are normalized in score-descending order and memory exposes
-`grasp_candidate_policy` with one active candidate. A later successful
-inference replaces the active policy while older results remain in history.
-Rank 0 is tried first. The candidate ID survives
-`camera_pose_to_world` and must be preserved in the complete world pose passed
-to safety and motion tools. A safety rejection or motion failure linked to that
-ID records the rejection and activates the next rank. Input, calibration,
-transport, and unrelated tool failures do not consume a candidate. Exhaustion
-requires fresh observation or grasp generation. A successful candidate-linked
-`move_to` marks the queue accepted and ends its gate scope, preventing stale
-grasp state from constraining later place or retreat motions.
+Candidates are normalized in score-descending order and persisted in full. The
+Agent chooses among them using current visual evidence, calibration, geometry,
+checker results, and its own attempt notes. Candidate IDs survive compilation,
+motion, review, and receipts. The host records outcomes but never advances a
+queue, activates a fallback, or dispatches a retry sequence.
 
 The independent agent-facing `graspgenx` ToolSpec is bound only when the
 `openeta-graspgenx` (or `graspgenx`) MCP URL is configured. It requires local
@@ -355,7 +337,17 @@ tool-name mapping so the planner-facing name can stay stable even if the
 simulator-side MCP tool is named differently. The current remote simulator MCP
 server maps `observe -> render_env`, `move_to -> move_to`; and
 `gripper_control` is routed to `gripper_open` or `gripper_close` according to
-the requested gripper position.
+the requested binary position (`0=closed`, `1=open`); fractions are rejected.
+The close/open command is latched across subsequent motion. Planner context
+reports the binary commanded state separately from continuous measured aperture
+and from attachment evidence.
+
+Simulator safety requests privileged object geometry internally while preserving
+the public `include_objects` boundary. After a non-empty close, object/EEF
+co-motion promotes a tentative target to an attached collision proxy. The proxy
+is checked against scene geometry before each carry batch, with a receptacle
+interior corridor allowing centred insertion but rejecting rim overlap. These
+safety details do not become task-stage state.
 
 Environment creation is a stable AgentTool operation. `create_simulator_env`
 is the only planner-facing creation path and owns the MCP
@@ -535,6 +527,10 @@ Default runtime policy:
   a structured `failure_reason`; the agent can still end an episode through
   `response::task_complete`, while environment/checker feedback can force
   `terminated=True` or `truncated=True` through `StepResult`.
+- Evaluation specs may set `recovery_turns_per_branch` and
+  `max_recovery_turns`. Only a distinct post-close compiled-grasp branch switch
+  grants turns, so repeated perception and duplicate evidence cannot consume an
+  unbounded extension.
 - A runner deadline actively abandons a blocked turn, requests environment
   close, and prevents its late result from becoming an `EpisodeStep`. Missing
   provider token usage falls back to the shared TUI token estimator and records

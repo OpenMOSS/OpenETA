@@ -327,7 +327,30 @@ def build_point_cloud_from_rgbd(
             raise AnyGraspInputError("missing_target_mask")
         region_steering = target_mask_2d[valid].astype(bool)
         if not region_steering.any():
-            raise AnyGraspInputError("empty_target_mask")
+            target_depths = points_z[target_mask_2d & (points_z > 0)]
+            metadata = {
+                **depth_metadata,
+                "target_mask_pixel_count": int(target_mask_2d.sum()),
+                "target_valid_depth_pixel_count": int(target_depths.size),
+            }
+            if target_depths.size:
+                target_depth_min = float(target_depths.min())
+                target_depth_max = float(target_depths.max())
+                target_depth_p99 = float(np.percentile(target_depths, 99))
+                metadata.update(
+                    {
+                        "target_depth_min_m": target_depth_min,
+                        "target_depth_max_m": target_depth_max,
+                        "target_depth_p99_m": target_depth_p99,
+                        "suggested_depth_cutoff_factor": round(
+                            min(4.0, max(1.0, target_depth_p99 / 0.9)), 6
+                        ),
+                    }
+                )
+            raise AnyGraspInputError(
+                "target_mask_outside_depth_range",
+                metadata=metadata,
+            )
 
     if workspace_limits is not None:
         xmin, xmax, ymin, ymax, zmin, zmax = workspace_limits
@@ -384,6 +407,7 @@ def _input_failure_content(reason: str) -> str:
         "invalid_depth_scale",
         "depth_scale_mismatch",
         "empty_point_cloud_after_depth_filter",
+        "target_mask_outside_depth_range",
     }:
         return f"{content} {_DEPTH_SCALE_GUIDANCE}"
     return content

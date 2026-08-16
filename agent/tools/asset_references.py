@@ -316,6 +316,42 @@ def build_object_memory_reference_handler(
                     target_object=target_object,
                 )
             )
+        except ObjectMemoryResolutionError as exc:
+            candidates = [candidate.to_dict() for candidate in exc.candidates]
+            return make_tool_result(
+                context,
+                success=False,
+                content=f"Object memory asset resolution failed: {exc}",
+                outputs={
+                    "reason": "object_memory_resolution_failed",
+                    "resolution_code": exc.code,
+                    "search_candidates": candidates,
+                },
+                diagnostics=[
+                    {
+                        "code": "object_memory_resolution_failed",
+                        "resolution_code": exc.code,
+                        "message": str(exc),
+                        "search_candidates": candidates,
+                    }
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 - service failures stay structured.
+            return make_tool_result(
+                context,
+                success=False,
+                content=f"Object memory retrieval failed: {exc}",
+                outputs={"reason": "object_memory_retrieval_failed"},
+                diagnostics=[
+                    {
+                        "code": "object_memory_retrieval_failed",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ],
+            )
+
+        try:
             session_root = artifact_session_root(
                 resolved_root,
                 artifact_session_id(context.metadata),
@@ -342,35 +378,15 @@ def build_object_memory_reference_handler(
                 output_path=run_dir / "scene_target_point.png",
                 point=(localized.x, localized.y),
             )
-        except ObjectMemoryResolutionError as exc:
-            candidates = [candidate.to_dict() for candidate in exc.candidates]
-            return make_tool_result(
-                context,
-                success=False,
-                content=f"Object memory asset resolution failed: {exc}",
-                outputs={
-                    "reason": "object_memory_resolution_failed",
-                    "resolution_code": exc.code,
-                    "search_candidates": candidates,
-                },
-                diagnostics=[
-                    {
-                        "code": "object_memory_resolution_failed",
-                        "resolution_code": exc.code,
-                        "message": str(exc),
-                        "search_candidates": candidates,
-                    }
-                ],
-            )
         except Exception as exc:  # noqa: BLE001 - network/VLM failures stay structured.
             return make_tool_result(
                 context,
                 success=False,
-                content=f"Object memory localization failed: {exc}",
-                outputs={"reason": "object_memory_localization_failed"},
+                content=f"Reference localization failed: {exc}",
+                outputs={"reason": "reference_localization_failed"},
                 diagnostics=[
                     {
-                        "code": "object_memory_localization_failed",
+                        "code": "reference_localization_failed",
                         "error_type": type(exc).__name__,
                         "message": str(exc),
                     }
@@ -390,6 +406,10 @@ def build_object_memory_reference_handler(
             if localized.bbox_xyxy is not None
             else None
         )
+        localizer_details = dict(localized.details or {})
+        ranked_candidates = localizer_details.get("ranked_candidates")
+        if not isinstance(ranked_candidates, list):
+            ranked_candidates = []
         localization_bundle = {
             "scene_image_ref": scene_image,
             "reference_image_refs": references,
@@ -401,6 +421,11 @@ def build_object_memory_reference_handler(
             "memory_resolution": resolution,
             "positive_points": positive_points,
             "bbox_xyxy": bbox_xyxy,
+            "candidate_policy": localizer_details.get("candidate_policy"),
+            "ranked_candidates": ranked_candidates,
+            "requires_downstream_confirmation": bool(
+                localizer_details.get("requires_downstream_confirmation")
+            ),
             "point_coordinate_space": "original_image_pixels_top_left_xy",
             "required_sam3_parameter": "positive_points",
         }
@@ -453,7 +478,7 @@ def build_object_memory_reference_handler(
                     "model": localized.model,
                     "confidence": localized.confidence,
                     "reason": localized.reason,
-                    **dict(localized.details or {}),
+                    **localizer_details,
                 },
             },
             artifacts=artifacts,

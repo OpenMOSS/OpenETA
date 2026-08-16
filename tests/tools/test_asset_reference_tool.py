@@ -170,7 +170,7 @@ def test_object_memory_configuration_warning_links_to_deployment_repository() ->
     assert result.details["diagnostics"] == [warning]
 
 
-def test_asset_reference_result_creates_and_resolves_localization_obligation(
+def test_asset_reference_result_creates_and_resolves_pending_localization_evidence(
     tmp_path: Path,
 ) -> None:
     reference = tmp_path / "reference.png"
@@ -211,13 +211,13 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
     assert pending is not None
     assert pending["scene_image"] == str(scene)
     assert pending["required_parameter"] == "roi_bbox_xyxy"
-    assert memory.detection_selection_gate_error(
-        tool_name="anygrasp",
-        parameters={},
-    )
-    assert memory.detection_selection_gate_error(
-        tool_name="sam3",
-        parameters={"image": str(scene)},
+    assert memory.detection_selection_gate_error(tool_name="anygrasp", parameters={}) is None
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="sam3",
+            parameters={"image": str(scene)},
+        )
+        is None
     )
 
     memory.add_action(
@@ -255,7 +255,7 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
     assert memory.pending_reference_localization() is None
 
 
-def test_object_memory_handler_returns_point_and_creates_point_obligation(
+def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     tmp_path: Path,
 ) -> None:
     scene = tmp_path / "scene.png"
@@ -294,7 +294,19 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
                 reason="matching label",
                 provider="fixture",
                 model="fixture-vlm",
-                details={"isolated_context": True},
+                details={
+                    "isolated_context": True,
+                    "candidate_policy": "ranked_provisional",
+                    "requires_downstream_confirmation": True,
+                    "ranked_candidates": [
+                        {
+                            "rank": 1,
+                            "positive_points": [{"x": 22.0, "y": 31.0, "label": 1}],
+                            "bbox_xyxy": [16.0, 22.0, 28.0, 40.0],
+                            "provisional": True,
+                        }
+                    ],
+                },
             )
 
     result = build_object_memory_reference_handler(
@@ -318,6 +330,9 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
     assert outputs["bbox_xyxy"] == [16.0, 22.0, 28.0, 40.0]
     assert outputs["resolved_asset_key"] == "libero/alphabet_soup"
     assert outputs["localization_bundle"]["bbox_xyxy"] == outputs["bbox_xyxy"]
+    assert outputs["localization_bundle"]["candidate_policy"] == "ranked_provisional"
+    assert outputs["localization_bundle"]["requires_downstream_confirmation"] is True
+    assert outputs["localization_bundle"]["ranked_candidates"][0]["rank"] == 1
     assert Path(outputs["marked_scene_image"]).is_file()
     assert "point-session" in Path(outputs["marked_scene_image"]).parts
     assert len(outputs["reference_images"]) == 3
@@ -341,14 +356,22 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
     assert pending["required_parameter"] == "positive_points"
     assert pending["positive_points"] == outputs["positive_points"]
     assert pending["bbox_xyxy"] == outputs["bbox_xyxy"]
+    assert pending["candidate_policy"] == "ranked_provisional"
+    assert pending["ranked_candidates"][0]["positive_points"] == outputs["positive_points"]
     assert memory.target_asset_reference()["bbox_xyxy"] == outputs["bbox_xyxy"]
     assert (
         memory.target_asset_reference()["resolved_asset_key"]
         == "libero/alphabet_soup"
     )
-    assert memory.detection_selection_gate_error(
-        tool_name="sam3",
-        parameters={"image": str(scene), "positive_points": [{"x": 23, "y": 31, "label": 1}]},
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="sam3",
+            parameters={
+                "image": str(scene),
+                "positive_points": [{"x": 23, "y": 31, "label": 1}],
+            },
+        )
+        is None
     )
     assert (
         memory.detection_selection_gate_error(
@@ -359,7 +382,7 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
     )
 
 
-def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
+def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     scene = "/tmp/current-scene.png"
     memory = AgentMemory()
     memory.start_session(task="pick alphabet soup")
@@ -393,12 +416,15 @@ def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
             },
         )
     )
-    assert memory.detection_selection_gate_error(
-        tool_name="retrieve_asset_reference",
-        parameters={
-            "target_object": "alphabet soup",
-            "scene_image": "/tmp/previous-scene.png",
-        },
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="retrieve_asset_reference",
+            parameters={
+                "target_object": "alphabet soup",
+                "scene_image": "/tmp/previous-scene.png",
+            },
+        )
+        is None
     )
     memory.add_action(
         EnvAction(
@@ -434,9 +460,12 @@ def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
     assert pending["scene_image"] == scene
     assert pending["positive_points"] == points
     assert pending["localization_bundle"]["source"] == "molmopoint"
-    assert memory.detection_selection_gate_error(
-        tool_name="retrieve_asset_reference",
-        parameters={},
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="retrieve_asset_reference",
+            parameters={},
+        )
+        is None
     )
     assert (
         memory.detection_selection_gate_error(
@@ -505,3 +534,72 @@ def test_object_memory_handler_returns_structured_search_ambiguity(tmp_path: Pat
         "libero/akita_black_bowl",
         "libero/stone_black_bowl",
     ]
+
+
+def test_object_memory_handler_distinguishes_retrieval_failure(tmp_path: Path) -> None:
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (64, 48), "gray").save(scene)
+
+    class Client:
+        def resolve(self, **_kwargs):
+            raise TimeoutError("memory service timed out")
+
+    class Localizer:
+        def localize(self, **_kwargs):
+            raise AssertionError("retrieval failure must not invoke localization")
+
+    result = build_object_memory_reference_handler(
+        Client(),
+        Localizer(),
+        output_root=tmp_path / "outputs",
+    )(
+        _context(
+            {
+                "environment": "libero",
+                "target_object": "alphabet soup",
+                "scene_image": str(scene),
+            }
+        )
+    )
+
+    assert result.success is False
+    assert result.details["outputs"]["reason"] == "object_memory_retrieval_failed"
+    assert result.details["diagnostics"][0]["error_type"] == "TimeoutError"
+
+
+def test_object_memory_handler_distinguishes_localization_failure(tmp_path: Path) -> None:
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (64, 48), "gray").save(scene)
+
+    class Client:
+        def resolve(self, **_kwargs):
+            return ObjectMemoryBundle(
+                query_key="libero/alphabet_soup",
+                namespace="libero",
+                asset_id="alphabet_soup",
+                label="alphabet soup",
+                references=(),
+                manifest={"key": "libero/alphabet_soup"},
+            )
+
+    class Localizer:
+        def localize(self, **_kwargs):
+            raise ValueError("scene crop is ambiguous")
+
+    result = build_object_memory_reference_handler(
+        Client(),
+        Localizer(),
+        output_root=tmp_path / "outputs",
+    )(
+        _context(
+            {
+                "environment": "libero",
+                "target_object": "alphabet soup",
+                "scene_image": str(scene),
+            }
+        )
+    )
+
+    assert result.success is False
+    assert result.details["outputs"]["reason"] == "reference_localization_failed"
+    assert result.details["diagnostics"][0]["error_type"] == "ValueError"

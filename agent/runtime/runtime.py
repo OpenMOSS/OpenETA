@@ -227,7 +227,6 @@ class OpenEtaAgentRuntime:
             "enhance_depth": self._enhance_depth_tool,
             "select_sam3_detection": self._select_sam3_detection_tool,
             "reject_sam3_detections": self._reject_sam3_detections_tool,
-            "activate_final_grasp_candidate": self._activate_final_grasp_candidate_tool,
             "python_exec": PythonExecRuntime().handler,
         }
         for name, handler in handlers.items():
@@ -556,29 +555,6 @@ class OpenEtaAgentRuntime:
             outputs={"rejection": rejected},
         )
 
-    def _activate_final_grasp_candidate_tool(
-        self,
-        context: ToolExecutionContext,
-    ) -> ToolResult:
-        recovery_id = str(context.parameters.get("recovery_id") or "").strip()
-        try:
-            activated = self.memory.activate_final_grasp_candidate(
-                recovery_id=recovery_id,
-            )
-        except ValueError as exc:
-            return make_tool_result(
-                context,
-                success=False,
-                content=str(exc),
-                diagnostics=[{"code": "invalid_final_grasp_fallback"}],
-            )
-        return make_tool_result(
-            context,
-            success=True,
-            content="Activated the final highest-scoring refinable grasp candidate.",
-            outputs={"activation": activated},
-        )
-
 
 def _read_rgb_image(path: str) -> np.ndarray:
     resolved = _existing_file(path)
@@ -589,10 +565,8 @@ def _read_rgb_image(path: str) -> np.ndarray:
 def _read_depth_array(path: str, *, scale: float) -> np.ndarray:
     resolved = _existing_file(path)
     if resolved.suffix.lower() == ".npy":
-        array = np.load(resolved)
-        return np.asarray(array, dtype=np.float32)
-    image = Image.open(resolved)
-    array = np.asarray(image)
+        return np.asarray(np.load(resolved), dtype=np.float32)
+    array = np.asarray(Image.open(resolved))
     if array.ndim == 3:
         array = array[..., 0]
     if array.dtype.kind in {"u", "i"}:
@@ -604,8 +578,7 @@ def _read_optional_numeric_array(path: str) -> np.ndarray:
     resolved = _existing_file(path)
     if resolved.suffix.lower() == ".npy":
         return np.asarray(np.load(resolved), dtype=np.float32)
-    image = Image.open(resolved)
-    array = np.asarray(image)
+    array = np.asarray(Image.open(resolved))
     if array.ndim == 3:
         array = array[..., 0]
     return array.astype(np.float32)

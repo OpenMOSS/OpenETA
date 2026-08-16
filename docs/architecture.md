@@ -28,8 +28,11 @@ Current remote simulator MCP mappings used by the agent runtime:
 - `close_simulator_env` -> `close_env`
 - `observe` -> `render_env`
 - `move_to` -> `move_to`
-- `gripper_control(position >= 0.5)` -> `gripper_open`
-- `gripper_control(position < 0.5)` -> `gripper_close`
+- `gripper_control(position = 1)` -> latched `gripper_open`
+- `gripper_control(position = 0)` -> latched `gripper_close`
+
+Fractional commands are rejected. Continuous gripper aperture is observation
+feedback only and is kept separate from the binary commanded latch state.
 
 MCP `isError` envelopes preserve their original text so remote failures remain
 diagnosable instead of being collapsed into a generic invalid response.
@@ -53,11 +56,14 @@ Simulator control tools should accept world-frame targets. Camera-frame grasp
 poses must be converted with an agent geometry tool such as
 `camera_pose_to_world` before calling `move_to`.
 
-Grasping is a skill composition, not a separate Agent Tool. The same complete
-world-frame normalized grasp result from `camera_pose_to_world` is sent to one atomic
-`move_to` call without planner-side pose adjustment. Gripper close remains a
-separate atomic `gripper_control` call so the planner can observe between
-actions.
+Grasping is a skill composition, not a separate Agent Tool. A compiled
+world-frame grasp is a provenance-bound reference anchor. The Agent still uses the
+ordinary atomic `move_to` tool and may author a visually justified xyz residual while
+preserving `compiled_grasp_id` plus the geometric `waypoint_role`. The host derives
+the residual rather than trusting a model-reported delta, permits at most 2 cm of
+residual change per call, and accounts at most 10 cm of cumulative residual travel
+per compiled grasp. A new compilation resets the budget. Gripper close remains a
+separate atomic `gripper_control` call so the planner can observe between actions.
 
 At the simulator boundary, ranked GraspNet-family candidates default to
 translation-only control while retaining the controller's current EEF
@@ -67,16 +73,11 @@ is GraspNet z (binormal), and EEF z is GraspNet x (approach). Non-candidate
 world poses continue to forward their explicit orientation unchanged. This is
 an adapter policy and does not change the remote MCP schema.
 
-AnyGrasp candidates use an agent-owned greedy fallback state: MCP supplies
-score-ranked camera-frame poses, the agent starts at rank 0, and only a
-candidate-linked safety or failure-check rejection advances to the next rank.
-Candidate IDs remain attached through frame conversion and downstream checks so
-fallback decisions are attributable and cannot silently skip ranks.
-
-GraspGenX candidates share that agent-owned greedy fallback state and preserve
-their predictor/gripper provenance through camera-to-world conversion. Only a
-candidate-linked safety or failure-check rejection advances either predictor's
-ranked queue.
+AnyGrasp and GraspGenX return score-ranked camera-frame proposals as immutable
+evidence. Scores are backend-local hints, not host policy. Candidate IDs remain
+attached through compilation, frame conversion, checks, and receipts so the Agent
+can compare outcomes and choose a materially different proposal without a host
+maintaining an active rank or fallback queue.
 
 Any smoke test or integration runner that creates a remote MCP environment must
 close it in a `finally` block with `close_env`. Leaking remote simulator handles

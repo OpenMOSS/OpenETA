@@ -127,29 +127,15 @@ def assess_attachment_probe(
     """Assess articulated co-motion from the frozen probe's before/after views."""
 
     memory = _memory_context(context.metadata.get("supervision_context"))
-    execution = _mapping(memory.get("grasp_execution"), "grasp_execution")
-    gate = _mapping(memory.get("attachment_gate"), "attachment_gate")
     probe = _mapping(
         memory.get("articulated_attachment_probe"),
         "articulated_attachment_probe",
     )
-    if (
-        execution.get("status") != "required"
-        or execution.get("stage") != "attachment"
-        or execution.get("attachment_mode") != "articulated_handle"
-        or probe.get("status") != "completed"
-    ):
-        raise AttachmentProbeError("no completed articulated probe is awaiting assessment")
-    if str(gate.get("verdict") or "UNKNOWN").upper() != "UNKNOWN":
-        raise AttachmentProbeError("the articulated attachment gate is already resolved")
-    assessment_count = int(gate.get("assessment_count") or 0)
-    refresh_completed = gate.get("unknown_refresh_completed") is True
-    if assessment_count >= 2:
-        raise AttachmentProbeError(
-            "the articulated attachment assessment budget is exhausted"
-        )
-    if assessment_count >= 1 and not refresh_completed:
-        raise AttachmentProbeError("one fresh observation is required before reassessment")
+    if probe.get("status") != "completed":
+        raise AttachmentProbeError("the referenced probe has not completed")
+    requested_probe_id = str(context.parameters.get("probe_id") or "").strip()
+    if not requested_probe_id or requested_probe_id != str(probe.get("probe_id") or ""):
+        raise AttachmentProbeError("probe_id must reference the completed frozen probe")
     before = [
         path
         for path in probe.get("pre_probe_image_paths", [])
@@ -193,6 +179,7 @@ def assess_attachment_probe(
                 "schema_version": ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA,
                 "role": "independent_articulated_attachment_reviewer",
                 "task": str(context.metadata.get("task") or ""),
+                "probe_id": probe.get("probe_id"),
                 "candidate_id": probe.get("candidate_id"),
                 "motion_type": probe.get("motion_type"),
                 "distance_m": probe.get("distance_m"),
@@ -217,11 +204,11 @@ def assess_attachment_probe(
     reason = str(payload.get("reason") or "").strip()
     return {
         "schema_version": ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA,
+        "probe_id": probe.get("probe_id"),
         "candidate_id": probe.get("candidate_id"),
         "scene_epoch": memory.get("scene_epoch"),
         "verdict": verdict,
         "reason": reason,
-        "assessment_index": assessment_count + 1,
         "checked_by": "independent_attachment_reviewer",
         "provider": result.provider,
         "model": result.model,
@@ -237,24 +224,31 @@ def prepare_attachment_probe(
     """Validate an agent proposal and freeze one bounded 5 cm probe action."""
 
     memory = _memory_context(supervision_context)
-    execution = _mapping(memory.get("grasp_execution"), "grasp_execution")
-    policy = _mapping(memory.get("grasp_candidate_policy"), "grasp_candidate_policy")
-    if execution.get("status") != "required" or execution.get("stage") != "prepare_probe":
+    compiled_grasp_id = str(parameters.get("compiled_grasp_id") or "").strip()
+    graph = _mapping(memory.get("provenance_evidence_graph"), "provenance_evidence_graph")
+    nodes = graph.get("nodes")
+    grasp_node = next(
+        (
+            dict(node)
+            for node in nodes
+            if isinstance(node, Mapping)
+            and node.get("kind") == "compiled_targeted_grasp"
+            and str(node.get("compiled_grasp_id") or "") == compiled_grasp_id
+        ),
+        None,
+    ) if isinstance(nodes, Sequence) else None
+    if not compiled_grasp_id or not isinstance(grasp_node, dict):
         raise AttachmentProbeError(
-            "prepare_attachment_probe is allowed only after an articulated handle close"
+            "compiled_grasp_id must name a grasp in provenance_evidence_graph"
         )
-    if policy.get("interaction_family") != "articulated_handle":
-        raise AttachmentProbeError("the active candidate is not an articulated handle")
-    candidate_id = str(execution.get("candidate_id") or "")
-    compiled_grasp_id = str(execution.get("compiled_grasp_id") or "")
-    if not candidate_id or not compiled_grasp_id:
-        raise AttachmentProbeError("active candidate provenance is incomplete")
-    active = _mapping(policy.get("active_candidate"), "active_candidate")
-    if str(active.get("id") or "") != candidate_id:
-        raise AttachmentProbeError("active candidate does not match grasp execution")
+    if grasp_node.get("freshness") == "superseded_target_evidence":
+        raise AttachmentProbeError(
+            "compiled grasp evidence was superseded by a different selected target"
+        )
+    candidate_id = str(grasp_node.get("candidate_id") or "")
+    if not candidate_id:
+        raise AttachmentProbeError("compiled grasp candidate provenance is incomplete")
     scene_epoch = _nonnegative_int(memory.get("scene_epoch"), "scene_epoch")
-    if _nonnegative_int(execution.get("scene_epoch"), "grasp_execution.scene_epoch") != scene_epoch:
-        raise AttachmentProbeError("grasp execution is stale for the current scene epoch")
     if observation is None:
         raise AttachmentProbeError("a current observation is required")
     pose = getattr(getattr(observation, "robot", None), "end_effector_pose", None)
@@ -343,6 +337,7 @@ def prepare_attachment_probe(
     path_sha256 = hashlib.sha256(
         json.dumps(frozen_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    probe_id = f"probe:{path_sha256}"
     _stamp_probe_metadata(tool_parameters, path_sha256=path_sha256)
     pre_probe_images = _current_rgb_paths(observation)
     if len(pre_probe_images) != 2:
@@ -352,6 +347,7 @@ def prepare_attachment_probe(
     return {
         "schema_version": ARTICULATED_ATTACHMENT_PROBE_SCHEMA,
         "status": "prepared",
+        "probe_id": probe_id,
         "candidate_id": candidate_id,
         "compiled_grasp_id": compiled_grasp_id,
         "scene_epoch": scene_epoch,
@@ -362,7 +358,7 @@ def prepare_attachment_probe(
         "direction_world_xyz": _round_vector(direction),
         "frozen_path": frozen_path,
         "path_sha256": path_sha256,
-        "required_action": {"name": tool_name, "parameters": tool_parameters},
+        "frozen_action": {"name": tool_name, "parameters": tool_parameters},
         "pre_probe_image_paths": pre_probe_images,
         "proposal_reason": reason,
         "checked_by": "host_probe_geometry",

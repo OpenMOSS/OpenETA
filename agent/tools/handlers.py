@@ -71,6 +71,8 @@ GRASP_POSE_FALLBACK_REASONS = {
     "model_inference_failed",
     "model_load_failed",
     "no_grasp_candidates",
+    "no_executable_grasp_candidates",
+    "target_mask_outside_depth_range",
     "unknown_error",
 }
 
@@ -1185,6 +1187,10 @@ def build_grasp_pose_estimate_handler(
                 "candidate_count": _grasp_backend_candidate_count(backend_result),
                 "elapsed_ms": elapsed_ms,
             }
+            if not backend_result.success:
+                diagnostics = _grasp_backend_diagnostics(backend_result)
+                if diagnostics:
+                    attempt["diagnostics"] = diagnostics
             attempts.append(attempt)
             if backend_result.success:
                 normalized = _normalise_grasp_pose_estimate_result(
@@ -1205,6 +1211,9 @@ def build_grasp_pose_estimate_handler(
                 reason = _grasp_backend_failure_reason(normalized)
                 attempt["status"] = "failed"
                 attempt["reason"] = reason
+                diagnostics = _grasp_backend_diagnostics(normalized)
+                if diagnostics:
+                    attempt["diagnostics"] = diagnostics
                 if reason in GRASP_POSE_FALLBACK_REASONS:
                     continue
                 return normalized
@@ -1762,6 +1771,7 @@ def build_anyplace_handler(
 
     def handler(context: ToolExecutionContext) -> ToolResult:
         session_id = artifact_session_id(context.metadata)
+        bundle_id = _string_param(context.parameters.get("bundle_id"))
         rgb = _string_param(context.parameters.get("rgb"))
         depth = _string_param(context.parameters.get("depth"))
         object_mask = _string_param(context.parameters.get("object_mask"))
@@ -1942,6 +1952,8 @@ def build_anyplace_handler(
                 },
             },
         }
+        if bundle_id:
+            request["bundle_id"] = bundle_id
         if source_gripper_name is not None:
             request["selected_grasp"]["source"]["gripper_name"] = source_gripper_name
         if source_up_direction is not None:
@@ -3958,6 +3970,36 @@ def _grasp_backend_candidate_count(result: ToolResult) -> int:
         return 0
 
 
+def _grasp_backend_diagnostics(result: ToolResult) -> JsonDict:
+    """Preserve bounded backend evidence needed to understand a failed attempt."""
+
+    details = result.details if isinstance(result.details, dict) else {}
+    outputs = details.get("outputs")
+    source = outputs if isinstance(outputs, Mapping) else details
+    diagnostics: JsonDict = {}
+    metadata = source.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in (
+            "depth_truncation",
+            "valid_point_count",
+            "target_mask_pixel_count",
+            "target_valid_depth_pixel_count",
+            "target_depth_min_m",
+            "target_depth_max_m",
+            "target_depth_p99_m",
+            "suggested_depth_cutoff_factor",
+        ):
+            if key in metadata:
+                diagnostics[key] = metadata[key]
+    raw_diagnostics = source.get("diagnostics")
+    if isinstance(raw_diagnostics, list):
+        diagnostics["backend_diagnostics"] = [
+            dict(value) if isinstance(value, Mapping) else str(value)
+            for value in raw_diagnostics[:5]
+        ]
+    return diagnostics
+
+
 def _normalise_grasp_pose_estimate_result(
     result: ToolResult,
     *,
@@ -3984,6 +4026,8 @@ def _normalise_grasp_pose_estimate_result(
         )
     result_id = f"gpe-{uuid4().hex[:16]}"
     candidates: list[JsonDict] = []
+    rejected_candidates: list[JsonDict] = []
+    max_gripper_width_m = _finite_float(hints.get("max_gripper_width_m"))
     for backend_index, value in enumerate(raw_candidates):
         if not isinstance(value, Mapping):
             return _grasp_pose_estimate_failure(
@@ -4015,7 +4059,35 @@ def _normalise_grasp_pose_estimate_result(
         )
         if "depth" not in candidate and "gripper_depth" in candidate:
             candidate["depth"] = candidate["gripper_depth"]
+        width = _finite_float(candidate.get("width"))
+        if (
+            max_gripper_width_m is not None
+            and max_gripper_width_m > 0
+            and (width is None or width < 0 or width > max_gripper_width_m + 1e-6)
+        ):
+            rejected_candidates.append(
+                {
+                    "backend_candidate_id": backend_candidate_id,
+                    "backend_index": backend_index,
+                    "score": candidate.get("score"),
+                    "width_m": width,
+                    "reason": "exceeds_physical_gripper_width",
+                    "max_gripper_width_m": max_gripper_width_m,
+                }
+            )
+            continue
         candidates.append(candidate)
+    if not candidates:
+        return _grasp_pose_estimate_failure(
+            "no_executable_grasp_candidates",
+            attempts=attempts,
+            retryable=True,
+            diagnostics={
+                "raw_candidate_count": len(raw_candidates),
+                "max_gripper_width_m": max_gripper_width_m,
+                "rejected_candidates": rejected_candidates,
+            },
+        )
     candidates.sort(key=lambda candidate: -float(candidate.get("score") or 0.0))
     for rank, candidate in enumerate(candidates):
         candidate["rank"] = rank
@@ -4070,7 +4142,9 @@ def _normalise_grasp_pose_estimate_result(
             "camera_frame_id": camera_frame_id,
             "scene_epoch": scene_epoch,
             "candidate_count": len(candidates),
+            "raw_candidate_count": len(raw_candidates),
             "grasp_candidates": candidates,
+            "rejected_candidates": rejected_candidates,
             "best_grasp_candidate": candidates[0],
             "active_grasp_candidate": candidates[0],
             "ranking": "score_descending_backend_local",
@@ -4095,6 +4169,7 @@ def _grasp_pose_estimate_failure(
     attempts: list[JsonDict],
     retryable: bool,
     content: str = "",
+    diagnostics: JsonDict | None = None,
 ) -> ToolResult:
     return ToolResult(
         False,
@@ -4113,6 +4188,7 @@ def _grasp_pose_estimate_failure(
                     "code": "grasp_pose_estimate_failed",
                     "reason": reason,
                     "retryable": retryable,
+                    **(dict(diagnostics) if diagnostics else {}),
                 }
             ],
         },

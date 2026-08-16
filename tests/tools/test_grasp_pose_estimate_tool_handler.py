@@ -101,6 +101,7 @@ def test_tool_spec_exposes_only_backend_neutral_inputs() -> None:
 
     assert spec.effect == ToolEffect.PLANNING
     assert set(spec.parameters) == {
+        "bundle_id",
         "mode",
         "rgb",
         "depth",
@@ -139,6 +140,7 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
     assert [name for name, _ in calls] == ["anygrasp", "contact_graspnet"]
     assert calls[0][1]["target_mask"].endswith("mask.png")
     assert calls[0][1]["dense_grasp"] is True
+    assert calls[0][1]["depth_cutoff_factor"] == 1.25
     assert calls[1][1]["object_mask"]["source_image"].endswith("rgb.png")
     assert result.details["selected_backend"] == "contact_graspnet"
     assert [attempt["status"] for attempt in result.details["backend_attempts"]] == [
@@ -286,6 +288,71 @@ def test_non_fallback_backend_error_stops_dispatch(tmp_path: Path) -> None:
     assert result.details["reason"] == "invalid_backend_request"
     assert result.details["retryable"] is False
     assert called == ["anygrasp"]
+
+
+def test_backend_depth_failure_keeps_actionable_diagnostics(tmp_path: Path) -> None:
+    def outside_depth_range(_context: ToolExecutionContext) -> ToolResult:
+        return ToolResult(
+            False,
+            content="target mask is beyond the service cutoff",
+            details={
+                "reason": "target_mask_outside_depth_range",
+                "metadata": {
+                    "depth_truncation": 1.0,
+                    "target_mask_pixel_count": 2265,
+                    "target_depth_min_m": 1.126,
+                    "target_depth_max_m": 1.22,
+                    "suggested_depth_cutoff_factor": 1.356,
+                },
+            },
+        )
+
+    result = build_grasp_pose_estimate_handler({"anygrasp": outside_depth_range})(
+        _context(_parameters(tmp_path))
+    )
+
+    assert result.success is False
+    attempt = result.details["backend_attempts"][0]
+    assert attempt["reason"] == "target_mask_outside_depth_range"
+    assert attempt["diagnostics"] == {
+        "depth_truncation": 1.0,
+        "target_mask_pixel_count": 2265,
+        "target_depth_min_m": 1.126,
+        "target_depth_max_m": 1.22,
+        "suggested_depth_cutoff_factor": 1.356,
+    }
+
+
+def test_host_width_limit_removes_infeasible_candidates_from_main_queue(
+    tmp_path: Path,
+) -> None:
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        too_wide = _candidate("wide", score=0.99)
+        too_wide["width"] = 0.094
+        feasible = _candidate("feasible", score=0.7)
+        feasible["width"] = 0.06
+        return _success(too_wide, feasible)
+
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    result = build_grasp_pose_estimate_handler({"anygrasp": backend})(
+        _context(parameters)
+    )
+
+    assert result.success is True
+    assert result.details["raw_candidate_count"] == 2
+    assert result.details["candidate_count"] == 1
+    assert result.details["grasp_candidates"][0]["backend_candidate_id"] == "feasible"
+    assert result.details["rejected_candidates"] == [
+        {
+            "backend_candidate_id": "wide",
+            "backend_index": 0,
+            "score": 0.99,
+            "width_m": 0.094,
+            "reason": "exceeds_physical_gripper_width",
+            "max_gripper_width_m": 0.08,
+        }
+    ]
 
 
 def test_model_load_failure_falls_back_to_next_backend(tmp_path: Path) -> None:

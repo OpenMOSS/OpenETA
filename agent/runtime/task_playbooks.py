@@ -195,7 +195,6 @@ def extract_task_playbook_candidate(
         raise TaskPlaybookError("successful episode is missing task_index metadata")
     queries: list[str] = []
     grasp_signatures: list[JsonDict] = []
-    stage_sequence: list[str] = []
     for record in _jsonl_records(Path(rollout_tool_calls)):
         event = record.get("event")
         if not isinstance(event, dict):
@@ -221,16 +220,6 @@ def extract_task_playbook_candidate(
             grasp_signatures.append(
                 {key: value for key, value in signature.items() if value not in (None, "")}
             )
-        if phase == "start" and name == "move_to":
-            pose = parameters.get("target_pose")
-            pose = pose if isinstance(pose, dict) else {}
-            stage = pose.get("grasp_stage") or pose.get("placement_stage") or pose.get("probe_type")
-            if isinstance(stage, str) and stage:
-                stage_sequence.append(stage)
-        if phase == "start" and name == "gripper_control":
-            position = parameters.get("position")
-            if position in {0, 1}:
-                stage_sequence.append("gripper_close" if position == 0 else "gripper_open")
     scope_slug = re.sub(
         r"[^a-z0-9]+",
         "-",
@@ -256,7 +245,6 @@ def extract_task_playbook_candidate(
             "task_summary": task,
             "observed_object_queries": queries,
             "successful_grasp_signatures": grasp_signatures,
-            "successful_stage_sequence": stage_sequence,
             "rules": [
                 "Use object identity and geometry hints only after fresh visual verification.",
                 "Treat estimator poses as seeds and keep attachment and reward gates active.",

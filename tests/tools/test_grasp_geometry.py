@@ -64,6 +64,8 @@ def test_compile_grasp_seed_applies_camera_and_eef_transforms() -> None:
     assert result["contact_pose"]["frame"] == "world"
     assert result["contact_pose"]["xyz"] == pytest.approx([0.1036, -0.2, -0.3])
     assert result["hover_pose"]["xyz"] == pytest.approx([0.1036, -0.2, -0.15])
+    assert result["hover_pose"]["waypoint_role"] == "grasp_clearance"
+    assert "grasp_stage" not in result["hover_pose"]
     assert result["approach_world_xyz"] == [0.0, 0.0, -1.0]
     assert result["hover_offset_world_xyz"] == [0.0, 0.0, 0.15]
     assert result["requested_pregrasp_distance_m"] == 0.15
@@ -156,6 +158,8 @@ def test_refinement_hover_accepts_camera_to_world_matrix() -> None:
     assert pose["source_grasp_id"] == "grasp_000"
     assert pose["recovery_id"] == "recovery-1"
     assert pose["scene_epoch"] == 3
+    assert pose["waypoint_role"] == "grasp_refinement_clearance"
+    assert "grasp_stage" not in pose
 
 
 def test_compile_grasp_seed_uses_generic_fallback_for_unlisted_object() -> None:
@@ -243,7 +247,7 @@ def test_articulated_handle_front_mode_preserves_native_pose_and_provenance() ->
     assert result["contact_pose"]["approach_mode"] == "front"
 
 
-def test_approach_mode_changes_compiled_id_and_rejects_agent_forgery() -> None:
+def test_approach_mode_changes_compiled_id_and_rejects_incompatible_geometry() -> None:
     top_down = _compile_parameters()
     top_down.update(
         {
@@ -300,6 +304,21 @@ def test_bowl_strategy_rejects_candidate_without_downward_native_approach() -> N
         )
 
 
+def test_removed_fallback_markers_cannot_bypass_candidate_validation() -> None:
+    parameters = _compile_parameters()
+    parameters["target_class"] = "bowl"
+    parameters["candidate_fallback"] = True
+    parameters["camera_pose"]["candidate_fallback"] = True
+    parameters["camera_pose"]["final_refinable_fallback"] = True
+
+    with pytest.raises(GraspGeometryError, match="native downward alignment"):
+        compile_grasp_seed(
+            parameters,
+            profile=_profile(),
+            profile_sha256="profile-sha",
+        )
+
+
 def test_bowl_candidate_filter_returns_structured_candidate_rejection() -> None:
     parameters = _compile_parameters()
     parameters["target_class"] = "bowl"
@@ -322,37 +341,6 @@ def test_bowl_candidate_filter_returns_structured_candidate_rejection() -> None:
         "recovery_class": "perception_refinable",
     }
     assert result.details["diagnostics"][0]["candidate_rejection"] is True
-
-
-def test_final_refinable_candidate_bypasses_only_strategy_filter() -> None:
-    parameters = _compile_parameters()
-    parameters["target_class"] = "bowl"
-    parameters["camera_pose"]["final_refinable_fallback"] = True
-
-    result = compile_grasp_seed(
-        parameters,
-        profile=_profile(),
-        profile_sha256="profile-sha",
-    )
-
-    assert result["final_refinable_fallback"] is True
-    assert result["candidate_id"] == "grasp_000"
-    assert result["gripper_width_m"] == pytest.approx(0.06)
-
-
-def test_bowl_score_fallback_bypasses_alignment_filter_with_explicit_warning() -> None:
-    parameters = _compile_parameters()
-    parameters["target_class"] = "bowl"
-    parameters["camera_pose"]["candidate_fallback"] = True
-
-    result = compile_grasp_seed(
-        parameters,
-        profile=_profile(),
-        profile_sha256="profile-sha",
-    )
-
-    assert result["candidate_fallback"] is True
-    assert "score-selected fallback" in result["warning"]
 
 
 def test_compile_grasp_seed_clamps_requested_hover_to_safe_normal_standoff() -> None:
@@ -513,6 +501,6 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
     assert result["target_region"] == "nearest_shallow_surface"
     assert result["target_pixel_xy"] == [4, 2]
     assert result["target_depth_m"] == 1.0
-    assert compiled["precontact_pose"]["grasp_stage"] == "precontact"
-    assert result["adjusted_precontact_pose"]["grasp_stage"] == "precontact"
+    assert compiled["precontact_pose"]["waypoint_role"] == "grasp_precontact"
+    assert result["adjusted_precontact_pose"]["waypoint_role"] == "grasp_precontact"
     assert result["adjusted_precontact_pose"]["alignment_id"] == result["alignment_id"]

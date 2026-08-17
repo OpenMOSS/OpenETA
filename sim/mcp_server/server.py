@@ -703,6 +703,13 @@ def _safety_obstacles(
     return [obj for obj in obstacles if str(obj.get("name") or "") != nearest_name]
 
 
+# Ceiling on carry-sweep samples.  Sized so the density guarantee holds across a
+# Franka's full reach (~0.855 m) for the 1 cm floor that _object_aabb clamps
+# dims to: 0.855 / (0.01 / 2) + 1 = 172.  At 15.7 us per sample this is ~4 ms
+# worst case, so the headroom is nearly free.
+_MAX_SWEEP_SAMPLES = 256
+
+
 def _check_attached_object_sweep(
     attachment: dict,
     obstacles: list[dict],
@@ -716,6 +723,19 @@ def _check_attached_object_sweep(
     own thickness.  Sample density is set by the smallest held dimension so no
     sample can skip past a body thinner than the object itself.  This is pure
     AABB arithmetic — no GPU work — so the extra samples are cheap.
+
+    The sample ceiling bounds pathological spans; it should not silently trade
+    away the density guarantee.  At 24 it did: past a ~0.72 m span the step
+    outgrew what a 1 cm held object covers and a wall between two samples was
+    missed.  That span is *not* reachable through move_to -- one batch moves at
+    most ``scale * batch_steps * sqrt(3)``, i.e. 4.7 cm on LIBERO and 26 cm on
+    RoboCasa -- so this was defence in depth, not a live bug.  The ceiling did
+    bind on RoboCasa-scale spans (26 samples wanted) without ever approaching
+    the tunnelling threshold.  Raised anyway because the cost is trivial:
+    15.7 us per sample against ten obstacles, so 256 samples is 4 ms.
+
+    When the ceiling does bind, ``swept_density_capped`` and ``swept_step_m``
+    report it rather than letting a weaker check pass as an equal one.
     """
     if len(start_xyz) < 3 or len(end_xyz) < 3:
         return check_attached_object_collision(attachment, obstacles, end_xyz)
@@ -734,7 +754,11 @@ def _check_attached_object_sweep(
     except (TypeError, ValueError):
         return check_attached_object_collision(attachment, obstacles, end_xyz)
 
-    samples = max(1, min(24, int(span / max(0.01, smallest / 2.0)) + 1))
+    step_limit = max(0.01, smallest / 2.0)
+    wanted = int(span / step_limit) + 1
+    samples = max(1, min(_MAX_SWEEP_SAMPLES, wanted))
+    capped = wanted > _MAX_SWEEP_SAMPLES
+
     last_info: dict = {"available": True, "attached_object_world_collision": False}
     for index in range(1, samples + 1):
         ratio = index / samples
@@ -748,7 +772,14 @@ def _check_attached_object_sweep(
             info["swept_samples"] = samples
             info["swept_hit_fraction"] = ratio
             return True, info
+
     last_info["swept_samples"] = samples
+    # Surface the achieved density so a capped sweep is never mistaken for a
+    # sweep that met the guarantee.
+    last_info["swept_step_m"] = span / samples if samples else 0.0
+    if capped:
+        last_info["swept_density_capped"] = True
+        last_info["swept_samples_wanted"] = wanted
     return False, last_info
 
 

@@ -74,6 +74,63 @@ def test_sweep_sample_density_scales_with_smallest_held_dimension() -> None:
     assert thin_info["swept_samples"] > thick_info["swept_samples"]
 
 
+def test_sweep_density_holds_across_a_full_arm_reach() -> None:
+    """Regression: the sample ceiling silently voided the density guarantee.
+
+    At 24 the step outgrew the held object's coverage past a ~0.72 m span and a
+    wall between two samples was missed.  move_to cannot produce that span in
+    one batch (at most 4.7 cm on LIBERO, 26 cm on RoboCasa), so this guards the
+    helper's own contract rather than a reachable escape -- worth holding because
+    the ceiling binding and the guarantee failing were indistinguishable from
+    outside.  The density test above uses a 0.4 m span where the ceiling never
+    bound, so it could not see this.
+    """
+    held = {
+        "status": "confirmed",
+        "object_name": "card_1",
+        "relative_xyz": [0.0, 0.0, 0.0],
+        "dims": [0.01, 0.08, 0.08],
+    }
+
+    for span in (0.72, 0.855):
+        _, probe = _check_attached_object_sweep(held, [], [0.0] * 3, [span, 0.0, 0.0])
+        samples = probe["swept_samples"]
+        # Put a wall exactly midway between the first two samples: the worst
+        # case for a sweep that only tests discrete points.
+        midpoint = (span * (1 / samples) + span * (2 / samples)) / 2.0
+        wall = {"name": "wall", "position": [midpoint, 0.0, 0.0], "dims": [0.001, 1.0, 1.0]}
+
+        detected, _ = _check_attached_object_sweep(
+            held, [wall], [0.0] * 3, [span, 0.0, 0.0]
+        )
+        assert detected is True, f"tunnelled at span={span} with {samples} samples"
+
+
+def test_sweep_reports_when_the_sample_ceiling_binds() -> None:
+    """A capped sweep must not pass as one that met the density guarantee."""
+    held = {
+        "status": "confirmed",
+        "object_name": "card_1",
+        "relative_xyz": [0.0, 0.0, 0.0],
+        "dims": [0.01, 0.08, 0.08],
+    }
+
+    _, ok = _check_attached_object_sweep(held, [], [0.0] * 3, [0.5, 0.0, 0.0])
+    assert "swept_density_capped" not in ok
+    # Consecutive samples must overlap.  _object_aabb floors both held and
+    # obstacle dims at 1 cm, so one sample covers at least
+    # 0.005 (held half) + 0.005 (margin) + 0.005 (obstacle half) = 15 mm,
+    # and the step has to stay inside twice that.  Note the step limit itself
+    # bottoms out at 1 cm via max(0.01, smallest / 2), so for anything thinner
+    # than 2 cm the density is set by that floor rather than by smallest / 2.
+    assert ok["swept_step_m"] <= 0.03
+
+    # Physically unreachable, but the reporting contract should hold anyway.
+    _, capped = _check_attached_object_sweep(held, [], [0.0] * 3, [5.0, 0.0, 0.0])
+    assert capped["swept_density_capped"] is True
+    assert capped["swept_samples_wanted"] > capped["swept_samples"]
+
+
 def test_sweep_reports_clear_when_nothing_intersects() -> None:
     attachment = {
         "status": "confirmed",

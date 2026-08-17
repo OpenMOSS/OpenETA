@@ -64,6 +64,13 @@ from agent.tools.grasp_geometry import (
     build_compile_grasp_seed_handler,
     build_wrist_alignment_handler,
 )
+from agent.tools.grasp_pose_advisor import (
+    GRASP_SELECTION_ADVICE_SCHEMA,
+    GRASP_SELECTION_BUNDLE_SCHEMA,
+    BackendGraspPoseAdvisor,
+    GraspPoseAdvisor,
+    build_grasp_selection_bundle,
+)
 from agent.tools.attachment_probe import (
     ARTICULATED_ATTACHMENT_PROBE_SCHEMA,
     AttachmentProbeError,
@@ -97,6 +104,7 @@ __all__ = [
     "build_anyplace_handler",
     "build_contact_graspnet_handler",
     "build_grasp_pose_estimate_handler",
+    "build_grasp_selection_bundle",
     "build_compile_grasp_seed_handler",
     "build_prepare_attachment_probe_handler",
     "build_assess_attachment_probe_handler",
@@ -117,6 +125,10 @@ __all__ = [
     "build_stdio_contact_graspnet_mcp_predictor",
     "build_stdio_graspgenx_mcp_gripper_lister",
     "build_stdio_graspgenx_mcp_predictor",
+    "BackendGraspPoseAdvisor",
+    "GraspPoseAdvisor",
+    "GRASP_SELECTION_ADVICE_SCHEMA",
+    "GRASP_SELECTION_BUNDLE_SCHEMA",
     "make_tool_result",
     "make_tool_result_details",
     "tool_result_type",

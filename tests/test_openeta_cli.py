@@ -608,7 +608,8 @@ def test_cli_binds_graspgenx_behind_unified_grasp_tool(
     monkeypatch.setattr(
         runtime_assembly,
         "build_grasp_pose_estimate_handler",
-        lambda handlers: facade_backends.update(handlers) or prediction_handler,
+        lambda handlers, **_kwargs: facade_backends.update(handlers)
+        or prediction_handler,
     )
 
     tools = build_default_tool_registry()

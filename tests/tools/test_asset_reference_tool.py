@@ -475,6 +475,54 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
         is None
     )
 
+    # The public SAM3 contract uses ``mode=points`` + ``points``.  The
+    # reference-localization evidence retains the historical
+    # ``positive_points`` spelling internally; a successful real-shaped call
+    # must still consume the obligation so select does not trigger another
+    # sam3 call on the following turn.
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "tool_calls": [
+                    {
+                        "name": "sam3",
+                        "parameters": {
+                            "mode": "points",
+                            "image": scene,
+                            "points": points,
+                        },
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "parameters": {
+                                    "mode": "points",
+                                    "image": scene,
+                                    "points": points,
+                                },
+                                "outputs": {
+                                    "result_id": "sam3-point-1",
+                                    "source_image": scene,
+                                    "detections": [
+                                        {
+                                            "id": "detection_000",
+                                            "mask_ref": "/tmp/mask.png",
+                                            "bbox_xyxy": [250, 320, 300, 390],
+                                            "score": 0.9,
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    assert memory.pending_reference_localization() is None
+    assert memory.pending_sam3_selection()["result_id"] == "sam3-point-1"
+
 
 def test_object_memory_handler_returns_structured_search_ambiguity(tmp_path: Path) -> None:
     scene = tmp_path / "scene.png"

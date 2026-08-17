@@ -87,6 +87,11 @@ from agent.tools.handlers import (
     build_sse_sam3_mcp_segmenter,
 )
 from agent.tools.grasp_geometry import build_compile_grasp_seed_handler
+from agent.tools.grasp_pose_advisor import (
+    GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
+    GRASP_POSE_ADVISOR_MAX_VISION_IMAGES,
+    BackendGraspPoseAdvisor,
+)
 from agent.tools.mcp_registry import load_mcp_server_url
 from agent.tools.object_memory import (
     ObjectMemoryBankClient,
@@ -186,6 +191,7 @@ class RuntimeAssemblyConfig:
     visual_history: VisualHistoryConfig = field(default_factory=VisualHistoryConfig.from_env)
     perception_capability_timeout_s: float = 10.0
     anygrasp_capability_query: AnyGraspCapabilityQuery | None = None
+    grasp_pose_advisor_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,7 +269,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     tools.bind_handler(
         "assess_attachment_probe",
         build_assess_attachment_probe_handler(
-            config.backend_factory(max_tokens=256, max_vision_images=4)
+            config.backend_factory(
+                max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+                max_vision_images=4,
+            )
         ),
         replace=True,
     )
@@ -354,6 +363,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         endpoints=effective_endpoints,
         backend_factory=config.backend_factory,
         artifact_root=artifact_root,
+        grasp_pose_advisor_enabled=config.grasp_pose_advisor_enabled,
     )
 
     planner = ToolCallingPlanner(
@@ -531,6 +541,7 @@ def bind_runtime_perception_tools(
     endpoints: RuntimeMcpEndpoints,
     backend_factory: BackendFactory,
     artifact_root: Path,
+    grasp_pose_advisor_enabled: bool = True,
 ) -> DepthPriorPrefetchCoordinator | None:
     object_memory_configuration_error = ""
     try:
@@ -648,9 +659,23 @@ def bind_runtime_perception_tools(
             url=endpoints.contact_graspnet_url
         )
     if grasp_backends:
+        advisor = (
+            BackendGraspPoseAdvisor(
+                backend_factory(
+                    max_tokens=GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
+                    max_vision_images=GRASP_POSE_ADVISOR_MAX_VISION_IMAGES,
+                )
+            )
+            if grasp_pose_advisor_enabled
+            else None
+        )
         tools.bind_handler(
             "grasp_pose_estimate",
-            build_grasp_pose_estimate_handler(grasp_backends),
+            build_grasp_pose_estimate_handler(
+                grasp_backends,
+                advisor=advisor,
+                selection_output_root=artifact_root / "grasp_selection",
+            ),
             replace=True,
         )
     return depth_prefetch

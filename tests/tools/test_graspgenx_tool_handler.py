@@ -53,6 +53,7 @@ def _parameters(tmp_path: Path) -> dict[str, Any]:
         "intrinsics": dict(INTRINSICS),
         "gripper_name": "franka_panda",
         "up_direction_camera": [0.0, 0.0, -2.0],
+        "depth_cutoff_factor": 1.25,
     }
 
 
@@ -172,6 +173,7 @@ def test_specs_are_visible_without_dummy_handlers() -> None:
         "intrinsics",
         "gripper_name",
         "up_direction_camera",
+        "depth_cutoff_factor",
     }
     assert listing.effect == ToolEffect.READ_ONLY
     assert listing.safe_by_default is True
@@ -204,10 +206,12 @@ def test_handler_sends_geometry_only_and_generates_audited_visuals(tmp_path: Pat
         "intrinsics",
         "gripper_name",
         "up_direction_camera",
+        "depth_cutoff_factor",
     }
     assert base64.b64decode(calls[0]["depth"]["base64"])
     assert base64.b64decode(calls[0]["object_mask"]["base64"])
     assert calls[0]["up_direction_camera"] == [0.0, 0.0, -1.0]
+    assert calls[0]["depth_cutoff_factor"] == 1.25
     assert result.details["candidate_count"] == 2
     assert [item["id"] for item in result.details["grasp_candidates"]] == [
         "graspgenx_000",
@@ -223,6 +227,7 @@ def test_handler_sends_geometry_only_and_generates_audited_visuals(tmp_path: Pat
         "intrinsics": INTRINSICS,
         "gripper_name": "franka_panda",
         "up_direction_camera": [0.0, 0.0, -1.0],
+        "depth_cutoff_factor": 1.25,
     }
     assert result.details["best_grasp_candidate"]["id"] == "graspgenx_000"
     assert result.details["active_grasp_candidate"]["id"] == "graspgenx_000"
@@ -271,6 +276,14 @@ def test_handler_accepts_resolved_mask_source_symlink(tmp_path: Path) -> None:
             "invalid_intrinsics",
         ),
         (lambda value, root: value.update(gripper_name=""), "missing_gripper_name"),
+        (
+            lambda value, root: value.update(depth_cutoff_factor=4.01),
+            "invalid_depth_cutoff_factor",
+        ),
+        (
+            lambda value, root: value.update(depth_cutoff_factor=True),
+            "invalid_depth_cutoff_factor",
+        ),
         (
             lambda value, root: value.update(up_direction_camera=[0, 0, 0]),
             "invalid_up_direction_camera",

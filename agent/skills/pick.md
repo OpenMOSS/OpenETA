@@ -78,6 +78,13 @@ Use as text guidance only, not an executable macro. Inspect each result.
    is shallow-grasp evidence, especially after a prior slip; it is not an
    automatic rejection. Record the id and rationale in Agent memory;
    no host task phase chooses it.
+   When `grasp_selection_advice` is present, treat it as read-only visual evidence:
+   compare its recommendation, rejected-candidate reasons, confidence, and
+   uncertainties with task-level constraints and prior outcomes. The advisor cannot
+   activate a grasp. You still own the final candidate choice and must explicitly
+   pass that exact candidate to `compile_grasp_seed`. If it abstains or has low
+   confidence, inspect `grasp_selection_bundle.bundle_ref` or its preview images
+   before choosing; do not silently fall back to rank 0.
    When selecting the SAM3 mask, include truthful
    `target_geometry_family` (`upright_can`, `upright_bottle`, `boxed_item`,
    `bowl`, `apple`, `drawer_handle`, or `other`) only when visually clear. It is

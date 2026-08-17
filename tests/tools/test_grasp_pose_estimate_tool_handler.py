@@ -161,6 +161,84 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
     assert result.details["source"]["camera_frame_id"] == "agentview"
 
 
+def test_graspgenx_receives_depth_cutoff_factor_from_unified_hints(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def graspgenx(context: ToolExecutionContext) -> ToolResult:
+        calls.append(dict(context.parameters))
+        return _success(_candidate("graspgenx-native-0", score=0.8))
+
+    result = build_grasp_pose_estimate_handler(
+        {"graspgenx": graspgenx},
+        backend_order=("graspgenx",),
+        graspgenx_gripper_name="franka_panda",
+        graspgenx_up_direction_camera=(0.0, 0.0, -1.0),
+    )(_context(_parameters(tmp_path)))
+
+    assert result.success is True
+    assert calls[0]["depth_cutoff_factor"] == 1.25
+    assert calls[0]["intrinsics"] == INTRINSICS
+
+
+def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> None:
+    parameters = _parameters(tmp_path)
+    Image.new("RGB", (16, 16), (50, 60, 70)).save(parameters["rgb"])
+    Image.new("I;16", (16, 16), 500).save(parameters["depth"])
+    Image.new("L", (16, 16), 255).save(parameters["object_mask"]["mask_ref"])
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    seen = []
+
+    class Advisor:
+        def advise(self, selection_bundle, *, task):
+            seen.append((selection_bundle, task))
+            ids = [item["candidate_id"] for item in selection_bundle["candidates"]]
+            return {
+                "schema_version": "openeta.grasp_selection_advice.v1",
+                "status": "completed",
+                "decision": "recommend",
+                "recommended_candidate_id": ids[1],
+                "alternatives": [ids[0]],
+                "confidence": 0.75,
+                "reasons": ["candidate two is visually centered"],
+                "rejected": {},
+                "uncertainties": [],
+                "bundle_id": selection_bundle["bundle_id"],
+                "advisor_role": "read_only_grasp_pose_advisor",
+            }
+
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        too_wide = _candidate("wide", score=1.0)
+        too_wide["width"] = 0.1
+        return _success(
+            too_wide,
+            _candidate("lower", score=0.5),
+            _candidate("higher", score=0.8),
+        )
+
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": backend},
+        backend_order=("anygrasp",),
+        advisor=Advisor(),
+        selection_output_root=tmp_path / "selection",
+    )(_context(parameters))
+
+    assert result.success is True
+    assert len(seen) == 1
+    bundle = seen[0][0]
+    assert seen[0][1] == ""
+    assert [item["backend_candidate_id"] for item in bundle["candidates"]] == [
+        "higher",
+        "lower",
+    ]
+    assert result.details["grasp_selection_advice"]["recommended_candidate_id"].endswith(
+        "-001"
+    )
+    assert Path(result.details["grasp_selection_bundle"]["overview_ref"]).is_file()
+    assert "must still choose" in result.content
+
+
 def test_host_excluded_backend_is_skipped(tmp_path: Path) -> None:
     calls: list[str] = []
 

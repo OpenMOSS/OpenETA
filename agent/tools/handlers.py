@@ -23,6 +23,11 @@ from agent.tools.grasp_geometry import (
     build_compile_grasp_seed_handler,
     build_wrist_alignment_handler,
 )
+from agent.tools.grasp_pose_advisor import (
+    GRASP_SELECTION_ADVICE_SCHEMA,
+    GraspPoseAdvisor,
+    build_grasp_selection_bundle,
+)
 from agent.tools.registry import (
     ToolExecutionContext,
     ToolHandler,
@@ -57,6 +62,7 @@ SAM3_EVIDENCE_ROLES = frozenset({DEFAULT_SAM3_EVIDENCE_ROLE, "placement_region"}
 DEFAULT_ANYPLACE_OUTPUT_ROOT = Path("tmp") / "tool_result" / "anyplace"
 DEFAULT_MOLMOPOINT_OUTPUT_ROOT = Path("tmp") / "tool_result" / "molmopoint"
 DEFAULT_GRASPGENX_OUTPUT_ROOT = Path("tmp") / "tool_result" / "graspgenx"
+DEFAULT_GRASP_SELECTION_OUTPUT_ROOT = Path("tmp") / "tool_result" / "grasp_selection"
 DEFAULT_DEPTH_PRIOR_OUTPUT_ROOT = Path("tmp") / "tool_result" / "depth_prior"
 GRASP_POSE_ESTIMATE_SCHEMA = "openeta.grasp_pose_estimate.v1"
 DEFAULT_GRASP_POSE_BACKEND_ORDER = (
@@ -1074,6 +1080,8 @@ def build_grasp_pose_estimate_handler(
     backend_order: Sequence[str] = DEFAULT_GRASP_POSE_BACKEND_ORDER,
     graspgenx_gripper_name: str = "franka_panda",
     graspgenx_up_direction_camera: Sequence[float] = (0.0, 0.0, -1.0),
+    advisor: GraspPoseAdvisor | None = None,
+    selection_output_root: str | Path = DEFAULT_GRASP_SELECTION_OUTPUT_ROOT,
 ) -> ToolHandler:
     """Build one agent-facing grasp estimator over independent backend handlers."""
 
@@ -1208,7 +1216,19 @@ def build_grasp_pose_estimate_handler(
                     hints=hints,
                 )
                 if normalized.success:
-                    return normalized
+                    return _attach_grasp_selection_advice(
+                        normalized,
+                        advisor=advisor,
+                        task=(
+                            str(context.observation.task or "")
+                            if context.observation is not None
+                            else str(context.metadata.get("task") or "")
+                        ),
+                        output_root=artifact_session_root(
+                            selection_output_root,
+                            artifact_session_id(context.metadata),
+                        ),
+                    )
                 reason = _grasp_backend_failure_reason(normalized)
                 attempt["status"] = "failed"
                 attempt["reason"] = reason
@@ -1262,6 +1282,114 @@ def build_grasp_pose_estimate_handler(
         )
 
     return handler
+
+
+def _attach_grasp_selection_advice(
+    result: ToolResult,
+    *,
+    advisor: GraspPoseAdvisor | None,
+    task: str,
+    output_root: str | Path,
+) -> ToolResult:
+    """Add visual advisory evidence without changing grasp activation semantics."""
+
+    if advisor is None:
+        return result
+    details = result.details if isinstance(result.details, dict) else {}
+    diagnostics = details.setdefault("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        diagnostics = []
+        details["diagnostics"] = diagnostics
+    try:
+        bundle, artifacts = build_grasp_selection_bundle(
+            details,
+            output_root=output_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - advisory evidence is fail-soft.
+        details["grasp_selection_advice"] = {
+            "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,
+            "status": "unavailable",
+            "decision": "abstain",
+            "recommended_candidate_id": "",
+            "alternatives": [],
+            "confidence": 0.0,
+            "reasons": [],
+            "rejected": {},
+            "uncertainties": [
+                "Candidate preview rendering failed; the main Agent retains full choice."
+            ],
+            "advisor_role": "read_only_grasp_pose_advisor",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        diagnostics.append(
+            {
+                "code": "grasp_selection_preview_unavailable",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        )
+        result.details = details
+        return result
+
+    details["grasp_selection_bundle"] = bundle
+    existing_artifacts = details.setdefault("artifacts", [])
+    if not isinstance(existing_artifacts, list):
+        existing_artifacts = []
+        details["artifacts"] = existing_artifacts
+    existing_artifacts.extend(artifacts)
+    try:
+        advice = advisor.advise(bundle, task=task)
+    except Exception as exc:  # noqa: BLE001 - advisor cannot block perception.
+        advice = {
+            "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,
+            "status": "unavailable",
+            "decision": "abstain",
+            "recommended_candidate_id": "",
+            "alternatives": [],
+            "confidence": 0.0,
+            "reasons": [],
+            "rejected": {},
+            "uncertainties": [
+                "The isolated advisor failed; inspect the persisted selection bundle if needed."
+            ],
+            "bundle_id": bundle.get("bundle_id"),
+            "advisor_role": "read_only_grasp_pose_advisor",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        diagnostics.append(
+            {
+                "code": "grasp_pose_advisor_unavailable",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "bundle_id": bundle.get("bundle_id"),
+            }
+        )
+    details["grasp_selection_advice"] = advice
+    result.details = details
+    status = str(advice.get("status") or "")
+    recommended = str(advice.get("recommended_candidate_id") or "")
+    if status in {"completed", "skipped_single_candidate"} and recommended:
+        reasons = advice.get("reasons")
+        reason = (
+            str(reasons[0]).strip()
+            if isinstance(reasons, list) and reasons and str(reasons[0]).strip()
+            else ""
+        )
+        reason_summary = f"reason: {reason} " if reason else ""
+        result.content = (
+            f"{result.content} Read-only grasp advisor recommends {recommended} "
+            f"with confidence {float(advice.get('confidence') or 0.0):.2f}; "
+            f"{reason_summary}the main Agent must still choose and call "
+            "compile_grasp_seed explicitly."
+        )
+    elif status == "unavailable":
+        result.content = (
+            f"{result.content} Grasp preview evidence was persisted, but the read-only "
+            "advisor abstained or was unavailable; the main Agent retains full choice."
+        )
+    return result
 
 
 def build_contact_graspnet_handler(
@@ -1399,6 +1527,17 @@ def build_graspgenx_handler(
         intrinsics_value = context.parameters.get("intrinsics")
         gripper_name = _string_param(context.parameters.get("gripper_name"))
         up_value = context.parameters.get("up_direction_camera")
+        raw_depth_cutoff_factor = context.parameters.get(
+            "depth_cutoff_factor", 1.0
+        )
+        try:
+            depth_cutoff_factor = (
+                math.nan
+                if isinstance(raw_depth_cutoff_factor, bool)
+                else float(raw_depth_cutoff_factor)
+            )
+        except (TypeError, ValueError):
+            depth_cutoff_factor = math.nan
         object_mask_request = (
             dict(object_mask_value)
             if isinstance(object_mask_value, Mapping)
@@ -1415,6 +1554,7 @@ def build_graspgenx_handler(
             ),
             "gripper_name": gripper_name,
             "up_direction_camera": up_value,
+            "depth_cutoff_factor": depth_cutoff_factor,
         }
 
         def finish(
@@ -1496,6 +1636,12 @@ def build_graspgenx_handler(
             return fail("invalid_intrinsics")
         if not gripper_name:
             return fail("missing_gripper_name")
+        if (
+            not math.isfinite(depth_cutoff_factor)
+            or depth_cutoff_factor < 1.0
+            or depth_cutoff_factor > 4.0
+        ):
+            return fail("invalid_depth_cutoff_factor")
         up_direction = _normalise_graspgenx_up_direction(up_value)
         if up_direction is None:
             return fail("invalid_up_direction_camera")
@@ -1546,6 +1692,7 @@ def build_graspgenx_handler(
                     "intrinsics": intrinsics,
                     "gripper_name": gripper_name,
                     "up_direction_camera": up_direction,
+                    "depth_cutoff_factor": depth_cutoff_factor,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - transport failures stay structured.
@@ -1566,6 +1713,7 @@ def build_graspgenx_handler(
             intrinsics=intrinsics,
             gripper_name=gripper_name,
             up_direction_camera=up_direction,
+            depth_cutoff_factor=depth_cutoff_factor,
         )
         if result.success:
             try:
@@ -3969,6 +4117,7 @@ def _grasp_pose_backend_parameters(
             **common,
             "gripper_name": graspgenx_gripper_name,
             "up_direction_camera": up_direction,
+            "depth_cutoff_factor": hints.get("depth_cutoff_factor", 1.0),
         }
     return None
 
@@ -4616,6 +4765,7 @@ def _normalise_graspgenx_response(
     intrinsics: JsonDict,
     gripper_name: str,
     up_direction_camera: list[float],
+    depth_cutoff_factor: float,
 ) -> ToolResult:
     if not isinstance(response, Mapping):
         return _graspgenx_failure("mcp_call_failed")
@@ -4712,6 +4862,7 @@ def _normalise_graspgenx_response(
                 "intrinsics": dict(intrinsics),
                 "gripper_name": gripper_name,
                 "up_direction_camera": list(up_direction_camera),
+                "depth_cutoff_factor": depth_cutoff_factor,
             },
             "candidate_count": len(candidates),
             "grasp_candidates": candidates,

@@ -273,6 +273,16 @@ def test_decision_state_is_bounded_index_over_packets_bundles_and_last_effect() 
                                 "outputs": {
                                     "result_id": "sam3-result-1",
                                     "detection_count": 1,
+                                    "grasp_selection_advice": {
+                                        "schema_version": "openeta.grasp_selection_advice.v1",
+                                        "recommended_candidate_id": "gpe-001",
+                                        "confidence": 0.8,
+                                    },
+                                    "grasp_selection_bundle": {
+                                        "schema_version": "openeta.grasp_selection_bundle.v1",
+                                        "bundle_id": "grasp-selection:example",
+                                        "bundle_ref": "/session/selection_bundle.json",
+                                    },
                                 },
                                 "artifacts": [
                                     {"path": "/session/selection.contact-sheet.png"}
@@ -308,6 +318,12 @@ def test_decision_state_is_bounded_index_over_packets_bundles_and_last_effect() 
     assert state["active_bundles"]["grasp_pose_estimate"]["status"] == "ready"
     assert state["last_action_effect"]["semantic_outcome"] == "detections_available"
     assert state["last_action_effect"]["outputs"]["result_id"] == "sam3-result-1"
+    assert state["last_action_effect"]["grasp_selection_advice"][
+        "recommended_candidate_id"
+    ] == "gpe-001"
+    assert state["last_action_effect"]["grasp_selection_bundle"]["bundle_id"] == (
+        "grasp-selection:example"
+    )
     assert state["last_action_effect"]["artifact_refs"] == [
         "/session/selection.contact-sheet.png"
     ]

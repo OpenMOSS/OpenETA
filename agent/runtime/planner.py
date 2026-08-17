@@ -2185,6 +2185,12 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
         details = details if isinstance(details, dict) else {}
         outputs = details.get("outputs")
         outputs = outputs if isinstance(outputs, dict) else {}
+        grasp_selection_advice = details.get("grasp_selection_advice")
+        if not isinstance(grasp_selection_advice, dict):
+            grasp_selection_advice = outputs.get("grasp_selection_advice")
+        grasp_selection_bundle = details.get("grasp_selection_bundle")
+        if not isinstance(grasp_selection_bundle, dict):
+            grasp_selection_bundle = outputs.get("grasp_selection_bundle")
         artifacts = details.get("artifacts")
         artifacts = artifacts if isinstance(artifacts, list) else []
         return {
@@ -2199,6 +2205,16 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "facts_produced": details.get("facts_produced", []),
             "recovery_options": details.get("recovery_options", []),
             "outputs": _bounded_decision_value(outputs),
+            "grasp_selection_advice": _bounded_decision_value(
+                grasp_selection_advice
+            )
+            if isinstance(grasp_selection_advice, dict)
+            else None,
+            "grasp_selection_bundle": _bounded_decision_value(
+                grasp_selection_bundle
+            )
+            if isinstance(grasp_selection_bundle, dict)
+            else None,
             "artifact_refs": [
                 ref
                 for artifact in artifacts[:12]

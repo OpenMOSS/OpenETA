@@ -43,6 +43,7 @@ def _request() -> dict[str, Any]:
         "intrinsics": {},
         "gripper_name": "franka_panda",
         "up_direction_camera": [0.0, 0.0, -1.0],
+        "depth_cutoff_factor": 1.25,
     }
 
 
@@ -138,6 +139,7 @@ def test_predict_callable_has_complete_schema_and_documentation() -> None:
         "intrinsics",
         "gripper_name",
         "up_direction_camera",
+        "depth_cutoff_factor",
     ]
     docstring = inspect.getdoc(graspgenx_mcp_server.predict_grasps) or ""
     assert "RGB is not" in docstring
@@ -146,6 +148,7 @@ def test_predict_callable_has_complete_schema_and_documentation() -> None:
     assert "above 3500" in docstring
     assert "without a 0.7 cutoff" in docstring
     assert "camera/opencv" in docstring
+    assert "depth_cutoff_factor" in docstring
     assert "GraspGenX" in docstring and "GraspNet/AnyGrasp" in docstring
 
 
@@ -189,6 +192,9 @@ def test_real_fastmcp_schema_exposes_dynamic_gripper_enum() -> None:
     assert by_name["predict_grasps"].inputSchema["properties"]["gripper_name"][
         "enum"
     ] == ["franka_panda", "robotiq_2f_85"]
+    assert by_name["predict_grasps"].inputSchema["properties"][
+        "depth_cutoff_factor"
+    ]["default"] == 1.0
 
 
 def test_health_reports_transport_readiness_without_loading_model(

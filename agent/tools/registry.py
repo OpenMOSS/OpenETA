@@ -1216,7 +1216,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Generate one normalized score-descending camera-frame grasp "
                 "candidate queue from aligned RGB-D and an optional target mask. "
                 "The host selects compatible AnyGrasp, Contact-GraspNet, or "
-                "GraspGenX backends and performs structured fallback."
+                "GraspGenX backends and performs structured fallback. After final "
+                "host filtering, an isolated read-only visual advisor may return a "
+                "ranked recommendation with reasons; it never activates a candidate."
             ),
             parameters={
                 "bundle_id": (
@@ -1275,6 +1277,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "up_direction_camera": (
                     "required nonzero gravity-opposing direction [x, y, z] in the "
                     "OpenCV camera frame"
+                ),
+                "depth_cutoff_factor": (
+                    "optional finite factor in [1, 4], default 1; multiplies the "
+                    "GraspGenX service depth cutoff while preserving raw depth, "
+                    "camera intrinsics, and returned metric grasp geometry"
                 ),
             },
             safe_by_default=False,

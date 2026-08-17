@@ -1657,7 +1657,16 @@ class AgentMemory:
             }
             required_value = localization.get(required_parameter)
             if required_value is not None:
-                parameters[required_parameter] = required_value
+                # ``positive_points`` is the evidence-bundle field retained
+                # for asset-reference compatibility.  The public SAM3 tool
+                # contract calls the same value ``points``.  Emit the public
+                # spelling here so repair guidance can be executed verbatim.
+                if required_parameter == "positive_points":
+                    parameters["mode"] = "points"
+                    parameters["points"] = required_value
+                    parameters.pop("prompt", None)
+                else:
+                    parameters[required_parameter] = required_value
             options.append(
                 {
                     "tool": "sam3",
@@ -1806,12 +1815,15 @@ class AgentMemory:
             asset_reference = self.target_asset_reference()
             if isinstance(asset_reference, dict):
                 verification = asset_reference.get("exact_instance_verification")
+                supplied_points = parameters.get("points")
+                if supplied_points is None:
+                    supplied_points = parameters.get("positive_points")
                 if (
                     isinstance(verification, dict)
                     and str(verification.get("decision") or "").lower() == "match"
                     and str(parameters.get("image") or "")
                     == str(asset_reference.get("scene_image") or "")
-                    and parameters.get("positive_points") == asset_reference.get("positive_points")
+                    and supplied_points == asset_reference.get("positive_points")
                 ):
                     base["reference_verification"] = dict(verification)
             self.facts.pop(PENDING_SAM3_SELECTION_KEY, None)
@@ -2149,8 +2161,11 @@ class AgentMemory:
                 parameters = {}
             pending = self.pending_reference_localization() or {}
             required_parameter = str(pending.get("required_parameter") or "roi_bbox_xyxy")
+            supplied_points = parameters.get("points")
+            if supplied_points is None:
+                supplied_points = parameters.get("positive_points")
             geometry_matches = (
-                parameters.get("positive_points") == pending.get("positive_points")
+                supplied_points == pending.get("positive_points")
                 if required_parameter == "positive_points"
                 else parameters.get("roi_bbox_xyxy") is not None
             )
@@ -2163,7 +2178,11 @@ class AgentMemory:
                     "asset_reference_localization_resolved",
                     {
                         "target_object": pending.get("target_object"),
-                        required_parameter: parameters.get(required_parameter),
+                        required_parameter: (
+                            supplied_points
+                            if required_parameter == "positive_points"
+                            else parameters.get(required_parameter)
+                        ),
                     },
                 )
                 self._save_working_memory()
@@ -4655,6 +4674,16 @@ def _extract_grasp_candidate_artifacts(call: JsonDict, details: JsonDict) -> lis
             "source_depth": source.get("source_depth") or grasp_source.get("depth"),
             "target_mask": source.get("target_mask") or grasp_source.get("object_mask"),
             "selected_grasp_source": source.get("source"),
+            "grasp_selection_bundle": (
+                source.get("grasp_selection_bundle")
+                if isinstance(source.get("grasp_selection_bundle"), dict)
+                else None
+            ),
+            "grasp_selection_advice": (
+                source.get("grasp_selection_advice")
+                if isinstance(source.get("grasp_selection_advice"), dict)
+                else None
+            ),
             "source_tool": grasp_source.get("source_tool") or tool_name,
             "source_backend": grasp_source.get("source_backend")
             or source.get("selected_backend")
@@ -5122,6 +5151,8 @@ def _compact_tool_result_details(details: JsonDict) -> JsonDict:
         "selection_required",
         "selected_detection",
         "selection_bundle",
+        "grasp_selection_bundle",
+        "grasp_selection_advice",
         "source_rgb",
         "source_depth",
         "target_mask",
@@ -5143,6 +5174,8 @@ def _compact_tool_result_details(details: JsonDict) -> JsonDict:
                 "rotation_matrix",
                 "selected_detection",
                 "selection_bundle",
+                "grasp_selection_bundle",
+                "grasp_selection_advice",
                 "observation_summary",
                 "motion_summary",
             }
@@ -5168,6 +5201,8 @@ def _compact_tool_result_details(details: JsonDict) -> JsonDict:
             "selection_required",
             "selected_detection",
             "selection_bundle",
+            "grasp_selection_bundle",
+            "grasp_selection_advice",
             "source_rgb",
             "source_depth",
             "target_mask",
@@ -5212,6 +5247,8 @@ def _compact_tool_result_details(details: JsonDict) -> JsonDict:
                     "rotation_matrix",
                     "selected_detection",
                     "selection_bundle",
+                    "grasp_selection_bundle",
+                    "grasp_selection_advice",
                     "observation_summary",
                     "motion_summary",
                     "results",

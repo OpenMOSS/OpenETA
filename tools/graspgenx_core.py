@@ -574,11 +574,23 @@ class GraspGenXBackend:
         intrinsics: dict[str, Any] | None,
         gripper_name: str,
         up_direction_camera: Any,
+        depth_cutoff_factor: float = 1.0,
     ) -> dict[str, Any]:
         start = time.perf_counter()
         metadata = self._metadata_base(gripper_name=gripper_name)
 
         try:
+            if isinstance(depth_cutoff_factor, bool):
+                raise GraspGenXInputError("invalid_depth_cutoff_factor")
+            try:
+                factor = float(depth_cutoff_factor)
+            except (TypeError, ValueError) as exc:
+                raise GraspGenXInputError("invalid_depth_cutoff_factor") from exc
+            if not math.isfinite(factor) or factor < 1.0 or factor > 4.0:
+                raise GraspGenXInputError("invalid_depth_cutoff_factor")
+            effective_depth_truncation = self.depth_truncation * factor
+            metadata["depth_cutoff_factor"] = factor
+            metadata["depth_truncation"] = effective_depth_truncation
             gripper = self._validate_gripper_name(gripper_name)
             parsed_intrinsics = validate_intrinsics(intrinsics)
             normalized_up = validate_up_direction(up_direction_camera)
@@ -605,7 +617,7 @@ class GraspGenXBackend:
                 depth_array=depth_array,
                 object_mask_array=mask_array,
                 intrinsics=parsed_intrinsics,
-                depth_truncation=self.depth_truncation,
+                depth_truncation=effective_depth_truncation,
             )
             metadata.update(point_metadata)
             alignment = rotation_aligning_up_to_z(normalized_up)

@@ -95,3 +95,48 @@ def test_memory_does_not_duplicate_an_existing_structured_artifact(tmp_path: Pat
 
     assert action.command["tool_calls"][0]["result"]["details"]["artifacts"] == [existing]
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_memory_indexes_grasp_selection_evidence_from_tool_result_outputs(
+    tmp_path: Path,
+) -> None:
+    memory = AgentMemory(artifact_root=tmp_path / "artifacts")
+    memory.start_session(task="pick object", session_id="session-a")
+    advice = {
+        "schema_version": "openeta.grasp_selection_advice.v1",
+        "recommended_candidate_id": "grasp_001",
+        "confidence": 0.8,
+    }
+    bundle = {
+        "schema_version": "openeta.grasp_selection_bundle.v1",
+        "bundle_id": "grasp-selection:example",
+        "bundle_ref": str(tmp_path / "selection_bundle.json"),
+    }
+    action = EnvAction(
+        action_type="tool_call",
+        command={
+            "tool_calls": [
+                {
+                    "name": "grasp_pose_estimate",
+                    "result": {
+                        "success": True,
+                        "details": {
+                            "outputs": {
+                                "result_id": "run-001",
+                                "grasp_candidates": [_candidate(0), _candidate(1)],
+                                "grasp_selection_advice": advice,
+                                "grasp_selection_bundle": bundle,
+                            },
+                            "artifacts": [],
+                        },
+                    },
+                }
+            ]
+        },
+    )
+
+    memory.add_action(action)
+
+    preview = memory.artifacts["grasp_pose_estimate_grasp_candidates_latest"]["value"]
+    assert preview["grasp_selection_advice"] == advice
+    assert preview["grasp_selection_bundle"] == bundle

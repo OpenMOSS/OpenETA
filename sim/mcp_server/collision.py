@@ -34,7 +34,10 @@ _checkers: dict[str, CollisionChecker] = {}
 # ── Graceful-degrade sentinel for when cuRobo / CUDA is missing ──────
 _curobo_available: bool | None = None
 
-_RECEPTACLE_CATEGORIES = frozenset({"basket", "bin", "bowl", "tray", "container"})
+RECEPTACLE_CATEGORIES = frozenset({"basket", "bin", "bowl", "tray", "container"})
+
+# Back-compat alias for in-module readers.
+_RECEPTACLE_CATEGORIES = RECEPTACLE_CATEGORIES
 
 
 def _detect_curobo() -> bool:
@@ -299,6 +302,11 @@ class CollisionChecker:
         """Update the collision world if objects have changed.
 
         Returns ``True`` if the world was updated.
+
+        An empty *objects* list explicitly CLEARS the world.  Returning early
+        without clearing would leave the previous call's obstacles resident at
+        their stale poses, so a later query would test the arm against
+        last-frame geometry and report a stale verdict as authoritative.
         """
         obj_hash = hash(tuple(
             (o.get("name"), tuple(o.get("position", [])),
@@ -309,13 +317,23 @@ class CollisionChecker:
             return False
         self._last_objects_hash = obj_hash
 
+        rw = self._robot_world
+        if rw is None:
+            return False
+
         wc = _build_world_config(objects)
-        if wc is not None:
-            rw = self._robot_world
-            if rw is not None:
-                rw.update_world(wc)
+        if wc is None:
+            # No usable geometry → drop every obstacle rather than keep the
+            # previous world.  An empty WorldConfig keeps the primitive
+            # collision type registered but with nothing in it, which
+            # ``_max_world_penetration_esdf`` reads as "nothing to penetrate".
+            from curobo.geom.types import WorldConfig as CuroboWorldConfig
+
+            rw.update_world(CuroboWorldConfig())
             return True
-        return False
+
+        rw.update_world(wc)
+        return True
 
     # ── penetration query ──────────────────────────────────────────
 
@@ -387,12 +405,14 @@ class CollisionChecker:
             _logger.error("Failed to create cuRobo RobotWorld: %s", exc)
             return False, {"available": False, "reason": f"RobotWorld init failed: {exc}"}
 
-        # Update world obstacles if needed
-        if objects:
-            try:
-                self._update_world_if_changed(objects)
-            except Exception:
-                pass  # best-effort; self-collision still works
+        # Update world obstacles.  Called unconditionally — an empty list must
+        # reach _update_world_if_changed so it can clear stale geometry.
+        world_update_error = ""
+        try:
+            self._update_world_if_changed(objects or [])
+        except Exception as exc:  # best-effort; self-collision still works
+            world_update_error = str(exc)
+            _logger.error("World update failed, world verdict is not authoritative: %s", exc)
 
         # Slice to arm DOF (ManiSkill: 9D → 7D)
         q_arm = joint_positions[:self._arm_dof]
@@ -426,6 +446,8 @@ class CollisionChecker:
         except Exception as exc:
             _logger.error("Collision check failed: %s", exc)
             return False, {"available": True, "error": str(exc),
+                           "world_checked": False, "self_checked": False,
+                           "obstacle_count": 0,
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
 
@@ -435,13 +457,31 @@ class CollisionChecker:
         self_coll = d_self_val > _SELF_PENETRATION_TOL
         in_collision = world_coll or self_coll
 
-        return in_collision, {
+        # ``world_checked`` distinguishes "checked the world and it was clear"
+        # from "never had any world geometry to check".  Without it a caller
+        # cannot tell a real pass from an unpopulated world, and an
+        # unconditional ``detected: False`` reads as a safety guarantee that
+        # was never actually evaluated.
+        info = {
             "available": True,
+            "world_checked": self._world_has_obstacles(rw) and not world_update_error,
+            "self_checked": True,
+            "obstacle_count": len(objects or []),
             "max_world_penetration": d_world_val,
             "max_self_penetration": d_self_val,
             "world_collision": world_coll,
             "self_collision": self_coll,
         }
+        if world_update_error:
+            info["world_update_error"] = world_update_error
+        return in_collision, info
+
+    @staticmethod
+    def _world_has_obstacles(rw: object) -> bool:
+        """True when the cuRobo world actually holds primitive obstacles."""
+        world = getattr(rw, "world_model", None)
+        ctypes = getattr(world, "collision_types", {}) if world is not None else {}
+        return bool(ctypes.get("primitive"))
 
     def close(self) -> None:
         """Release cuRobo GPU resources."""

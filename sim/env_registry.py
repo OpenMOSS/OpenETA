@@ -100,7 +100,7 @@ def hot_activate(bench: str) -> bool:
     }
     pkg = _BENCH_PKG.get(bench, bench)
     if bench == "libero":
-        lib_dir = os.environ.get("LIBERO_DIR", "/tmp/LIBERO")
+        lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
         if lib_dir not in sys.path:
             sys.path.insert(0, lib_dir)
 
@@ -419,7 +419,7 @@ def _make_libero_direct(task: Any, render_mode: str | None = "rgb_array",
                          image_width: int | None = None, image_height: int | None = None) -> gym.Env:
     """Create a LIBERO OffScreenRenderEnv from a Benchmark Task."""
     import sys, os
-    lib_dir = os.environ.get("LIBERO_DIR", "/tmp/LIBERO")
+    lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)
     from libero.libero import get_libero_path
@@ -600,7 +600,7 @@ def _make_libero_direct_worker(suite_name: str, task_idx: int, _unused: str,
                                 image_width: int | None = None, image_height: int | None = None) -> gym.Env:
     """Create a LIBERO env from suite name + task index."""
     import sys, os
-    lib_dir = os.environ.get("LIBERO_DIR", "/tmp/LIBERO")
+    lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)
     from libero.libero.benchmark import get_benchmark
@@ -645,8 +645,14 @@ def _make_robocasa_direct(
 def _register_libero_envs() -> None:
     """Register LIBERO tasks from all benchmark suites."""
     import sys, os
-    if "/tmp/LIBERO" not in sys.path:
-        sys.path.insert(0, "/tmp/LIBERO")
+    # LIBERO is an editable namespace-package install (top-level libero/ has no
+    # __init__.py), so `import libero` only resolves while its source dir is on
+    # sys.path.  Honour LIBERO_DIR here: hardcoding the path meant a relocated
+    # checkout registered zero LIBERO envs, and the bare `except ImportError:
+    # return` below made that look like "this bench has no tasks".
+    lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
     try:
         from libero.libero.benchmark import get_benchmark_dict
     except ImportError:
@@ -1208,7 +1214,7 @@ def _pkg_available(import_name: str) -> bool:
     if import_name == "libero":
         try:
             import sys, os
-            lib_path = os.environ.get("LIBERO_DIR", "/tmp/LIBERO")
+            lib_path = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
             need_remove = lib_path not in sys.path
             if need_remove:
                 sys.path.insert(0, lib_path)

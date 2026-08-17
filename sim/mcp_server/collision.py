@@ -254,6 +254,13 @@ class CollisionChecker:
         self._arm_dof = 7          # Franka: 7 arm revolute joints
         self._state_dof: int = 7   # LIBERO: exactly 7
         self._last_objects_hash: int | None = None
+        # Number of obstacles actually loaded into the cuRobo world.  This is
+        # the authoritative "is there anything to hit" signal: cuRobo keeps
+        # ``world_model.collision_types["primitive"]`` True for the lifetime of
+        # the checker once the primitive type is registered, so that flag says
+        # only that primitive checking is *enabled*, never that obstacles are
+        # present.  Verified against cuRobo 0.7.7 on 2026-08-17.
+        self._obstacle_count: int = 0
 
         if backend == "maniskill":
             self._state_dof = 9    # 7 arm + 2 gripper, sliced to [:7]
@@ -308,9 +315,15 @@ class CollisionChecker:
         their stale poses, so a later query would test the arm against
         last-frame geometry and report a stale verdict as authoritative.
         """
+        # Must cover every field _build_world_config reads, dims included.  An
+        # earlier version hashed only name/position/orientation, so an object
+        # that changed size at a fixed pose -- a perception update refining a
+        # bounding box, a resized proxy -- was silently checked against the
+        # previous geometry: the same staleness class as skipping the clear.
         obj_hash = hash(tuple(
             (o.get("name"), tuple(o.get("position", [])),
-             tuple(o.get("orientation", [])) if o.get("orientation") else None)
+             tuple(o.get("orientation", [])) if o.get("orientation") else None,
+             tuple(o.get("dims", [])) if o.get("dims") else None)
             for o in (objects or [])
         ))
         if obj_hash == self._last_objects_hash:
@@ -324,15 +337,18 @@ class CollisionChecker:
         wc = _build_world_config(objects)
         if wc is None:
             # No usable geometry → drop every obstacle rather than keep the
-            # previous world.  An empty WorldConfig keeps the primitive
-            # collision type registered but with nothing in it, which
-            # ``_max_world_penetration_esdf`` reads as "nothing to penetrate".
+            # previous world.  Recording the count as 0 is what actually makes
+            # the next query safe: cuRobo leaves the primitive collision type
+            # registered after an empty update, so its own state cannot tell us
+            # the world is empty.
+            self._obstacle_count = 0
             from curobo.geom.types import WorldConfig as CuroboWorldConfig
 
             rw.update_world(CuroboWorldConfig())
             return True
 
         rw.update_world(wc)
+        self._obstacle_count = len(getattr(wc, "cuboid", None) or [])
         return True
 
     # ── penetration query ──────────────────────────────────────────
@@ -347,14 +363,15 @@ class CollisionChecker:
         """
         import torch  # noqa: F401 — parity with caller's device/dtype
 
-        world = getattr(rw, "world_model", None)
-        # No primitive obstacles loaded → nothing to penetrate.
-        ctypes = getattr(world, "collision_types", {}) if world is not None else {}
-        if not ctypes.get("primitive"):
+        # Nothing loaded → nothing to penetrate.  Keyed on the count we recorded
+        # rather than ``collision_types["primitive"]``, which stays True after an
+        # empty update and would send an empty world through the ESDF query.
+        if self._obstacle_count == 0:
             return 0.0
 
         from curobo.geom.sdf.world import CollisionQueryBuffer
 
+        world = rw.world_model
         state = rw.get_kinematics(q)
         spheres = state.link_spheres_tensor.unsqueeze(1)
         buf = CollisionQueryBuffer()
@@ -464,7 +481,7 @@ class CollisionChecker:
         # was never actually evaluated.
         info = {
             "available": True,
-            "world_checked": self._world_has_obstacles(rw) and not world_update_error,
+            "world_checked": self._obstacle_count > 0 and not world_update_error,
             "self_checked": True,
             "obstacle_count": len(objects or []),
             "max_world_penetration": d_world_val,
@@ -478,7 +495,14 @@ class CollisionChecker:
 
     @staticmethod
     def _world_has_obstacles(rw: object) -> bool:
-        """True when the cuRobo world actually holds primitive obstacles."""
+        """Deprecated: cuRobo's ``collision_types`` cannot answer this.
+
+        Retained only so external callers do not break.  Once the primitive
+        collision type is registered cuRobo keeps the flag True for the
+        checker's lifetime, including after an empty ``update_world``, so this
+        reports whether primitive checking is *enabled* — not whether any
+        obstacle is loaded.  Use ``self._obstacle_count`` instead.
+        """
         world = getattr(rw, "world_model", None)
         ctypes = getattr(world, "collision_types", {}) if world is not None else {}
         return bool(ctypes.get("primitive"))
@@ -487,6 +511,7 @@ class CollisionChecker:
         """Release cuRobo GPU resources."""
         self._robot_world = None
         self._last_objects_hash = None
+        self._obstacle_count = 0
 
 
 # ══════════════════════════════════════════════════════════════════════

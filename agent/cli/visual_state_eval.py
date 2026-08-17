@@ -8,6 +8,7 @@ from pathlib import Path
 
 from adapter.protocol import JsonDict
 from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
     OpenAICompatiblePlannerBackend,
     OpenAICompatiblePlannerBackendConfig,
 )
@@ -47,7 +48,7 @@ def main() -> None:
     if missing:
         raise SystemExit("Missing provider fields: " + ", ".join(missing))
     config = OpenAICompatiblePlannerBackendConfig.from_provider_config(provider)
-    config.max_tokens = 768
+    config.max_tokens = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     backend = OpenAICompatiblePlannerBackend(config)
     report = run_visual_state_evaluation(backend, cases=cases)
     report["provider"] = _provider_descriptor(provider.redacted())

@@ -21,8 +21,8 @@ runtime validation and migration compatibility. The model-facing projection is
 1. `objective`: current user/environment task and latest human input;
 2. `current_observation`: compact structured state plus explicitly labelled
    visual evidence;
-3. `recent_transitions`: bounded action, observation, receipt, and interaction
-   events;
+3. `recent_transitions`: elastic action, observation, receipt, and interaction
+   history, projected together with the transition ledger and conversation;
 4. `world_evidence`: selected targets, tool-produced candidates, gripper state,
    checker evidence, reconciliation evidence, and trusted environment receipts;
 5. `open_questions`: unresolved perception or semantic-selection evidence;
@@ -55,6 +55,44 @@ Session trace remains append-only evidence. Working memory is split into:
 
 Old sessions without `agent_working_state.json` are migrated in memory by
 selecting legacy facts whose source is `save_memory`.
+
+### One total context budget
+
+Durable conversation, event, transition-ledger, artifact, and VDM records are
+not shortened merely because they belong to different prompt sections. The
+normal planner projection has no fixed 8-event, 4/12-transition, or 8/12-action
+window. It first assembles the complete semantically bounded records available
+to the session and estimates the combined input containing the system prompt,
+Agent context, and canonical conversation.
+
+The persisted transition ledger no longer rolls over at 32 entries, and normal
+session resume no longer loads only the latest 64 events. Callers may still ask
+for an explicit resume/event limit or an explicit durable compaction checkpoint;
+those are opt-in operations rather than invisible production defaults.
+
+When that combined input exceeds the configured fraction of the provider's
+context window, after reserving the main Agent's output allowance, the host
+removes the oldest elastic entries until the prompt fits. It removes redundant
+event summaries before the compact transition ledger and conversation action
+groups. Initial and current user instructions are protected ahead of old
+action/result pairs. This projection never mutates append-only session history.
+`context_budget.projection` records the initial/final token estimates and exact
+per-source drop counts. Because provider image tokenization varies, the budget
+also charges each attached image a configurable conservative estimate (2048
+tokens by default) instead of pretending that image paths are the whole visual
+cost.
+
+Per-item limits remain only as structural abuse guards: inline/base64 images are
+replaced by artifact references, high-cardinality structured outputs are
+materialized to disk, and an individual textual tool summary cannot consume the
+entire prompt. Raw visual inputs also keep the deliberately bounded
+initial-plus-recent window; text-context capacity is not a reason to attach an
+unbounded number of images.
+
+RFC impact: `openeta.context_budget.v2`, the elastic-history projection fields,
+and the shared 2048-token reasoning-subagent default are interface/configuration
+changes. They remain implementation-local until the three-person RFC review
+accepts the contract update; no shared RFC text is implied by this document.
 
 Old task-policy facts are deleted by a one-way load migration and the cleaned
 working memory is written back immediately. The production runtime contains no

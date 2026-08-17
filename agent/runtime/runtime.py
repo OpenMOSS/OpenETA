@@ -134,7 +134,7 @@ class OpenEtaAgentRuntime:
             },
         )
 
-    def resume_session(self, session_id: str, *, max_events: int | None = 64) -> None:
+    def resume_session(self, session_id: str, *, max_events: int | None = None) -> None:
         self.memory.resume_session(session_id, max_events=max_events)
         if self.rollout_recorder is not None:
             self.rollout_recorder.start_session(

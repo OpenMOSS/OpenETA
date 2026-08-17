@@ -52,6 +52,7 @@ from agent.runtime.mcp_catalog import discover_mcp_tool_catalog
 from agent.runtime.promoted_memory import PromotedMemoryStore
 from agent.runtime.runtime import OpenEtaAgentRuntime
 from agent.runtime.runtime_assembly import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
     assemble_runtime,
@@ -1895,7 +1896,10 @@ def _load_mcp_url(
 
 
 def _new_supervision_backend(cli: OpenEtaCli) -> OpenAICompatiblePlannerBackend:
-    return _new_cli_backend(cli, max_tokens=512)
+    return _new_cli_backend(
+        cli,
+        max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+    )
 
 
 def _new_cli_backend(

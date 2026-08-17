@@ -2230,7 +2230,7 @@ def test_tool_calling_planner_metadata_keeps_context_summary_not_full_context() 
     assert "context_budget" in decision.metadata["tool_context_summary"]
 
 
-def test_planner_context_auto_compacts_when_budget_threshold_is_reached() -> None:
+def test_planner_context_projects_without_mutating_history_when_budget_is_reached() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick cube")
     memory.save_fact("large_note", {"content": "x" * 1200}, source="unit")
@@ -2247,10 +2247,12 @@ def test_planner_context_auto_compacts_when_budget_threshold_is_reached() -> Non
         ),
     )
 
-    assert any(event.event_type == "memory_compacted" for event in memory.events)
-    assert context["context_budget"]["schema_version"] == "openeta.context_budget.v1"
+    assert not any(event.event_type == "memory_compacted" for event in memory.events)
+    assert context["context_budget"]["schema_version"] == "openeta.context_budget.v2"
     assert context["context_budget"]["auto_compact_triggered"] is True
-    assert context["memory"]["working_memory"]["compact_summary"]
+    projection = context["context_budget"]["projection"]
+    assert projection["policy"] == "elastic_total_token_budget"
+    assert projection["durable_history_mutated"] is False
 
 
 def test_planner_context_uses_default_one_million_context_window() -> None:
@@ -2268,7 +2270,89 @@ def test_planner_context_uses_default_one_million_context_window() -> None:
     assert not any(event.event_type == "memory_compacted" for event in memory.events)
     assert context["context_budget"]["context_window_tokens"] == DEFAULT_CONTEXT_WINDOW_TOKENS
     assert context["context_budget"]["auto_compact_triggered"] is False
-    assert context["context_budget"]["trigger_tokens"] == int(DEFAULT_CONTEXT_WINDOW_TOKENS * 0.9)
+    assert context["context_budget"]["trigger_tokens"] == (
+        int(DEFAULT_CONTEXT_WINDOW_TOKENS * 0.9) - 4096
+    )
+
+
+def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect a long manipulation trace")
+    for index in range(40):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "python_exec",
+                        "parameters": {"code": f"result = {index}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "python_exec",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "content": f"result {index}",
+                                "details": {"outputs": {"result": index}},
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        config=PlannerContextConfig(context_window_tokens=1_000_000),
+    )
+
+    assert len(memory.model_conversation_messages()) == 81
+    assert len(context["agent_context"]["recent_transitions"]) == 40
+    assert len(context["agent_context"]["transition_ledger"]) == 40
+    assert context["context_budget"]["projection"]["triggered"] is False
+
+    requests: list[PlannerBackendRequest] = []
+
+    def capture(request: PlannerBackendRequest) -> dict:
+        requests.append(request)
+        return {
+            "kind": "response",
+            "name": "talk",
+            "parameters": {"message": "history inspected"},
+        }
+
+    ToolCallingPlanner(
+        CallablePlannerBackend(capture),
+        context_config=PlannerContextConfig(context_window_tokens=1_000_000),
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    assert len(requests) == 1
+    assert len(requests[0].conversation_messages) == 81
+    assert len(requests[0].tool_context["recent_transitions"]) == 40
+    assert len(requests[0].tool_context["transition_ledger"]) == 40
+
+    constrained = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        config=PlannerContextConfig(context_window_tokens=10_000),
+    )["context_budget"]["projection"]
+    assert constrained["triggered"] is True
+    assert constrained["entries_removed"] is True
+    assert constrained["fits_target"] is True
+    assert len(memory.model_conversation_messages()) == 81
 
 
 def test_planner_context_can_disable_context_window_threshold() -> None:

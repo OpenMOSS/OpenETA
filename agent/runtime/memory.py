@@ -58,7 +58,6 @@ GRASP_REFERENCE_ORIENTATION_TOLERANCE_DEG = 20.0
 GRASP_ADJUSTMENT_STEP_LIMIT_M = 0.02
 GRASP_ADJUSTMENT_CUMULATIVE_LIMIT_M = 0.10
 GRASP_ADJUSTMENT_EPSILON_M = 1e-6
-TRANSITION_LEDGER_LIMIT = 32
 GRASP_GEOMETRY_FAMILIES = {
     "upright_can",
     "upright_bottle",
@@ -194,7 +193,7 @@ class AgentMemory:
         *,
         task: str = "",
         metadata: JsonDict | None = None,
-        max_events: int | None = 64,
+        max_events: int | None = None,
     ) -> None:
         self.session_id = session_id
         stored_metadata: JsonDict = {}
@@ -3447,7 +3446,7 @@ class AgentMemory:
             "candidate_id": _parameters_grasp_candidate_id(request.get("parameters") or {}),
             "verdict": _transition_call_verdict(call),
         }
-        rows = [*self.transition_ledger(), row][-TRANSITION_LEDGER_LIMIT:]
+        rows = [*self.transition_ledger(), row]
         self.facts[TRANSITION_LEDGER_KEY] = _memory_fact_entry(
             {"rows": rows},
             source="runtime_transition_ledger",
@@ -3492,7 +3491,7 @@ class AgentMemory:
             }
         )
         self.facts[TRANSITION_LEDGER_KEY] = _memory_fact_entry(
-            {"rows": rows[-TRANSITION_LEDGER_LIMIT:]},
+            {"rows": rows},
             source="runtime_transition_ledger",
         )
         self._save_working_memory()
@@ -3542,7 +3541,9 @@ class AgentMemory:
         self._save_working_memory()
         return self.compact_summary
 
-    def recent_events(self, limit: int = 8) -> list[MemoryEvent]:
+    def recent_events(self, limit: int | None = 8) -> list[MemoryEvent]:
+        if limit is None:
+            return list(self.events)
         if limit <= 0:
             return []
         return self.events[-limit:]
@@ -3590,7 +3591,7 @@ class AgentMemory:
             return interaction
         return None
 
-    def planning_context(self, *, max_events: int = 8) -> JsonDict:
+    def planning_context(self, *, max_events: int | None = 8) -> JsonDict:
         """Return compact context suitable for a planner prompt or policy."""
 
         return {
@@ -3623,7 +3624,7 @@ class AgentMemory:
             "scene_epoch": self.scene_epoch(),
             "object_scene_epoch": self.object_scene_epoch(),
             "robot_motion_epoch": self.robot_motion_epoch(),
-            "transition_ledger": self.transition_ledger()[-12:],
+            "transition_ledger": self.transition_ledger(),
             "latest_environment_receipt": self.latest_environment_receipt(),
             "world_evidence": self.world_evidence_context(),
             "latest_human_interaction": self.latest_human_interaction(),
@@ -3711,10 +3712,18 @@ class AgentMemory:
         if removed_task_policy_entries:
             self._save_working_memory()
 
-    def model_conversation_messages(self) -> list[JsonDict]:
+    def model_conversation_messages(
+        self,
+        *,
+        max_message_chars: int | None = None,
+        max_action_groups: int | None = None,
+    ) -> list[JsonDict]:
         """Return canonical chat messages in provider-compatible form."""
 
-        return self.conversation.model_messages()
+        return self.conversation.model_messages(
+            max_message_chars=max_message_chars,
+            max_action_groups=max_action_groups,
+        )
 
     def conversation_checkpoint_summary(self) -> str:
         summary = self.conversation.checkpoint.get("summary")

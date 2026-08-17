@@ -4,7 +4,10 @@ import agent.cli.batch_eval as batch_eval
 import agent.cli.openeta_cli as cli_module
 import agent.runtime.runtime_assembly as runtime_assembly
 import pytest
-from agent.backends.planner import StaticPlannerBackend
+from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+    StaticPlannerBackend,
+)
 from agent.backends.provider_config import PlannerProviderConfig
 from agent.cli.batch_eval import build_mcp_episode_worker_factory
 from agent.cli.openeta_cli import OpenEtaCli
@@ -236,7 +239,15 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
         "max_tokens": MAIN_PLANNER_MAX_OUTPUT_TOKENS,
         "max_vision_images": 9,
     } in calls
-    assert {"max_tokens": 384, "max_vision_images": 2} in calls
+    assert {
+        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_vision_images": 2,
+    } in calls
+    assert {
+        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_vision_images": 4,
+    } in calls
+    assert {"max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS} in calls
     assert assembly.runtime.visual_history.backend is not assembly.runtime.planner.backend
 
 

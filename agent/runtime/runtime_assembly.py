@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Callable
 
 from adapter.protocol import JsonDict
-from agent.backends.planner import PlannerBackend
+from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+    PlannerBackend,
+)
 from agent.backends.provider_config import PlannerProviderConfig
 from agent.runtime.calibration import (
     BackendCalibrationReviewer,
@@ -127,6 +130,7 @@ MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 # otherwise valid response with no JSON content. This matches the established
 # experiment entry budget while still allowing normal responses to finish early.
 MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
+VDM_MAX_OUTPUT_TOKENS = 2048
 
 
 REMOTE_PLACEHOLDER_TOOLS = (
@@ -313,7 +317,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             publication_mode=lambda: policy_provider().skill_change_mode,
             human_approval=config.calibration_approval,
         ),
-        reviewer=BackendCalibrationReviewer(config.backend_factory()),
+        reviewer=BackendCalibrationReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.bind_handler(
         "propose_calibration_profile",
@@ -337,7 +343,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             publication_mode=lambda: policy_provider().skill_change_mode,
             human_approval=config.strategy_approval,
         ),
-        reviewer=BackendGraspStrategyReviewer(config.backend_factory()),
+        reviewer=BackendGraspStrategyReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.bind_handler(
         "propose_grasp_strategy",
@@ -386,7 +394,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     visual_history = (
         VisualHistoryManager(
             config=config.visual_history,
-            backend=config.backend_factory(max_tokens=384, max_vision_images=2),
+            backend=config.backend_factory(
+                max_tokens=VDM_MAX_OUTPUT_TOKENS,
+                max_vision_images=2,
+            ),
         )
         if config.visual_history.enabled
         else None
@@ -443,7 +454,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     gate = SupervisionGate(
         config.supervision_policy,
         human_approval=config.human_action_approval,
-        action_reviewer=BackendActionReviewer(config.backend_factory(max_tokens=512)),
+        action_reviewer=BackendActionReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.set_execution_gate(gate.authorize)
     for listener in config.tool_listeners:
@@ -530,7 +543,9 @@ def configure_runtime_self_improvement(
         author=BackendSkillAuthoringSubagent(
             backend_factory(max_tokens=SKILL_AUTHORING_MAX_OUTPUT_TOKENS)
         ),
-        reviewer=BackendSkillChangeReviewer(backend_factory()),
+        reviewer=BackendSkillChangeReviewer(
+            backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
         executable_tools=_skill_authoring_tools(runtime.tools),
     )
 
@@ -813,7 +828,9 @@ def _authorize_skill_change(
             "source": "runtime_policy",
             "reason": "Standard profile permits session-local registry changes.",
         }
-    reviewed = BackendSkillChangeReviewer(backend_factory()).review(
+    reviewed = BackendSkillChangeReviewer(
+        backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+    ).review(
         request=request,
         skill=skill,
     )

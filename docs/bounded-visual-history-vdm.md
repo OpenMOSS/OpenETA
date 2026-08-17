@@ -267,9 +267,11 @@ into a confident completion claim.
 - Planner image budget below the configured policy requirement: expose a
   configuration error or explicit degraded-policy record; do not truncate by
   list order.
-- VDM text must have a small fixed output budget. If a future long-horizon
-  benchmark makes the delta text itself unbounded, add a separately evaluated
-  text-ledger compaction layer rather than changing the raw visual-window rule.
+- The VDM uses a 2048-token completion allowance so reasoning-capable providers
+  can finish their hidden reasoning and still emit the required JSON. Its four
+  semantic arrays remain schema-bounded. Older delta records are retained until
+  the main planner's combined token projector needs to remove them; this does
+  not change the bounded raw visual-window rule.
 
 ## Shared TUI and batch assembly
 

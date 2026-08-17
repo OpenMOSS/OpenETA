@@ -8,6 +8,7 @@ from pathlib import Path
 
 from adapter.protocol import JsonDict
 from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
     OpenAICompatiblePlannerBackend,
     OpenAICompatiblePlannerBackendConfig,
 )
@@ -67,7 +68,9 @@ def main() -> None:
     def backend_factory(role: str) -> OpenAICompatiblePlannerBackend:
         config = OpenAICompatiblePlannerBackendConfig.from_provider_config(provider)
         config.max_tokens = (
-            SKILL_AUTHORING_MAX_OUTPUT_TOKENS if role == "skill_author" else 512
+            SKILL_AUTHORING_MAX_OUTPUT_TOKENS
+            if role == "skill_author"
+            else REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
         )
         return OpenAICompatiblePlannerBackend(config)
 

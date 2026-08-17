@@ -299,6 +299,9 @@ class CommercialApiPlannerBackend(PlannerBackend):
 OpenAICompatibleTransport = Callable[[str, JsonDict, dict[str, str], float], JsonDict]
 
 
+REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 2048
+
+
 @dataclass(slots=True)
 class OpenAICompatiblePlannerBackendConfig:
     """Config for an OpenAI-compatible `/v1/chat/completions` planner backend."""
@@ -311,7 +314,9 @@ class OpenAICompatiblePlannerBackendConfig:
     max_attempts: int = 3
     retry_backoff_s: float = 0.5
     temperature: float = 0.0
-    max_tokens: int = 512
+    # Isolated model clients usually return short JSON, but reasoning-capable
+    # providers may count hidden reasoning against this same completion budget.
+    max_tokens: int = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     context_window_tokens: int | None = None
     use_json_response_format: bool = True
     enable_vision: bool = True

@@ -127,8 +127,11 @@ def test_user_constraint_survives_many_operational_events() -> None:
 
     assert messages[0] == {"role": "user", "content": "pick milk"}
     assert any("keep the gripper closed" in message["content"] for message in messages)
-    assert len(messages) <= 20
-    assert any("compacted transcript summary" in message["content"] for message in messages)
+    # Canonical history no longer stops at a local eight-action window.  The
+    # combined planner input projector trims it only when the total model
+    # context budget is actually reached.
+    assert len(messages) == 62
+    assert not any("compacted transcript summary" in message["content"] for message in messages)
     assert [message["role"] for message in messages[-2:]] == ["assistant", "user"]
     assert "OpenETA host execution evidence" in messages[-1]["content"]
     assert context["current_user_request"].startswith("You may pick the cube")

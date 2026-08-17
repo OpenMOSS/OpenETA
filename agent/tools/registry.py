@@ -1658,12 +1658,26 @@ def build_default_tool_registry() -> ToolRegistry:
         ToolSpec(
             name="ik_preview_check",
             category="safety",
-            description="Preview inverse-kinematics feasibility before execution.",
+            description=(
+                "Read-only endpoint reachability preview before execution. Returns "
+                "reachable, unreachable, or unknown with joint-limit, residual, and "
+                "optional endpoint-collision diagnostics; it does not check a path."
+            ),
             parameters={
                 "target_pose": (
-                    "desired end-effector pose; preserve the active grasp candidate id "
-                    "from camera_pose_to_world when checking a grasp pose"
-                )
+                    "required desired world-frame end-effector pose; preserve the active "
+                    "grasp candidate id from camera_pose_to_world when checking a grasp pose"
+                ),
+                "position_tolerance_m": "optional maximum per-axis position residual",
+                "orientation_tolerance_rad": "optional orientation residual tolerance",
+                "preserve_current_orientation": (
+                    "optional, default true when target_pose omits orientation so the "
+                    "preview matches move_to's position-only wrist behavior"
+                ),
+                "check_endpoint_collision": (
+                    "optional self/endpoint collision check; path feasibility remains "
+                    "the responsibility of obstacle_avoidance"
+                ),
             },
             safe_by_default=True,
             effect=ToolEffect.READ_ONLY,

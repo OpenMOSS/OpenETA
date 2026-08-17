@@ -91,6 +91,8 @@ def test_visual_history_canary_has_a_bounded_episode_budget() -> None:
 
 
 def test_eval_preflight_marks_incompatible_anygrasp_unavailable(monkeypatch) -> None:
+    assert "ik_preview_check" in eval_cli._REQUIRED_SIM_MCP_TOOLS
+
     class SimulatorCatalog:
         def __init__(self, _url: str) -> None:
             pass

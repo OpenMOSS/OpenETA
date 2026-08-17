@@ -40,6 +40,7 @@ _REQUIRED_SIM_MCP_TOOLS = {
     "create_env",
     "reset_env",
     "render_env",
+    "ik_preview_check",
     "move_to",
     "close_env",
     "gripper_open",

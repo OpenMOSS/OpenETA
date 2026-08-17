@@ -341,6 +341,7 @@ def test_default_simulator_mcp_binding_uses_remote_stable_tools() -> None:
         "create_simulator_env",
         "close_simulator_env",
         "observe",
+        "ik_preview_check",
         "move_to",
         "follow_eef_trajectory",
         "gripper_control",
@@ -348,6 +349,7 @@ def test_default_simulator_mcp_binding_uses_remote_stable_tools() -> None:
     assert tools.can_execute("create_simulator_env")
     assert tools.can_execute("close_simulator_env")
     assert tools.can_execute("observe")
+    assert tools.can_execute("ik_preview_check")
     assert tools.can_execute("move_to")
     assert tools.can_execute("follow_eef_trajectory")
     assert tools.can_execute("gripper_control")
@@ -705,6 +707,103 @@ def test_move_to_proxy_converts_world_rotation_matrix_to_mcp_euler_angles() -> N
     assert arguments["yaw"] == 0.0
 
 
+def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": False,
+            "success": False,
+            "status": "unreachable",
+            "kinematic_status": "unreachable",
+            "feasible": False,
+            "reason_code": "full_pose_infeasible",
+            "message": "Position and orientation cannot be satisfied together.",
+            "position_only_reachable": True,
+            "orientation_only_reachable": True,
+            "target": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "tolerances": {
+                "max_axis_position_error_m": 0.002,
+                "orientation_error_rad": 0.05,
+            },
+            "best_candidate": {
+                "joint_positions": [0.0] * 7,
+                "max_axis_position_error_m": 0.011,
+                "orientation_error_rad": 0.05,
+            },
+            "collision": {"checked": False},
+            "path": {"checked": False},
+            "suggestions": ["relax_target_orientation"],
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {
+            "target_pose": {
+                "frame": "world",
+                "xyz": [0.1, 0.2, 0.3],
+                "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+            }
+        },
+    )
+
+    assert result.success is False
+    assert transport.calls[0]["name"] == "ik_preview_check"
+    assert transport.calls[0]["arguments"]["handle"] == "env-1"
+    reachability = result.details["outputs"]["reachability"]
+    assert result.details["outputs"]["feasible"] is False
+    assert reachability["status"] == "unreachable"
+    assert reachability["reason_code"] == "full_pose_infeasible"
+    assert reachability["position_only_reachable"] is True
+    assert reachability["best_candidate"]["max_axis_position_error_m"] == 0.011
+    assert result.details["diagnostics"][0]["candidate_rejection"] is True
+    assert "cannot be satisfied" in result.content
+
+
+def test_ik_preview_matches_move_to_uncalibrated_grasp_orientation_rule() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "status": "reachable",
+            "kinematic_status": "reachable",
+            "feasible": True,
+            "reason_code": "ik_solution_found",
+            "message": "IK solution found.",
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {
+            "target_pose": {
+                "id": "grasp_003",
+                "rank": 3,
+                "frame": "world",
+                "translation_xyz": [0.1, 0.2, 0.3],
+                "rotation_matrix": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+            }
+        },
+    )
+
+    assert result.success is True
+    assert {"roll", "pitch", "yaw"}.isdisjoint(transport.calls[0]["arguments"])
+
+
 def test_move_to_proxy_rejects_unsupported_speed_parameter() -> None:
     transport = FakeSimulatorMcpTransport({"success": True})
     tools = bind_simulator_mcp_tool_handlers(
@@ -904,6 +1003,11 @@ def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcom
             "end": {"xyz": [0.02, 0.0, 0.5]},
             "target": {"x": 0.2, "y": 0.0, "z": 0.5},
             "steps_executed": 3,
+            "reached_target": False,
+            "position_error_m": 0.18,
+            "max_axis_position_error_m": 0.18,
+            "orientation_error_deg": 12.5,
+            "stop_reason": "collision_detected",
             "reward": 0.0,
             "terminated": False,
         }
@@ -935,6 +1039,10 @@ def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcom
     motion = result.details["outputs"]["response"]["motion_summary"]
     assert motion["collision"]["detected"] is True
     assert motion["reached_target"] is False
+    assert motion["position_error_m"] == pytest.approx(0.18)
+    assert motion["max_axis_position_error_m"] == pytest.approx(0.18)
+    assert motion["orientation_error_deg"] == pytest.approx(12.5)
+    assert motion["stop_reason"] == "collision_detected"
     assert result.details["state_delta"]["motion"] == motion
     pose_feedback = result.details["outputs"]["pose_feedback"]
     assert pose_feedback["schema_version"] == "openeta.eef_pose_feedback.v1"

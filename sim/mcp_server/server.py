@@ -39,6 +39,7 @@ from sim.mcp_server.session import (
 from sim.mcp_server.worker_mgr import (
     _forget_obs_dirty,
     _proxy_observe,
+    _proxy_reachability,
     _proxy_render,
     _proxy_reset,
     _proxy_step,
@@ -681,6 +682,149 @@ def _quat_angular_distance(a: list[float], b: list[float]) -> float:
 
 @_blocking_tool
 @_serialized_env_control
+def ik_preview_check(
+    handle: str,
+    x: float,
+    y: float,
+    z: float,
+    *,
+    roll: float | None = None,
+    pitch: float | None = None,
+    yaw: float | None = None,
+    position_tolerance_m: float = 0.002,
+    orientation_tolerance_rad: float = 0.05,
+    max_attempts: int = 24,
+    max_nfev_per_attempt: int = 300,
+    timeout_s: float = 10.0,
+    preserve_current_orientation: bool = True,
+    check_endpoint_collision: bool = False,
+    include_scene_objects: bool = False,
+    session_id: str = "",
+) -> dict:
+    """Preview endpoint IK feasibility without moving the robot.
+
+    The result is deliberately tri-state. ``unreachable`` is a structured
+    rejection, while ``unknown`` means the numerical/backend budget could not
+    certify either outcome and must not be presented as a safe approval.
+    Path feasibility is not checked here; use ``obstacle_avoidance`` for that
+    separate question.
+    """
+
+    sid = session_id or _current_session.get() or ""
+    _touch_session(sid)
+    meta = _session_envs.get(sid, {}).get(handle)
+    if not meta:
+        return {"ok": False, "success": False, "error": f"Unknown: {handle}"}
+    orientation_values = (roll, pitch, yaw)
+    if any(value is not None for value in orientation_values) and not all(
+        value is not None for value in orientation_values
+    ):
+        return {
+            "ok": False,
+            "success": False,
+            "error": "roll, pitch, and yaw must be provided together",
+            "reason_code": "invalid_target_pose",
+        }
+
+    body: dict = {
+        "target_xyz": [float(x), float(y), float(z)],
+        "position_tolerance_m": float(position_tolerance_m),
+        "orientation_tolerance_rad": float(orientation_tolerance_rad),
+        "max_attempts": int(max_attempts),
+        "max_nfev_per_attempt": int(max_nfev_per_attempt),
+        "timeout_s": float(timeout_s),
+        "preserve_current_orientation": bool(preserve_current_orientation),
+    }
+    if all(value is not None for value in orientation_values):
+        body["target_euler_xyz_deg"] = [float(roll), float(pitch), float(yaw)]
+
+    result = _proxy_reachability(meta, body)
+    if not isinstance(result, dict):
+        result = {
+            "status": "unknown",
+            "kinematic_status": "unknown",
+            "feasible": None,
+            "reason_code": "invalid_worker_response",
+            "message": "Reachability worker returned an invalid response.",
+        }
+    if result.get("error"):
+        return {
+            "ok": False,
+            "success": False,
+            "error": str(result.get("error")),
+            "reason_code": str(result.get("reason_code") or "reachability_backend_error"),
+        }
+
+    result = dict(result)
+    result.setdefault("collision", {"checked": False})
+    result["path"] = {
+        "checked": False,
+        "reason": "path feasibility is owned by obstacle_avoidance",
+    }
+    if check_endpoint_collision and result.get("kinematic_status") == "reachable":
+        candidate = result.get("best_candidate")
+        joints = candidate.get("joint_positions") if isinstance(candidate, dict) else None
+        objects = list(meta.get("_collision_objects") or []) if include_scene_objects else []
+        if isinstance(joints, list):
+            try:
+                checker = get_checker(handle, str(meta.get("backend") or ""))
+                in_collision, collision_info = checker.check(joints, objects)
+            except Exception as exc:  # noqa: BLE001 - uncertainty must stay structured.
+                in_collision = False
+                collision_info = {
+                    "available": False,
+                    "reason": f"endpoint collision checker failed: {type(exc).__name__}: {exc}",
+                }
+            result["collision"] = {
+                "checked": bool(collision_info.get("available")),
+                "scene_objects_included": bool(include_scene_objects),
+                "detected": bool(in_collision),
+                **{key: value for key, value in collision_info.items() if key != "available"},
+            }
+            if in_collision:
+                result.update(
+                    {
+                        "status": "unreachable",
+                        "feasible": False,
+                        "reason_code": "endpoint_collision",
+                        "message": (
+                            "A kinematic solution exists, but the requested endpoint "
+                            "configuration is in collision."
+                        ),
+                    }
+                )
+                result.setdefault("suggestions", []).append("select_collision_free_target")
+            elif not collision_info.get("available"):
+                result.update(
+                    {
+                        "status": "unknown",
+                        "feasible": None,
+                        "reason_code": "endpoint_collision_check_unavailable",
+                        "message": (
+                            "IK succeeded, but the requested endpoint collision check "
+                            "was unavailable; overall feasibility is unknown."
+                        ),
+                    }
+                )
+        else:
+            result.update(
+                {
+                    "status": "unknown",
+                    "feasible": None,
+                    "reason_code": "ik_candidate_missing",
+                    "message": "IK result did not contain a joint candidate for collision checking.",
+                }
+            )
+
+    status = str(result.get("status") or "unknown")
+    result["ok"] = status != "unreachable"
+    result["success"] = status != "unreachable"
+    result["content"] = str(result.get("message") or f"IK preview status: {status}")
+    return result
+
+
+@_blocking_tool
+@_serialized_env_control
 def move_to(handle: str, x: float, y: float, z: float, *,
             roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
             num_steps: int = 100, tolerance: float = 0.002, ori_tolerance: float = 0.05,
@@ -688,9 +832,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             enable_collision_check: bool = True) -> dict:
     """Move the end-effector to an absolute pose using closed-loop interpolation.
 
-    Re-observes the EE pose from the step result every 10 steps for
-    closed-loop correction.  Supports both position-only and position +
-    orientation control.
+    Re-observes the EE pose from step results for closed-loop correction:
+    every step for position-only reaches and every three steps for full-pose
+    reaches. Supports both position-only and position + orientation control.
 
     If the environment has not been reset yet, the first call implicitly
     resets it — no separate ``reset_env`` call is needed.
@@ -748,9 +892,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
     # dashboard feedback) plus a guaranteed final render at the end — the rest
     # of the steps skip the render and run at physics speed (~20 ms).
     _RENDER_EVERY = 15
-    recheck_every = 3  # re-observe every N steps — small because EE is read
-                        # from step results (zero extra cost), and a shorter
-                        # window prevents overshoot from inaccurate action scale
+    # Every proxy step already returns EE state at no additional render cost.
+    # Position-only reaches benefit from recomputing every step: reusing one
+    # nominal OSC delta for three physics steps produced a centimetre-scale
+    # near-target limit cycle.  Full-pose reaches retain the smaller historical
+    # three-step interpolation increments; one-step full-pose commands were
+    # measured to amplify translation/rotation coupling.  The explicit receipt
+    # below reports when the coupled controller still cannot attain the pose.
+    recheck_every = 3 if use_ori else 1
 
     # ── target orientation in quaternion ───────────────────────────
     target_quat: list[float] = []
@@ -985,6 +1134,58 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         "terminated": final_terminated,
         "reward": final_reward,
     }
+    final_position_error = (
+        _math.sqrt(
+            (x - final_xyz[0]) ** 2
+            + (y - final_xyz[1]) ** 2
+            + (z - final_xyz[2]) ** 2
+        )
+        if len(final_xyz) >= 3
+        else None
+    )
+    max_axis_position_error = (
+        max(abs(x - final_xyz[0]), abs(y - final_xyz[1]), abs(z - final_xyz[2]))
+        if len(final_xyz) >= 3
+        else None
+    )
+    final_orientation_error = (
+        _quat_angular_distance(final_quat, target_quat)
+        if use_ori and len(final_quat) >= 4
+        else None
+    )
+    reached_target = bool(
+        max_axis_position_error is not None
+        and max_axis_position_error < tolerance
+        and (
+            not use_ori
+            or (
+                final_orientation_error is not None
+                and final_orientation_error < ori_tolerance
+            )
+        )
+        and not final_terminated
+        and not control_error
+        and not collision_detected
+    )
+    result["reached_target"] = reached_target
+    if final_position_error is not None:
+        result["position_error_m"] = final_position_error
+        result["max_axis_position_error_m"] = max_axis_position_error
+    if final_orientation_error is not None:
+        result["orientation_error_rad"] = final_orientation_error
+        result["orientation_error_deg"] = _math.degrees(final_orientation_error)
+    if reached_target:
+        result["stop_reason"] = "target_reached"
+    elif collision_detected:
+        result["stop_reason"] = "collision_detected"
+    elif control_error:
+        result["stop_reason"] = "control_step_failed"
+    elif final_terminated:
+        result["stop_reason"] = "episode_terminated"
+    elif total_steps >= num_steps:
+        result["stop_reason"] = "iteration_limit"
+    else:
+        result["stop_reason"] = "controller_stopped"
     if control_error:
         result["ok"] = False
         result["code"] = "control_step_failed"
@@ -1010,7 +1211,10 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             **{k: v for k, v in collision_info.items() if k != "available"},
         }
     elif enable_collision_check and collision_info.get("available"):
-        result["collision"] = {"detected": False}
+        result["collision"] = {
+            "detected": False,
+            **{k: v for k, v in collision_info.items() if k != "available"},
+        }
     elif enable_collision_check:
         result["collision"] = {
             "detected": False,

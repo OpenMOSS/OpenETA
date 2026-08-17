@@ -128,7 +128,12 @@ Use as text guidance only, not an executable macro. Inspect each result.
    hover/contact reaches, omit `num_steps` and let `move_to` use its closed-loop
    default budget. `num_steps` is a maximum controller-iteration budget, not a
    distance or speed parameter; the environment's “3-5 steps for visible motion”
-   hint applies to raw `step_env`, not to completing a `move_to`. If a receipt says
+   hint applies to raw `step_env`, not to completing a `move_to`. Before committing
+   to a compiled hover/contact endpoint, call `ik_preview_check` on that same
+   world-frame pose. `unreachable` means change the pose or candidate using its
+   component residuals; `unknown` is solver uncertainty, not a safe approval;
+   `reachable` covers endpoint kinematics only, so keep path/collision evidence
+   separate. If a receipt says
    `reached_target=false`, do not advance from hover to contact or from contact to
    close. Use the reported actual EEF pose plus fresh images to retry or replan.
 10. After contact, execute exactly binary `gripper_control position=0`;

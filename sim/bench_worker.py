@@ -18,6 +18,7 @@ The worker exposes a subset of the REST API:
     POST /env/{handle}/step    {action?, num_steps?}
     POST /env/{handle}/observe
     POST /env/{handle}/render
+    POST /env/{handle}/reachability
 """
 
 from __future__ import annotations
@@ -867,6 +868,54 @@ async def observe_env(request):
     return _json_response(await _run_sim_call(_observe_with_image, env, handle=h))
 
 
+async def reachability_env(request):
+    """Run a read-only endpoint IK check against the worker-owned model."""
+
+    h = request.path_params.get("handle", "")
+    env = _envs.get(h)
+    if env is None:
+        return _json_response({"error": f"Unknown handle: {h}"}, 400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    xyz = body.get("target_xyz")
+    if not isinstance(xyz, list) or len(xyz) != 3:
+        return _json_response({"error": "target_xyz must contain three numbers"}, 400)
+
+    target_quat = body.get("target_quat_xyzw")
+    euler_deg = body.get("target_euler_xyz_deg")
+    if target_quat is None and euler_deg is not None:
+        try:
+            from scipy.spatial.transform import Rotation
+
+            target_quat = Rotation.from_euler("xyz", euler_deg, degrees=True).as_quat().tolist()
+        except Exception as exc:
+            return _json_response({"error": f"invalid target_euler_xyz_deg: {exc}"}, 400)
+
+    def _check():
+        from sim.reachability import check_endpoint_reachability
+
+        # Capture current qpos consistently with reset/step/close.  The solver
+        # uses an independent MjData and therefore never mutates the live env.
+        with _obs_lock_for(h):
+            return check_endpoint_reachability(
+                env,
+                target_xyz=xyz,
+                target_quat_xyzw=target_quat,
+                preserve_current_orientation=body.get(
+                    "preserve_current_orientation", True
+                ),
+                position_tolerance_m=body.get("position_tolerance_m", 0.002),
+                orientation_tolerance_rad=body.get("orientation_tolerance_rad", 0.05),
+                max_attempts=body.get("max_attempts", 24),
+                max_nfev_per_attempt=body.get("max_nfev_per_attempt", 300),
+                timeout_s=body.get("timeout_s", 10.0),
+            )
+
+    return _json_response(await _run_sim_call(_check))
+
+
 async def render_env(request):
     h = request.path_params.get("handle", "")
     env = _envs.get(h)
@@ -940,6 +989,7 @@ app = Starlette(routes=[
     Route("/env/{handle}/step", step_env, methods=["POST"]),
     Route("/env/{handle}/observe", observe_env, methods=["POST"]),
     Route("/env/{handle}/render", render_env, methods=["POST"]),
+    Route("/env/{handle}/reachability", reachability_env, methods=["POST"]),
     Route("/render_all", render_all_envs, methods=["POST"]),
 ])
 

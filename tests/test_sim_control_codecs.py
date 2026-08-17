@@ -143,7 +143,114 @@ def test_move_to_stops_on_worker_error_and_preserves_last_pose(monkeypatch) -> N
     assert result["code"] == "control_step_failed"
     assert result["steps_executed"] == 1
     assert result["end"]["xyz"] == start
+    assert result["reached_target"] is False
+    assert result["stop_reason"] == "control_step_failed"
     assert "terminated episode" in result["error"]
+
+
+def test_move_to_receipt_reports_controller_residual_and_iteration_limit(
+    monkeypatch,
+) -> None:
+    meta = {"backend": "libero", "action_dim": 7, "remote_handle": "remote"}
+    start = [0.0, 0.0, 0.0]
+
+    monkeypatch.setattr(server, "_session_envs", {"sid": {"handle": meta}})
+    monkeypatch.setattr(server, "_touch_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_proxy_observe",
+        lambda *_args, **_kwargs: {
+            "observation": {"robot": {"end_effector_pose": {"xyz": start}}}
+        },
+    )
+    monkeypatch.setattr(server, "_proxy_render", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        server,
+        "_proxy_step",
+        lambda *_args, **_kwargs: {
+            "observation": {"robot": {"end_effector_pose": {"xyz": start}}}
+        },
+    )
+
+    result = server.move_to.__wrapped__(
+        "handle", 0.1, 0.0, 0.0, num_steps=2, session_id="sid"
+    )
+
+    assert result["steps_executed"] == 2
+    assert result["reached_target"] is False
+    assert result["position_error_m"] == pytest.approx(0.1)
+    assert result["max_axis_position_error_m"] == pytest.approx(0.1)
+    assert result["stop_reason"] == "iteration_limit"
+
+
+def test_ik_preview_check_returns_structured_unreachable_without_moving(monkeypatch) -> None:
+    meta = {"backend": "libero", "remote_handle": "remote"}
+    monkeypatch.setattr(server, "_session_envs", {"sid": {"handle": meta}})
+    monkeypatch.setattr(server, "_touch_session", lambda *_args, **_kwargs: None)
+    calls: list[dict] = []
+
+    def fake_preview(_meta, body):
+        calls.append(body)
+        return {
+            "status": "unreachable",
+            "kinematic_status": "unreachable",
+            "feasible": False,
+            "reason_code": "full_pose_infeasible",
+            "message": "Position and orientation cannot be satisfied together.",
+            "position_only_reachable": True,
+            "orientation_only_reachable": True,
+            "best_candidate": {
+                "joint_positions": [0.0] * 7,
+                "max_axis_position_error_m": 0.011,
+                "orientation_error_rad": 0.05,
+            },
+        }
+
+    monkeypatch.setattr(server, "_proxy_reachability", fake_preview)
+    result = server.ik_preview_check.__wrapped__(
+        "handle",
+        0.1,
+        0.2,
+        0.3,
+        roll=180.0,
+        pitch=0.0,
+        yaw=0.0,
+        session_id="sid",
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "unreachable"
+    assert result["reason_code"] == "full_pose_infeasible"
+    assert result["collision"] == {"checked": False}
+    assert result["path"]["checked"] is False
+    assert calls[0]["target_xyz"] == [0.1, 0.2, 0.3]
+    assert calls[0]["target_euler_xyz_deg"] == [180.0, 0.0, 0.0]
+
+
+def test_ik_preview_unknown_does_not_become_a_false_rejection(monkeypatch) -> None:
+    meta = {"backend": "libero", "remote_handle": "remote"}
+    monkeypatch.setattr(server, "_session_envs", {"sid": {"handle": meta}})
+    monkeypatch.setattr(server, "_touch_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_proxy_reachability",
+        lambda *_args, **_kwargs: {
+            "status": "unknown",
+            "kinematic_status": "unknown",
+            "feasible": None,
+            "reason_code": "ik_search_timeout",
+            "message": "Search budget expired.",
+        },
+    )
+
+    result = server.ik_preview_check.__wrapped__(
+        "handle", 0.1, 0.2, 0.3, session_id="sid"
+    )
+
+    assert result["ok"] is True
+    assert result["success"] is True
+    assert result["status"] == "unknown"
+    assert result["feasible"] is None
 
 
 def test_trajectory_pose_arguments_accept_quaternion_and_validate_endpoint() -> None:

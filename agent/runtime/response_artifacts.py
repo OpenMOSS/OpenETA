@@ -109,12 +109,51 @@ def build_response_reference(
     motion_summary = build_motion_summary(payload)
     if motion_summary:
         reference["motion_summary"] = motion_summary
+    reachability_summary = build_reachability_summary(payload)
+    if reachability_summary:
+        reference["reachability_summary"] = reachability_summary
     for key in ("envs", "tasks", "items", "results"):
         if key in payload and isinstance(payload[key], list):
             reference[f"{key}_count"] = len(payload[key])
     if image_artifacts:
         reference["image_artifacts"] = list(image_artifacts)
     return reference
+
+
+def build_reachability_summary(payload: JsonDict) -> JsonDict:
+    """Keep a reachability verdict and its actionable residuals in context."""
+
+    status = payload.get("status")
+    reason_code = payload.get("reason_code")
+    if status not in {"reachable", "unreachable", "unknown"} or not isinstance(
+        reason_code, str
+    ):
+        return {}
+    summary: JsonDict = {
+        "status": status,
+        "reason_code": reason_code,
+    }
+    for key in (
+        "kinematic_status",
+        "orientation_mode",
+        "feasible",
+        "message",
+        "position_only_reachable",
+        "orientation_only_reachable",
+    ):
+        value = payload.get(key)
+        if _is_small_scalar(value) or value is None:
+            summary[key] = value
+    for key in ("target", "tolerances", "best_candidate", "collision", "path", "solver"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            summary[key] = _plain_json_value(value)
+    suggestions = payload.get("suggestions")
+    if isinstance(suggestions, list):
+        summary["suggestions"] = [
+            str(item) for item in suggestions[:8] if isinstance(item, str)
+        ]
+    return summary
 
 
 def build_observation_summary(
@@ -259,6 +298,16 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
     steps = payload.get("steps_executed")
     if isinstance(steps, int):
         summary["steps_executed"] = steps
+    for key in (
+        "position_error_m",
+        "max_axis_position_error_m",
+        "orientation_error_rad",
+        "orientation_error_deg",
+        "stop_reason",
+    ):
+        value = payload.get(key)
+        if _is_small_scalar(value):
+            summary[key] = value
 
     reached = payload.get("reached_target")
     if isinstance(reached, bool):

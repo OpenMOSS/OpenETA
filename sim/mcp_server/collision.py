@@ -365,9 +365,18 @@ class CollisionChecker:
           ``max_world_penetration``, ``max_self_penetration``,
           ``world_collision``, ``self_collision`` (positive = penetration).
         """
+        objects = objects or []
+        coverage = {
+            "check_mode": "post_step_configuration",
+            "trajectory_checked": False,
+            "self_checked": bool(self._available),
+            "world_checked": bool(self._available and objects),
+            "world_object_count": len(objects),
+        }
         if not self._available:
             return False, {"available": False,
-                           "reason": "cuRobo not installed or CUDA unavailable"}
+                           "reason": "cuRobo not installed or CUDA unavailable",
+                           **coverage}
 
         if self._backend == "metaworld":
             return False, {"available": False,
@@ -441,6 +450,7 @@ class CollisionChecker:
             "max_self_penetration": d_self_val,
             "world_collision": world_coll,
             "self_collision": self_coll,
+            **coverage,
         }
 
     def close(self) -> None:

@@ -14,6 +14,8 @@ allowed_tools:
   - reject_sam3_detections
   - anyplace
   - camera_pose_to_world
+  - ik_preview_check
+  - obstacle_avoidance
   - move_to
   - gripper_control
 ---
@@ -72,6 +74,10 @@ before choosing the next tool call.
    translating, then use the bounded horizontal waypoints from
    `placement_motion_guidance` rather than one long carry. Preserve the current
    EEF orientation and do not combine lateral carry with receptacle descent. A
+   planned endpoint should pass `ik_preview_check` before motion. Use its
+   position/orientation residuals to adjust an unreachable waypoint; do not treat
+   `unknown` as proof of safety. This is endpoint IK only, so retain separate
+   `obstacle_avoidance` evidence for the carry path. A
    confirmed held object participates in the collision envelope. If motion is
    rejected with `collision_type=attached_object_world`, use the named obstacle
    and predicted pose to choose a higher or more central waypoint; do not repeat

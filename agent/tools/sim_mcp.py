@@ -2349,6 +2349,9 @@ def _agent_visible_attachment_proxy_receipt(receipt: JsonDict) -> JsonDict:
         "authorized_target_outside_contact_envelope": (
             "close_not_supported_by_host_contact_envelope"
         ),
+        "close_near_bound_target_pending_visual_confirmation": (
+            "non_empty_close_with_tentative_safety_proxy"
+        ),
         "non_empty_close_near_bound_target": "non_empty_close_with_tentative_safety_proxy",
     }
     public["reason"] = (

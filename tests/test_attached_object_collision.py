@@ -41,10 +41,15 @@ def test_attachment_proxy_stays_tentative_until_independent_visual_verdict() -> 
     assert abs(receipt["eef_displacement_since_close_m"] - 0.08) < 1e-9
     assert receipt["attachment_proven"] is False
 
-    retired = _refresh_attachment_proxy(meta, _observation([0.0, 0.08, 0.25], 0.01))
-    assert "_attachment_proxy" not in meta
-    assert retired["status"] == "retired"
-    assert retired["reason"] == "aperture_collapsed_to_empty_close"
+    low_aperture = _refresh_attachment_proxy(
+        meta,
+        _observation([0.0, 0.08, 0.25], 0.01),
+    )
+    assert meta["_attachment_proxy"]["status"] == "tentative"
+    assert low_aperture["status"] == "tentative"
+    assert low_aperture["reason"] == "awaiting_independent_co_motion_evidence"
+    assert low_aperture["measured_open_fraction"] == 0.01
+    assert low_aperture["attachment_proven"] is False
 
 
 def test_attachment_proxy_uses_host_bound_target_instead_of_nearest_object() -> None:

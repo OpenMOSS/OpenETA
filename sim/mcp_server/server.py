@@ -47,6 +47,7 @@ from sim.mcp_server.worker_mgr import (
     _proxy_step,
 )
 from sim.mcp_server.collision import (
+    RECEPTACLE_CATEGORIES,
     check_attached_object_collision,
     get_checker,
     remove_checker,
@@ -552,17 +553,17 @@ def _arm_attachment_proxy(
 
     state = _extract_gripper_state_from_result(result)
     openness = state.get("openness")
-    if not isinstance(openness, (int, float)) or isinstance(openness, bool) or openness < 0.08:
+    if not isinstance(openness, (int, float)) or isinstance(openness, bool):
         meta.pop("_attachment_proxy", None)
         return {
             "schema_version": "openeta.attachment_proxy_receipt.v1",
             "status": "not_armed",
-            "reason": "empty_close_or_no_measurable_contact",
+            "reason": "gripper_aperture_unavailable",
             "measured_open_fraction": openness,
             "attachment_proven": False,
             "interpretation": (
-                "The fingers closed near the empty-close value; no carried-object "
-                "collision proxy was armed. Inspect the returned views before lifting."
+                "The close response did not expose a numeric gripper aperture, so no "
+                "carried-object collision proxy was armed. Inspect fresh views."
             ),
         }
     eef = _extract_ee_xyz_from_result(result)
@@ -584,7 +585,7 @@ def _arm_attachment_proxy(
         if not isinstance(obj, dict):
             continue
         category = str(obj.get("category") or "").strip().lower()
-        if category in {"basket", "bin", "bowl", "tray", "container"}:
+        if category in RECEPTACLE_CATEGORIES:
             continue
         position = obj.get("position")
         if not isinstance(position, list) or len(position) < 3:
@@ -627,6 +628,9 @@ def _arm_attachment_proxy(
         "relative_xyz": [position[i] - float(eef[i]) for i in range(3)],
         "dims": [max(0.01, float(value)) for value in dims[:3]],
         "anchor_eef_xyz": [float(value) for value in eef[:3]],
+        # Aperture is evidence for the independent attachment reviewer, not a
+        # proxy-arming gate: thin objects may legitimately close near zero.
+        "measured_open_fraction": float(openness),
         "binding_source": (
             "host_compiled_target_provenance"
             if isinstance(authorized_object, dict)
@@ -636,7 +640,7 @@ def _arm_attachment_proxy(
     return {
         "schema_version": "openeta.attachment_proxy_receipt.v1",
         "status": "tentative",
-        "reason": "non_empty_close_near_bound_target",
+        "reason": "close_near_bound_target_pending_visual_confirmation",
         "target_object_name": str(obj.get("name") or ""),
         "binding_source": meta["_attachment_proxy"]["binding_source"],
         "eef_to_target_distance_m": nearest[0],
@@ -644,8 +648,8 @@ def _arm_attachment_proxy(
         "attachment_proven": False,
         "interpretation": (
             "A conservative carried-object collision proxy was armed for a lift "
-            "probe. This is not attachment proof; require post-lift co-motion and "
-            "source-vacancy evidence."
+            "probe. Aperture is only a hint and this is not attachment proof; "
+            "require post-lift co-motion and source-vacancy evidence."
         ),
     }
 
@@ -665,23 +669,8 @@ def _refresh_attachment_proxy(meta: dict, result: dict) -> dict | None:
         return None
     state = _extract_gripper_state_from_result(result)
     openness = state.get("openness")
-    if isinstance(openness, (int, float)) and not isinstance(openness, bool) and openness < 0.08:
-        object_name = str(proxy.get("object_name") or "")
-        meta.pop("_attachment_proxy", None)
-        return {
-            "schema_version": "openeta.attachment_proxy_receipt.v1",
-            "status": "retired",
-            "reason": "aperture_collapsed_to_empty_close",
-            "target_object_name": object_name,
-            "binding_source": proxy.get("binding_source"),
-            "measured_open_fraction": float(openness),
-            "attachment_proven": False,
-            "interpretation": (
-                "The conservative carried-object proxy was retired because the "
-                "latched gripper closed into the empty-close aperture range. "
-                "Correlate this with fresh dual-view evidence and recover."
-            ),
-        }
+    if isinstance(openness, (int, float)) and not isinstance(openness, bool):
+        proxy["measured_open_fraction"] = float(openness)
     eef = _extract_ee_xyz_from_result(result)
     anchor = proxy.get("anchor_eef_xyz")
     displacement = (
@@ -704,9 +693,9 @@ def _refresh_attachment_proxy(meta: dict, result: dict) -> dict | None:
         "eef_displacement_since_close_m": displacement,
         "attachment_proven": False,
         "interpretation": (
-            "The host keeps a conservative tentative collision proxy while the "
-            "latched close retains non-empty aperture. Confirm or reject attachment "
-            "from fresh dual-view co-motion and source-vacancy evidence."
+            "The host keeps a conservative tentative collision proxy after close. "
+            "Aperture alone neither confirms nor retires it; confirm or reject "
+            "attachment from fresh dual-view co-motion and source-vacancy evidence."
         ),
     }
 
@@ -719,6 +708,104 @@ def _collision_objects_without_attached(meta: dict) -> list[dict]:
         for item in meta.get("_collision_objects", [])
         if isinstance(item, dict) and str(item.get("name") or "") != attached_name
     ]
+
+
+# Radius around the commanded pose within which an object is read as the
+# intended manipulation target rather than an obstacle.
+_APPROACH_TARGET_RADIUS_M = 0.08
+
+
+def _safety_obstacles(
+    meta: dict,
+    *,
+    approach_target_xyz: tuple[float, float, float] | list[float] | None = None,
+    target_radius_m: float = _APPROACH_TARGET_RADIUS_M,
+) -> list[dict]:
+    """Private safety geometry, minus the held object and the approach target.
+
+    The safety adapter always uses privileged geometry; ``_expose_objects``
+    governs only what the public observation reveals.  Keeping the two coupled
+    meant the arm-vs-world check ran against an empty world by default.
+
+    The single object nearest the *commanded* pose is dropped, because
+    "something sits where I am reaching" is what an intended grasp target looks
+    like — treating it as an obstacle would abort every reach before contact.
+    Everything else in the scene stays an obstacle.  Inferring the target from
+    the commanded pose keeps this server-side and opens no new information
+    channel to the Agent.
+    """
+    obstacles = _collision_objects_without_attached(meta)
+    if approach_target_xyz is None or len(approach_target_xyz) < 3:
+        return obstacles
+    try:
+        target = [float(value) for value in approach_target_xyz[:3]]
+    except (TypeError, ValueError):
+        return obstacles
+
+    nearest_name: str | None = None
+    best = float(target_radius_m)
+    for obj in obstacles:
+        position = obj.get("position")
+        if not isinstance(position, list) or len(position) < 3:
+            continue
+        try:
+            distance = math.dist(target, [float(value) for value in position[:3]])
+        except (TypeError, ValueError):
+            continue
+        if distance < best:
+            nearest_name, best = str(obj.get("name") or ""), distance
+    if nearest_name is None:
+        return obstacles
+    return [obj for obj in obstacles if str(obj.get("name") or "") != nearest_name]
+
+
+def _check_attached_object_sweep(
+    attachment: dict,
+    obstacles: list[dict],
+    start_xyz: list[float],
+    end_xyz: list[float],
+) -> tuple[bool, dict]:
+    """Sample the carry segment instead of testing only its endpoint.
+
+    Testing the batch endpoint alone lets the carried object tunnel straight
+    through an obstacle whenever one batch advances further than the object's
+    own thickness.  Sample density is set by the smallest held dimension so no
+    sample can skip past a body thinner than the object itself.  This is pure
+    AABB arithmetic — no GPU work — so the extra samples are cheap.
+    """
+    if len(start_xyz) < 3 or len(end_xyz) < 3:
+        return check_attached_object_collision(attachment, obstacles, end_xyz)
+
+    dims = attachment.get("dims")
+    smallest = 0.06
+    if isinstance(dims, list) and len(dims) >= 3:
+        finite = [float(v) for v in dims[:3] if isinstance(v, (int, float))]
+        if finite and min(finite) > 0:
+            smallest = min(finite)
+
+    try:
+        span = math.dist(
+            [float(v) for v in start_xyz[:3]], [float(v) for v in end_xyz[:3]]
+        )
+    except (TypeError, ValueError):
+        return check_attached_object_collision(attachment, obstacles, end_xyz)
+
+    samples = max(1, min(24, int(span / max(0.01, smallest / 2.0)) + 1))
+    last_info: dict = {"available": True, "attached_object_world_collision": False}
+    for index in range(1, samples + 1):
+        ratio = index / samples
+        sample = [
+            float(start_xyz[axis]) + (float(end_xyz[axis]) - float(start_xyz[axis])) * ratio
+            for axis in range(3)
+        ]
+        detected, info = check_attached_object_collision(attachment, obstacles, sample)
+        last_info = info
+        if detected:
+            info["swept_samples"] = samples
+            info["swept_hit_fraction"] = ratio
+            return True, info
+    last_info["swept_samples"] = samples
+    return False, last_info
 
 
 # ── Quaternion helpers (no scipy dependency) ────────────────────────────
@@ -1259,6 +1346,10 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         batch_steps = min(recheck_every, num_steps - batch_start)
 
         attachment = meta.get("_attachment_proxy")
+        # A tentative proxy is checked too: its relative_xyz was measured from
+        # the real object pose when armed, so it is no less accurate than a
+        # confirmed one.  Waiting for confirmation left the first ~1.5 cm of
+        # every post-grasp carry — the lift — entirely unguarded.
         if (
             enable_collision_check
             and isinstance(attachment, dict)
@@ -1269,9 +1360,10 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                 current_xyz[1] + ay * scale * batch_steps,
                 current_xyz[2] + az * scale * batch_steps,
             ]
-            collision_detected, collision_info = check_attached_object_collision(
+            collision_detected, collision_info = _check_attached_object_sweep(
                 attachment,
-                list(meta.get("_collision_objects", [])),
+                _safety_obstacles(meta),
+                current_xyz,
                 predicted_eef,
                 baseline_eef_xyz=current_xyz,
             )
@@ -1356,15 +1448,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         collision_info = {"available": False}
         if enable_collision_check and backend in ("libero", "maniskill"):
             jp = _extract_joint_positions_from_result(final_result)
-            # Public include_objects remains the opt-in for cuRobo's generic
-            # robot-vs-world check; otherwise an intended grasp target would be
-            # treated as an obstacle before contact.  The attached-object proxy
-            # above always uses the private safety geometry after co-motion.
-            objects = (
-                _collision_objects_without_attached(meta)
-                if meta.get("_expose_objects") is True
-                else []
-            )
+            # The arm-vs-world check always uses privileged geometry.  Gating it
+            # on the public include_objects flag meant cuRobo's world was never
+            # populated in the default path, so max_world_penetration was
+            # structurally 0.0 and only self-collision was ever evaluated.
+            # Excluding just the approach target preserves the original intent
+            # (a grasp target must not read as an obstacle pre-contact) without
+            # discarding the rest of the scene.
+            objects = _safety_obstacles(meta, approach_target_xyz=(x, y, z))
             if jp:
                 try:
                     checker = get_checker(handle, backend)

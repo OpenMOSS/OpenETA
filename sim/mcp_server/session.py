@@ -25,7 +25,7 @@ warnings = __import__("warnings")
 warnings.filterwarnings("ignore")
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("MS_SKIP_ASSET_DOWNLOAD_PROMPT", "1")
-os.environ.setdefault("LIBERO_DIR", "/tmp/LIBERO")
+os.environ.setdefault("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
 os.environ.setdefault("LIBERO_DATASET_PATH", f"{_REPO_ROOT}/sim/venvs/libero/assets/datasets")
 
 # ── Session-scoped storage ────────────────────────────────────────────

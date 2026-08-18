@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from adapter.protocol import CameraFrame, EnvObservation, RobotState
 from agent.runtime.memory import (
     ANYPLACE_INPUT_BUNDLES_KEY,
     GRASP_PROVENANCE_KEY,
@@ -31,6 +32,8 @@ def _source(observation_index: int, *, frame: str = "agentview"):
     base = f"artifacts/obs-{observation_index:04d}/cameras.0.{frame}"
     return {
         "mode": "targeted",
+        "source_packet_id": f"packet-{observation_index}",
+        "camera_frame_id": frame,
         "rgb": base + ".rgb.png",
         "depth": base + ".depth.png",
         "object_mask": f"artifacts/obs-{observation_index:04d}/object-mask.png",
@@ -41,6 +44,38 @@ def _source(observation_index: int, *, frame: str = "agentview"):
 def _memory_with_grasp(source):
     memory = AgentMemory()
     memory.start_session(task="pick and place")
+    indexed_sources = [_source(1), source]
+    for index, indexed in enumerate(indexed_sources):
+        memory.add_observation(
+            EnvObservation(
+                task="pick and place",
+                cameras=[
+                    CameraFrame(
+                        frame_id=indexed["camera_frame_id"],
+                        rgb=[],
+                        intrinsics=dict(INTRINSICS),
+                    )
+                ],
+                robot=RobotState(),
+                metadata={
+                    "image_artifacts": [
+                        {
+                            "kind": "rgb",
+                            "frame_id": indexed["camera_frame_id"],
+                            "path": indexed["rgb"],
+                            "packet_id": indexed["source_packet_id"],
+                        },
+                        {
+                            "kind": "depth",
+                            "frame_id": indexed["camera_frame_id"],
+                            "path": indexed["depth"],
+                            "packet_id": indexed["source_packet_id"],
+                        },
+                    ],
+                    "step_idx": index,
+                },
+            )
+        )
     memory.facts[GRASP_PROVENANCE_KEY] = _memory_fact_entry(
         {
             "schema_version": "openeta.grasp_provenance.v1",
@@ -121,7 +156,8 @@ def test_anyplace_wrist_mismatch_requires_exact_repair_call() -> None:
     assert public["repair_call"] == {
         "tool": "sam3",
         "parameters": {
-            "image": _source(1)["rgb"],
+            "source_packet_id": "packet-1",
+            "camera_frame_id": "agentview",
             "prompt": "milk carton",
             "evidence_role": "target_object",
         },

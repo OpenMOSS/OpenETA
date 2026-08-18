@@ -83,7 +83,11 @@ def _record_target_selection(
                     {
                         "name": "sam3",
                         "status": "executed",
-                        "parameters": {"image": rgb, "prompt": "cube"},
+                        "parameters": {
+                            "source_packet_id": "packet-4",
+                            "camera_frame_id": "agentview",
+                            "prompt": "cube",
+                        },
                         "result": {
                             "success": True,
                             "details": {
@@ -139,6 +143,8 @@ def test_agent_owned_pipeline_does_not_turn_reference_work_into_a_task_gate() ->
         "pending_reference_localization",
         {
             "scene_image": "/session/rgb.png",
+            "source_packet_id": "packet-4",
+            "camera_frame_id": "agentview",
             "target_object": "alphabet soup",
             "required_parameter": "positive_points",
             "positive_points": [{"x": 20, "y": 30, "label": 1}],
@@ -237,7 +243,10 @@ def test_tool_result_separates_operational_success_from_semantic_outcome() -> No
         )
 
     tools.bind_handler("sam3", handler)
-    result = tools.call("sam3", {"image": "/session/rgb.png", "prompt": "cube"})
+    result = tools.call(
+        "sam3",
+        {"source_packet_id": "packet-4", "prompt": "cube"},
+    )
 
     assert result.success is True
     assert result.details["operational_success"] is True

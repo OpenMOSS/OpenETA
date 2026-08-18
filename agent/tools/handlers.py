@@ -18,6 +18,11 @@ from uuid import uuid4
 
 from adapter.protocol import JsonDict
 from agent.runtime.artifact_paths import artifact_session_id, artifact_session_root
+from agent.runtime.observation_packets import (
+    ObservationPacketResolutionError,
+    build_observation_packet_entries,
+    resolve_packet_source,
+)
 from agent.tools.attachment_probe import build_prepare_attachment_probe_handler
 from agent.tools.grasp_geometry import (
     build_compile_grasp_seed_handler,
@@ -206,12 +211,10 @@ def build_sam3_handler(
             raw_points = positive_points_value
         else:
             mode = explicit_mode or "text"
-        requested_image = _string_param(context.parameters.get("image"))
-        image = _resolve_current_observation_rgb_path(requested_image, context.observation)
-        source_camera_metadata = _current_observation_rgb_metadata(
-            image,
-            context.observation,
-        )
+        source_packet_id = _string_param(context.parameters.get("source_packet_id"))
+        requested_frame_id = _string_param(context.parameters.get("camera_frame_id"))
+        image = ""
+        source_camera_metadata: JsonDict = {}
         prompt = _string_param(context.parameters.get("prompt"))
         evidence_role = (
             _string_param(context.parameters.get("evidence_role")).lower()
@@ -221,9 +224,11 @@ def build_sam3_handler(
         points: list[JsonDict] = []
         request: JsonDict = {
             "mode": mode,
-            "image": image,
+            "source_packet_id": source_packet_id,
             "evidence_role": evidence_role,
         }
+        if requested_frame_id:
+            request["camera_frame_id"] = requested_frame_id
         if mode == "text":
             request["prompt"] = prompt
         elif mode == "points":
@@ -249,6 +254,10 @@ def build_sam3_handler(
             _write_json(request_ref, dict(context.parameters))
             details = dict(result.details)
             details["raw_output_ref"] = str(raw_output_ref)
+            if source_packet_id:
+                details.setdefault("source_packet_id", source_packet_id)
+            for key, value in source_camera_metadata.items():
+                details.setdefault(key, value)
             result.details = details
             raw_record: JsonDict = {"mcp_called": mcp_called}
             if isinstance(response, Mapping):
@@ -277,6 +286,40 @@ def build_sam3_handler(
                 },
             )
             return result
+
+        try:
+            source_observation = _resolve_sam3_source_observation(
+                context,
+                source_packet_id=source_packet_id,
+                camera_frame_id=requested_frame_id,
+            )
+            image = str(source_observation["rgb"])
+            source_camera_metadata = {
+                "source_packet_id": source_packet_id,
+                "source_observation": source_observation,
+                "source_frame_id": str(source_observation.get("frame_id") or ""),
+                **(
+                    {"source_camera_role": source_observation["role"]}
+                    if source_observation.get("role")
+                    else {}
+                ),
+            }
+        except ObservationPacketResolutionError as exc:
+            failure = _sam3_failure(
+                mode=mode,
+                prompt=prompt,
+                points=[],
+                source_image="",
+                reason=exc.code,
+                content=f"SAM3 segmentation failed: {exc}",
+                metadata={"source_packet_resolution": exc.to_dict()},
+            )
+            failure.details["diagnostics"] = [exc.to_dict()]
+            return finish(
+                failure,
+                mcp_called=False,
+                reason=exc.code,
+            )
 
         if evidence_role not in SAM3_EVIDENCE_ROLES:
             return finish(
@@ -552,7 +595,8 @@ def build_sam3_handler(
             points=points,
             source_image=image,
             request={
-                "image": image,
+                "source_packet_id": source_packet_id,
+                "camera_frame_id": source_observation.get("frame_id"),
                 "mode": mode,
                 "evidence_role": evidence_role,
                 "image_format": image_format,
@@ -601,96 +645,6 @@ def build_sam3_handler(
     return handler
 
 
-def _resolve_current_observation_rgb_path(image: str, observation: Any) -> str:
-    """Resolve a frame id only from the current observation's RGB artifacts."""
-
-    return _resolve_current_observation_artifact_path(
-        image,
-        observation,
-        kind="rgb",
-        allow_frame_alias=True,
-    )
-
-
-def _current_observation_rgb_metadata(image: str, observation: Any) -> JsonDict:
-    """Return provenance for the exact current-observation RGB artifact."""
-
-    if not image or observation is None:
-        return {}
-    metadata = getattr(observation, "metadata", None)
-    if not isinstance(metadata, dict):
-        return {}
-    artifacts = metadata.get("image_artifacts")
-    if not isinstance(artifacts, list):
-        return {}
-    for artifact in artifacts:
-        if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
-            continue
-        path = artifact.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        if not _same_resolved_path(path, image):
-            continue
-        provenance: JsonDict = {}
-        packet_id = _string_param(artifact.get("packet_id"))
-        if not packet_id:
-            try:
-                packet_id = Path(path).parent.name
-            except (OSError, ValueError):
-                packet_id = ""
-        frame_id = str(artifact.get("frame_id") or "")
-        role = str(artifact.get("role") or "")
-        if packet_id:
-            provenance["source_packet_id"] = packet_id
-        source_observation: JsonDict = {
-            "packet_id": packet_id,
-            "frame_id": frame_id,
-            "rgb": path,
-        }
-        for candidate in artifacts:
-            if (
-                not isinstance(candidate, dict)
-                or candidate.get("kind") != "depth"
-                or str(candidate.get("frame_id") or "") != frame_id
-            ):
-                continue
-            candidate_path = candidate.get("path")
-            if not isinstance(candidate_path, str) or not candidate_path:
-                continue
-            candidate_packet_id = _string_param(candidate.get("packet_id"))
-            if not candidate_packet_id:
-                try:
-                    candidate_packet_id = Path(candidate_path).parent.name
-                except (OSError, ValueError):
-                    candidate_packet_id = ""
-            if packet_id and candidate_packet_id == packet_id:
-                source_observation["depth"] = candidate_path
-                break
-        cameras = getattr(observation, "cameras", None)
-        if isinstance(cameras, list):
-            camera = next(
-                (
-                    candidate
-                    for candidate in cameras
-                    if str(getattr(candidate, "frame_id", "") or "") == frame_id
-                ),
-                None,
-            )
-            intrinsics = getattr(camera, "intrinsics", None)
-            if isinstance(intrinsics, dict) and intrinsics:
-                source_observation["intrinsics"] = dict(intrinsics)
-        provenance["source_observation"] = source_observation
-        # Keep the legacy role-less payload shape while adding packet provenance.
-        # Frame/camera labels are only part of the role-aware adapter contract.
-        if not role:
-            return provenance
-        if frame_id:
-            provenance["source_frame_id"] = frame_id
-        provenance["source_camera_role"] = role
-        return provenance
-    return {}
-
-
 def _resolve_current_observation_artifact_path(
     requested: str,
     observation: Any,
@@ -698,7 +652,7 @@ def _resolve_current_observation_artifact_path(
     kind: str,
     allow_frame_alias: bool = False,
 ) -> str:
-    """Repair one missing path only from a unique current-observation artifact."""
+    """Resolve an explicit current-frame alias without basename rebinding."""
 
     if not requested or Path(requested).is_file() or observation is None:
         return requested
@@ -708,8 +662,6 @@ def _resolve_current_observation_artifact_path(
     artifacts = metadata.get("image_artifacts")
     if not isinstance(artifacts, list):
         return requested
-    requested_name = Path(requested).name
-    basename_matches: list[str] = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             continue
@@ -720,11 +672,64 @@ def _resolve_current_observation_artifact_path(
             continue
         if allow_frame_alias and artifact.get("frame_id") == requested:
             return path
-        if Path(path).name == requested_name and Path(path).is_file():
-            basename_matches.append(path)
-    if len(basename_matches) == 1:
-        return basename_matches[0]
     return requested
+
+
+def _resolve_sam3_source_observation(
+    context: ToolExecutionContext,
+    *,
+    source_packet_id: str,
+    camera_frame_id: str,
+) -> JsonDict:
+    """Resolve SAM3's planner-facing packet reference inside the active session."""
+
+    if not source_packet_id:
+        raise ObservationPacketResolutionError(
+            "missing_source_packet_id",
+            "source_packet_id is required; local image paths are not accepted.",
+        )
+    resolver = context.metadata.get("_observation_packet_resolver")
+    if callable(resolver):
+        resolved = resolver(source_packet_id, camera_frame_id)
+        if not isinstance(resolved, dict):
+            raise ObservationPacketResolutionError(
+                "invalid_source_packet_resolution",
+                "The host packet resolver returned an invalid result.",
+                details={"source_packet_id": source_packet_id},
+            )
+        return dict(resolved)
+
+    observation = context.observation
+    if observation is None:
+        raise ObservationPacketResolutionError(
+            "source_packet_resolver_unavailable",
+            "No session packet resolver or current observation is available.",
+            details={"source_packet_id": source_packet_id},
+        )
+    entries = build_observation_packet_entries(
+        observation,
+        observation_index=0,
+        scene_epoch=0,
+        object_scene_epoch=0,
+        robot_motion_epoch=0,
+    )
+    matching = [entry for entry in entries if entry.get("packet_id") == source_packet_id]
+    if not matching:
+        raise ObservationPacketResolutionError(
+            "unknown_source_packet_id",
+            "source_packet_id does not exist in the active observation packet index.",
+            details={
+                "source_packet_id": source_packet_id,
+                "available_source_packet_ids": [entry.get("packet_id") for entry in entries],
+            },
+        )
+    if len(matching) != 1:
+        raise ObservationPacketResolutionError(
+            "duplicate_source_packet_id",
+            "source_packet_id resolves to multiple packet records.",
+            details={"source_packet_id": source_packet_id},
+        )
+    return resolve_packet_source(matching[0], camera_frame_id=camera_frame_id)
 
 
 def build_stdio_sam3_mcp_segmenter(
@@ -2214,6 +2219,20 @@ def _scene_detector_handler(context: ToolExecutionContext) -> ToolResult:
 
 def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
     prompt = context.parameters.get("prompt", "object")
+    source_packet_id = _string_param(context.parameters.get("source_packet_id"))
+    try:
+        source_observation = _resolve_sam3_source_observation(
+            context,
+            source_packet_id=source_packet_id,
+            camera_frame_id=_string_param(context.parameters.get("camera_frame_id")),
+        )
+    except ObservationPacketResolutionError as exc:
+        return make_tool_result(
+            context,
+            success=False,
+            content=f"Dummy SAM3 segmentation failed: {exc}",
+            diagnostics=[exc.to_dict()],
+        )
     evidence_role = (
         _string_param(context.parameters.get("evidence_role")).lower()
         or DEFAULT_SAM3_EVIDENCE_ROLE
@@ -2224,7 +2243,9 @@ def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
         success=True,
         content="dummy segmentation mask generated",
         outputs={
-            "image": context.parameters.get("image"),
+            "source_packet_id": source_packet_id,
+            "source_image": source_observation.get("rgb"),
+            "source_observation": source_observation,
             "prompt": prompt,
             "evidence_role": evidence_role,
             "masks": [
@@ -3449,8 +3470,8 @@ def _normalise_sam3_response(
             "detection_count": len(detections),
             "detections": detections,
             "ranking": "score_descending",
-            "selection_required": len(detections) > 1,
-            "selected_detection": detections[0] if len(detections) == 1 else None,
+            "selection_required": bool(detections),
+            "selected_detection": None,
             "selection_bundle": selection_bundle,
             "artifacts": artifacts,
             "diagnostics": visualization_diagnostics,

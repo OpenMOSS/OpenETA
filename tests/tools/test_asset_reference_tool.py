@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from adapter.protocol import EnvAction
+from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
 from agent.runtime.memory import AgentMemory
 from agent.runtime.reference_localization import ReferencePointLocalization
 from agent.tools.asset_references import (
@@ -64,6 +64,34 @@ def _context(parameters: dict, *, session_id: str = "asset-session"):
         spec=spec,
         parameters=parameters,
         metadata={"session_id": session_id},
+    )
+
+
+def _index_scene(
+    memory: AgentMemory,
+    scene: str | Path,
+    *,
+    packet_id: str = "packet-scene",
+) -> None:
+    if memory.session_id is None:
+        memory.start_session(task="localize target")
+    scene_path = str(scene)
+    memory.add_observation(
+        EnvObservation(
+            task="localize target",
+            cameras=[CameraFrame(frame_id="agentview", rgb=[])],
+            robot=RobotState(),
+            metadata={
+                "image_artifacts": [
+                    {
+                        "kind": "rgb",
+                        "frame_id": "agentview",
+                        "path": scene_path,
+                        "packet_id": packet_id,
+                    }
+                ]
+            },
+        )
     )
 
 
@@ -190,6 +218,7 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
         )
     )
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -215,7 +244,7 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": str(scene)},
+            parameters={"source_packet_id": "packet-scene"},
         )
         is None
     )
@@ -228,7 +257,8 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
                     {
                         "name": "sam3",
                         "parameters": {
-                            "image": str(scene),
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
                             "prompt": "alphabet soup can",
                             "roi_bbox_xyxy": [2, 3, 20, 18],
                         },
@@ -236,7 +266,8 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
                             "success": True,
                             "details": {
                                 "parameters": {
-                                    "image": str(scene),
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
                                     "prompt": "alphabet soup can",
                                     "roi_bbox_xyxy": [2, 3, 20, 18],
                                 },
@@ -338,6 +369,7 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     assert len(outputs["reference_images"]) == 3
 
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -367,7 +399,7 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
         memory.detection_selection_gate_error(
             tool_name="sam3",
             parameters={
-                "image": str(scene),
+                "source_packet_id": "packet-scene",
                 "positive_points": [{"x": 23, "y": 31, "label": 1}],
             },
         )
@@ -376,7 +408,10 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": str(scene), "positive_points": outputs["positive_points"]},
+            parameters={
+                "source_packet_id": "packet-scene",
+                "positive_points": outputs["positive_points"],
+            },
         )
         is None
     )
@@ -386,6 +421,7 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     scene = "/tmp/current-scene.png"
     memory = AgentMemory()
     memory.start_session(task="pick alphabet soup")
+    _index_scene(memory, scene)
     memory.save_fact(
         "sam3_no_detection",
         {
@@ -470,7 +506,7 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": scene, "positive_points": points},
+            parameters={"source_packet_id": "packet-scene", "positive_points": points},
         )
         is None
     )
@@ -489,7 +525,8 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
                         "name": "sam3",
                         "parameters": {
                             "mode": "points",
-                            "image": scene,
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
                             "points": points,
                         },
                         "result": {
@@ -497,7 +534,8 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
                             "details": {
                                 "parameters": {
                                     "mode": "points",
-                                    "image": scene,
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
                                     "points": points,
                                 },
                                 "outputs": {

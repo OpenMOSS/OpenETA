@@ -1047,14 +1047,20 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Segment objects or regions from RGB observations using text, one to "
                 "64 foreground/background pixel points, or an optional full-frame "
                 "pixel ROI. Rank detections and provide candidate visuals for explicit "
-                "VLM selection while preserving original camera coordinates."
+                "VLM selection while preserving original camera coordinates. The host "
+                "resolves the session-owned observation packet; local image paths are "
+                "not accepted from the Agent."
             ),
             parameters={
-                "mode": "text | points; defaults to text for backward compatibility",
-                "image": (
-                    "exact local RGB image path (preferred), or a frame id present in the "
-                    "current observation's image_artifacts"
+                "source_packet_id": (
+                    "required exact packet_id copied from visible observation evidence; "
+                    "the host resolves its local RGB-D artifacts and camera metadata"
                 ),
+                "camera_frame_id": (
+                    "optional exact camera frame within the packet; omit to prefer "
+                    "agentview, then the unique scene_primary or sole RGB camera"
+                ),
+                "mode": "text | points; defaults to text",
                 "prompt": (
                     "required only for mode=text: concise visual object phrase, preferably English"
                 ),

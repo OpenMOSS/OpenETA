@@ -29,6 +29,14 @@ from agent.runtime.memory_migrations import (
     is_removed_task_policy_key,
     purge_removed_task_policy_facts,
 )
+from agent.runtime.observation_packets import (
+    ObservationPacketResolutionError,
+    build_observation_packet_entries,
+    find_packet_id_for_path,
+    find_packet_reference_for_path,
+    packet_integrity_fingerprint,
+    resolve_packet_source,
+)
 
 
 PENDING_SAM3_SELECTION_KEY = "pending_sam3_selection"
@@ -132,6 +140,7 @@ class AgentMemory:
         self.facts: dict[str, JsonDict] = {}
         self.agent_working_state: dict[str, JsonDict] = {}
         self.artifacts: dict[str, JsonDict] = {}
+        self._observation_packets: dict[str, JsonDict] = {}
         self.skill_notes: dict[str, list[JsonDict]] = {}
         self.compact_summary: str = ""
 
@@ -168,6 +177,7 @@ class AgentMemory:
             _memory_fact_entry({"epoch": 0}, source="runtime"),
         )
         self.artifacts = boot_artifacts
+        self._observation_packets.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
         if self.store is not None:
@@ -213,6 +223,7 @@ class AgentMemory:
         self.facts.clear()
         self.agent_working_state.clear()
         self.artifacts.clear()
+        self._observation_packets.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
         if self.store is not None:
@@ -237,6 +248,7 @@ class AgentMemory:
                         timestamp_s=timestamp_s,
                     )
                 )
+                self._index_observation_packets_from_payload(payload)
             records = self.store.load_conversation_records(session_id)
             if records:
                 self.conversation.replay(records)
@@ -290,7 +302,8 @@ class AgentMemory:
 
     def add_observation(self, observation: EnvObservation) -> None:
         summary = summarize_observation(observation)
-        summary["observation_index"] = self._next_observation_index()
+        observation_index = self._next_observation_index()
+        summary["observation_index"] = observation_index
         environment_step = observation.metadata.get("step_idx")
         if isinstance(environment_step, int) and not isinstance(environment_step, bool):
             summary["environment_step"] = environment_step
@@ -300,10 +313,12 @@ class AgentMemory:
         summary["runtime_camera_calibrations"] = [
             {
                 "frame_id": camera.frame_id,
+                "role": camera.role,
+                "intrinsics": dict(camera.intrinsics),
                 "extrinsics": dict(camera.extrinsics),
+                "timestamp_s": camera.timestamp_s,
             }
             for camera in observation.cameras
-            if isinstance(camera.extrinsics, dict) and camera.extrinsics
         ]
         runtime_sources: list[JsonDict] = []
         visual_artifacts: list[JsonDict] = []
@@ -362,6 +377,17 @@ class AgentMemory:
                 runtime_sources.append({"frame_id": frame_id, "rgb_path": rgb_path})
         summary["runtime_camera_sources"] = runtime_sources
         summary["visual_artifacts"] = visual_artifacts
+        packet_entries = build_observation_packet_entries(
+            observation,
+            observation_index=observation_index,
+            scene_epoch=self.scene_epoch(),
+            object_scene_epoch=self.object_scene_epoch(),
+            robot_motion_epoch=self.robot_motion_epoch(),
+        )
+        if packet_entries:
+            summary["observation_packets"] = packet_entries
+            for entry in packet_entries:
+                self._register_observation_packet(entry)
         self.record("observation", summary)
         reconciliation_updated = self._reconcile_unknown_motion(observation)
         if reconciliation_updated:
@@ -387,6 +413,119 @@ class AgentMemory:
                 if isinstance(value, int) and not isinstance(value, bool):
                     return value + 1
         return sum(event.event_type == "observation" for event in self.events)
+
+    def resolve_observation_packet(
+        self,
+        source_packet_id: str,
+        camera_frame_id: str = "",
+    ) -> JsonDict:
+        """Resolve a session-owned packet into aligned local camera inputs."""
+
+        packet_id = str(source_packet_id or "").strip()
+        if not packet_id:
+            raise ObservationPacketResolutionError(
+                "missing_source_packet_id",
+                "source_packet_id is required.",
+                details={"active_agent_session_id": self.session_id or ""},
+            )
+        entry = self._observation_packets.get(packet_id)
+        if entry is None:
+            self._load_observation_packet_index_from_store()
+            entry = self._observation_packets.get(packet_id)
+        if entry is None:
+            raise ObservationPacketResolutionError(
+                "unknown_source_packet_id",
+                "source_packet_id does not exist in the active Agent session.",
+                details={
+                    "source_packet_id": packet_id,
+                    "active_agent_session_id": self.session_id or "",
+                    "recent_source_packets": self.recent_observation_packet_refs(),
+                },
+            )
+        return resolve_packet_source(
+            entry,
+            camera_frame_id=str(camera_frame_id or ""),
+        )
+
+    def observation_packet_id_for_path(self, path: object) -> str:
+        """Map one exact session artifact path back to its owning packet."""
+
+        packet_id = find_packet_id_for_path(self._observation_packets.values(), path)
+        if packet_id:
+            return packet_id
+        self._load_observation_packet_index_from_store()
+        return find_packet_id_for_path(self._observation_packets.values(), path)
+
+    def observation_packet_reference_for_path(self, path: object) -> JsonDict:
+        """Map one exact session artifact path to packet and camera identifiers."""
+
+        reference = find_packet_reference_for_path(self._observation_packets.values(), path)
+        if reference:
+            return reference
+        self._load_observation_packet_index_from_store()
+        return find_packet_reference_for_path(self._observation_packets.values(), path)
+
+    def recent_observation_packet_refs(self, *, limit: int = 6) -> list[JsonDict]:
+        """Return a bounded repair index without exposing local paths."""
+
+        entries = list(self._observation_packets.values())[-max(0, limit) :]
+        refs: list[JsonDict] = []
+        for entry in entries:
+            frames = sorted(
+                {
+                    str(item.get("frame_id") or "")
+                    for item in entry.get("artifacts", [])
+                    if isinstance(item, dict) and item.get("kind") == "rgb"
+                }
+            )
+            refs.append(
+                {
+                    "source_packet_id": entry.get("packet_id"),
+                    "observation_index": entry.get("observation_index"),
+                    "camera_frame_ids": frames,
+                }
+            )
+        return refs
+
+    def _register_observation_packet(self, entry: JsonDict) -> None:
+        packet_id = str(entry.get("packet_id") or "").strip()
+        if not packet_id:
+            return
+        existing = self._observation_packets.get(packet_id)
+        if existing is not None:
+            if packet_integrity_fingerprint(existing) != packet_integrity_fingerprint(entry):
+                raise ObservationPacketResolutionError(
+                    "duplicate_source_packet_id",
+                    "One source_packet_id refers to different immutable packet contents.",
+                    details={
+                        "source_packet_id": packet_id,
+                        "active_agent_session_id": self.session_id or "",
+                    },
+                )
+            return
+        self._observation_packets[packet_id] = dict(entry)
+
+    def _index_observation_packets_from_payload(self, payload: JsonDict) -> None:
+        entries = payload.get("observation_packets")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if isinstance(entry, dict):
+                self._register_observation_packet(entry)
+
+    def _load_observation_packet_index_from_store(self) -> None:
+        if self.store is None or self.session_id is None:
+            return
+        try:
+            rows = self.store.load_events(self.session_id, limit=None)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
+        for row in rows:
+            if not isinstance(row, dict) or row.get("event_type") != "observation":
+                continue
+            payload = row.get("payload")
+            if isinstance(payload, dict):
+                self._index_observation_packets_from_payload(payload)
 
     def add_action(self, action: EnvAction) -> None:
         environment_task_updated = self._capture_active_environment_task(action)
@@ -1651,9 +1790,11 @@ class AgentMemory:
                 localization.get("required_parameter") or "roi_bbox_xyxy"
             )
             parameters: JsonDict = {
-                "image": localization.get("scene_image"),
+                "source_packet_id": localization.get("source_packet_id"),
                 "prompt": localization.get("target_object") or "target object",
             }
+            if localization.get("camera_frame_id"):
+                parameters["camera_frame_id"] = localization["camera_frame_id"]
             required_value = localization.get(required_parameter)
             if required_value is not None:
                 # ``positive_points`` is the evidence-bundle field retained
@@ -1791,12 +1932,12 @@ class AgentMemory:
                     if source_camera_role
                     else None
                 )
-                or parameters.get("frame_id")
+                or parameters.get("camera_frame_id")
             )
             base = {
                 "result_id": result_id,
                 "target_prompt": outputs.get("prompt") or parameters.get("prompt"),
-                "source_image": outputs.get("source_image") or parameters.get("image"),
+                "source_image": outputs.get("source_image"),
                 "source_packet_id": outputs.get("source_packet_id"),
                 "source_observation": outputs.get("source_observation"),
                 "frame_id": source_frame_id,
@@ -1820,8 +1961,13 @@ class AgentMemory:
                 if (
                     isinstance(verification, dict)
                     and str(verification.get("decision") or "").lower() == "match"
-                    and str(parameters.get("image") or "")
-                    == str(asset_reference.get("scene_image") or "")
+                    and str(parameters.get("source_packet_id") or "")
+                    == str(asset_reference.get("source_packet_id") or "")
+                    and (
+                        not asset_reference.get("camera_frame_id")
+                        or str(parameters.get("camera_frame_id") or "")
+                        == str(asset_reference.get("camera_frame_id") or "")
+                    )
                     and supplied_points == asset_reference.get("positive_points")
                 ):
                     base["reference_verification"] = dict(verification)
@@ -1989,6 +2135,9 @@ class AgentMemory:
                 ]
                 if not scene_image or not reference_images:
                     continue
+                source_reference = self.observation_packet_reference_for_path(scene_image)
+                if not source_reference:
+                    continue
                 positive_points = bundle.get("positive_points")
                 if not isinstance(positive_points, list):
                     positive_points = outputs.get("positive_points")
@@ -2021,6 +2170,7 @@ class AgentMemory:
                     "environment": outputs.get("environment") or bundle.get("environment"),
                     "target_object": outputs.get("target_object") or bundle.get("target_object"),
                     "scene_image": scene_image,
+                    **source_reference,
                     "reference_images": reference_images,
                     "marked_scene_image": bundle.get("marked_scene_image_ref")
                     or outputs.get("marked_scene_image"),
@@ -2052,6 +2202,7 @@ class AgentMemory:
                             bundle.get("memory_resolution") or outputs.get("memory_resolution")
                         ),
                         "scene_image": scene_image,
+                        **source_reference,
                         "reference_images": reference_images,
                         "positive_points": positive_points if point_prompt else None,
                         "bbox_xyxy": bbox_xyxy,
@@ -2116,10 +2267,14 @@ class AgentMemory:
                     normalized.append({"x": float(x), "y": float(y), "label": 1})
                 if not scene_image or not normalized:
                     continue
+                source_reference = self.observation_packet_reference_for_path(scene_image)
+                if not source_reference:
+                    continue
                 obligation = {
                     "environment": None,
                     "target_object": no_detection.get("target_prompt"),
                     "scene_image": scene_image,
+                    **source_reference,
                     "reference_images": [],
                     "marked_scene_image": None,
                     "positive_points": normalized,
@@ -2169,7 +2324,13 @@ class AgentMemory:
                 else parameters.get("roi_bbox_xyxy") is not None
             )
             if (
-                str(parameters.get("image") or "") == str(pending.get("scene_image") or "")
+                str(parameters.get("source_packet_id") or "")
+                == str(pending.get("source_packet_id") or "")
+                and (
+                    not pending.get("camera_frame_id")
+                    or str(parameters.get("camera_frame_id") or "")
+                    == str(pending.get("camera_frame_id") or "")
+                )
                 and geometry_matches
             ):
                 self.facts.pop(PENDING_REFERENCE_LOCALIZATION_KEY, None)
@@ -2713,8 +2874,8 @@ class AgentMemory:
                     and not _is_moving_camera_frame(placement_frame)
                 )
                 if rebase_grasp_to_fixed_camera:
+                    repair_source_image = source_image
                     repair_parameters = {
-                        "image": source_image,
                         "prompt": (
                             target.get("target_prompt")
                             if isinstance(target, dict)
@@ -2730,8 +2891,8 @@ class AgentMemory:
                     )
                     required_source_image = source_image
                 else:
+                    repair_source_image = expected_image
                     repair_parameters = {
-                        "image": expected_image,
                         "prompt": placement.get("target_prompt") or "placement region",
                         "evidence_role": "placement_region",
                     }
@@ -2740,18 +2901,35 @@ class AgentMemory:
                         "select that SAM3 detection"
                     )
                     required_source_image = expected_image
-                public.update(
-                    {
-                        "status": "placement_source_mismatch",
-                        "required_source_image": required_source_image,
-                        "provided_source_image": source_image,
-                        "recovery": recovery,
-                        "repair_call": {
-                            "tool": "sam3",
-                            "parameters": repair_parameters,
-                        },
-                    }
+                repair_reference = self.observation_packet_reference_for_path(
+                    repair_source_image
                 )
+                if repair_reference:
+                    repair_parameters.update(repair_reference)
+                    public.update(
+                        {
+                            "status": "placement_source_mismatch",
+                            "required_source_image": required_source_image,
+                            "provided_source_image": source_image,
+                            "recovery": recovery,
+                            "repair_call": {
+                                "tool": "sam3",
+                                "parameters": repair_parameters,
+                            },
+                        }
+                    )
+                else:
+                    public.update(
+                        {
+                            "status": "source_packet_unresolvable",
+                            "required_source_image": required_source_image,
+                            "provided_source_image": source_image,
+                            "recovery": (
+                                "observe again because the required source artifact is not "
+                                "owned by any indexed observation packet"
+                            ),
+                        }
+                    )
             elif not isinstance(source.get("intrinsics"), dict) or any(
                 candidate.get(key) is None
                 for key in (

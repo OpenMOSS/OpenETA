@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from adapter.protocol import CameraFrame, EnvObservation, RobotState
 from agent.tools.handlers import (
     build_sam3_handler,
     build_sse_sam3_mcp_segmenter,
@@ -44,9 +45,24 @@ def test_real_sam3_point_tool_materializes_three_selectable_candidates(
             spec=spec,
             parameters={
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "integration-packet",
                 "points": [{"x": 125.0, "y": 112.0, "label": 1}],
             },
+            observation=EnvObservation(
+                task="segment object",
+                cameras=[CameraFrame(frame_id="agentview", rgb=[])],
+                robot=RobotState(),
+                metadata={
+                    "image_artifacts": [
+                        {
+                            "kind": "rgb",
+                            "frame_id": "agentview",
+                            "path": str(FIXTURE_IMAGE),
+                            "packet_id": "integration-packet",
+                        }
+                    ]
+                },
+            ),
         )
     )
 

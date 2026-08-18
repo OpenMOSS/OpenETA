@@ -841,7 +841,38 @@ def test_cli_binds_perception_mcp_handlers_from_registry(monkeypatch, tmp_path) 
 
     runtime = OpenEtaCli()._require_runtime()
 
-    sam3 = runtime.tools.call("sam3", {"image": str(image), "prompt": "cube"})
+    sam_observation = EnvObservation(
+        task="segment cube",
+        cameras=[
+            CameraFrame(
+                frame_id="agentview",
+                rgb=[],
+                intrinsics={"fx": 1.0, "fy": 1.0, "cx": 0.5, "cy": 0.5, "scale": 1000.0},
+            )
+        ],
+        robot=RobotState(),
+        metadata={
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "agentview",
+                    "path": str(image),
+                    "packet_id": "cli-packet",
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "agentview",
+                    "path": str(depth),
+                    "packet_id": "cli-packet",
+                },
+            ]
+        },
+    )
+    sam3 = runtime.tools.call(
+        "sam3",
+        {"source_packet_id": "cli-packet", "prompt": "cube"},
+        observation=sam_observation,
+    )
     grasp = runtime.tools.call(
         "grasp_pose_estimate",
         {

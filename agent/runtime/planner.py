@@ -495,7 +495,10 @@ class RuleBasedPlanner(BasePlanner):
             return PlannerDecision(
                 action_type="tool_call",
                 action="sam3",
-                parameters={"image": _first_camera_id(observation), "prompt": target},
+                parameters={
+                    "source_packet_id": _first_observation_packet_id(observation),
+                    "prompt": target,
+                },
                 reasoning=(
                     "Task asks for object acquisition; start with atomic "
                     f"segmentation of target `{target}`."
@@ -873,9 +876,22 @@ def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
 
 def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
     errors: list[str] = []
-    image = parameters.get("image")
-    if not isinstance(image, str) or not image.strip() or _looks_like_placeholder_path(image):
-        errors.append("sam3 requires `parameters.image` as a concrete local image path.")
+    source_packet_id = parameters.get("source_packet_id")
+    if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+        errors.append(
+            "sam3 requires `parameters.source_packet_id` copied exactly from visible "
+            "observation evidence. Local image paths are not accepted."
+        )
+    if "image" in parameters:
+        errors.append(
+            "sam3 no longer accepts `parameters.image`; use source_packet_id so the "
+            "host can resolve session-owned artifacts and provenance."
+        )
+    camera_frame_id = parameters.get("camera_frame_id")
+    if camera_frame_id is not None and (
+        not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
+    ):
+        errors.append("sam3 `parameters.camera_frame_id` must be a non-empty string when set.")
     legacy_points = parameters.get("positive_points")
     mode = (
         str(parameters.get("mode") or ("points" if legacy_points is not None else "text"))
@@ -1323,7 +1339,9 @@ def _agent_owned_tool_planner_system_prompt() -> str:
         "skill_call before world mutation. Runtime tool schemas and returned docstrings "
         "are authoritative over examples. Preserve exact artifact paths, frame ids, "
         "scene epochs, matrices, mask refs, candidate ids, and tool-result provenance; "
-        "never invent placeholders such as latest_mask. Resolve "
+        "never invent placeholders such as latest_mask. For sam3, copy the short exact "
+        "source_packet_id from observation evidence and let the host resolve local RGB-D "
+        "paths and source_observation; never send an image path to sam3. Resolve "
         "open_questions.target_selection by visually checking the current original image "
         "and candidate evidence, then call select_sam3_detection or "
         "reject_sam3_detections with exact ids. Scores rank proposals but do not prove "
@@ -1807,6 +1825,19 @@ def _first_camera_id(observation: EnvObservation) -> str | None:
     if not observation.cameras:
         return None
     return observation.cameras[0].frame_id
+
+
+def _first_observation_packet_id(observation: EnvObservation) -> str:
+    artifacts = observation.metadata.get("image_artifacts")
+    if not isinstance(artifacts, list):
+        return ""
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
+            continue
+        packet_id = artifact.get("packet_id")
+        if isinstance(packet_id, str) and packet_id:
+            return packet_id
+    return ""
 
 
 def build_policy_context(

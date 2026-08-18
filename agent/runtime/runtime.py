@@ -170,6 +170,7 @@ class OpenEtaAgentRuntime:
                 "execution_id": execution_id,
                 "session_id": self.memory.session_id or "",
                 "task": self.memory.current_user_request or observation.task,
+                "_observation_packet_resolver": self.memory.resolve_observation_packet,
                 "supervision_context": {
                     "memory": self.memory.planning_context(max_events=4),
                 },

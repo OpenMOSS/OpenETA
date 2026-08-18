@@ -40,8 +40,12 @@ Use as text guidance only, not an executable macro. Inspect each result.
 1. Call `observe` to get the complete current scene observation.
 2. Normalize the task target to a concise English visual phrase for `sam3`
    (for example, 牛奶盒 -> `milk box`, 方块 -> `cube`).
-3. Call `sam3` on the exact local RGB path from `current_camera_artifacts` with
-   the normalized `prompt`, for example `milk box` or `can`.
+3. Call `sam3` with the exact short `source_packet_id` copied from visible
+   observation evidence and the normalized `prompt`, for example `milk box` or
+   `can`. The host resolves the session-owned local RGB-D paths, camera frame,
+   and `source_observation`; never pass an image path to `sam3`. Add
+   `camera_frame_id` only when the packet's default scene camera is not the
+   intended view.
    Do not pass a non-English user phrase directly to `sam3` if a clear English
    object name is available.
    For an unusual asset that text segmentation misses, use

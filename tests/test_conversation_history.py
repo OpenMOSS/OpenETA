@@ -211,7 +211,7 @@ def test_every_tool_projects_bounded_outputs_and_artifact_paths() -> None:
                 "request": {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "/session/rgb.png", "prompt": "cube"},
+                    "parameters": {"source_packet_id": "packet-1", "prompt": "cube"},
                 },
                 "tool_calls": [
                     {

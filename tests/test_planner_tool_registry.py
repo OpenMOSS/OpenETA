@@ -67,7 +67,23 @@ def _observation() -> EnvObservation:
         ],
         robot=RobotState(end_effector_pose={"xyz": [0.0, 0.0, 0.5]}),
         objects=[{"name": "cube"}],
-        metadata={"step_idx": 1},
+        metadata={
+            "step_idx": 1,
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "front",
+                    "path": "front-rgb.png",
+                    "packet_id": "packet-front",
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "front",
+                    "path": "front-depth.png",
+                    "packet_id": "packet-front",
+                },
+            ],
+        },
     )
 
 
@@ -107,8 +123,18 @@ def _rgbd_observation(
                 artifact
                 for frame_id, rgb, depth in views
                 for artifact in (
-                    {"kind": "rgb", "frame_id": frame_id, "path": str(rgb)},
-                    {"kind": "depth", "frame_id": frame_id, "path": str(depth)},
+                    {
+                        "kind": "rgb",
+                        "frame_id": frame_id,
+                        "path": str(rgb),
+                        "packet_id": "packet-rgbd",
+                    },
+                    {
+                        "kind": "depth",
+                        "frame_id": frame_id,
+                        "path": str(depth),
+                        "packet_id": "packet-rgbd",
+                    },
                 )
             ]
         },
@@ -410,7 +436,7 @@ def test_static_planner_backend_executes_registered_tool_handler() -> None:
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
                 "reasoning": "Need segmentation before grasp planning.",
             }
         )
@@ -639,7 +665,7 @@ def test_default_planner_prompt_uses_first_class_simulator_creation_tool() -> No
 
 
 
-def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path) -> None:
+def test_reference_guided_sam3_accepts_exact_source_packet_id(tmp_path: Path) -> None:
     localized_scene = tmp_path / "wrist-0014.png"
     rematerialized_scene = tmp_path / "wrist-0013.png"
     localized_scene.write_bytes(b"same-static-wrist-scene")
@@ -651,6 +677,8 @@ def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path)
         "pending_reference_localization",
         {
             "scene_image": str(localized_scene),
+            "source_packet_id": "packet-reference",
+            "camera_frame_id": "wrist",
             "target_object": "alphabet_soup",
             "positive_points": points,
             "required_parameter": "positive_points",
@@ -663,7 +691,8 @@ def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path)
                 "kind": "tool_call",
                 "name": "sam3",
                 "parameters": {
-                    "image": str(rematerialized_scene),
+                    "source_packet_id": "packet-reference",
+                    "camera_frame_id": "wrist",
                     "positive_points": points,
                 },
             }
@@ -685,6 +714,12 @@ def test_verified_reference_evidence_binds_to_matching_sam3_result() -> None:
     memory = AgentMemory()
     scene = "tmp/scene.png"
     points = [{"x": 130.0, "y": 251.0, "label": 1}]
+    memory.add_observation(
+        _rgbd_observation(
+            task="pick alphabet soup",
+            views=[("agentview", Path(scene), Path("tmp/depth.png"))],
+        )
+    )
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -731,11 +766,14 @@ def test_verified_reference_evidence_binds_to_matching_sam3_result() -> None:
                             "success": True,
                             "details": {
                                 "parameters": {
-                                    "image": scene,
+                                    "source_packet_id": "packet-rgbd",
+                                    "camera_frame_id": "agentview",
                                     "positive_points": points,
                                 },
                                 "outputs": {
                                     "result_id": "sam-verified",
+                                    "source_packet_id": "packet-rgbd",
+                                    "source_image": scene,
                                     "detections": [
                                         {
                                             "id": "detection_000",
@@ -799,7 +837,7 @@ def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> No
                     "name": "sam3",
                     "parameters": {
                         "mode": "points",
-                        "image": "tmp/scene.jpg",
+                        "source_packet_id": "packet-front",
                         "points": [
                             {
                                 "image_index": 1,
@@ -815,7 +853,7 @@ def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> No
                     "name": "sam3",
                     "parameters": {
                         "mode": "points",
-                        "image": "tmp/scene.jpg",
+                        "source_packet_id": "packet-front",
                         "points": [{"x": 466.0, "y": 480.0, "label": 1}],
                     },
                 },
@@ -3686,11 +3724,21 @@ def test_planner_context_preserves_camera_pose_transform_for_move_to() -> None:
 
 def test_dummy_tool_handlers_return_standard_result_envelopes() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    packet_observation = _rgbd_observation(
+        task="find the cube",
+        views=[
+            (
+                "front",
+                Path("tests/fixtures/sam3/sam_test.png"),
+                Path("tests/fixtures/sam3/sam_test.png"),
+            )
+        ],
+    )
 
     perception = tools.call(
         "sam3",
-        {"image": "front", "prompt": "cube"},
-        observation=_observation(),
+        {"source_packet_id": "packet-rgbd", "prompt": "cube"},
+        observation=packet_observation,
     )
     planning = tools.call(
         "anygrasp",
@@ -3755,7 +3803,7 @@ def test_registry_promotes_legacy_tool_artifacts_into_standard_envelope() -> Non
 
     result = tools.call(
         "sam3",
-        {"image": "front-rgb.png", "prompt": "cube"},
+        {"source_packet_id": "packet-front", "prompt": "cube"},
         observation=_observation(),
     )
 
@@ -3877,7 +3925,7 @@ def test_pipeline_runs_post_failure_checker_after_configured_tool_call() -> None
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
             }
         )
     )
@@ -3916,7 +3964,7 @@ def test_pipeline_does_not_run_post_failure_checker_after_success() -> None:
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
             }
         )
     )
@@ -3971,7 +4019,10 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
                 {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "front", "prompt": "cube"},
+                    "parameters": {
+                        "source_packet_id": "packet-front",
+                        "prompt": "cube",
+                    },
                     "reasoning": "Segment the target object.",
                 },
                 {
@@ -4039,7 +4090,10 @@ def test_episode_runner_stops_when_agent_reports_task_complete() -> None:
                 {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "front", "prompt": "cube"},
+                    "parameters": {
+                        "source_packet_id": "packet-front",
+                        "prompt": "cube",
+                    },
                 },
             ]
         )
@@ -4227,7 +4281,8 @@ def test_openai_compatible_backend_uses_chat_completions_transport() -> None:
                     "message": {
                         "content": (
                             '{"kind": "tool_call", "name": "sam3", '
-                            '"parameters": {"image": "front", "prompt": "cube"}, '
+                            '"parameters": {"source_packet_id": "packet-front", '
+                            '"prompt": "cube"}, '
                             '"reasoning": "Need segmentation."}'
                         )
                     },
@@ -4571,7 +4626,7 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
                     "message": {
                         "content": (
                             '{"kind":"tool_call","name":"sam3",'
-                            '"parameters":{"image":"scene.png",'
+                            '"parameters":{"source_packet_id":"packet-scene",'
                             '"prompt":"alphabet soup can",'
                             '"roi_bbox_xyxy":[2,3,20,18]}}'
                         )
@@ -4595,6 +4650,7 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
                 "task": "pick alphabet soup",
                     "pending_reference_localization": {
                     "scene_image": str(scene),
+                    "source_packet_id": "packet-scene",
                     "reference_images": [str(reference)],
                 },
             },

@@ -40,7 +40,11 @@ from agent.runtime.skills import (
     build_default_skill_registry,
     load_skill_markdown,
 )
-from agent.runtime.token_counting import DEFAULT_CONTEXT_WINDOW_TOKENS, estimate_text_tokens
+from agent.runtime.token_counting import (
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    estimate_json_tokens,
+    estimate_text_tokens,
+)
 from agent.tools.handlers import bind_dummy_tool_handlers
 from agent.tools.registry import (
     TOOL_RESULT_SCHEMA_VERSION,
@@ -2275,7 +2279,7 @@ def test_planner_context_uses_default_one_million_context_window() -> None:
     )
 
 
-def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> None:
+def test_planner_projects_bounded_recent_layers_without_mutating_durable_history() -> None:
     memory = AgentMemory()
     memory.start_session(task="inspect a long manipulation trace")
     for index in range(40):
@@ -2303,6 +2307,7 @@ def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> Non
                 },
             )
         )
+        memory.add_observation(_observation())
 
     context = build_tool_context(
         observation=_observation(),
@@ -2313,7 +2318,9 @@ def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> Non
     )
 
     assert len(memory.model_conversation_messages()) == 81
-    assert len(context["agent_context"]["recent_transitions"]) == 40
+    recent = context["agent_context"]["recent_transitions"]
+    assert len(recent) == 3
+    assert {event["type"] for event in recent} == {"observation"}
     assert len(context["agent_context"]["transition_ledger"]) == 40
     assert context["context_budget"]["projection"]["triggered"] is False
 
@@ -2338,8 +2345,13 @@ def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> Non
     )
 
     assert len(requests) == 1
-    assert len(requests[0].conversation_messages) == 81
-    assert len(requests[0].tool_context["recent_transitions"]) == 40
+    # Initial user task + one compact history index + four recent action/result
+    # pairs. The append-only canonical conversation remains complete in memory.
+    assert len(requests[0].conversation_messages) == 10
+    assert "compacted transcript summary" in requests[0].conversation_messages[1][
+        "content"
+    ]
+    assert len(requests[0].tool_context["recent_transitions"]) == 3
     assert len(requests[0].tool_context["transition_ledger"]) == 40
 
     constrained = build_tool_context(
@@ -2352,6 +2364,84 @@ def test_long_context_keeps_history_beyond_legacy_event_and_ledger_caps() -> Non
     assert constrained["triggered"] is True
     assert constrained["entries_removed"] is True
     assert constrained["fits_target"] is True
+    assert len(memory.model_conversation_messages()) == 81
+    assert len(memory.recent_events(None)) >= 81
+
+
+def test_layered_projection_does_not_replay_old_large_tool_results() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect a long manipulation trace")
+    for index in range(40):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "python_exec",
+                        "parameters": {"code": f"result = {index}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "python_exec",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "content": "ok",
+                                "details": {
+                                    "outputs": {
+                                        "result": {
+                                            "index": index,
+                                            "payload": f"marker-{index}-" + "x" * 4_000,
+                                        }
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    requests: list[PlannerBackendRequest] = []
+
+    def capture(request: PlannerBackendRequest) -> dict:
+        requests.append(request)
+        return {
+            "kind": "response",
+            "name": "talk",
+            "parameters": {"message": "history inspected"},
+        }
+
+    ToolCallingPlanner(
+        CallablePlannerBackend(capture),
+        context_config=PlannerContextConfig(context_window_tokens=1_000_000),
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    request = requests[0]
+    durable_messages = memory.model_conversation_messages()
+    projected_text = json.dumps(
+        {
+            "conversation": request.conversation_messages,
+            "context": request.tool_context,
+        },
+        ensure_ascii=False,
+    )
+    assert "marker-0-" not in projected_text
+    assert "marker-39-" in projected_text
+    assert len(request.conversation_messages) == 10
+    assert estimate_json_tokens(
+        {
+            "conversation": request.conversation_messages,
+            "context": request.tool_context,
+        }
+    ).tokens < estimate_json_tokens({"conversation": durable_messages}).tokens // 2
     assert len(memory.model_conversation_messages()) == 81
 
 

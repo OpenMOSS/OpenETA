@@ -208,11 +208,12 @@ class ConversationHistory:
             for item in self.items
             if item.role == "assistant" and item.kind == "action"
         ]
-        retained_action_ids = (
-            set(action_group_ids[-max(0, max_action_groups) :])
-            if max_action_groups is not None
-            else set(action_group_ids)
-        )
+        if max_action_groups is None:
+            retained_action_ids = set(action_group_ids)
+        elif max_action_groups <= 0:
+            retained_action_ids = set()
+        else:
+            retained_action_ids = set(action_group_ids[-max_action_groups:])
         retained: list[ConversationItem] = []
         dropped: list[ConversationItem] = []
         for item in self.items:
@@ -279,7 +280,11 @@ class ConversationHistory:
             for item in self.items
             if item.role == "assistant" and item.kind == "action"
         ]
-        retained_action_group_ids = set(action_group_ids[-max(0, max_retained_actions) :])
+        retained_action_group_ids = (
+            set(action_group_ids[-max_retained_actions:])
+            if max_retained_actions > 0
+            else set()
+        )
         retained: list[ConversationItem] = []
         dropped: list[ConversationItem] = []
         for item in self.items:

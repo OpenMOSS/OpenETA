@@ -77,6 +77,8 @@ _CAMERA_ROLE_PREFERENCE = {
 }
 
 DEFAULT_MAX_SKILL_CONTENT_CHARS = 8000
+DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS = 4
+DEFAULT_RECENT_TRANSITION_OBSERVATIONS = 3
 
 
 @dataclass(slots=True)
@@ -94,9 +96,14 @@ class PlannerDecision:
 
 @dataclass(frozen=True, slots=True)
 class PlannerContextConfig:
-    """Controls planner-facing context assembly under one total token budget."""
+    """Controls the bounded model projection of an unbounded durable session."""
 
+    # ``max_memory_events`` is a legacy caller override on the in-memory source
+    # projection. Normal Planner requests read the durable event stream and then
+    # apply the semantic high-fidelity window below.
     max_memory_events: int | None = None
+    recent_conversation_action_groups: int = DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS
+    recent_transition_observations: int = DEFAULT_RECENT_TRANSITION_OBSERVATIONS
     max_selected_skills: int = 3
     max_skill_content_chars: int | None = DEFAULT_MAX_SKILL_CONTENT_CHARS
     auto_compact_enabled: bool = True
@@ -1304,7 +1311,8 @@ def _agent_owned_tool_planner_system_prompt() -> str:
         "robot_motion_epoch records EEF/camera motion without by itself invalidating a "
         "world-frame target pose. stale_scene_epoch is historical, commanded_not_observed is "
         "not a sensed state, and an acknowledged close command is not proof of attachment. "
-        "Use recent_transitions to connect the last atomic action to the current scene. "
+        "Use the recent action/result conversation and recent_transitions observation "
+        "or recovery evidence to connect the last atomic action to the current scene. "
         "If visual evidence is missing or ambiguous, observe or ask_human instead of "
         "pretending the state is known. Perform at most one world-mutating tool call, "
         "then inspect a fresh observation before further control. A transport-unknown "
@@ -1870,7 +1878,9 @@ def _build_budgeted_tool_context(
         skills=skills,
         config=context_config,
     )
-    conversation_messages = memory.model_conversation_messages()
+    conversation_messages = memory.model_conversation_messages(
+        max_action_groups=max(0, context_config.recent_conversation_action_groups)
+    )
     conversation_messages, budget = _project_planner_input_to_budget(
         context,
         config=context_config,
@@ -1986,11 +1996,15 @@ def _build_tool_context_payload(
         "skill_usage": skill_usage,
         "execution_rules": _tool_calling_rules(),
     }
-    context["agent_context"] = _build_agent_decision_context(context)
+    context["agent_context"] = _build_agent_decision_context(context, config=config)
     return context
 
 
-def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
+def _build_agent_decision_context(
+    runtime_context: JsonDict,
+    *,
+    config: PlannerContextConfig,
+) -> JsonDict:
     """Project runtime evidence into the smaller context owned by the Agent.
 
     Host task phases and required-next-action obligations deliberately stay out
@@ -2036,19 +2050,10 @@ def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
 
     recent_events = memory.get("recent_events")
     recent_events = recent_events if isinstance(recent_events, list) else []
-    recent_transitions = [
-        event
-        for event in recent_events
-        if isinstance(event, dict)
-        and event.get("type")
-        in {
-            "action",
-            "observation",
-            "environment_receipt",
-            "human_answer",
-            "recovery_feedback",
-        }
-    ]
+    recent_transitions = _recent_high_fidelity_transitions(
+        recent_events,
+        observation_turns=max(0, config.recent_transition_observations),
+    )
 
     observation = runtime_context.get("observation")
     observation = observation if isinstance(observation, dict) else {}
@@ -2153,8 +2158,9 @@ def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
         "artifacts": artifacts,
         "relevant_skills": runtime_context.get("selected_skill_guidance", []),
         "skill_usage": runtime_context.get("skill_usage", {}),
-        # Full schemas are supplied once. The legacy tool_references field remains
-        # as a name-only compatibility index rather than duplicating every schema.
+        # Full schemas remain in the canonical context once. The provider backend
+        # moves this cache-stable block ahead of growing conversation history; the
+        # legacy tool_references field stays a name-only compatibility index.
         "available_tools": runtime_context.get("tool_references", []),
         "tool_references": [
             {"name": reference.get("name")}
@@ -2240,6 +2246,43 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "repair_bundle": metadata.get("repair_bundle"),
         }
     return None
+
+
+def _recent_high_fidelity_transitions(
+    events: list[JsonDict],
+    *,
+    observation_turns: int,
+) -> list[JsonDict]:
+    """Project recent non-conversation evidence without replaying full actions.
+
+    Action requests and host ToolResults already live in the bounded canonical
+    conversation, while action/environment outcomes have a compact durable
+    ``transition_ledger`` representation.  This window therefore carries only
+    observation and recovery evidence that those two layers do not represent.
+    Complete events remain in the append-only session trace.
+    """
+
+    if observation_turns <= 0:
+        return []
+    relevant = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("type") in {"observation", "recovery_feedback"}
+    ]
+    observation_indices = [
+        index
+        for index, event in enumerate(relevant)
+        if event.get("type") == "observation"
+    ]
+    if observation_indices:
+        start = observation_indices[max(0, len(observation_indices) - observation_turns)]
+        return relevant[start:]
+
+    # Recovery feedback can precede the first canonical observation (for
+    # example, a preflight rejection). Keep a small bounded fallback rather than
+    # silently hiding the only actionable evidence.
+    return relevant[-observation_turns:]
 
 
 def _bounded_artifact_index(

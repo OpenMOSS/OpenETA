@@ -139,6 +139,23 @@ def test_user_constraint_survives_many_operational_events() -> None:
     assert all(event["type"] != "user_message" for event in context["recent_events"])
 
 
+def test_zero_action_projection_keeps_dialogue_but_no_action_result_pairs() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick milk")
+    memory.begin_user_turn("Keep the basket upright.", source="human_answer")
+    for index in range(3):
+        memory.add_action(_action("move_to", index=index))
+
+    projected = memory.model_conversation_messages(max_action_groups=0)
+
+    assert any("pick milk" in message["content"] for message in projected)
+    assert any("Keep the basket upright" in message["content"] for message in projected)
+    assert not any('"openeta_action"' in message["content"] for message in projected)
+    assert not any("OpenETA host execution evidence" in message["content"] for message in projected)
+    assert any("compacted transcript summary" in message["content"] for message in projected)
+    assert len(memory.model_conversation_messages()) == 8
+
+
 def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> None:
     memory = AgentMemory()
     memory.start_session(task="inspect grasp candidates")

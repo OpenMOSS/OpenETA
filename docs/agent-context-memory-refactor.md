@@ -43,6 +43,67 @@ Each attached current image now carries a stable evidence id, camera frame and
 role, observation step, optional timestamp, and `freshness=current`. The provider
 message presents labelled images before the larger JSON decision context.
 
+### Durable history and bounded model projection
+
+The session workspace is the lossless source of truth. Event trace and
+conversation records are appended incrementally, rich ToolResults and images are
+materialized as immutable artifacts, and only derived working-memory snapshots
+are atomically replaced. Building a Planner request never compacts or mutates
+that durable history.
+
+The main Planner sees three complementary projections rather than a replay of
+the complete trace:
+
+1. **Recent high-fidelity window.** Canonical conversation keeps all real user
+   dialogue plus the latest four action/result groups. `recent_transitions` keeps
+   the latest three observation turns and intervening recovery feedback; it does
+   not duplicate action commands or environment receipts already represented by
+   conversation and the ledger. The independently bounded visual-history policy
+   still supplies the first main-view anchor, recent main views, current wrist
+   view, and VDM bridges.
+2. **Compact history ledger.** `transition_ledger` retains the complete compact
+   tool/environment timeline without full ToolResult payloads.
+3. **Current materialized state.** `current_observation`, `decision_state`,
+   `world_evidence`, active bundles, open obligations, and artifact references
+   describe what is valid now. They are rebuilt each turn rather than appended
+   as another history stream.
+
+Older raw action results, observations, response JSON, and images remain
+queryable through the session memory/artifact interfaces. The total token budget
+is a final overflow guard around this semantic projection, not the normal
+mechanism for deciding which durable records become model-visible.
+
+### Radix-cache-friendly provider layout
+
+The canonical `PlannerBackendRequest.tool_context` remains complete for scripted
+backends, rollout recording, replay, validation, and budgeting. The
+OpenAI-compatible wire adapter partitions only the main
+`openeta.agent_context.v2` serialization into a cache-stable system prefix and a
+dynamic final user turn:
+
+1. the Agent system prompt;
+2. a deterministic `openeta.planner_static_context.v1` system message;
+3. optional conversation summary and canonical growing conversation history;
+4. the current dynamic context and labelled vision attachments in the final user
+   message.
+
+The stable message contains the full `available_tools` schemas, name-only
+`tool_references`, selected `relevant_skills`, `skill_usage`, and the stable
+`operational_constraints.rules`. JSON keys are recursively sorted and compactly
+serialized so the same tool/skill contract is byte-identical across turns.
+Current observation, visual history, transitions, evidence, artifacts,
+freshness/reconciliation state, and open questions remain dynamic. A genuine
+tool, skill, or execution-rule change intentionally changes the stable prefix and
+invalidates the old cache entry.
+
+The partition does not duplicate or remove semantic input: fields moved into the
+stable system message are removed from the final user JSON. Isolated reviewers,
+VDM, localization, grasp-advisor, and other sub-agent requests retain their
+single-user-message representation. Each provider result includes a compact
+`openeta.planner_prompt_layout.v1` diagnostic with stable/dynamic character
+counts, field names, and the stable-prefix SHA-256, without copying prompt
+content into the diagnostic.
+
 ## Memory ownership
 
 Session trace remains append-only evidence. Working memory is split into:

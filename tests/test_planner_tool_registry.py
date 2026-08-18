@@ -1819,6 +1819,10 @@ def test_pick_skill_is_loaded_from_markdown_guidance() -> None:
     assert "use the\n`embodiment_explore` skill" in pick.content
     assert "does not silently recalibrate one" in pick.content
     assert "grasp candidate list" in pick.content
+    assert "## Near-field Wrist Refinement" in pick.content
+    assert "only lateral contact placement looks wrong" in pick.content
+    assert "does not move, change grasp orientation" in pick.content
+    assert "full wrist-view re-estimation" in pick.content
     assert pick.allowed_tools[:7] == (
         "observe",
         "retrieve_asset_reference",

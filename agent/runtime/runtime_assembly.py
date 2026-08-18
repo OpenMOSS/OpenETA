@@ -89,7 +89,10 @@ from agent.tools.handlers import (
     build_sse_molmopoint_mcp_pointer,
     build_sse_sam3_mcp_segmenter,
 )
-from agent.tools.grasp_geometry import build_compile_grasp_seed_handler
+from agent.tools.grasp_geometry import (
+    build_compile_grasp_seed_handler,
+    build_wrist_alignment_handler,
+)
 from agent.tools.grasp_pose_advisor import (
     GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
     GRASP_POSE_ADVISOR_MAX_VISION_IMAGES,
@@ -263,6 +266,11 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             workspace.grasp_profile_path,
             strategy_root=workspace.grasp_strategy_root,
         ),
+        replace=True,
+    )
+    tools.bind_handler(
+        "compute_wrist_alignment",
+        build_wrist_alignment_handler(workspace.grasp_profile_path),
         replace=True,
     )
     tools.bind_handler(

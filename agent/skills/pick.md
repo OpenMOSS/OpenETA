@@ -3,7 +3,7 @@ name: pick
 description: Guidance for acquiring a target object with atomic tools.
 version: v1
 editable: true
-context_char_limit: 12000
+context_char_limit: 14500
 task_patterns:
   - pick <object>
   - grasp <object>
@@ -115,12 +115,9 @@ Use as text guidance only, not an executable macro. Inspect each result.
    `hover_pose` is an ordinary collision-clearance waypoint, not an implicit
    phase and not a command to follow a fixed host sequence. Hover at least 0.15 m
    opposite world-frame `approach_world_xyz`, not fixed world `+Z`. Once there,
-   prefer a full wrist-view grasp refresh when the target is visible: acquire
-   fresh wrist RGB-D, run wrist-image SAM3, resolve its selection, call targeted
-   `grasp_pose_estimate` on that same packet, and compile the refined candidate.
-   `compute_wrist_alignment` remains an optional bounded correction; it is not a
-   replacement for full grasp re-estimation. Preserve evidence lineage and move
-   to contact only after visual evidence and deterministic checks support it.
+   use the evidence-triggered **Near-field Wrist Refinement** below when the
+   wrist view can materially improve contact geometry. Preserve evidence lineage
+   and move to contact only after visual evidence and deterministic checks support it.
    Compiled poses are anchors. Dual-view evidence may justify `move_to` xyz
    correction within host-derived 2 cm/call and 10 cm total residual caps. Preserve
    provenance and re-observe. These caps bound the offset from the compiled anchor;
@@ -170,6 +167,44 @@ Use as text guidance only, not an executable macro. Inspect each result.
     re-estimation, or stop.
     Never invent a hover; safety, wrong-target, malformed-pose, stale-scene, and
     calibration rejections remain hard stops.
+
+## Near-field Wrist Refinement
+
+This is an optional visual correction opportunity, not a required task phase.
+Use it near a collision-clearance/hover reference when the target is visible in
+fresh wrist RGB-D and the initial scene-view pose has uncertain contact quality,
+the target occupied too few scene-view pixels, or fresh wrist evidence shows the
+gripper corridor is off the intended contact region. Skip it when current visual
+and geometric evidence already supports the contact pose.
+
+Choose the cheapest adequate refinement from the evidence:
+
+- If the compiled approach direction, orientation, and contact depth remain
+  credible and only lateral contact placement looks wrong, segment the target on
+  the fresh wrist packet, explicitly select that wrist SAM3 detection, and call
+  `compute_wrist_alignment` with its full-frame mask plus the matching depth,
+  intrinsics, extrinsics, measured EEF pose, compiled grasp, and scene epoch.
+  Do not submit a desired pixel: the host projects the configured calibrated
+  EEF-to-gripper-center point into that wrist image. The returned aligned hover,
+  precontact, and contact poses are read-only translation references. This tool
+  does not move, change grasp orientation, or independently repair axial contact
+  depth; inspect its correction and clamp status before choosing a reference.
+- If the approach direction, orientation, surface, or contact depth is doubtful,
+  do a full wrist-view re-estimation instead: call `sam3` with the fresh packet's
+  exact `source_packet_id` and wrist `camera_frame_id`, select the intended mask,
+  consume the resulting host `grasp_pose_estimate` bundle, inspect its candidates,
+  then explicitly compile the chosen wrist candidate with that packet's matching
+  camera extrinsics. The new compile is a new reference anchor; the host does not
+  silently replace the earlier candidate.
+
+Before executing either refined reference, call `ik_preview_check`; keep path and
+collision evidence separate. A `compute_wrist_alignment` reference still uses the
+original `compiled_grasp_id` and the ordinary residual budget. Re-observe after
+each motion and verify that the gripper corridor/contact region actually improved.
+Do not repeat refinement on an unchanged view merely to spend more turns. If the
+target is occluded, the calibration chain fails, or the correction hits its clamp,
+retreat or gather a better view instead of inventing pixels or accumulating blind
+residuals.
 
 ## Recovery Notes
 

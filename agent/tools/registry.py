@@ -1513,8 +1513,12 @@ def build_default_tool_registry() -> ToolRegistry:
             name="compute_wrist_alignment",
             category="geometry",
             description=(
-                "Compute one bounded world-frame hover correction from a fresh wrist "
-                "mask, aligned depth and camera calibration. It does not move the robot."
+                "Near a compiled clearance/hover reference, compute one bounded "
+                "world-frame lateral translation correction from a fresh wrist mask, "
+                "aligned depth, and the configured calibrated gripper-center projection. "
+                "Use it when approach orientation and contact depth remain credible; it "
+                "does not move the robot or re-estimate orientation/axial contact depth. "
+                "For those uncertainties, run a full fresh wrist-view grasp estimate."
             ),
             parameters={
                 "compiled_grasp": "complete compile_grasp_seed output",
@@ -1522,9 +1526,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "depth": "fresh aligned wrist depth PNG path",
                 "intrinsics": "matching wrist fx/fy/cx/cy/scale",
                 "camera_extrinsics": "matching wrist camera-to-world calibration",
-                "current_eef_pose": "current measured EEF pose containing xyz",
+                "current_eef_pose": (
+                    "current measured EEF pose from the same wrist observation, "
+                    "including xyz and rotation_matrix, quat_xyzw, or rotvec"
+                ),
                 "scene_epoch": "current host-owned non-negative scene epoch",
-                "desired_pixel_xy": "optional gripper-corridor pixel; defaults to cx/cy",
                 "max_correction_m": "optional correction clamp in [0.005, 0.05] m",
             },
             effect=ToolEffect.READ_ONLY,

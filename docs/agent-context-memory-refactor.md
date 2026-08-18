@@ -244,7 +244,16 @@ reference. Its role is geometric and does not imply a required successor.
 After reaching a useful clearance pose, the Agent should normally use a fresh
 wrist RGB-D packet for full target segmentation, targeted grasp estimation, and
 candidate compilation. `compute_wrist_alignment` remains an optional bounded
-correction, not the default replacement for wrist-view grasp estimation.
+correction, not the default replacement for wrist-view grasp estimation. Its
+desired gripper pixel is host-derived by projecting the configured
+`eef_to_gripper_center_xyz` through the current EEF and wrist-camera transforms;
+the optical principal point is not treated as the gripper location. The result
+records `openeta.gripper_center_projection.v1` for calibration audit. Near-field
+refinement is evidence-triggered rather than a host task phase: use alignment
+when the original approach/orientation/contact depth remain credible and only
+lateral contact placement needs correction; use a full wrist SAM3 → targeted
+grasp estimate → explicit compile when orientation, surface, or axial contact
+depth is uncertain. Neither path silently activates or replaces a candidate.
 
 The host also maintains a read-only `openeta.provenance_evidence_graph.v1`.
 Compiling a candidate binds its exact host-captured targeted grasp artifact to a

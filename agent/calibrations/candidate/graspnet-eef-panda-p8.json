@@ -23,6 +23,10 @@
     ],
     "translation_xyz": [0.0036, 0.0, 0.0]
   },
+  "wrist_alignment": {
+    "eef_to_gripper_center_xyz": [0.0, 0.0, 0.0],
+    "reference_point": "gripper0_grip_site"
+  },
   "provenance": {
     "calibrated_on": "2026-07-08",
     "task": "libero_10 task 0",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -10,6 +11,7 @@ from PIL import Image
 from agent.tools.grasp_geometry import (
     DEFAULT_GRASP_PROFILE,
     build_compile_grasp_seed_handler,
+    build_wrist_alignment_handler,
     camera_optical_forward_world,
     GraspGeometryError,
     compile_grasp_seed,
@@ -441,13 +443,28 @@ def test_wrist_alignment_uses_full_frame_mask_and_clamps_correction(tmp_path: Pa
             "compiled_grasp": compiled,
             "target_mask": str(mask_path),
             "depth": str(depth_path),
-            "intrinsics": {"fx": 100.0, "fy": 100.0, "cx": 4.0, "cy": 4.0, "scale": 1000.0},
-            "camera_extrinsics": _compile_parameters()["camera_extrinsics"],
-            "current_eef_pose": {"xyz": [0.0, 0.0, 0.6]},
-            "desired_pixel_xy": [4.0, 4.0],
+            "intrinsics": {
+                "fx": 100.0,
+                "fy": 100.0,
+                "cx": 4.0,
+                "cy": 4.0,
+                "width": 8,
+                "height": 8,
+                "scale": 1000.0,
+            },
+            "camera_extrinsics": {
+                **_compile_parameters()["camera_extrinsics"],
+                "camera_frame": "opencv",
+            },
+            "current_eef_pose": {
+                "xyz": [0.0, 0.0, 0.6],
+                "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
             "max_correction_m": 0.02,
             "scene_epoch": 0,
-        }
+        },
+        profile=_profile(),
+        profile_sha256="profile-sha",
     )
 
     assert result["target_pixel_xy"] == pytest.approx([6.0, 5.0])
@@ -456,6 +473,10 @@ def test_wrist_alignment_uses_full_frame_mask_and_clamps_correction(tmp_path: Pa
         0.02, abs=1e-6
     )
     assert result["aligned_hover_pose"]["frame"] == "world"
+    assert result["desired_pixel_xy"] == [4.0, 4.0]
+    assert result["gripper_center_projection"]["calibration_id"] == (
+        "graspnet-eef-panda-p8"
+    )
 
 
 def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) -> None:
@@ -495,13 +516,22 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
                 "fy": 100.0,
                 "cx": 4.0,
                 "cy": 4.0,
+                "width": 9,
+                "height": 9,
                 "scale": 1000.0,
             },
-            "camera_extrinsics": _compile_parameters()["camera_extrinsics"],
-            "current_eef_pose": {"xyz": [0.0, 0.0, 0.6]},
-            "desired_pixel_xy": [4.0, 4.0],
+            "camera_extrinsics": {
+                **_compile_parameters()["camera_extrinsics"],
+                "camera_frame": "opencv",
+            },
+            "current_eef_pose": {
+                "xyz": [0.0, 0.0, 0.6],
+                "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
             "scene_epoch": 0,
-        }
+        },
+        profile=_profile(),
+        profile_sha256="profile-sha",
     )
 
     assert result["target_region"] == "nearest_shallow_surface"
@@ -510,3 +540,216 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
     assert compiled["precontact_pose"]["waypoint_role"] == "grasp_precontact"
     assert result["adjusted_precontact_pose"]["waypoint_role"] == "grasp_precontact"
     assert result["adjusted_precontact_pose"]["alignment_id"] == result["alignment_id"]
+
+
+def test_wrist_alignment_projects_libero_grip_site_instead_of_principal_point(
+    tmp_path: Path,
+) -> None:
+    mask_path = tmp_path / "mask.png"
+    depth_path = tmp_path / "depth.png"
+    mask = Image.new("L", (512, 512), 0)
+    for y in range(330, 351):
+        for x in range(245, 266):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+    Image.new("I;16", (512, 512), 1000).save(depth_path)
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    result = compute_wrist_alignment(
+        {
+            "compiled_grasp": compiled,
+            "target_mask": str(mask_path),
+            "depth": str(depth_path),
+            "intrinsics": {
+                "fx": 333.6256954473487,
+                "fy": 333.6256954473487,
+                "cx": 256.0,
+                "cy": 256.0,
+                "width": 512,
+                "height": 512,
+                "scale": 1000.0,
+            },
+            "camera_extrinsics": {
+                "camera_frame": "opengl",
+                "frame_transform": "camera_to_world",
+                "matrix_layout": "row_major",
+                "mat": [
+                    0.0004918296876253447,
+                    0.9983867450712568,
+                    0.056777331476359764,
+                    -0.9999998786606127,
+                    0.0004926243565984145,
+                    3.5101782591695496e-13,
+                    -2.7969896037469133e-05,
+                    -0.05677732458703341,
+                    0.998386866214906,
+                ],
+                "pos": [
+                    -0.0930379221590543,
+                    2.4631217821431277e-05,
+                    0.3552841355231346,
+                ],
+            },
+            "current_eef_pose": {
+                "xyz": [
+                    -0.14846466056582405,
+                    -4.2543992093357714e-14,
+                    0.2612794757296404,
+                ],
+                "quat_xyzw": [
+                    0.9995966048795353,
+                    0.00024621283211107015,
+                    -0.028400120485872912,
+                    -6.995295789799863e-06,
+                ],
+            },
+            "scene_epoch": 0,
+        },
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    assert result["desired_pixel_xy"] == pytest.approx([256.0, 427.972008])
+    assert result["desired_pixel_xy"] != [256.0, 256.0]
+    assert result["gripper_center_projection"]["camera_extrinsics_source"] == (
+        "live_camera_to_world"
+    )
+
+
+def test_wrist_alignment_composes_loaded_eye_in_hand_calibration(tmp_path: Path) -> None:
+    mask_path = tmp_path / "mask.png"
+    depth_path = tmp_path / "depth.png"
+    mask = Image.new("L", (8, 8), 0)
+    for y in range(3, 6):
+        for x in range(3, 6):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+    Image.new("I;16", (8, 8), 1000).save(depth_path)
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    result = compute_wrist_alignment(
+        {
+            "compiled_grasp": compiled,
+            "target_mask": str(mask_path),
+            "depth": str(depth_path),
+            "intrinsics": {
+                "fx": 100.0,
+                "fy": 100.0,
+                "cx": 4.0,
+                "cy": 4.0,
+                "width": 8,
+                "height": 8,
+                "scale": 1000.0,
+            },
+            "camera_extrinsics": {
+                "type": "T_gripper_cam",
+                "frame": "gripper",
+                "T_gripper_cam": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, -1.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+            "current_eef_pose": {
+                "xyz": [0.0, 0.0, 0.6],
+                "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+            "scene_epoch": 0,
+        },
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    assert result["desired_pixel_xy"] == [4.0, 4.0]
+    assert result["gripper_center_projection"]["camera_extrinsics_source"] == (
+        "T_world_eef_x_T_gripper_cam"
+    )
+
+
+def test_wrist_alignment_rejects_agent_supplied_gripper_pixel() -> None:
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    with pytest.raises(GraspGeometryError, match="host-derived"):
+        compute_wrist_alignment(
+            {
+                "compiled_grasp": compiled,
+                "desired_pixel_xy": [4.0, 4.0],
+            },
+            profile=_profile(),
+            profile_sha256="profile-sha",
+        )
+
+
+def test_wrist_alignment_handler_loads_session_profile_automatically(
+    tmp_path: Path,
+) -> None:
+    profile = _profile()
+    profile["wrist_alignment"]["eef_to_gripper_center_xyz"] = [0.01, 0.0, 0.0]
+    profile_path = tmp_path / "grasp_profile.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=profile,
+        profile_sha256=profile_sha256,
+    )
+    mask_path = tmp_path / "mask.png"
+    depth_path = tmp_path / "depth.png"
+    mask = Image.new("L", (10, 10), 0)
+    for y in range(3, 6):
+        for x in range(4, 7):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+    Image.new("I;16", (10, 10), 1000).save(depth_path)
+    spec = build_default_tool_registry().get("compute_wrist_alignment")
+
+    result = build_wrist_alignment_handler(profile_path)(
+        ToolExecutionContext(
+            name="compute_wrist_alignment",
+            spec=spec,
+            parameters={
+                "compiled_grasp": compiled,
+                "target_mask": str(mask_path),
+                "depth": str(depth_path),
+                "intrinsics": {
+                    "fx": 100.0,
+                    "fy": 100.0,
+                    "cx": 4.0,
+                    "cy": 4.0,
+                    "width": 10,
+                    "height": 10,
+                    "scale": 1000.0,
+                },
+                "camera_extrinsics": {
+                    "camera_frame": "opencv",
+                    "frame_transform": "camera_to_world",
+                    "matrix_layout": "row_major",
+                    "mat": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                    "pos": [0.0, 0.0, 0.0],
+                },
+                "current_eef_pose": {
+                    "xyz": [0.0, 0.0, 1.0],
+                    "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+                },
+                "scene_epoch": 0,
+            },
+        )
+    )
+
+    assert result.success is True
+    outputs = result.details["outputs"]
+    assert outputs["desired_pixel_xy"] == [5.0, 4.0]
+    assert outputs["gripper_center_projection"]["profile_sha256"] == profile_sha256

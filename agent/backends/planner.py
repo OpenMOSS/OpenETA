@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import threading
@@ -18,6 +19,16 @@ from adapter.protocol import JsonDict
 from agent.runtime.actions import PipelineStatus
 from agent.backends.provider_config import PlannerProviderConfig, ProviderEndpointConfig
 from agent.runtime.token_counting import estimate_json_tokens, estimate_text_tokens
+
+
+PLANNER_STATIC_CONTEXT_SCHEMA_VERSION = "openeta.planner_static_context.v1"
+_MAIN_AGENT_CONTEXT_SCHEMA_VERSION = "openeta.agent_context.v2"
+_CACHE_STABLE_AGENT_CONTEXT_KEYS = (
+    "available_tools",
+    "tool_references",
+    "relevant_skills",
+    "skill_usage",
+)
 
 
 @dataclass(slots=True)
@@ -430,10 +441,30 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 details={"missing_fields": missing},
             )
 
-        user_content, vision_attachments = _planner_user_content(request, self.config)
+        stable_context, dynamic_context = _partition_planner_tool_context(request)
+        stable_context_prompt = (
+            _stable_planner_context_prompt(stable_context) if stable_context else ""
+        )
+        prompt_layout = _planner_prompt_layout_summary(
+            stable_context=stable_context,
+            stable_context_prompt=stable_context_prompt,
+            dynamic_context=dynamic_context,
+        )
+        user_content, vision_attachments = _planner_user_content(
+            request,
+            self.config,
+            prompt_tool_context=dynamic_context,
+        )
         messages: list[JsonDict] = [
             {"role": "system", "content": request.system_prompt},
         ]
+        if stable_context_prompt:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": stable_context_prompt,
+                }
+            )
         if request.conversation_summary.strip():
             messages.append(
                 {
@@ -492,6 +523,7 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     "provider_role": provider_role,
                     "provider_failover": provider_switch_count > 0,
                     "provider_switch_count": provider_switch_count,
+                    "prompt_layout": prompt_layout,
                 },
                 rollout_exchange={"attempts": provider_exchanges},
             )
@@ -523,6 +555,7 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 "provider_role": provider_role,
                 "provider_failover": provider_switch_count > 0,
                 "provider_switch_count": provider_switch_count,
+                "prompt_layout": prompt_layout,
             },
             rollout_exchange={"attempts": provider_exchanges},
         )
@@ -780,7 +813,11 @@ def extract_context_window_tokens(model_payload: JsonDict) -> int | None:
     return None
 
 
-def _planner_user_prompt(request: PlannerBackendRequest) -> str:
+def _planner_user_prompt(
+    request: PlannerBackendRequest,
+    *,
+    tool_context: JsonDict | None = None,
+) -> str:
     instruction = (
         "Follow the system prompt for this isolated role. Return only the exact "
         "JSON object requested by that prompt, without markdown."
@@ -792,18 +829,105 @@ def _planner_user_prompt(request: PlannerBackendRequest) -> str:
     )
     payload = {
         "instruction": instruction,
-        "tool_context": request.tool_context,
+        "tool_context": request.tool_context if tool_context is None else tool_context,
         "attempt": request.attempt,
         "validation_errors": request.validation_errors,
     }
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _partition_planner_tool_context(
+    request: PlannerBackendRequest,
+) -> tuple[JsonDict, JsonDict]:
+    """Move cache-stable main-agent references ahead of growing chat history.
+
+    The canonical request retains the complete ``tool_context`` for recorders and
+    deterministic backends.  This partition only changes the OpenAI-compatible
+    wire layout.  Isolated sub-agents and non-main context schemas keep their
+    existing single-user-message representation.
+    """
+
+    context = request.tool_context
+    if (
+        request.metadata.get("isolated_context") is True
+        or context.get("schema_version") != _MAIN_AGENT_CONTEXT_SCHEMA_VERSION
+    ):
+        return {}, dict(context)
+
+    dynamic = dict(context)
+    stable: JsonDict = {
+        "schema_version": PLANNER_STATIC_CONTEXT_SCHEMA_VERSION,
+        "agent_context_schema_version": dynamic.pop("schema_version"),
+    }
+    for key in _CACHE_STABLE_AGENT_CONTEXT_KEYS:
+        if key in dynamic:
+            stable[key] = dynamic.pop(key)
+
+    constraints = dynamic.get("operational_constraints")
+    if isinstance(constraints, dict) and "rules" in constraints:
+        stable["operational_constraints"] = {"rules": constraints.get("rules")}
+        dynamic_constraints = {
+            key: value for key, value in constraints.items() if key != "rules"
+        }
+        if dynamic_constraints:
+            dynamic["operational_constraints"] = dynamic_constraints
+        else:
+            dynamic.pop("operational_constraints", None)
+    return stable, dynamic
+
+
+def _stable_planner_context_prompt(stable_context: JsonDict) -> str:
+    """Serialize the stable planner prefix deterministically for radix caching."""
+
+    payload = json.dumps(
+        stable_context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "Stable OpenETA tool and skill context for this session. Treat these "
+        "schemas, guidance documents, and execution rules as authoritative. "
+        "The final user message supplies the current turn state.\n" + payload
+    )
+
+
+def _planner_prompt_layout_summary(
+    *,
+    stable_context: JsonDict,
+    stable_context_prompt: str,
+    dynamic_context: JsonDict,
+) -> JsonDict:
+    """Return compact cache-layout diagnostics without copying prompt content."""
+
+    dynamic_payload = json.dumps(
+        dynamic_context,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return {
+        "schema_version": "openeta.planner_prompt_layout.v1",
+        "cache_stable_prefix_enabled": bool(stable_context_prompt),
+        "static_before_conversation": bool(stable_context_prompt),
+        "stable_context_chars": len(stable_context_prompt),
+        "stable_context_sha256": (
+            hashlib.sha256(stable_context_prompt.encode("utf-8")).hexdigest()
+            if stable_context_prompt
+            else ""
+        ),
+        "stable_context_keys": list(stable_context),
+        "dynamic_context_chars": len(dynamic_payload),
+        "dynamic_context_keys": list(dynamic_context),
+    }
+
+
 def _planner_user_content(
     request: PlannerBackendRequest,
     config: OpenAICompatiblePlannerBackendConfig,
+    *,
+    prompt_tool_context: JsonDict | None = None,
 ) -> tuple[str | list[JsonDict], list[JsonDict]]:
-    text = _planner_user_prompt(request)
+    text = _planner_user_prompt(request, tool_context=prompt_tool_context)
     if not config.enable_vision:
         return text, []
     explicit_paths = request.tool_context.get("vision_image_paths")

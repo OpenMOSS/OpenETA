@@ -520,6 +520,24 @@ def _extract_joint_positions_from_result(result: dict) -> list[float]:
     return jp if isinstance(jp, list) else []
 
 
+def _extract_joint_names_from_result(result: dict) -> list[str]:
+    """Extract ``joint_names`` (positional labels for ``joint_positions``).
+
+    Needed by the collision checker for multi-arm robots, where the joints
+    cuRobo wants are not a leading slice of the observation vector.  Absent for
+    single-arm backends, which is fine — the checker only requires names when
+    slicing would be wrong.
+    """
+    obs = result.get("observation", result) if isinstance(result, dict) else {}
+    if not isinstance(obs, dict):
+        return []
+    robot = obs.get("robot", {})
+    if not isinstance(robot, dict):
+        return []
+    names = robot.get("joint_names", [])
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
 def _extract_objects_from_result(result: dict) -> list[dict]:
     """Extract ``objects`` list from a step result or observe result."""
     obs = result.get("observation", result) if isinstance(result, dict) else {}
@@ -1477,7 +1495,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         # ── collision check (post-batch) ──────────────────────────
         collision_detected = False
         collision_info = {"available": False}
-        if enable_collision_check and backend in ("libero", "maniskill"):
+        # BEHAVIOR is listed here even though its checker reports unavailable:
+        # routing it through means move_to returns cuRobo's stated reason
+        # ("no model for R1Pro") instead of a bare available:False that reads
+        # identically to "scene is clear".
+        if enable_collision_check and backend in ("libero", "maniskill", "behavior"):
             jp = _extract_joint_positions_from_result(final_result)
             # The arm-vs-world check always uses privileged geometry.  Gating it
             # on the public include_objects flag meant cuRobo's world was never
@@ -1487,12 +1509,17 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             # (a grasp target must not read as an obstacle pre-contact) without
             # discarding the rest of the scene.
             objects = _safety_obstacles(meta, approach_target_xyz=(x, y, z))
-            if jp:
-                try:
-                    checker = get_checker(handle, backend)
-                    collision_detected, collision_info = checker.check(jp, objects)
-                except Exception:
-                    pass  # best-effort; don't crash move_to
+            try:
+                checker = get_checker(handle, backend)
+                # Ask the checker even with no joint positions: an unsupported
+                # robot must still report why, and gating that on jp would drop
+                # the reason for any backend whose observation omits them.
+                collision_detected, collision_info = checker.check(
+                    jp or [], objects,
+                    joint_names=_extract_joint_names_from_result(final_result),
+                )
+            except Exception:
+                pass  # best-effort; don't crash move_to
 
         if collision_detected:
             break
@@ -1629,6 +1656,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             "detected": False,
             **{k: v for k, v in collision_info.items() if k != "available"},
         }
+        # Keep the skip reason explicit even though the complete checker receipt
+        # is projected above.  This guards future receipt filtering from turning
+        # "not checked" into an unexplained clear result.
+        if collision_info.get("reason") and not (
+            result["collision"].get("world_checked", False)
+            and result["collision"].get("self_checked", False)
+        ):
+            result["collision"]["reason"] = collision_info["reason"]
     elif enable_collision_check:
         result["collision"] = {
             "detected": False,
@@ -2530,6 +2565,7 @@ def _build_dashboard_app() -> Starlette:
 
 def main() -> None:
     import argparse
+    import atexit as _atexit
     import uvicorn
     from mcp.server.sse import SseServerTransport
 
@@ -2634,7 +2670,24 @@ def main() -> None:
     print(f"\n  OpenETA Dashboard:      http://{host}:{port}/")
     print(f"  MCP (Streamable HTTP):  http://{host}:{port}/mcp")
     print(f"  MCP (legacy SSE):       http://{host}:{port}/sse\n")
-    uvicorn.run(combined, host=host, port=port, log_level="warning")
+
+    # Reap workers on server exit.  Without this every worker outlives the
+    # server that spawned it -- for BEHAVIOR that is a ~6.5 GB VRAM process per
+    # env with no owner left to close it.  uvicorn installs its own
+    # SIGINT/SIGTERM handling and returns from run(), so ``finally`` covers the
+    # ordinary paths and atexit covers exits that bypass it.  A SIGKILLed
+    # server can run neither, which is why workers also carry PR_SET_PDEATHSIG.
+    def _reap_workers() -> None:
+        try:
+            _get_mgr().stop_all()
+        except Exception:
+            pass
+
+    _atexit.register(_reap_workers)
+    try:
+        uvicorn.run(combined, host=host, port=port, log_level="warning")
+    finally:
+        _reap_workers()
 
 
 if __name__ == "__main__":

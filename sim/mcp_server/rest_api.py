@@ -19,6 +19,7 @@ from sim.mcp_server.session import (
     _session_envs,
     _session_stream_tasks,
     _session_streams,
+    DEFAULT_STREAM_INTERVAL_S,
     _session_stream_interval,
 )
 from sim.mcp_server.worker_mgr import (
@@ -55,7 +56,7 @@ async def session_stream(request):
     if not sid or sid not in _session_envs:
         return JSONResponse({"error": "Unknown session"}, 404)
 
-    interval_s = _session_stream_interval.get(sid, 0.05)
+    interval_s = _session_stream_interval.get(sid, DEFAULT_STREAM_INTERVAL_S)
 
     async def event_stream():
         q: asyncio.Queue = asyncio.Queue(maxsize=4)
@@ -93,7 +94,7 @@ async def session_env_stream(request):
     if handle not in _session_envs.get(sid, {}):
         return JSONResponse({"error": f"Unknown env handle: {handle}"}, 404)
 
-    interval_s = _session_stream_interval.get(sid, 0.05)
+    interval_s = _session_stream_interval.get(sid, DEFAULT_STREAM_INTERVAL_S)
     stream_key = f"{sid}/{handle}"
 
     async def event_stream():

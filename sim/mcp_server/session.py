@@ -54,7 +54,14 @@ def _obs_key(meta: dict) -> tuple[str, str]:
 _session_streams: dict[str, set[asyncio.Queue]] = {}
 # session_id  or  "session_id/handle" → asyncio.Task (live-stream render loop)
 _session_stream_tasks: dict[str, asyncio.Task] = {}
-# session_id → stream interval in seconds (default 0.05)
+# Default seconds between dashboard frame pushes.  At 720x720 the old 0.05
+# pushed ~38 MB/s of PNG per viewer -- fine on loopback, not fine over a
+# network; 0.5 is still responsive to watch.  Nothing ever writes
+# _session_stream_interval, so this default is the only knob, and it is an env
+# var so retuning does not mean editing source.
+DEFAULT_STREAM_INTERVAL_S: float = float(
+    os.environ.get("OPENETA_STREAM_INTERVAL_S", "0.5"))
+# session_id → stream interval in seconds (default DEFAULT_STREAM_INTERVAL_S)
 _session_stream_interval: dict[str, float] = {}
 # session_id → float (monotonic timestamp of last activity)
 _session_last_activity: dict[str, float] = {}

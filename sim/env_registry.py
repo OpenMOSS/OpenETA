@@ -855,6 +855,7 @@ class DummySimEnv(gym.Env):
             ],
             "robot_joint_positions": observation.robot.joint_positions,
             "robot_joint_velocities": observation.robot.joint_velocities,
+            "robot_joint_names": observation.robot.joint_names,
             "end_effector_pose": observation.robot.end_effector_pose,
             "gripper_state": observation.robot.gripper_state,
             "objects": observation.objects,

@@ -727,6 +727,13 @@ class UnifiedEnv(gym.Env):
         jv = raw.get("robot_joint_velocities")
         if jv is not None:
             proprio["joint_velocities"] = self._np(jv)
+        # Names stay a list of str, not self._np: they label joint_positions
+        # positionally and a consumer that must select a subset by name (the
+        # collision checker, on a robot whose arms are interleaved) cannot
+        # recover them from the numeric vector.
+        jn = raw.get("robot_joint_names")
+        if jn:
+            proprio["joint_names"] = [str(n) for n in jn]
         ee = raw.get("end_effector_pose")
         if ee and isinstance(ee, dict):
             xyz = ee.get("xyz")

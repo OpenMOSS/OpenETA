@@ -253,6 +253,7 @@ class CollisionChecker:
         self._robot_world: object | None = None
         self._arm_dof = 7          # Franka: 7 arm revolute joints
         self._state_dof: int = 7   # LIBERO: exactly 7
+        self._robot_config = "franka.yml"
         self._last_objects_hash: int | None = None
         # Number of obstacles actually loaded into the cuRobo world.  This is
         # the authoritative "is there anything to hit" signal: cuRobo keeps
@@ -261,9 +262,31 @@ class CollisionChecker:
         # only that primitive checking is *enabled*, never that obstacles are
         # present.  Verified against cuRobo 0.7.7 on 2026-08-17.
         self._obstacle_count: int = 0
+        # Cached observation->cuRobo joint permutation, plus the exact name list
+        # it was derived from.  The permutation is only meaningful for that
+        # ordering, so it is revalidated on every call rather than built once.
+        self._joint_permutation: list[int] | None = None
+        self._joint_permutation_names: list[str] | None = None
 
         if backend == "maniskill":
             self._state_dof = 9    # 7 arm + 2 gripper, sliced to [:7]
+
+        if backend == "behavior":
+            self._robot_config = "r1pro.yml"
+            self._arm_dof = 22
+            self._state_dof = 22
+            # If the generated config is absent the checker must fail loudly at
+            # this point rather than fall back to franka.yml, which would be a
+            # silent wrong-robot check.
+            try:
+                from curobo.util_file import get_robot_configs_path, join_path
+                import os
+                if not os.path.exists(join_path(get_robot_configs_path(), "r1pro.yml")):
+                    self._available = False
+                    _logger.error("r1pro.yml missing — run scripts/gen_r1pro_curobo.py; "
+                                  "BEHAVIOR collision disabled rather than using franka.yml")
+            except Exception:
+                pass
 
         if backend == "metaworld":
             self._available = False
@@ -271,6 +294,63 @@ class CollisionChecker:
 
         if not self._available:
             _logger.info("Collision checking unavailable for handle (backend=%s)", backend)
+
+    # ── joint mapping ──────────────────────────────────────────────
+
+    def _needs_named_mapping(self) -> bool:
+        """True when a positional slice cannot yield cuRobo's joint vector.
+
+        LIBERO and ManiSkill report the arm as the leading entries in order, so
+        slicing is correct there.  R1Pro does not: its vector starts with six
+        base DOF and then interleaves the two arms
+        (``left_arm_joint1, right_arm_joint1, left_arm_joint2, ...``), so the
+        joints cuRobo wants are neither contiguous nor in order.
+        """
+        return self._backend == "behavior"
+
+    def _map_by_name(self, joint_positions: list[float],
+                     joint_names: list[str] | None,
+                     ) -> tuple[list[float] | None, str]:
+        """Permute *joint_positions* into the cuRobo model's joint order.
+
+        Returns ``(q, "")`` on success or ``(None, reason)`` on failure.  Every
+        failure path returns a reason rather than a best-effort vector: a
+        mis-mapped q still yields a confident verdict, and a wrong "clear" is
+        exactly what this module exists to prevent.
+        """
+        if not joint_names:
+            return None, ("joint_names missing from observation; refusing to "
+                          "guess R1Pro joint order (arms are interleaved)")
+        if len(joint_names) != len(joint_positions):
+            return None, (f"joint_names ({len(joint_names)}) does not match "
+                          f"joint_positions ({len(joint_positions)})")
+
+        try:
+            rw = self._ensure_robot_world()
+            target = [str(n) for n in rw.kinematics.joint_names]
+        except Exception as exc:
+            return None, f"could not read cuRobo joint order: {exc}"
+
+        index = {str(n): i for i, n in enumerate(joint_names)}
+        missing = [n for n in target if n not in index]
+        if missing:
+            return None, (f"observation lacks joints cuRobo needs: "
+                          f"{missing[:4]}{'...' if len(missing) > 4 else ''}")
+
+        # Rebuild when the incoming order changes, not only on first call.  A
+        # reordering that still contains every required joint passes the
+        # ``missing`` check above, so a cache keyed on nothing would keep
+        # applying a stale permutation and report a confident verdict computed
+        # from the wrong geometry -- the exact failure this mapping prevents.
+        key = [str(n) for n in joint_names]
+        if self._joint_permutation is None or self._joint_permutation_names != key:
+            rebuilt = self._joint_permutation is not None
+            self._joint_permutation = [index[n] for n in target]
+            self._joint_permutation_names = key
+            _logger.info("%s %d observation joints -> %d cuRobo joints by name",
+                         "Remapped" if rebuilt else "Mapped",
+                         len(joint_names), len(target))
+        return [float(joint_positions[i]) for i in self._joint_permutation], ""
 
     # ── lazy init ──────────────────────────────────────────────────
 
@@ -290,7 +370,7 @@ class CollisionChecker:
         # Must pass a non-None world_model so the collision checker gets
         # created at init time (otherwise update_world is a no-op).
         config = RobotWorldConfig.load_from_config(
-            robot_config="franka.yml",
+            robot_config=self._robot_config,
             world_model=CuroboWorldConfig(),  # empty, populated via update_world
             tensor_args=tensor_args,
             n_envs=1,
@@ -300,7 +380,22 @@ class CollisionChecker:
         )
         _logger.info("Creating cuRobo RobotWorld (first call — JIT compiles CUDA kernels)...")
         self._robot_world = RobotWorld(config)
-        _logger.info("cuRobo RobotWorld ready.")
+
+        # Reconcile the expected joint count against the model actually built.
+        # Locked joints do not count as active DOF, so a hand-written constant
+        # drifts from reality as soon as lock_joints changes; a mismatch here
+        # would silently feed a wrongly-sized q to cuRobo.
+        try:
+            actual = int(self._robot_world.kinematics.get_dof())
+            if actual != self._arm_dof:
+                _logger.info("cuRobo active DOF is %d, expected %d (%s) — using %d",
+                             actual, self._arm_dof, self._robot_config, actual)
+                self._arm_dof = actual
+        except Exception as exc:
+            _logger.warning("Could not read cuRobo DOF: %s", exc)
+
+        _logger.info("cuRobo RobotWorld ready (%s, dof=%d).",
+                     self._robot_config, self._arm_dof)
         return self._robot_world
 
     # ── world update ───────────────────────────────────────────────
@@ -388,11 +483,17 @@ class CollisionChecker:
     # ── public API ─────────────────────────────────────────────────
 
     def check(self, joint_positions: list[float],
-              objects: list[dict] | None = None) -> tuple[bool, dict]:
+              objects: list[dict] | None = None,
+              joint_names: list[str] | None = None) -> tuple[bool, dict]:
         """Return ``(in_collision, info_dict)``.
 
         *joint_positions* is the raw joint angles from the observation
-        (7 floats for LIBERO, 9 for ManiSkill).
+        (7 floats for LIBERO, 9 for ManiSkill, 28 for BEHAVIOR/R1Pro).
+
+        *joint_names* names those angles positionally.  Required for BEHAVIOR:
+        R1Pro reports arms interleaved left/right, so the subset cuRobo wants
+        cannot be obtained by slicing.  Ignored for single-arm backends whose
+        leading ``_arm_dof`` entries are already the arm in order.
 
         *objects* is the ``observation.objects`` list.
 
@@ -401,20 +502,49 @@ class CollisionChecker:
           ``world_collision``, ``self_collision`` (positive = penetration).
         """
         if not self._available:
-            return False, {"available": False,
-                           "reason": "cuRobo not installed or CUDA unavailable"}
-
-        if self._backend == "metaworld":
-            return False, {"available": False,
-                           "reason": "joint_positions unavailable for MetaWorld",
+            # Report *why*, per backend.  A caller that cannot tell "checked and
+            # clear" from "never checked" will read an unsupported robot as a
+            # safe one, which is the failure mode this whole path exists to
+            # prevent.
+            if self._backend == "metaworld":
+                # This branch used to sit *below* the generic return and was
+                # therefore dead: metaworld sets _available False in __init__,
+                # so it reported "cuRobo not installed" even with cuRobo working.
+                reason = "joint_positions unavailable for MetaWorld"
+            elif self._backend == "behavior":
+                reason = ("r1pro.yml not generated — run scripts/gen_r1pro_curobo.py")
+            else:
+                reason = "cuRobo not installed or CUDA unavailable"
+            return False, {"available": False, "reason": reason,
+                           "unsupported_robot": False,
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
 
-        if not joint_positions or len(joint_positions) < self._arm_dof:
+        if not joint_positions:
+            return False, {"available": True,
+                           "reason": "No joint positions in observation",
+                           "max_world_penetration": 0.0, "max_self_penetration": 0.0,
+                           "world_collision": False, "self_collision": False}
+
+        # Reorder to cuRobo's own joint order when names are available.  This is
+        # mandatory for R1Pro and harmless elsewhere.  Failing closed here is
+        # deliberate: an unmapped vector would still produce a verdict, just one
+        # computed from the wrong joints.
+        if self._needs_named_mapping():
+            q_arm, map_err = self._map_by_name(joint_positions, joint_names)
+            if map_err:
+                return False, {"available": True, "reason": map_err,
+                               "world_checked": False, "self_checked": False,
+                               "max_world_penetration": 0.0,
+                               "max_self_penetration": 0.0,
+                               "world_collision": False, "self_collision": False}
+        elif len(joint_positions) < self._arm_dof:
             return False, {"available": True,
                            "reason": f"Need >= {self._arm_dof} joint positions, got {len(joint_positions)}",
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
+        else:
+            q_arm = None  # resolved below by the existing slice path
 
         try:
             rw = self._ensure_robot_world()
@@ -431,8 +561,10 @@ class CollisionChecker:
             world_update_error = str(exc)
             _logger.error("World update failed, world verdict is not authoritative: %s", exc)
 
-        # Slice to arm DOF (ManiSkill: 9D → 7D)
-        q_arm = joint_positions[:self._arm_dof]
+        # Slice to arm DOF (ManiSkill: 9D → 7D).  Skipped when the name-based
+        # mapping above already produced the vector in cuRobo's order.
+        if q_arm is None:
+            q_arm = joint_positions[:self._arm_dof]
         if len(q_arm) < self._arm_dof:
             return False, {"available": True,
                            "reason": f"Expected {self._arm_dof} arm joints, got {len(q_arm)}"}

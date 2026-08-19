@@ -824,6 +824,18 @@ def _proxy_observe(meta: dict) -> dict:
     return _public_observation_result(meta, result)
 
 
+def _proxy_reachability(meta: dict, body: dict) -> dict:
+    """Proxy a read-only endpoint IK query to the worker that owns the env."""
+
+    mgr = _get_mgr()
+    return mgr.proxy_handle_op(
+        meta,
+        f"/env/{meta['remote_handle']}/reachability",
+        method="POST",
+        body=body,
+    )
+
+
 def _proxy_render(meta: dict) -> dict:
     """Proxy a render request to the worker."""
     mgr = _get_mgr()

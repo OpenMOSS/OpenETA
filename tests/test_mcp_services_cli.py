@@ -9,6 +9,22 @@ import pytest
 from scripts import openeta_mcp_services as cli
 
 
+def _anygrasp_config(tmp_path: Path) -> cli.ServiceConfig:
+    args = cli.build_parser().parse_args(
+        [
+            "start",
+            "anygrasp",
+            "--state-dir",
+            str(tmp_path),
+            "--anygrasp-sdk-root",
+            "/sdk",
+            "--anygrasp-checkpoint-path",
+            "/checkpoint",
+        ]
+    )
+    return cli._build_configs(args)[0]
+
+
 def test_status_without_pid_reports_not_running(tmp_path: Path, capsys) -> None:
     assert cli.main(["status", "sam3", "--state-dir", str(tmp_path), "--json"]) == 0
 
@@ -207,6 +223,8 @@ def test_start_all_dry_run_includes_seven_services(tmp_path: Path, capsys) -> No
     assert "tools/unidepth_v2_mcp_server.py" in output
     assert "--sdk-root /path/to/anygrasp_sdk" in output
     assert "--checkpoint-path /path/to/checkpoint_detection.tar" in output
+    assert "--max-gripper-width 0.08" in output
+    assert "--gripper-height 0.03" in output
     assert "--anyplace-root /path/to/anyplace" in output
     assert "--config-path /path/to/anyplace-config.yaml" in output
     assert "--contact-graspnet-root /path/to/contact-graspnet" in output
@@ -219,6 +237,184 @@ def test_start_all_dry_run_includes_seven_services(tmp_path: Path, capsys) -> No
     assert "--port 8778" in output
     assert "--model-id lpiccinelli/unidepth-v2-vitl14" in output
     assert "--port 8779" in output
+
+
+def test_anygrasp_service_geometry_is_explicitly_configurable(tmp_path: Path) -> None:
+    profile = tmp_path / "custom-grasp-profile.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "calibration_id": "custom-gripper",
+                "max_gripper_width_m": 0.075,
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = cli.build_parser().parse_args(
+        [
+            "start",
+            "anygrasp",
+            "--state-dir",
+            str(tmp_path),
+            "--anygrasp-sdk-root",
+            "/sdk",
+            "--anygrasp-checkpoint-path",
+            "/checkpoint",
+            "--grasp-calibration-profile",
+            str(profile),
+            "--anygrasp-max-gripper-width",
+            "0.075",
+            "--anygrasp-gripper-height",
+            "0.025",
+            "--dry-run",
+        ]
+    )
+
+    command = cli._build_configs(args)[0].command
+
+    assert command[-4:] == [
+        "--max-gripper-width",
+        "0.075",
+        "--gripper-height",
+        "0.025",
+    ]
+
+
+def test_anygrasp_deployment_width_must_match_host_calibration(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert (
+        cli.main(
+            [
+                "start",
+                "anygrasp",
+                "--state-dir",
+                str(tmp_path),
+                "--anygrasp-sdk-root",
+                "/sdk",
+                "--anygrasp-checkpoint-path",
+                "/checkpoint",
+                "--anygrasp-max-gripper-width",
+                "0.075",
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+
+    assert "does not match calibration profile" in capsys.readouterr().err
+
+
+def test_anygrasp_default_width_comes_from_host_calibration(tmp_path: Path) -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "start",
+            "anygrasp",
+            "--state-dir",
+            str(tmp_path),
+            "--anygrasp-sdk-root",
+            "/sdk",
+            "--anygrasp-checkpoint-path",
+            "/checkpoint",
+            "--dry-run",
+        ]
+    )
+
+    config = cli._build_configs(args)[0]
+
+    assert config.expected_max_gripper_width_m == pytest.approx(0.08)
+    assert config.grasp_calibration_profile == cli.DEFAULT_GRASP_CALIBRATION_PROFILE
+    assert config.command[-4:-2] == ["--max-gripper-width", "0.08"]
+
+
+def test_start_reuses_running_anygrasp_when_capability_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _anygrasp_config(tmp_path)
+    config.pid_file.write_text("1234\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(cli, "_pid_matches_command", lambda _pid, _config: True)
+    monkeypatch.setattr(
+        cli,
+        "_anygrasp_compatibility",
+        lambda _config: {
+            "compatible": True,
+            "reason": "compatible",
+            "backend_max_gripper_width_m": 0.08,
+        },
+    )
+
+    result = cli._start_service(config, dry_run=False)
+
+    assert result["ok"] is True
+    assert result["reason"] == "already_running_compatible"
+    assert result["pid"] == 1234
+
+
+@pytest.mark.parametrize(
+    "restart_reason",
+    ["gripper_width_mismatch", "capability_discovery_failed"],
+)
+def test_start_restarts_owned_anygrasp_when_capability_is_incompatible(
+    tmp_path: Path,
+    monkeypatch,
+    restart_reason: str,
+) -> None:
+    config = _anygrasp_config(tmp_path)
+    events = []
+    monkeypatch.setattr(
+        cli,
+        "_anygrasp_compatibility",
+        lambda _config: {"compatible": False, "reason": restart_reason},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_stop_service",
+        lambda _config, **_kwargs: events.append("stop")
+        or {"ok": True, "action": "stop", "pid": 1234},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_start_service",
+        lambda _config, **_kwargs: events.append("start")
+        or {
+            "ok": True,
+            "action": "start",
+            "pid": 5678,
+            "capability": {"compatible": True},
+        },
+    )
+
+    result = cli._reconcile_running_anygrasp(config, pid=1234)
+
+    assert result["ok"] is True
+    assert result["reason"] == "automatic_restart"
+    assert result["restart_reason"] == restart_reason
+    assert events == ["stop", "start"]
+
+
+def test_anygrasp_reconcile_fails_without_stopping_unowned_pid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _anygrasp_config(tmp_path)
+    config.pid_file.write_text("1234\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(cli, "_pid_matches_command", lambda _pid, _config: False)
+    stopped = []
+    monkeypatch.setattr(
+        cli,
+        "_stop_service",
+        lambda *_args, **_kwargs: stopped.append(True) or {"ok": True},
+    )
+
+    result = cli._start_service(config, dry_run=False)
+
+    assert result["ok"] is False
+    assert result["reason"] == "pid_mismatch"
+    assert stopped == []
 
 
 def test_unidepth_v2_config_reads_environment(monkeypatch, tmp_path: Path) -> None:
@@ -385,6 +581,26 @@ def test_smoke_uses_mcp_list_tools_without_real_service(tmp_path: Path, monkeypa
     payload = json.loads(capsys.readouterr().out)
     assert payload["sam3"]["smoke"] == "ok"
     assert payload["sam3"]["tools"] == ["segment"]
+
+
+def test_anygrasp_smoke_requires_detection_and_capability_tools(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(cli, "_mcp_list_tools", lambda _url: ["detect_grasps"])
+
+    assert cli.main(["smoke", "anygrasp", "--state-dir", str(tmp_path), "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["anygrasp"]["reason"] == "missing_tool:get_capabilities"
+
+    monkeypatch.setattr(
+        cli,
+        "_mcp_list_tools",
+        lambda _url: ["detect_grasps", "get_capabilities"],
+    )
+    assert cli.main(["smoke", "anygrasp", "--state-dir", str(tmp_path), "--json"]) == 0
 
 
 def test_anyplace_smoke_requires_predict_placement(tmp_path: Path, monkeypatch, capsys) -> None:

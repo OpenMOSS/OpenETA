@@ -1,0 +1,62 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "visual-history-abc-milk-canary-v1",
+  "description": "Clear, large-target LIBERO milk canary for the visual-history A/B/C rollout evaluation.",
+  "episode_manifest": "manifests/libero_object_task7_agent_first_canary.json",
+  "variants": [
+    {
+      "variant_id": "A_current_main_only",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 1,
+          "include_initial_main": false,
+          "include_current_wrist": false,
+          "include_vdm": false
+        }
+      }
+    },
+    {
+      "variant_id": "B_bounded_raw_no_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": false
+        }
+      }
+    },
+    {
+      "variant_id": "C_bounded_raw_main_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260816
+  },
+  "execution": {
+    "concurrency": 3,
+    "provider_concurrency": 2,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "large-target-single-task-canary",
+    "paired_fields": ["source_episode_id", "seed", "repeat_index"],
+    "purpose": "separate visual-history behavior from tiny-target localization difficulty"
+  }
+}

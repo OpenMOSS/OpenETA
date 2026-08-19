@@ -68,6 +68,7 @@ class OpenEtaAgentRuntime:
         rollout_enabled: bool = True,
         default_session_id: str | None = None,
         visual_history: VisualHistoryManager | None = None,
+        startup_facts: dict[str, JsonDict] | None = None,
     ) -> None:
         self.planner = planner or ToolCallingPlanner()
         self.memory = memory or AgentMemory(store=memory_store)
@@ -78,6 +79,10 @@ class OpenEtaAgentRuntime:
         self.self_improvement_reviewer = self_improvement_reviewer or SelfImprovementReviewer()
         self.default_session_id = default_session_id
         self.visual_history = visual_history
+        self.startup_facts = {
+            str(name): dict(payload)
+            for name, payload in (startup_facts or {}).items()
+        }
         self.rollout_recorder = rollout_recorder
         if self.rollout_recorder is None and rollout_enabled:
             store_root = getattr(self.memory.store, "root", None)
@@ -104,6 +109,8 @@ class OpenEtaAgentRuntime:
             metadata=metadata,
             session_id=session_id or self.default_session_id,
         )
+        for name, payload in self.startup_facts.items():
+            self.memory.save_fact(name, payload, source="runtime_preflight")
         if self.rollout_recorder is not None and self.memory.session_id is not None:
             self.rollout_recorder.start_session(
                 session_id=self.memory.session_id,
@@ -127,7 +134,7 @@ class OpenEtaAgentRuntime:
             },
         )
 
-    def resume_session(self, session_id: str, *, max_events: int | None = 64) -> None:
+    def resume_session(self, session_id: str, *, max_events: int | None = None) -> None:
         self.memory.resume_session(session_id, max_events=max_events)
         if self.rollout_recorder is not None:
             self.rollout_recorder.start_session(
@@ -163,6 +170,7 @@ class OpenEtaAgentRuntime:
                 "execution_id": execution_id,
                 "session_id": self.memory.session_id or "",
                 "task": self.memory.current_user_request or observation.task,
+                "_observation_packet_resolver": self.memory.resolve_observation_packet,
                 "supervision_context": {
                     "memory": self.memory.planning_context(max_events=4),
                 },

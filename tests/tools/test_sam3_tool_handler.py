@@ -38,6 +38,12 @@ def _context(
     observation: EnvObservation | None = None,
 ) -> ToolExecutionContext:
     spec = build_default_tool_registry().get("sam3")
+    if observation is None:
+        observation = _observation_with_rgb_artifact(
+            "agentview",
+            FIXTURE_IMAGE,
+            packet_id="test-packet",
+        )
     return ToolExecutionContext(
         name="sam3",
         spec=spec,
@@ -52,7 +58,7 @@ def _observation_with_rgb_artifact(
     path: Path,
     *,
     role: str = "",
-    packet_id: str = "",
+    packet_id: str = "test-packet",
 ) -> EnvObservation:
     artifact = {"kind": "rgb", "frame_id": frame_id, "path": str(path)}
     depth_artifact = {
@@ -167,9 +173,17 @@ def test_sam3_default_roots_use_repo_tmp_layout() -> None:
 def test_sam3_spec_exposes_text_and_point_modes() -> None:
     spec = build_default_tool_registry().get("sam3")
 
-    assert {"mode", "image", "prompt", "points", "evidence_role"}.issubset(
+    assert {
+        "source_packet_id",
+        "camera_frame_id",
+        "mode",
+        "prompt",
+        "points",
+        "evidence_role",
+    }.issubset(
         spec.parameters
     )
+    assert "image" not in spec.parameters
     assert "label=1" in spec.parameters["points"]
 
 
@@ -232,7 +246,7 @@ def test_sam3_point_mode_routes_and_materializes_three_candidates(tmp_path: Path
         _context(
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [
                     {"x": 50, "y": 60, "label": 1},
                     {"x": 100.0, "y": 80.0, "label": 0},
@@ -308,7 +322,7 @@ def test_sam3_point_audit_recursively_scrubs_base64_fields(tmp_path: Path) -> No
         _context(
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"x": 50, "y": 60, "label": 1}],
             }
         )
@@ -360,7 +374,7 @@ def test_sam3_text_rejects_non_boolean_success(
         },
         output_root=tmp_path / "images",
         result_output_root=tmp_path / "results",
-    )(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    )(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -399,7 +413,7 @@ def test_sam3_selection_visualization_failure_fails_closed(
         },
         output_root=tmp_path / "images",
         result_output_root=tmp_path / "results",
-    )(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    )(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "artifact_write_failed"
@@ -408,13 +422,13 @@ def test_sam3_selection_visualization_failure_fails_closed(
     assert result.details["metadata"] == {"error_type": "OSError"}
 
 
-def test_sam3_handler_fails_closed_without_image(tmp_path: Path) -> None:
+def test_sam3_handler_fails_closed_without_source_packet_id(tmp_path: Path) -> None:
     handler = build_sam3_handler(lambda request: {}, output_root=tmp_path)
 
     result = handler(_context({"prompt": "black shoe"}))
 
     assert result.success is False
-    assert result.details["reason"] == "missing_image"
+    assert result.details["reason"] == "missing_source_packet_id"
     assert Path(result.details["raw_output_ref"]).is_file()
     assert result.details["detection_count"] == 0
     assert result.details["detections"] == []
@@ -423,22 +437,22 @@ def test_sam3_handler_fails_closed_without_image(tmp_path: Path) -> None:
 def test_sam3_handler_fails_closed_without_prompt() -> None:
     handler = build_sam3_handler(lambda request: {})
 
-    result = handler(_context({"image": "front"}))
+    result = handler(_context({"source_packet_id": "test-packet"}))
 
     assert result.success is False
     assert result.details["reason"] == "missing_prompt"
-    assert result.details["source_image"] == "front"
+    assert result.details["source_image"] == str(FIXTURE_IMAGE)
     assert result.details["detection_count"] == 0
 
 
 @pytest.mark.parametrize(
     ("parameters", "reason"),
     [
-        ({"mode": "other", "image": str(FIXTURE_IMAGE)}, "invalid_mode"),
+        ({"mode": "other", "source_packet_id": "test-packet"}, "invalid_mode"),
         (
             {
                 "mode": "text",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "shoe",
                 "points": [{"x": 1, "y": 2, "label": 1}],
             },
@@ -447,17 +461,17 @@ def test_sam3_handler_fails_closed_without_prompt() -> None:
         (
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "shoe",
                 "points": [{"x": 1, "y": 2, "label": 1}],
             },
             "conflicting_prompt_inputs",
         ),
-        ({"mode": "points", "image": str(FIXTURE_IMAGE)}, "missing_points"),
+        ({"mode": "points", "source_packet_id": "test-packet"}, "missing_points"),
         (
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"x": 1, "y": 2, "label": 0}],
             },
             "invalid_points",
@@ -465,7 +479,7 @@ def test_sam3_handler_fails_closed_without_prompt() -> None:
         (
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"x": 9999, "y": 2, "label": 1}],
             },
             "point_out_of_bounds",
@@ -473,7 +487,7 @@ def test_sam3_handler_fails_closed_without_prompt() -> None:
         (
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"pixel_x": 1, "pixel_y": 2, "label": 1}],
             },
             "invalid_points",
@@ -512,7 +526,7 @@ def test_sam3_point_mode_fails_when_backend_is_not_bound(tmp_path: Path) -> None
         _context(
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"x": 1, "y": 2, "label": 1}],
             }
         )
@@ -525,7 +539,7 @@ def test_sam3_point_mode_fails_when_backend_is_not_bound(tmp_path: Path) -> None
 def test_sam3_handler_fails_closed_on_success_without_details() -> None:
     handler = build_sam3_handler(lambda request: {"success": True})
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -536,7 +550,7 @@ def test_sam3_handler_fails_closed_on_success_without_detection_count() -> None:
         lambda request: {"success": True, "details": {"detections": []}}
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -547,7 +561,7 @@ def test_sam3_handler_fails_closed_on_success_without_detections() -> None:
         lambda request: {"success": True, "details": {"detection_count": 0}}
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -589,7 +603,7 @@ def test_sam3_handler_encodes_image_path_and_materializes_success(tmp_path: Path
     result = handler(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "black shoe",
                 "evidence_role": "placement_region",
             },
@@ -608,8 +622,8 @@ def test_sam3_handler_encodes_image_path_and_materializes_success(tmp_path: Path
         "sam-session"
     )
     assert result.details["detection_count"] == 1
-    assert result.details["selection_required"] is False
-    assert result.details["selected_detection"]["id"] == "detection_000"
+    assert result.details["selection_required"] is True
+    assert result.details["selected_detection"] is None
     assert result.details["detections"][0]["score"] == 0.7
     assert Path(result.details["detections"][0]["mask_ref"]).exists()
     assert Path(result.details["artifacts"][0]["artifact_ref"]).exists()
@@ -628,7 +642,7 @@ def test_sam3_handler_encodes_image_path_and_materializes_success(tmp_path: Path
     assert "base64" not in json.dumps(result.details)
 
 
-def test_sam3_handler_resolves_frame_id_from_current_observation(tmp_path: Path) -> None:
+def test_sam3_handler_resolves_packet_id_from_current_observation(tmp_path: Path) -> None:
     calls: list[dict] = []
     handler = build_sam3_handler(
         lambda request: calls.append(request)
@@ -638,14 +652,14 @@ def test_sam3_handler_resolves_frame_id_from_current_observation(tmp_path: Path)
 
     result = handler(
         _context(
-            {"image": "agentview", "prompt": "cube"},
+            {"source_packet_id": "test-packet", "prompt": "cube"},
             observation=_observation_with_rgb_artifact("agentview", FIXTURE_IMAGE),
         )
     )
 
     assert result.success is True
     assert result.details["source_image"] == str(FIXTURE_IMAGE)
-    assert "source_frame_id" not in result.details
+    assert result.details["source_frame_id"] == "agentview"
     assert base64.b64decode(calls[0]["image_base64"]) == FIXTURE_IMAGE.read_bytes()
 
 
@@ -662,7 +676,11 @@ def test_sam3_handler_preserves_role_aware_source_camera_provenance(
 
     result = handler(
         _context(
-            {"image": "zed_head", "prompt": "cube"},
+            {
+                "source_packet_id": "test-packet",
+                "camera_frame_id": "zed_head",
+                "prompt": "cube",
+            },
             observation=_observation_with_rgb_artifact(
                 "zed_head",
                 FIXTURE_IMAGE,
@@ -687,7 +705,7 @@ def test_sam3_handler_preserves_observation_packet_provenance(tmp_path: Path) ->
 
     result = handler(
         _context(
-            {"image": "agentview", "prompt": "cube"},
+            {"source_packet_id": "observation-packet-7", "prompt": "cube"},
             observation=_observation_with_rgb_artifact(
                 "agentview",
                 FIXTURE_IMAGE,
@@ -704,14 +722,19 @@ def test_sam3_handler_preserves_observation_packet_provenance(tmp_path: Path) ->
         "rgb": str(FIXTURE_IMAGE),
         "depth": "other-depth.png",
         "intrinsics": {"fx": 100.0, "fy": 100.0, "cx": 0.5, "cy": 0.5},
+        "observation_index": 0,
+        "scene_epoch": 0,
+        "object_scene_epoch": 0,
+        "robot_motion_epoch": 0,
     }
 
 
-def test_sam3_handler_resolves_stale_path_to_current_observation(tmp_path: Path) -> None:
+def test_sam3_handler_rejects_unknown_packet_without_current_frame_rebinding(
+    tmp_path: Path,
+) -> None:
     current_image = tmp_path / "call-with-nonce" / "cameras.0.agentview.rgb.png"
     current_image.parent.mkdir()
     current_image.write_bytes(FIXTURE_IMAGE.read_bytes())
-    stale_image = tmp_path / "call-without-nonce" / current_image.name
     calls: list[dict] = []
     handler = build_sam3_handler(
         lambda request: calls.append(request)
@@ -721,14 +744,18 @@ def test_sam3_handler_resolves_stale_path_to_current_observation(tmp_path: Path)
 
     result = handler(
         _context(
-            {"image": str(stale_image), "prompt": "cube"},
-            observation=_observation_with_rgb_artifact("agentview", current_image),
+            {"source_packet_id": "stale-packet", "prompt": "cube"},
+            observation=_observation_with_rgb_artifact(
+                "agentview",
+                current_image,
+                packet_id="current-packet",
+            ),
         )
     )
 
-    assert result.success is True
-    assert result.details["source_image"] == str(current_image)
-    assert base64.b64decode(calls[0]["image_base64"]) == FIXTURE_IMAGE.read_bytes()
+    assert result.success is False
+    assert result.details["reason"] == "unknown_source_packet_id"
+    assert calls == []
 
 
 def test_sam3_handler_does_not_resolve_frame_outside_current_observation() -> None:
@@ -736,14 +763,18 @@ def test_sam3_handler_does_not_resolve_frame_outside_current_observation() -> No
 
     result = handler(
         _context(
-            {"image": "wrist", "prompt": "cube"},
+            {
+                "source_packet_id": "test-packet",
+                "camera_frame_id": "wrist",
+                "prompt": "cube",
+            },
             observation=_observation_with_rgb_artifact("agentview", FIXTURE_IMAGE),
         )
     )
 
     assert result.success is False
-    assert result.details["reason"] == "image_not_found"
-    assert result.details["source_image"] == "wrist"
+    assert result.details["reason"] == "source_camera_not_found"
+    assert result.details["source_image"] == ""
 
 
 def test_sam3_multiple_detections_require_explicit_selection(tmp_path: Path) -> None:
@@ -775,7 +806,7 @@ def test_sam3_multiple_detections_require_explicit_selection(tmp_path: Path) -> 
         output_root=tmp_path,
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "soup can"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "soup can"}))
 
     assert result.success is True
     assert result.details["selection_required"] is True
@@ -839,7 +870,7 @@ def test_sam3_handler_can_split_json_results_and_images(tmp_path: Path) -> None:
         result_output_root=result_root,
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     raw_output_ref = Path(result.details["raw_output_ref"])
     mask_ref = Path(result.details["detections"][0]["mask_ref"])
@@ -856,13 +887,22 @@ def test_sam3_handler_can_split_json_results_and_images(tmp_path: Path) -> None:
     assert Path(mask_artifact["path"]).is_relative_to(image_root)
 
 
-def test_sam3_handler_fails_when_image_path_is_missing() -> None:
+def test_sam3_handler_fails_when_resolved_packet_artifact_is_missing() -> None:
     handler = build_sam3_handler(lambda request: {})
 
-    result = handler(_context({"image": "missing-image.png", "prompt": "black shoe"}))
+    result = handler(
+        _context(
+            {"source_packet_id": "missing-packet", "prompt": "black shoe"},
+            observation=_observation_with_rgb_artifact(
+                "agentview",
+                Path("missing-image.png"),
+                packet_id="missing-packet",
+            ),
+        )
+    )
 
     assert result.success is False
-    assert result.details["reason"] == "image_not_found"
+    assert result.details["reason"] == "source_artifact_missing"
 
 
 def test_sam3_handler_accepts_empty_detection_success() -> None:
@@ -879,7 +919,7 @@ def test_sam3_handler_accepts_empty_detection_success() -> None:
         }
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "missing thing"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "missing thing"}))
 
     assert result.success is True
     assert result.details["detection_count"] == 0
@@ -921,7 +961,7 @@ def test_sam3_roi_preserves_full_frame_and_clamps_mask(tmp_path: Path) -> None:
     result = handler(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "alphabet soup can",
                 "roi_bbox_xyxy": [80, 50, 150, 120],
             },
@@ -993,7 +1033,7 @@ def test_sam3_roi_retries_once_with_generic_prompt(tmp_path: Path) -> None:
     result = build_sam3_handler(segment, output_root=tmp_path)(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "alphabet soup can",
                 "roi_bbox_xyxy": [10, 10, 100, 100],
             }
@@ -1067,7 +1107,7 @@ def test_sam3_point_prompt_routes_to_segment_points_and_preserves_candidates(
     )(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "positive_points": [{"x": 100.0, "y": 80.0, "label": 1}],
             },
             session_id="point-session",
@@ -1104,7 +1144,7 @@ def test_sam3_point_prompt_rejects_out_of_bounds_point() -> None:
     result = handler(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "positive_points": [{"x": -1, "y": 5, "label": 1}],
             }
         )
@@ -1119,7 +1159,7 @@ def test_sam3_point_prompt_fails_when_backend_tool_is_unavailable() -> None:
     result = build_sam3_handler(lambda _request: {})(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "positive_points": [{"x": 5, "y": 5, "label": 1}],
             }
         )
@@ -1136,7 +1176,7 @@ def test_sam3_roi_rejects_out_of_bounds_bbox() -> None:
     result = handler(
         _context(
             {
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "prompt": "object",
                 "roi_bbox_xyxy": [-1, 0, 10, 10],
             }
@@ -1161,7 +1201,7 @@ def test_sam3_handler_preserves_segment_failure_shape() -> None:
         }
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "image_not_found"
@@ -1176,7 +1216,7 @@ def test_sam3_handler_structures_segment_exceptions() -> None:
         raise RuntimeError("server unavailable")
 
     handler = build_sam3_handler(segment)
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "mcp_call_failed"
@@ -1203,7 +1243,7 @@ def test_sam3_handler_rejects_box_without_mask_ref() -> None:
         }
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -1230,7 +1270,7 @@ def test_sam3_handler_rejects_detection_without_mask_base64() -> None:
         }
     )
 
-    result = handler(_context({"image": str(FIXTURE_IMAGE), "prompt": "black shoe"}))
+    result = handler(_context({"source_packet_id": "test-packet", "prompt": "black shoe"}))
 
     assert result.success is False
     assert result.details["reason"] == "inconsistent_detection_outputs"
@@ -1279,7 +1319,7 @@ def test_sam3_point_invalid_success_is_rejected_atomically(
         _context(
             {
                 "mode": "points",
-                "image": str(FIXTURE_IMAGE),
+                "source_packet_id": "test-packet",
                 "points": [{"x": 50, "y": 60, "label": 1}],
             }
         )

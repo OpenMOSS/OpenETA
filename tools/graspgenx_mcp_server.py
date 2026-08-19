@@ -37,6 +37,7 @@ def predict_grasps(
     intrinsics: dict[str, Any],
     gripper_name: str,
     up_direction_camera: list[float],
+    depth_cutoff_factor: float = 1.0,
 ) -> dict[str, Any]:
     """Predict targeted camera-frame grasps for a named gripper.
 
@@ -59,6 +60,9 @@ def predict_grasps(
         up_direction_camera: Nonzero gravity-opposing world-up vector expressed
             in the OpenCV camera frame. It is normalized internally. A camera
             looking straight down commonly uses approximately ``[0, 0, -1]``.
+        depth_cutoff_factor: Optional finite factor in ``[1, 4]``. It multiplies
+            the default one-meter valid-depth cutoff without changing raw depth,
+            intrinsics, or the metric scale of returned grasp geometry.
 
     Example:
         {
@@ -78,7 +82,8 @@ def predict_grasps(
                 "scale": 1000.0
             },
             "gripper_name": "franka_panda",
-            "up_direction_camera": [0.0, 0.0, -1.0]
+            "up_direction_camera": [0.0, 0.0, -1.0],
+            "depth_cutoff_factor": 1.34
         }
 
     Depth and mask dimensions must match and inputs are never resized. Valid
@@ -115,6 +120,7 @@ def predict_grasps(
                 intrinsics=intrinsics,
                 gripper_name=gripper_name,
                 up_direction_camera=up_direction_camera,
+                depth_cutoff_factor=depth_cutoff_factor,
             )
         finally:
             _release_cuda_cache()
@@ -158,6 +164,7 @@ def build_mcp(gripper_names: list[str] | tuple[str, ...]) -> FastMCP:
         intrinsics: dict[str, Any],
         gripper_name: str,
         up_direction_camera: list[float],
+        depth_cutoff_factor: float = 1.0,
     ) -> dict[str, Any]:
         return predict_grasps(
             depth=depth,
@@ -165,6 +172,7 @@ def build_mcp(gripper_names: list[str] | tuple[str, ...]) -> FastMCP:
             intrinsics=intrinsics,
             gripper_name=gripper_name,
             up_direction_camera=up_direction_camera,
+            depth_cutoff_factor=depth_cutoff_factor,
         )
 
     dynamic_predict_grasps.__annotations__ = {
@@ -173,6 +181,7 @@ def build_mcp(gripper_names: list[str] | tuple[str, ...]) -> FastMCP:
         "intrinsics": dict[str, Any],
         "gripper_name": Literal.__getitem__(names),
         "up_direction_camera": list[float],
+        "depth_cutoff_factor": float,
         "return": dict[str, Any],
     }
     dynamic_predict_grasps.__name__ = TOOL_NAME

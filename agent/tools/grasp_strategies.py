@@ -203,7 +203,12 @@ def select_grasp_strategy(
     target_geometry_family: str = "",
     strategy_id: str = "",
 ) -> tuple[JsonDict | None, str]:
-    """Select an explicit strategy or one deterministic automatic match."""
+    """Select an explicit strategy or one validated automatic match.
+
+    Candidate strategies are experiment artifacts, not host-owned task policy.
+    They remain available through ``strategy_id`` but must not silently replace
+    estimator geometry merely because the Agent supplied an object-family hint.
+    """
 
     compatible = [
         dict(strategy)
@@ -223,7 +228,8 @@ def select_grasp_strategy(
     matches = [
         strategy
         for strategy in compatible
-        if family
+        if strategy.get("status") == "validated"
+        and family
         in _mapping(
             strategy.get("automatic_activation", {}),
             "automatic_activation",
@@ -233,7 +239,6 @@ def select_grasp_strategy(
         return None, "generic_fallback"
     matches.sort(
         key=lambda item: (
-            0 if item.get("status") == "validated" else 1,
             -int(item.get("revision") or 1),
             str(item.get("strategy_id") or ""),
         )

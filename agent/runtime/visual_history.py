@@ -42,7 +42,10 @@ class VisualHistoryConfig:
     include_vdm: bool = True
     vdm_max_output_items: int = 8
     vdm_max_item_chars: int = 500
-    vdm_recent_delta_limit: int = 6
+    # None keeps all compact textual deltas until the planner's total token
+    # projector needs to evict old entries.  Explicit evaluation overrides may
+    # still request the legacy fixed-window ablation.
+    vdm_recent_delta_limit: int | None = None
 
     @classmethod
     def from_env(
@@ -76,10 +79,14 @@ class VisualHistoryConfig:
                 "OPENETA_VISUAL_VDM_ENABLED",
                 True,
             ),
-            vdm_recent_delta_limit=_env_positive_int(
-                source,
-                "OPENETA_VISUAL_VDM_RECENT_DELTA_LIMIT",
-                6,
+            vdm_recent_delta_limit=(
+                _env_positive_int(
+                    source,
+                    "OPENETA_VISUAL_VDM_RECENT_DELTA_LIMIT",
+                    6,
+                )
+                if str(source.get("OPENETA_VISUAL_VDM_RECENT_DELTA_LIMIT") or "").strip()
+                else None
             ),
         )
 
@@ -138,12 +145,23 @@ class VisualHistoryConfig:
             "recent_main_turns",
             "vdm_max_output_items",
             "vdm_max_item_chars",
-            "vdm_recent_delta_limit",
         ):
             observed = value.get(key, getattr(current, key))
             if isinstance(observed, bool) or not isinstance(observed, int) or observed < 1:
                 raise ValueError(f"visual_history.{key} must be a positive integer")
             integers[key] = observed
+
+        raw_delta_limit = value.get(
+            "vdm_recent_delta_limit", current.vdm_recent_delta_limit
+        )
+        if raw_delta_limit is not None and (
+            isinstance(raw_delta_limit, bool)
+            or not isinstance(raw_delta_limit, int)
+            or raw_delta_limit < 1
+        ):
+            raise ValueError(
+                "visual_history.vdm_recent_delta_limit must be null or a positive integer"
+            )
 
         role = value.get("main_camera_role", current.main_camera_role)
         if not isinstance(role, str) or not role.strip():
@@ -157,7 +175,7 @@ class VisualHistoryConfig:
             include_vdm=booleans["include_vdm"],
             vdm_max_output_items=integers["vdm_max_output_items"],
             vdm_max_item_chars=integers["vdm_max_item_chars"],
-            vdm_recent_delta_limit=integers["vdm_recent_delta_limit"],
+            vdm_recent_delta_limit=raw_delta_limit,
         )
 
     @property
@@ -475,8 +493,12 @@ def build_visual_history_projection(
         set(range(1, bridge_target + 1)) if config.include_vdm else set()
     )
 
-    projected_deltas = compressed[-config.vdm_recent_delta_limit :]
-    compacted_deltas = compressed[: -config.vdm_recent_delta_limit]
+    if config.vdm_recent_delta_limit is None:
+        projected_deltas = compressed
+        compacted_deltas: list[JsonDict] = []
+    else:
+        projected_deltas = compressed[-config.vdm_recent_delta_limit :]
+        compacted_deltas = compressed[: -config.vdm_recent_delta_limit]
 
     return {
         "vision_image_paths": paths,

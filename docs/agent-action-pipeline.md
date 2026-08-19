@@ -82,7 +82,7 @@ Primary `tool_call` example:
     "kind": "tool_call",
     "name": "sam3",
     "parameters": {
-      "image": "front_rgbd",
+      "source_packet_id": "env-abc-observation-0001",
       "prompt": "red cube"
     },
     "reasoning": "Locate the target object before selecting a grasp."
@@ -94,7 +94,7 @@ Primary `tool_call` example:
       "kind": "tool_call",
       "name": "sam3",
       "parameters": {
-        "image": "front_rgbd",
+        "source_packet_id": "env-abc-observation-0001",
         "prompt": "red cube"
       },
       "status": "pending",
@@ -125,7 +125,7 @@ Restricted `tool_call` batch example:
   "name": "tool_batch",
   "parameters": {
     "calls": [
-      {"name": "sam3", "parameters": {"image": "front_rgbd", "prompt": "cube"}},
+      {"name": "sam3", "parameters": {"source_packet_id": "env-abc-observation-0001", "prompt": "cube"}},
       {"name": "hand_pose_database", "parameters": {"object": "cube", "task": "pick"}}
     ]
   }
@@ -173,7 +173,7 @@ successful or failed return into the same `ToolResult.details` envelope:
   "effect": "read_only",
   "result_type": "perception",
   "success": true,
-  "parameters": {"image": "front", "prompt": "cube"},
+  "parameters": {"source_packet_id": "env-abc-observation-0001", "prompt": "cube"},
   "outputs": {
     "masks": [{"mask_id": "mask-cube-001", "label": "cube", "score": 0.99}]
   },
@@ -234,11 +234,15 @@ images remain in trace/memory but are never exposed as the current frame.
 ### SAM3 detection selection evidence
 
 The agent-facing `sam3` ToolSpec has two explicit modes. `mode="text"` (the
-default) consumes one local image path plus a natural-language `prompt`;
-`mode="points"` consumes one local image path plus 1–64 top-left pixel points
+default) consumes one session-scoped `source_packet_id` plus a natural-language
+`prompt`; `mode="points"` consumes the same packet reference plus 1–64 top-left pixel points
 with normalized `{x, y, label}` fields, where label `1` is foreground and `0`
 is background and at least one foreground point is required. Prompt and point
-inputs are mutually exclusive. MolmoPoint results are not passed through
+inputs are mutually exclusive. The host resolves the packet to an exact RGB
+artifact and aligned source observation. Packet ids are unique within the
+active Agent session; an individual image is identified internally by
+`(source_packet_id, camera_frame_id, kind)`. Unknown ids, missing artifacts,
+ambiguous cameras, duplicate ids, and path/id mismatches fail closed. MolmoPoint results are not passed through
 verbatim: the planner selects `image_sources[image_index]` and maps
 `pixel_x/pixel_y` to `x/y` before calling SAM3.
 
@@ -249,13 +253,10 @@ case. The evidence contains the original image, candidate-specific overlay or
 crop references, and a contact sheet so the main agent explicitly confirms the
 mask before downstream use.
 
-For backward compatibility, the standalone text-mode handler still exposes its
-sole candidate through `selected_detection` and reports
-`selection_required=false` when exactly one detection is returned. That field
-is a handler convenience, not a closed-loop runtime bypass: `AgentMemory`
-creates the semantic-confirmation record for every non-empty result before
-targeted grasping or world-mutating execution. Point mode always has three
-candidates and therefore never uses the single-candidate convenience.
+Every non-empty result reports `selection_required=true` and
+`selected_detection=null`, including the single-candidate case. `AgentMemory`
+creates the matching semantic-confirmation record before targeted grasping or
+world-mutating execution; there is no handler-level auto-selection bypass.
 
 Point mode always returns exactly three score-ranked mask candidates and never
 auto-selects one. The handler verifies the echoed points, binary mask geometry,
@@ -558,7 +559,7 @@ planner = ToolCallingPlanner(
         {
             "kind": "tool_call",
             "name": "sam3",
-            "parameters": {"image": "front", "prompt": "cube"},
+            "parameters": {"source_packet_id": "env-abc-observation-0001", "prompt": "cube"},
             "reasoning": "Segment the target before grasp planning.",
         }
     )

@@ -28,6 +28,7 @@ from agent.runtime.response_artifacts import (
     build_motion_summary,
     build_observation_snapshot,
     build_observation_summary,
+    build_reachability_summary,
     build_response_reference,
     materialize_json_response,
 )
@@ -50,6 +51,7 @@ DEFAULT_SIMULATOR_MCP_TOOL_NAMES = (
     "create_simulator_env",
     "close_simulator_env",
     "observe",
+    "ik_preview_check",
     "move_to",
     "follow_eef_trajectory",
     "gripper_control",
@@ -71,6 +73,7 @@ DEFAULT_SIMULATOR_MCP_TOOL_MAP = {
     "create_simulator_env": "create_env",
     "close_simulator_env": "close_env",
     "observe": "render_env",
+    "ik_preview_check": "ik_preview_check",
     "move_to": "move_to",
 }
 
@@ -641,6 +644,10 @@ class SimulatorMcpToolProxy:
             )
         if agent_tool == "observe":
             return self._mcp_tool_name(agent_tool), self._with_session({})
+        if agent_tool == "ik_preview_check":
+            return self._mcp_tool_name(agent_tool), self._ik_preview_arguments(
+                context.parameters
+            )
         if agent_tool == "move_to":
             return self._mcp_tool_name(agent_tool), self._move_to_arguments(context.parameters)
         if agent_tool == "follow_eef_trajectory":
@@ -689,6 +696,40 @@ class SimulatorMcpToolProxy:
             if key in parameters:
                 arguments[key] = parameters[key]
         for key in ("num_steps", "tolerance", "ori_tolerance", "enable_collision_check"):
+            if key in parameters:
+                arguments[key] = parameters[key]
+        return self._with_session(arguments)
+
+    def _ik_preview_arguments(self, parameters: JsonDict) -> JsonDict:
+        x, y, z = _extract_xyz(parameters, tool_name="ik_preview_check")
+        arguments: JsonDict = {"x": x, "y": y, "z": z}
+        is_anyplace_pose = _is_anyplace_pose(parameters)
+        is_grasp_candidate = _is_ranked_grasp_candidate_pose(parameters)
+        if is_anyplace_pose:
+            pass
+        elif is_grasp_candidate and self.config.forward_grasp_candidate_orientation:
+            arguments.update(
+                _extract_graspnet_panda_orientation_arguments(
+                    parameters,
+                    tool_name="ik_preview_check",
+                )
+            )
+        elif not is_grasp_candidate:
+            arguments.update(
+                _extract_orientation_arguments(parameters, tool_name="ik_preview_check")
+            )
+        for key in (
+            "position_tolerance_m",
+            "orientation_tolerance_rad",
+            "max_attempts",
+            "max_nfev_per_attempt",
+            "timeout_s",
+            "preserve_current_orientation",
+            "check_endpoint_collision",
+            "include_scene_objects",
+            "handle",
+            "session_id",
+        ):
             if key in parameters:
                 arguments[key] = parameters[key]
         return self._with_session(arguments)
@@ -775,6 +816,12 @@ class SimulatorMcpToolProxy:
             summary = response_ref.get(key)
             if isinstance(summary, dict):
                 outputs[key] = summary
+        reachability_summary = build_reachability_summary(payload)
+        if reachability_summary:
+            outputs["reachability"] = reachability_summary
+            outputs["feasible"] = reachability_summary.get("feasible")
+            outputs["status"] = reachability_summary.get("status")
+            outputs["reason_code"] = reachability_summary.get("reason_code")
         return {
             "outputs": outputs,
             "artifacts": artifacts,
@@ -1826,9 +1873,23 @@ def _context_execution_cancelled(context: ToolExecutionContext) -> bool:
 def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> str:
     content = response.get("content")
     if isinstance(content, str) and content.strip():
-        return content if len(content) <= 500 else content[:500].rstrip()
+        # Preserve enough semantic feedback for the Agent to diagnose and
+        # reflect.  Complete bulky responses still live in response_path;
+        # planner-level total token projection, not a 500-character slice,
+        # governs how much historical feedback remains model-visible.
+        return content if len(content) <= 4_000 else content[:4_000].rstrip()
+    reachability = response.get("reachability_summary")
+    if isinstance(reachability, dict):
+        status = str(reachability.get("status") or "unknown")
+        reason = str(reachability.get("reason_code") or "unspecified")
+        message = str(reachability.get("message") or "").strip()
+        return f"IK preview {status} ({reason}). {message}".strip()
     if not success:
-        return str(response.get("error") or f"Simulator MCP tool failed: {mcp_tool}")
+        return str(
+            response.get("message")
+            or response.get("error")
+            or f"Simulator MCP tool failed: {mcp_tool}"
+        )
     response_path = response.get("response_path")
     collision = response.get("collision")
     if _collision_rejects_motion(collision):
@@ -2054,6 +2115,20 @@ def _move_response_lacks_completion_receipt(response: JsonDict) -> bool:
 
 
 def _response_diagnostics(response: JsonDict) -> list[JsonDict]:
+    reachability = build_reachability_summary(response)
+    if reachability.get("status") == "unreachable":
+        return [
+            {
+                "code": str(reachability.get("reason_code") or "ik_target_unreachable"),
+                "message": str(
+                    reachability.get("message")
+                    or "The requested endpoint pose is unreachable."
+                ),
+                "reachability": reachability,
+                "candidate_rejection": True,
+                "failure_class": "ik_target_unreachable",
+            }
+        ]
     failure_class = str(response.get("failure_class") or "").strip()
     candidate_rejection = response.get("candidate_rejection") is True
     collision = response.get("collision")

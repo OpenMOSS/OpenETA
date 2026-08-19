@@ -38,7 +38,11 @@ from agent.runtime.task_playbooks import (
     load_task_playbooks,
     select_task_playbook,
 )
-from agent.runtime.token_counting import DEFAULT_CONTEXT_WINDOW_TOKENS, estimate_json_tokens
+from agent.runtime.token_counting import (
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    TokenEstimate,
+    estimate_json_tokens,
+)
 from agent.runtime.visual_history import (
     VisualHistoryConfig,
     build_visual_history_projection,
@@ -73,6 +77,8 @@ _CAMERA_ROLE_PREFERENCE = {
 }
 
 DEFAULT_MAX_SKILL_CONTENT_CHARS = 8000
+DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS = 4
+DEFAULT_RECENT_TRANSITION_OBSERVATIONS = 3
 
 
 @dataclass(slots=True)
@@ -90,16 +96,22 @@ class PlannerDecision:
 
 @dataclass(frozen=True, slots=True)
 class PlannerContextConfig:
-    """Controls bounded planner-facing context assembly."""
+    """Controls the bounded model projection of an unbounded durable session."""
 
-    max_memory_events: int = 8
+    # ``max_memory_events`` is a legacy caller override on the in-memory source
+    # projection. Normal Planner requests read the durable event stream and then
+    # apply the semantic high-fidelity window below.
+    max_memory_events: int | None = None
+    recent_conversation_action_groups: int = DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS
+    recent_transition_observations: int = DEFAULT_RECENT_TRANSITION_OBSERVATIONS
     max_selected_skills: int = 3
-    max_skill_content_chars: int = DEFAULT_MAX_SKILL_CONTENT_CHARS
+    max_skill_content_chars: int | None = DEFAULT_MAX_SKILL_CONTENT_CHARS
     auto_compact_enabled: bool = True
     context_window_tokens: int | None = DEFAULT_CONTEXT_WINDOW_TOKENS
     auto_compact_trigger_ratio: float = 0.9
-    auto_compact_max_events: int = 8
+    reserved_output_tokens: int = 4096
     approx_chars_per_token: int = 4
+    approx_tokens_per_image: int = 2048
     token_estimator_model: str | None = None
     visual_history: VisualHistoryConfig = field(
         default_factory=lambda: VisualHistoryConfig(enabled=False)
@@ -158,12 +170,13 @@ class ToolCallingPlanner(BasePlanner):
         tools: ToolRegistry,
         skills: SkillRegistry,
     ) -> PlannerDecision:
-        tool_context = build_tool_context(
+        tool_context, conversation_messages = _build_budgeted_tool_context(
             observation=observation,
             memory=memory,
             tools=tools,
             skills=skills,
             config=self.context_config,
+            system_prompt=self.system_prompt,
         )
         host_obligation = _invariant_obligation_decision(
             tool_context,
@@ -205,7 +218,7 @@ class ToolCallingPlanner(BasePlanner):
                     dict(agent_context) if isinstance(agent_context, dict) else tool_context
                 ),
                 system_prompt=self.system_prompt,
-                conversation_messages=memory.model_conversation_messages(),
+                conversation_messages=conversation_messages,
                 conversation_summary=memory.conversation_checkpoint_summary(),
                 attempt=attempt,
                 validation_errors=validation_errors,
@@ -482,7 +495,10 @@ class RuleBasedPlanner(BasePlanner):
             return PlannerDecision(
                 action_type="tool_call",
                 action="sam3",
-                parameters={"image": _first_camera_id(observation), "prompt": target},
+                parameters={
+                    "source_packet_id": _first_observation_packet_id(observation),
+                    "prompt": target,
+                },
                 reasoning=(
                     "Task asks for object acquisition; start with atomic "
                     f"segmentation of target `{target}`."
@@ -860,9 +876,22 @@ def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
 
 def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
     errors: list[str] = []
-    image = parameters.get("image")
-    if not isinstance(image, str) or not image.strip() or _looks_like_placeholder_path(image):
-        errors.append("sam3 requires `parameters.image` as a concrete local image path.")
+    source_packet_id = parameters.get("source_packet_id")
+    if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+        errors.append(
+            "sam3 requires `parameters.source_packet_id` copied exactly from visible "
+            "observation evidence. Local image paths are not accepted."
+        )
+    if "image" in parameters:
+        errors.append(
+            "sam3 no longer accepts `parameters.image`; use source_packet_id so the "
+            "host can resolve session-owned artifacts and provenance."
+        )
+    camera_frame_id = parameters.get("camera_frame_id")
+    if camera_frame_id is not None and (
+        not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
+    ):
+        errors.append("sam3 `parameters.camera_frame_id` must be a non-empty string when set.")
     legacy_points = parameters.get("positive_points")
     mode = (
         str(parameters.get("mode") or ("points" if legacy_points is not None else "text"))
@@ -1298,7 +1327,8 @@ def _agent_owned_tool_planner_system_prompt() -> str:
         "robot_motion_epoch records EEF/camera motion without by itself invalidating a "
         "world-frame target pose. stale_scene_epoch is historical, commanded_not_observed is "
         "not a sensed state, and an acknowledged close command is not proof of attachment. "
-        "Use recent_transitions to connect the last atomic action to the current scene. "
+        "Use the recent action/result conversation and recent_transitions observation "
+        "or recovery evidence to connect the last atomic action to the current scene. "
         "If visual evidence is missing or ambiguous, observe or ask_human instead of "
         "pretending the state is known. Perform at most one world-mutating tool call, "
         "then inspect a fresh observation before further control. A transport-unknown "
@@ -1309,7 +1339,9 @@ def _agent_owned_tool_planner_system_prompt() -> str:
         "skill_call before world mutation. Runtime tool schemas and returned docstrings "
         "are authoritative over examples. Preserve exact artifact paths, frame ids, "
         "scene epochs, matrices, mask refs, candidate ids, and tool-result provenance; "
-        "never invent placeholders such as latest_mask. Resolve "
+        "never invent placeholders such as latest_mask. For sam3, copy the short exact "
+        "source_packet_id from observation evidence and let the host resolve local RGB-D "
+        "paths and source_observation; never send an image path to sam3. Resolve "
         "open_questions.target_selection by visually checking the current original image "
         "and candidate evidence, then call select_sam3_detection or "
         "reject_sam3_detections with exact ids. Scores rank proposals but do not prove "
@@ -1795,6 +1827,19 @@ def _first_camera_id(observation: EnvObservation) -> str | None:
     return observation.cameras[0].frame_id
 
 
+def _first_observation_packet_id(observation: EnvObservation) -> str:
+    artifacts = observation.metadata.get("image_artifacts")
+    if not isinstance(artifacts, list):
+        return ""
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
+            continue
+        packet_id = artifact.get("packet_id")
+        if isinstance(packet_id, str) and packet_id:
+            return packet_id
+    return ""
+
+
 def build_policy_context(
     *,
     observation: EnvObservation,
@@ -1834,6 +1879,28 @@ def build_tool_context(
 ) -> JsonDict:
     """Build the agent-visible context for closed-loop tool selection."""
 
+    context, _conversation_messages = _build_budgeted_tool_context(
+        observation=observation,
+        memory=memory,
+        tools=tools,
+        skills=skills,
+        config=config,
+        system_prompt="",
+    )
+    return context
+
+
+def _build_budgeted_tool_context(
+    *,
+    observation: EnvObservation,
+    memory: AgentMemory,
+    tools: ToolRegistry,
+    skills: SkillRegistry,
+    config: PlannerContextConfig | None,
+    system_prompt: str,
+) -> tuple[JsonDict, list[JsonDict]]:
+    """Build and jointly project runtime evidence plus canonical chat history."""
+
     context_config = config or PlannerContextConfig()
     context = _build_tool_context_payload(
         observation=observation,
@@ -1842,32 +1909,20 @@ def build_tool_context(
         skills=skills,
         config=context_config,
     )
-    budget = _context_budget_status(
+    conversation_messages = memory.model_conversation_messages(
+        max_action_groups=max(0, context_config.recent_conversation_action_groups)
+    )
+    conversation_messages, budget = _project_planner_input_to_budget(
         context,
         config=context_config,
-        auto_compact_triggered=False,
-        conversation_messages=memory.model_conversation_messages(),
+        conversation_messages=conversation_messages,
+        system_prompt=system_prompt,
     )
-    if budget["should_auto_compact"]:
-        memory.compact(max_events=context_config.auto_compact_max_events)
-        context = _build_tool_context_payload(
-            observation=observation,
-            memory=memory,
-            tools=tools,
-            skills=skills,
-            config=context_config,
-        )
-        budget = _context_budget_status(
-            context,
-            config=context_config,
-            auto_compact_triggered=True,
-            conversation_messages=memory.model_conversation_messages(),
-        )
     context["context_budget"] = budget
     agent_context = context.get("agent_context")
     if isinstance(agent_context, dict):
         agent_context["context_budget"] = budget
-    return context
+    return context, conversation_messages
 
 
 def _build_tool_context_payload(
@@ -1972,11 +2027,15 @@ def _build_tool_context_payload(
         "skill_usage": skill_usage,
         "execution_rules": _tool_calling_rules(),
     }
-    context["agent_context"] = _build_agent_decision_context(context)
+    context["agent_context"] = _build_agent_decision_context(context, config=config)
     return context
 
 
-def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
+def _build_agent_decision_context(
+    runtime_context: JsonDict,
+    *,
+    config: PlannerContextConfig,
+) -> JsonDict:
     """Project runtime evidence into the smaller context owned by the Agent.
 
     Host task phases and required-next-action obligations deliberately stay out
@@ -2022,19 +2081,10 @@ def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
 
     recent_events = memory.get("recent_events")
     recent_events = recent_events if isinstance(recent_events, list) else []
-    recent_transitions = [
-        event
-        for event in recent_events
-        if isinstance(event, dict)
-        and event.get("type")
-        in {
-            "action",
-            "observation",
-            "environment_receipt",
-            "human_answer",
-            "recovery_feedback",
-        }
-    ][-4:]
+    recent_transitions = _recent_high_fidelity_transitions(
+        recent_events,
+        observation_turns=max(0, config.recent_transition_observations),
+    )
 
     observation = runtime_context.get("observation")
     observation = observation if isinstance(observation, dict) else {}
@@ -2122,6 +2172,7 @@ def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
         },
         "visual_history": runtime_context.get("visual_history"),
         "recent_transitions": recent_transitions,
+        "transition_ledger": memory.get("transition_ledger", []),
         "world_evidence": runtime_evidence,
         "evidence_graph": evidence_graph,
         "host_resolved_inputs": {
@@ -2138,8 +2189,9 @@ def _build_agent_decision_context(runtime_context: JsonDict) -> JsonDict:
         "artifacts": artifacts,
         "relevant_skills": runtime_context.get("selected_skill_guidance", []),
         "skill_usage": runtime_context.get("skill_usage", {}),
-        # Full schemas are supplied once. The legacy tool_references field remains
-        # as a name-only compatibility index rather than duplicating every schema.
+        # Full schemas remain in the canonical context once. The provider backend
+        # moves this cache-stable block ahead of growing conversation history; the
+        # legacy tool_references field stays a name-only compatibility index.
         "available_tools": runtime_context.get("tool_references", []),
         "tool_references": [
             {"name": reference.get("name")}
@@ -2185,12 +2237,18 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
         details = details if isinstance(details, dict) else {}
         outputs = details.get("outputs")
         outputs = outputs if isinstance(outputs, dict) else {}
+        grasp_selection_advice = details.get("grasp_selection_advice")
+        if not isinstance(grasp_selection_advice, dict):
+            grasp_selection_advice = outputs.get("grasp_selection_advice")
+        grasp_selection_bundle = details.get("grasp_selection_bundle")
+        if not isinstance(grasp_selection_bundle, dict):
+            grasp_selection_bundle = outputs.get("grasp_selection_bundle")
         artifacts = details.get("artifacts")
         artifacts = artifacts if isinstance(artifacts, list) else []
         return {
             "tool": call.get("name"),
             "status": call.get("status"),
-            "content": str(result.get("content") or "")[:1_500],
+            "content": str(result.get("content") or "")[:4_000],
             "operational_success": details.get(
                 "operational_success", result.get("success")
             ),
@@ -2199,6 +2257,16 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "facts_produced": details.get("facts_produced", []),
             "recovery_options": details.get("recovery_options", []),
             "outputs": _bounded_decision_value(outputs),
+            "grasp_selection_advice": _bounded_decision_value(
+                grasp_selection_advice
+            )
+            if isinstance(grasp_selection_advice, dict)
+            else None,
+            "grasp_selection_bundle": _bounded_decision_value(
+                grasp_selection_bundle
+            )
+            if isinstance(grasp_selection_bundle, dict)
+            else None,
             "artifact_refs": [
                 ref
                 for artifact in artifacts[:12]
@@ -2209,6 +2277,43 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "repair_bundle": metadata.get("repair_bundle"),
         }
     return None
+
+
+def _recent_high_fidelity_transitions(
+    events: list[JsonDict],
+    *,
+    observation_turns: int,
+) -> list[JsonDict]:
+    """Project recent non-conversation evidence without replaying full actions.
+
+    Action requests and host ToolResults already live in the bounded canonical
+    conversation, while action/environment outcomes have a compact durable
+    ``transition_ledger`` representation.  This window therefore carries only
+    observation and recovery evidence that those two layers do not represent.
+    Complete events remain in the append-only session trace.
+    """
+
+    if observation_turns <= 0:
+        return []
+    relevant = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("type") in {"observation", "recovery_feedback"}
+    ]
+    observation_indices = [
+        index
+        for index, event in enumerate(relevant)
+        if event.get("type") == "observation"
+    ]
+    if observation_indices:
+        start = observation_indices[max(0, len(observation_indices) - observation_turns)]
+        return relevant[start:]
+
+    # Recovery feedback can precede the first canonical observation (for
+    # example, a preflight rejection). Keep a small bounded fallback rather than
+    # silently hiding the only actionable evidence.
+    return relevant[-observation_turns:]
 
 
 def _bounded_artifact_index(
@@ -2482,37 +2587,36 @@ def _context_budget_status(
     config: PlannerContextConfig,
     auto_compact_triggered: bool,
     conversation_messages: list[JsonDict] | None = None,
+    system_prompt: str = "",
+    projection: JsonDict | None = None,
 ) -> JsonDict:
     conversation_messages = conversation_messages or []
     agent_context = context.get("agent_context")
     budget_context = agent_context if isinstance(agent_context, dict) else context
-    estimate = estimate_json_tokens(
-        {
-            "conversation_messages": conversation_messages,
-            "tool_context": budget_context,
-        },
-        model=config.token_estimator_model,
-        approx_chars_per_token=config.approx_chars_per_token,
+    estimate = _planner_input_estimate(
+        budget_context,
+        conversation_messages,
+        system_prompt=system_prompt,
+        config=config,
     )
     estimated_chars = estimate.chars
     estimated_tokens = estimate.tokens
     trigger_ratio = min(max(config.auto_compact_trigger_ratio, 0.0), 1.0)
     trigger_tokens = (
-        int(config.context_window_tokens * trigger_ratio)
+        max(
+            1,
+            int(config.context_window_tokens * trigger_ratio)
+            - max(0, config.reserved_output_tokens),
+        )
         if config.context_window_tokens is not None
         else None
     )
     tokens_until_auto_compact = (
         max(0, trigger_tokens - estimated_tokens) if trigger_tokens is not None else None
     )
-    should_auto_compact = (
-        config.auto_compact_enabled
-        and not auto_compact_triggered
-        and trigger_tokens is not None
-        and estimated_tokens >= trigger_tokens
-    )
+    should_auto_compact = False
     return {
-        "schema_version": "openeta.context_budget.v1",
+        "schema_version": "openeta.context_budget.v2",
         "auto_compact_enabled": config.auto_compact_enabled,
         "auto_compact_triggered": auto_compact_triggered,
         "should_auto_compact": should_auto_compact,
@@ -2523,8 +2627,170 @@ def _context_budget_status(
         "estimated_tokens": estimated_tokens,
         "conversation_message_count": len(conversation_messages),
         "tokens_until_auto_compact": tokens_until_auto_compact,
+        "reserved_output_tokens": max(0, config.reserved_output_tokens),
+        "projection": dict(projection or {}),
         "estimator": estimate.estimator,
     }
+
+
+def _project_planner_input_to_budget(
+    context: JsonDict,
+    *,
+    config: PlannerContextConfig,
+    conversation_messages: list[JsonDict],
+    system_prompt: str,
+) -> tuple[list[JsonDict], JsonDict]:
+    """Fit elastic history to one prompt budget without mutating durable memory."""
+
+    messages = [dict(message) for message in conversation_messages]
+    window = config.context_window_tokens
+    trigger_ratio = min(max(config.auto_compact_trigger_ratio, 0.0), 1.0)
+    target_tokens = (
+        max(1, int(window * trigger_ratio) - max(0, config.reserved_output_tokens))
+        if window is not None
+        else None
+    )
+    agent_context = context.get("agent_context")
+    agent_context = agent_context if isinstance(agent_context, dict) else context
+    initial = _planner_input_estimate(
+        agent_context,
+        messages,
+        system_prompt=system_prompt,
+        config=config,
+    )
+    dropped = {
+        "recent_transitions": 0,
+        "transition_ledger": 0,
+        "visual_deltas": 0,
+        "conversation_messages": 0,
+    }
+
+    def over_budget() -> bool:
+        if target_tokens is None:
+            return False
+        return _planner_input_estimate(
+            agent_context,
+            messages,
+            system_prompt=system_prompt,
+            config=config,
+        ).tokens > target_tokens
+
+    while config.auto_compact_enabled and over_budget():
+        transitions = agent_context.get("recent_transitions")
+        if isinstance(transitions, list) and len(transitions) > 1:
+            transitions.pop(0)
+            dropped["recent_transitions"] += 1
+            continue
+        ledger = agent_context.get("transition_ledger")
+        if isinstance(ledger, list) and len(ledger) > 1:
+            ledger.pop(0)
+            dropped["transition_ledger"] += 1
+            continue
+        visual_history = agent_context.get("visual_history")
+        deltas = (
+            visual_history.get("compressed_deltas")
+            if isinstance(visual_history, dict)
+            else None
+        )
+        if isinstance(deltas, list) and len(deltas) > 1:
+            deltas.pop(0)
+            dropped["visual_deltas"] += 1
+            continue
+        removed = _drop_oldest_conversation_action_group(messages)
+        if removed:
+            dropped["conversation_messages"] += removed
+            continue
+        break
+
+    final = _planner_input_estimate(
+        agent_context,
+        messages,
+        system_prompt=system_prompt,
+        config=config,
+    )
+    projection = {
+        "policy": "elastic_total_token_budget",
+        "triggered": target_tokens is not None and initial.tokens > target_tokens,
+        "entries_removed": any(dropped.values()),
+        "target_input_tokens": target_tokens,
+        "initial_estimated_tokens": initial.tokens,
+        "final_estimated_tokens": final.tokens,
+        "fits_target": target_tokens is None or final.tokens <= target_tokens,
+        "dropped": dropped,
+        "durable_history_mutated": False,
+    }
+    budget = _context_budget_status(
+        context,
+        config=config,
+        auto_compact_triggered=projection["triggered"],
+        conversation_messages=messages,
+        system_prompt=system_prompt,
+        projection=projection,
+    )
+    return messages, budget
+
+
+def _planner_input_estimate(
+    agent_context: JsonDict,
+    messages: list[JsonDict],
+    *,
+    system_prompt: str,
+    config: PlannerContextConfig,
+) -> TokenEstimate:
+    text_estimate = estimate_json_tokens(
+        {
+            "system_prompt": system_prompt,
+            "conversation_messages": messages,
+            "tool_context": agent_context,
+        },
+        model=config.token_estimator_model,
+        approx_chars_per_token=config.approx_chars_per_token,
+    )
+    image_paths = agent_context.get("vision_image_paths")
+    unique_image_count = len(
+        {
+            str(path)
+            for path in (image_paths if isinstance(image_paths, list) else [])
+            if isinstance(path, str) and path
+        }
+    )
+    image_tokens = unique_image_count * max(0, config.approx_tokens_per_image)
+    return TokenEstimate(
+        tokens=text_estimate.tokens + image_tokens,
+        chars=text_estimate.chars,
+        estimator={
+            **text_estimate.estimator,
+            "image_estimate": {
+                "image_count": unique_image_count,
+                "approx_tokens_per_image": max(0, config.approx_tokens_per_image),
+                "estimated_image_tokens": image_tokens,
+            },
+        },
+    )
+
+
+def _drop_oldest_conversation_action_group(messages: list[JsonDict]) -> int:
+    """Drop one old action/result pair while preserving dialogue constraints."""
+
+    for index, message in enumerate(messages[:-1]):
+        content = str(message.get("content") or "")
+        if message.get("role") != "assistant" or '"openeta_action"' not in content:
+            continue
+        removed = 1
+        if index + 1 < len(messages):
+            following = messages[index + 1]
+            if (
+                following.get("role") == "user"
+                and "OpenETA host execution evidence" in str(following.get("content") or "")
+            ):
+                removed = 2
+        del messages[index : index + removed]
+        return removed
+    # If only dialogue remains, retain the initial task and latest message.
+    if len(messages) > 2:
+        del messages[1]
+        return 1
+    return 0
 
 
 def _planner_metadata(
@@ -2811,12 +3077,16 @@ def _skill_guidance_reference(
     # planner configs continue to win, which keeps bounded-context tests and
     # deployments deterministic.
     if (
-        content_limit >= DEFAULT_MAX_SKILL_CONTENT_CHARS
+        content_limit is not None
+        and content_limit >= DEFAULT_MAX_SKILL_CONTENT_CHARS
         and isinstance(declared_limit, int)
         and declared_limit > content_limit
     ):
         content_limit = declared_limit
-    content, truncated = _truncate_text(skill.content, content_limit)
+    if content_limit is None:
+        content, truncated = skill.content, False
+    else:
+        content, truncated = _truncate_text(skill.content, content_limit)
     payload = _skill_reference(skill)
     payload.update(
         {

@@ -177,6 +177,21 @@ def test_build_point_clouds_uses_camera_z_strict_one_meter_cutoff() -> None:
     assert float(object_points[:, 2].max()) < 1.0
 
 
+def test_build_point_clouds_can_extend_cutoff_without_rescaling_metric_depth() -> None:
+    depth = np.full((11, 11), 1200, dtype=np.uint16)
+    mask = np.full((11, 11), 255, dtype=np.uint8)
+
+    object_points, _scene, metadata = build_targeted_point_clouds(
+        depth_array=depth,
+        object_mask_array=mask,
+        intrinsics=_intrinsics(),
+        depth_truncation=1.5,
+    )
+
+    assert metadata["depth_truncation"] == 1.5
+    np.testing.assert_allclose(object_points[:, 2], 1.2)
+
+
 def test_build_point_clouds_reports_scale_and_point_count_diagnostics() -> None:
     with pytest.raises(GraspGenXInputError, match="depth_scale_mismatch") as raised:
         build_targeted_point_clouds(
@@ -507,6 +522,57 @@ def test_backend_returns_ranked_contract_without_transport_payloads(
     serialized = str(result)
     assert "base64" not in serialized
     assert "point_cloud" not in serialized
+
+
+def test_backend_depth_cutoff_factor_extends_filter_without_scaling_geometry(
+    tmp_path: Path,
+) -> None:
+    source, checkpoints, grippers = _backend_layout(tmp_path)
+    backend = _FakeBackend(
+        graspgenx_root=source,
+        checkpoint_root=checkpoints,
+        gripper_descriptions_root=grippers,
+    )
+
+    result = backend.predict_grasps(
+        depth=_image_payload(np.full((11, 11), 1200, dtype=np.uint16)),
+        object_mask=_image_payload(np.full((11, 11), 255, dtype=np.uint8)),
+        intrinsics=_intrinsics(),
+        gripper_name="franka_panda",
+        up_direction_camera=[0, 0, 1],
+        depth_cutoff_factor=1.5,
+    )
+
+    assert result["success"] is True
+    assert result["details"]["metadata"]["depth_cutoff_factor"] == 1.5
+    assert result["details"]["metadata"]["depth_truncation"] == 1.5
+    assert result["details"]["grasp_candidates"][0]["translation_xyz"][2] == 0.5
+
+
+@pytest.mark.parametrize(
+    "factor", [None, "invalid", 0.99, 4.01, float("nan"), True]
+)
+def test_backend_rejects_invalid_depth_cutoff_factor(
+    tmp_path: Path, factor: Any
+) -> None:
+    source, checkpoints, grippers = _backend_layout(tmp_path)
+    backend = _FakeBackend(
+        graspgenx_root=source,
+        checkpoint_root=checkpoints,
+        gripper_descriptions_root=grippers,
+    )
+
+    result = backend.predict_grasps(
+        depth=_image_payload(np.full((11, 11), 500, dtype=np.uint16)),
+        object_mask=_image_payload(np.full((11, 11), 255, dtype=np.uint8)),
+        intrinsics=_intrinsics(),
+        gripper_name="franka_panda",
+        up_direction_camera=[0, 0, 1],
+        depth_cutoff_factor=factor,
+    )
+
+    assert result["success"] is False
+    assert result["details"]["reason"] == "invalid_depth_cutoff_factor"
 
 
 def test_collision_selection_checks_ranked_batches_until_twenty(

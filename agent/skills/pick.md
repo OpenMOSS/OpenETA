@@ -3,7 +3,7 @@ name: pick
 description: Guidance for acquiring a target object with atomic tools.
 version: v1
 editable: true
-context_char_limit: 12000
+context_char_limit: 14500
 task_patterns:
   - pick <object>
   - grasp <object>
@@ -40,8 +40,12 @@ Use as text guidance only, not an executable macro. Inspect each result.
 1. Call `observe` to get the complete current scene observation.
 2. Normalize the task target to a concise English visual phrase for `sam3`
    (for example, 牛奶盒 -> `milk box`, 方块 -> `cube`).
-3. Call `sam3` on the exact local RGB path from `current_camera_artifacts` with
-   the normalized `prompt`, for example `milk box` or `can`.
+3. Call `sam3` with the exact short `source_packet_id` copied from visible
+   observation evidence and the normalized `prompt`, for example `milk box` or
+   `can`. The host resolves the session-owned local RGB-D paths, camera frame,
+   and `source_observation`; never pass an image path to `sam3`. Add
+   `camera_frame_id` only when the packet's default scene camera is not the
+   intended view.
    Do not pass a non-English user phrase directly to `sam3` if a clear English
    object name is available.
    For an unusual asset that text segmentation misses, use
@@ -72,12 +76,26 @@ Use as text guidance only, not an executable macro. Inspect each result.
 7. Read the normalized grasp candidate list. Candidate poses use the
    camera/OpenCV GraspNet convention and are sorted by backend-local score.
    Scores are backend-local. Choose using identity, width/calibration, collision,
-   geometry, and prior outcomes. Record the id and rationale in Agent memory;
+   geometry, and prior outcomes. When the ToolResult includes
+   `target_mask_candidate_projection`, compare each translation/tip pixel with
+   the mask bbox and centroid. A candidate anchored at a thin top/side boundary
+   is shallow-grasp evidence, especially after a prior slip; it is not an
+   automatic rejection. Record the id and rationale in Agent memory;
    no host task phase chooses it.
+   When `grasp_selection_advice` is present, treat it as read-only visual evidence:
+   compare its recommendation, rejected-candidate reasons, confidence, and
+   uncertainties with task-level constraints and prior outcomes. The advisor cannot
+   activate a grasp. You still own the final candidate choice and must explicitly
+   pass that exact candidate to `compile_grasp_seed`. If it abstains or has low
+   confidence, inspect `grasp_selection_bundle.bundle_ref` or its preview images
+   before choosing; do not silently fall back to rank 0.
    When selecting the SAM3 mask, include truthful
    `target_geometry_family` (`upright_can`, `upright_bottle`, `boxed_item`,
    `bowl`, `apple`, `drawer_handle`, or `other`) only when visually clear. It is
-   task evidence for strategy matching, not a calibration allowlist.
+   task evidence for strategy matching, not a calibration allowlist. Only a
+   validated strategy may activate automatically from this hint. Candidate
+   strategies are experimental evidence and require an explicit `strategy_id`;
+   otherwise the compiler preserves the estimator pose.
 8. Before grasp motion, call `compile_grasp_seed` with:
    - `camera_pose`: the complete candidate that you selected from the current
      grasp ToolResult or its `complete_outputs_artifact`, preserving its id,
@@ -97,15 +115,28 @@ Use as text guidance only, not an executable macro. Inspect each result.
    `hover_pose` is an ordinary collision-clearance waypoint, not an implicit
    phase and not a command to follow a fixed host sequence. Hover at least 0.15 m
    opposite world-frame `approach_world_xyz`, not fixed world `+Z`. Once there,
-   prefer a full wrist-view grasp refresh when the target is visible: acquire
-   fresh wrist RGB-D, run wrist-image SAM3, resolve its selection, call targeted
-   `grasp_pose_estimate` on that same packet, and compile the refined candidate.
-   `compute_wrist_alignment` remains an optional bounded correction; it is not a
-   replacement for full grasp re-estimation. Preserve evidence lineage and move
-   to contact only after visual evidence and deterministic checks support it.
+   use the evidence-triggered **Near-field Wrist Refinement** below when the
+   wrist view can materially improve contact geometry. Preserve evidence lineage
+   and move to contact only after visual evidence and deterministic checks support it.
    Compiled poses are anchors. Dual-view evidence may justify `move_to` xyz
    correction within host-derived 2 cm/call and 10 cm total residual caps. Preserve
-   provenance and re-observe.
+   provenance and re-observe. These caps bound the offset from the compiled anchor;
+   they are not a limit on how far the EEF may travel to reach it. An exact compiled
+   hover/contact pose has zero residual and can be requested directly—do not split
+   that approach into 2 cm increments. If a distinct far transit waypoint is useful,
+   omit `compiled_grasp_id` and `waypoint_role`, keep it outside the contact safety
+   envelope, observe there, and then use the compiled anchor. For normal compiled
+   hover/contact reaches, omit `num_steps` and let `move_to` use its closed-loop
+   default budget. `num_steps` is a maximum controller-iteration budget, not a
+   distance or speed parameter; the environment's “3-5 steps for visible motion”
+   hint applies to raw `step_env`, not to completing a `move_to`. Before committing
+   to a compiled hover/contact endpoint, call `ik_preview_check` on that same
+   world-frame pose. `unreachable` means change the pose or candidate using its
+   component residuals; `unknown` is solver uncertainty, not a safe approval;
+   `reachable` covers endpoint kinematics only, so keep path/collision evidence
+   separate. If a receipt says
+   `reached_target=false`, do not advance from hover to contact or from contact to
+   close. Use the reported actual EEF pose plus fresh images to retry or replan.
 10. After contact, execute exactly binary `gripper_control position=0`;
    `0=closed`, `1=open`, fractions are invalid, and the command stays latched
    across every later motion. Keep three signals separate:
@@ -136,6 +167,44 @@ Use as text guidance only, not an executable macro. Inspect each result.
     re-estimation, or stop.
     Never invent a hover; safety, wrong-target, malformed-pose, stale-scene, and
     calibration rejections remain hard stops.
+
+## Near-field Wrist Refinement
+
+This is an optional visual correction opportunity, not a required task phase.
+Use it near a collision-clearance/hover reference when the target is visible in
+fresh wrist RGB-D and the initial scene-view pose has uncertain contact quality,
+the target occupied too few scene-view pixels, or fresh wrist evidence shows the
+gripper corridor is off the intended contact region. Skip it when current visual
+and geometric evidence already supports the contact pose.
+
+Choose the cheapest adequate refinement from the evidence:
+
+- If the compiled approach direction, orientation, and contact depth remain
+  credible and only lateral contact placement looks wrong, segment the target on
+  the fresh wrist packet, explicitly select that wrist SAM3 detection, and call
+  `compute_wrist_alignment` with its full-frame mask plus the matching depth,
+  intrinsics, extrinsics, measured EEF pose, compiled grasp, and scene epoch.
+  Do not submit a desired pixel: the host projects the configured calibrated
+  EEF-to-gripper-center point into that wrist image. The returned aligned hover,
+  precontact, and contact poses are read-only translation references. This tool
+  does not move, change grasp orientation, or independently repair axial contact
+  depth; inspect its correction and clamp status before choosing a reference.
+- If the approach direction, orientation, surface, or contact depth is doubtful,
+  do a full wrist-view re-estimation instead: call `sam3` with the fresh packet's
+  exact `source_packet_id` and wrist `camera_frame_id`, select the intended mask,
+  consume the resulting host `grasp_pose_estimate` bundle, inspect its candidates,
+  then explicitly compile the chosen wrist candidate with that packet's matching
+  camera extrinsics. The new compile is a new reference anchor; the host does not
+  silently replace the earlier candidate.
+
+Before executing either refined reference, call `ik_preview_check`; keep path and
+collision evidence separate. A `compute_wrist_alignment` reference still uses the
+original `compiled_grasp_id` and the ordinary residual budget. Re-observe after
+each motion and verify that the gripper corridor/contact region actually improved.
+Do not repeat refinement on an unchanged view merely to spend more turns. If the
+target is occluded, the calibration chain fails, or the correction hits its clamp,
+retreat or gather a better view instead of inventing pixels or accumulating blind
+residuals.
 
 ## Recovery Notes
 

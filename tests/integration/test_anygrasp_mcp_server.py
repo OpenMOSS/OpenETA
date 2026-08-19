@@ -68,6 +68,7 @@ def test_anygrasp_mcp_stdio_detects_official_sample(tmp_path: Path) -> None:
                 await session.initialize()
                 tools = await session.list_tools()
                 assert "detect_grasps" in [tool.name for tool in tools.tools]
+                assert "get_capabilities" in [tool.name for tool in tools.tools]
                 result = await session.call_tool(
                     "detect_grasps",
                     request,

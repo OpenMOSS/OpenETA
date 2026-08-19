@@ -1047,14 +1047,20 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Segment objects or regions from RGB observations using text, one to "
                 "64 foreground/background pixel points, or an optional full-frame "
                 "pixel ROI. Rank detections and provide candidate visuals for explicit "
-                "VLM selection while preserving original camera coordinates."
+                "VLM selection while preserving original camera coordinates. The host "
+                "resolves the session-owned observation packet; local image paths are "
+                "not accepted from the Agent."
             ),
             parameters={
-                "mode": "text | points; defaults to text for backward compatibility",
-                "image": (
-                    "exact local RGB image path (preferred), or a frame id present in the "
-                    "current observation's image_artifacts"
+                "source_packet_id": (
+                    "required exact packet_id copied from visible observation evidence; "
+                    "the host resolves its local RGB-D artifacts and camera metadata"
                 ),
+                "camera_frame_id": (
+                    "optional exact camera frame within the packet; omit to prefer "
+                    "agentview, then the unique scene_primary or sole RGB camera"
+                ),
+                "mode": "text | points; defaults to text",
                 "prompt": (
                     "required only for mode=text: concise visual object phrase, preferably English"
                 ),
@@ -1216,7 +1222,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Generate one normalized score-descending camera-frame grasp "
                 "candidate queue from aligned RGB-D and an optional target mask. "
                 "The host selects compatible AnyGrasp, Contact-GraspNet, or "
-                "GraspGenX backends and performs structured fallback."
+                "GraspGenX backends and performs structured fallback. After final "
+                "host filtering, an isolated read-only visual advisor may return a "
+                "ranked recommendation with reasons; it never activates a candidate."
             ),
             parameters={
                 "bundle_id": (
@@ -1275,6 +1283,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "up_direction_camera": (
                     "required nonzero gravity-opposing direction [x, y, z] in the "
                     "OpenCV camera frame"
+                ),
+                "depth_cutoff_factor": (
+                    "optional finite factor in [1, 4], default 1; multiplies the "
+                    "GraspGenX service depth cutoff while preserving raw depth, "
+                    "camera intrinsics, and returned metric grasp geometry"
                 ),
             },
             safe_by_default=False,
@@ -1500,8 +1513,12 @@ def build_default_tool_registry() -> ToolRegistry:
             name="compute_wrist_alignment",
             category="geometry",
             description=(
-                "Compute one bounded world-frame hover correction from a fresh wrist "
-                "mask, aligned depth and camera calibration. It does not move the robot."
+                "Near a compiled clearance/hover reference, compute one bounded "
+                "world-frame lateral translation correction from a fresh wrist mask, "
+                "aligned depth, and the configured calibrated gripper-center projection. "
+                "Use it when approach orientation and contact depth remain credible; it "
+                "does not move the robot or re-estimate orientation/axial contact depth. "
+                "For those uncertainties, run a full fresh wrist-view grasp estimate."
             ),
             parameters={
                 "compiled_grasp": "complete compile_grasp_seed output",
@@ -1509,9 +1526,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "depth": "fresh aligned wrist depth PNG path",
                 "intrinsics": "matching wrist fx/fy/cx/cy/scale",
                 "camera_extrinsics": "matching wrist camera-to-world calibration",
-                "current_eef_pose": "current measured EEF pose containing xyz",
+                "current_eef_pose": (
+                    "current measured EEF pose from the same wrist observation, "
+                    "including xyz and rotation_matrix, quat_xyzw, or rotvec"
+                ),
                 "scene_epoch": "current host-owned non-negative scene epoch",
-                "desired_pixel_xy": "optional gripper-corridor pixel; defaults to cx/cy",
                 "max_correction_m": "optional correction clamp in [0.005, 0.05] m",
             },
             effect=ToolEffect.READ_ONLY,
@@ -1577,7 +1596,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "authorization: after fresh visual review the Agent may adjust its xyz "
                 "while preserving compiled_grasp_id and waypoint_role. The "
                 "host derives the residual and enforces at most 0.02 m change per call "
-                "and 0.10 m cumulative residual travel per compiled grasp."
+                "and 0.10 m cumulative residual travel per compiled grasp. For a "
+                "goal-directed reach, normally omit num_steps and inspect the returned "
+                "reached_target value before advancing the manipulation."
             ),
             parameters={
                 "target_pose": (
@@ -1586,7 +1607,11 @@ def build_default_tool_registry() -> ToolRegistry:
                     "for a compiled grasp, copy its provenance fields unchanged even when "
                     "visually adjusting xyz"
                 ),
-                "num_steps": "optional controller step limit",
+                "num_steps": (
+                    "optional maximum closed-loop controller iterations; omit to use "
+                    "the server default reach budget. This is not a speed or distance "
+                    "parameter, and a small value may deliberately stop short"
+                ),
                 "tolerance": "optional position tolerance in metres",
                 "ori_tolerance": "optional orientation tolerance in radians",
                 "enable_collision_check": "optional simulator collision-check toggle",
@@ -1645,12 +1670,26 @@ def build_default_tool_registry() -> ToolRegistry:
         ToolSpec(
             name="ik_preview_check",
             category="safety",
-            description="Preview inverse-kinematics feasibility before execution.",
+            description=(
+                "Read-only endpoint reachability preview before execution. Returns "
+                "reachable, unreachable, or unknown with joint-limit, residual, and "
+                "optional endpoint-collision diagnostics; it does not check a path."
+            ),
             parameters={
                 "target_pose": (
-                    "desired end-effector pose; preserve the active grasp candidate id "
-                    "from camera_pose_to_world when checking a grasp pose"
-                )
+                    "required desired world-frame end-effector pose; preserve the active "
+                    "grasp candidate id from camera_pose_to_world when checking a grasp pose"
+                ),
+                "position_tolerance_m": "optional maximum per-axis position residual",
+                "orientation_tolerance_rad": "optional orientation residual tolerance",
+                "preserve_current_orientation": (
+                    "optional, default true when target_pose omits orientation so the "
+                    "preview matches move_to's position-only wrist behavior"
+                ),
+                "check_endpoint_collision": (
+                    "optional self/endpoint collision check; path feasibility remains "
+                    "the responsibility of obstacle_avoidance"
+                ),
             },
             safe_by_default=True,
             effect=ToolEffect.READ_ONLY,

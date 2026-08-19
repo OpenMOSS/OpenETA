@@ -340,7 +340,7 @@ def test_visual_history_config_has_deterministic_environment_defaults() -> None:
     assert config.enabled is True
     assert config.main_camera_role == "agentview"
     assert config.recent_main_turns == 3
-    assert config.vdm_recent_delta_limit == 6
+    assert config.vdm_recent_delta_limit is None
     assert config.planner_raw_image_capacity == 5
 
     disabled = VisualHistoryConfig.from_env(

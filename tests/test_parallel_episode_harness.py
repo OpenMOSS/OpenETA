@@ -421,7 +421,7 @@ def test_batch_worker_factory_binds_graspgenx_behind_unified_tool(
     monkeypatch.setattr(
         runtime_assembly,
         "build_grasp_pose_estimate_handler",
-        lambda handlers: facade_backends.update(handlers)
+        lambda handlers, **_kwargs: facade_backends.update(handlers)
         or (lambda _context: ToolResult(True, content="predicted")),
     )
 

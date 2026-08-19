@@ -21,8 +21,8 @@ runtime validation and migration compatibility. The model-facing projection is
 1. `objective`: current user/environment task and latest human input;
 2. `current_observation`: compact structured state plus explicitly labelled
    visual evidence;
-3. `recent_transitions`: bounded action, observation, receipt, and interaction
-   events;
+3. `recent_transitions`: elastic action, observation, receipt, and interaction
+   history, projected together with the transition ledger and conversation;
 4. `world_evidence`: selected targets, tool-produced candidates, gripper state,
    checker evidence, reconciliation evidence, and trusted environment receipts;
 5. `open_questions`: unresolved perception or semantic-selection evidence;
@@ -43,6 +43,67 @@ Each attached current image now carries a stable evidence id, camera frame and
 role, observation step, optional timestamp, and `freshness=current`. The provider
 message presents labelled images before the larger JSON decision context.
 
+### Durable history and bounded model projection
+
+The session workspace is the lossless source of truth. Event trace and
+conversation records are appended incrementally, rich ToolResults and images are
+materialized as immutable artifacts, and only derived working-memory snapshots
+are atomically replaced. Building a Planner request never compacts or mutates
+that durable history.
+
+The main Planner sees three complementary projections rather than a replay of
+the complete trace:
+
+1. **Recent high-fidelity window.** Canonical conversation keeps all real user
+   dialogue plus the latest four action/result groups. `recent_transitions` keeps
+   the latest three observation turns and intervening recovery feedback; it does
+   not duplicate action commands or environment receipts already represented by
+   conversation and the ledger. The independently bounded visual-history policy
+   still supplies the first main-view anchor, recent main views, current wrist
+   view, and VDM bridges.
+2. **Compact history ledger.** `transition_ledger` retains the complete compact
+   tool/environment timeline without full ToolResult payloads.
+3. **Current materialized state.** `current_observation`, `decision_state`,
+   `world_evidence`, active bundles, open obligations, and artifact references
+   describe what is valid now. They are rebuilt each turn rather than appended
+   as another history stream.
+
+Older raw action results, observations, response JSON, and images remain
+queryable through the session memory/artifact interfaces. The total token budget
+is a final overflow guard around this semantic projection, not the normal
+mechanism for deciding which durable records become model-visible.
+
+### Radix-cache-friendly provider layout
+
+The canonical `PlannerBackendRequest.tool_context` remains complete for scripted
+backends, rollout recording, replay, validation, and budgeting. The
+OpenAI-compatible wire adapter partitions only the main
+`openeta.agent_context.v2` serialization into a cache-stable system prefix and a
+dynamic final user turn:
+
+1. the Agent system prompt;
+2. a deterministic `openeta.planner_static_context.v1` system message;
+3. optional conversation summary and canonical growing conversation history;
+4. the current dynamic context and labelled vision attachments in the final user
+   message.
+
+The stable message contains the full `available_tools` schemas, name-only
+`tool_references`, selected `relevant_skills`, `skill_usage`, and the stable
+`operational_constraints.rules`. JSON keys are recursively sorted and compactly
+serialized so the same tool/skill contract is byte-identical across turns.
+Current observation, visual history, transitions, evidence, artifacts,
+freshness/reconciliation state, and open questions remain dynamic. A genuine
+tool, skill, or execution-rule change intentionally changes the stable prefix and
+invalidates the old cache entry.
+
+The partition does not duplicate or remove semantic input: fields moved into the
+stable system message are removed from the final user JSON. Isolated reviewers,
+VDM, localization, grasp-advisor, and other sub-agent requests retain their
+single-user-message representation. Each provider result includes a compact
+`openeta.planner_prompt_layout.v1` diagnostic with stable/dynamic character
+counts, field names, and the stable-prefix SHA-256, without copying prompt
+content into the diagnostic.
+
 ## Memory ownership
 
 Session trace remains append-only evidence. Working memory is split into:
@@ -55,6 +116,44 @@ Session trace remains append-only evidence. Working memory is split into:
 
 Old sessions without `agent_working_state.json` are migrated in memory by
 selecting legacy facts whose source is `save_memory`.
+
+### One total context budget
+
+Durable conversation, event, transition-ledger, artifact, and VDM records are
+not shortened merely because they belong to different prompt sections. The
+normal planner projection has no fixed 8-event, 4/12-transition, or 8/12-action
+window. It first assembles the complete semantically bounded records available
+to the session and estimates the combined input containing the system prompt,
+Agent context, and canonical conversation.
+
+The persisted transition ledger no longer rolls over at 32 entries, and normal
+session resume no longer loads only the latest 64 events. Callers may still ask
+for an explicit resume/event limit or an explicit durable compaction checkpoint;
+those are opt-in operations rather than invisible production defaults.
+
+When that combined input exceeds the configured fraction of the provider's
+context window, after reserving the main Agent's output allowance, the host
+removes the oldest elastic entries until the prompt fits. It removes redundant
+event summaries before the compact transition ledger and conversation action
+groups. Initial and current user instructions are protected ahead of old
+action/result pairs. This projection never mutates append-only session history.
+`context_budget.projection` records the initial/final token estimates and exact
+per-source drop counts. Because provider image tokenization varies, the budget
+also charges each attached image a configurable conservative estimate (2048
+tokens by default) instead of pretending that image paths are the whole visual
+cost.
+
+Per-item limits remain only as structural abuse guards: inline/base64 images are
+replaced by artifact references, high-cardinality structured outputs are
+materialized to disk, and an individual textual tool summary cannot consume the
+entire prompt. Raw visual inputs also keep the deliberately bounded
+initial-plus-recent window; text-context capacity is not a reason to attach an
+unbounded number of images.
+
+RFC impact: `openeta.context_budget.v2`, the elastic-history projection fields,
+and the shared 2048-token reasoning-subagent default are interface/configuration
+changes. They remain implementation-local until the three-person RFC review
+accepts the contract update; no shared RFC text is implied by this document.
 
 Old task-policy facts are deleted by a one-way load migration and the cleaned
 working memory is written back immediately. The production runtime contains no
@@ -145,7 +244,16 @@ reference. Its role is geometric and does not imply a required successor.
 After reaching a useful clearance pose, the Agent should normally use a fresh
 wrist RGB-D packet for full target segmentation, targeted grasp estimation, and
 candidate compilation. `compute_wrist_alignment` remains an optional bounded
-correction, not the default replacement for wrist-view grasp estimation.
+correction, not the default replacement for wrist-view grasp estimation. Its
+desired gripper pixel is host-derived by projecting the configured
+`eef_to_gripper_center_xyz` through the current EEF and wrist-camera transforms;
+the optical principal point is not treated as the gripper location. The result
+records `openeta.gripper_center_projection.v1` for calibration audit. Near-field
+refinement is evidence-triggered rather than a host task phase: use alignment
+when the original approach/orientation/contact depth remain credible and only
+lateral contact placement needs correction; use a full wrist SAM3 → targeted
+grasp estimate → explicit compile when orientation, surface, or axial contact
+depth is uncertain. Neither path silently activates or replaces a candidate.
 
 The host also maintains a read-only `openeta.provenance_evidence_graph.v1`.
 Compiling a candidate binds its exact host-captured targeted grasp artifact to a

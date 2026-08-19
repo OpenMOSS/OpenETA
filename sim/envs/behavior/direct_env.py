@@ -565,6 +565,10 @@ class BehaviorDirectEnv(gym.Env):
                 proprio["gripper_open"] = open_fraction
                 proprio["gripper_state"] = {
                     "open": open_fraction > 0.5,
+                    # Canonical Agent-facing continuous aperture. Keep the
+                    # historical open_fraction alias for experiment logs and
+                    # downstream consumers that have not migrated yet.
+                    "openness": open_fraction,
                     "open_fraction": open_fraction,
                 }
         return proprio

@@ -40,7 +40,11 @@ from agent.runtime.skills import (
     build_default_skill_registry,
     load_skill_markdown,
 )
-from agent.runtime.token_counting import DEFAULT_CONTEXT_WINDOW_TOKENS, estimate_text_tokens
+from agent.runtime.token_counting import (
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    estimate_json_tokens,
+    estimate_text_tokens,
+)
 from agent.tools.handlers import bind_dummy_tool_handlers
 from agent.tools.registry import (
     TOOL_RESULT_SCHEMA_VERSION,
@@ -63,7 +67,23 @@ def _observation() -> EnvObservation:
         ],
         robot=RobotState(end_effector_pose={"xyz": [0.0, 0.0, 0.5]}),
         objects=[{"name": "cube"}],
-        metadata={"step_idx": 1},
+        metadata={
+            "step_idx": 1,
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "front",
+                    "path": "front-rgb.png",
+                    "packet_id": "packet-front",
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "front",
+                    "path": "front-depth.png",
+                    "packet_id": "packet-front",
+                },
+            ],
+        },
     )
 
 
@@ -103,8 +123,18 @@ def _rgbd_observation(
                 artifact
                 for frame_id, rgb, depth in views
                 for artifact in (
-                    {"kind": "rgb", "frame_id": frame_id, "path": str(rgb)},
-                    {"kind": "depth", "frame_id": frame_id, "path": str(depth)},
+                    {
+                        "kind": "rgb",
+                        "frame_id": frame_id,
+                        "path": str(rgb),
+                        "packet_id": "packet-rgbd",
+                    },
+                    {
+                        "kind": "depth",
+                        "frame_id": frame_id,
+                        "path": str(depth),
+                        "packet_id": "packet-rgbd",
+                    },
                 )
             ]
         },
@@ -406,7 +436,7 @@ def test_static_planner_backend_executes_registered_tool_handler() -> None:
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
                 "reasoning": "Need segmentation before grasp planning.",
             }
         )
@@ -635,7 +665,7 @@ def test_default_planner_prompt_uses_first_class_simulator_creation_tool() -> No
 
 
 
-def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path) -> None:
+def test_reference_guided_sam3_accepts_exact_source_packet_id(tmp_path: Path) -> None:
     localized_scene = tmp_path / "wrist-0014.png"
     rematerialized_scene = tmp_path / "wrist-0013.png"
     localized_scene.write_bytes(b"same-static-wrist-scene")
@@ -647,6 +677,8 @@ def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path)
         "pending_reference_localization",
         {
             "scene_image": str(localized_scene),
+            "source_packet_id": "packet-reference",
+            "camera_frame_id": "wrist",
             "target_object": "alphabet_soup",
             "positive_points": points,
             "required_parameter": "positive_points",
@@ -659,7 +691,8 @@ def test_reference_guided_sam3_accepts_byte_identical_scene_copy(tmp_path: Path)
                 "kind": "tool_call",
                 "name": "sam3",
                 "parameters": {
-                    "image": str(rematerialized_scene),
+                    "source_packet_id": "packet-reference",
+                    "camera_frame_id": "wrist",
                     "positive_points": points,
                 },
             }
@@ -681,6 +714,12 @@ def test_verified_reference_evidence_binds_to_matching_sam3_result() -> None:
     memory = AgentMemory()
     scene = "tmp/scene.png"
     points = [{"x": 130.0, "y": 251.0, "label": 1}]
+    memory.add_observation(
+        _rgbd_observation(
+            task="pick alphabet soup",
+            views=[("agentview", Path(scene), Path("tmp/depth.png"))],
+        )
+    )
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -727,11 +766,14 @@ def test_verified_reference_evidence_binds_to_matching_sam3_result() -> None:
                             "success": True,
                             "details": {
                                 "parameters": {
-                                    "image": scene,
+                                    "source_packet_id": "packet-rgbd",
+                                    "camera_frame_id": "agentview",
                                     "positive_points": points,
                                 },
                                 "outputs": {
                                     "result_id": "sam-verified",
+                                    "source_packet_id": "packet-rgbd",
+                                    "source_image": scene,
                                     "detections": [
                                         {
                                             "id": "detection_000",
@@ -795,7 +837,7 @@ def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> No
                     "name": "sam3",
                     "parameters": {
                         "mode": "points",
-                        "image": "tmp/scene.jpg",
+                        "source_packet_id": "packet-front",
                         "points": [
                             {
                                 "image_index": 1,
@@ -811,7 +853,7 @@ def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> No
                     "name": "sam3",
                     "parameters": {
                         "mode": "points",
-                        "image": "tmp/scene.jpg",
+                        "source_packet_id": "packet-front",
                         "points": [{"x": 466.0, "y": 480.0, "label": 1}],
                     },
                 },
@@ -1777,6 +1819,10 @@ def test_pick_skill_is_loaded_from_markdown_guidance() -> None:
     assert "use the\n`embodiment_explore` skill" in pick.content
     assert "does not silently recalibrate one" in pick.content
     assert "grasp candidate list" in pick.content
+    assert "## Near-field Wrist Refinement" in pick.content
+    assert "only lateral contact placement looks wrong" in pick.content
+    assert "does not move, change grasp orientation" in pick.content
+    assert "full wrist-view re-estimation" in pick.content
     assert pick.allowed_tools[:7] == (
         "observe",
         "retrieve_asset_reference",
@@ -2230,7 +2276,7 @@ def test_tool_calling_planner_metadata_keeps_context_summary_not_full_context() 
     assert "context_budget" in decision.metadata["tool_context_summary"]
 
 
-def test_planner_context_auto_compacts_when_budget_threshold_is_reached() -> None:
+def test_planner_context_projects_without_mutating_history_when_budget_is_reached() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick cube")
     memory.save_fact("large_note", {"content": "x" * 1200}, source="unit")
@@ -2247,10 +2293,12 @@ def test_planner_context_auto_compacts_when_budget_threshold_is_reached() -> Non
         ),
     )
 
-    assert any(event.event_type == "memory_compacted" for event in memory.events)
-    assert context["context_budget"]["schema_version"] == "openeta.context_budget.v1"
+    assert not any(event.event_type == "memory_compacted" for event in memory.events)
+    assert context["context_budget"]["schema_version"] == "openeta.context_budget.v2"
     assert context["context_budget"]["auto_compact_triggered"] is True
-    assert context["memory"]["working_memory"]["compact_summary"]
+    projection = context["context_budget"]["projection"]
+    assert projection["policy"] == "elastic_total_token_budget"
+    assert projection["durable_history_mutated"] is False
 
 
 def test_planner_context_uses_default_one_million_context_window() -> None:
@@ -2268,7 +2316,175 @@ def test_planner_context_uses_default_one_million_context_window() -> None:
     assert not any(event.event_type == "memory_compacted" for event in memory.events)
     assert context["context_budget"]["context_window_tokens"] == DEFAULT_CONTEXT_WINDOW_TOKENS
     assert context["context_budget"]["auto_compact_triggered"] is False
-    assert context["context_budget"]["trigger_tokens"] == int(DEFAULT_CONTEXT_WINDOW_TOKENS * 0.9)
+    assert context["context_budget"]["trigger_tokens"] == (
+        int(DEFAULT_CONTEXT_WINDOW_TOKENS * 0.9) - 4096
+    )
+
+
+def test_planner_projects_bounded_recent_layers_without_mutating_durable_history() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect a long manipulation trace")
+    for index in range(40):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "python_exec",
+                        "parameters": {"code": f"result = {index}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "python_exec",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "content": f"result {index}",
+                                "details": {"outputs": {"result": index}},
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+        memory.add_observation(_observation())
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        config=PlannerContextConfig(context_window_tokens=1_000_000),
+    )
+
+    assert len(memory.model_conversation_messages()) == 81
+    recent = context["agent_context"]["recent_transitions"]
+    assert len(recent) == 3
+    assert {event["type"] for event in recent} == {"observation"}
+    assert len(context["agent_context"]["transition_ledger"]) == 40
+    assert context["context_budget"]["projection"]["triggered"] is False
+
+    requests: list[PlannerBackendRequest] = []
+
+    def capture(request: PlannerBackendRequest) -> dict:
+        requests.append(request)
+        return {
+            "kind": "response",
+            "name": "talk",
+            "parameters": {"message": "history inspected"},
+        }
+
+    ToolCallingPlanner(
+        CallablePlannerBackend(capture),
+        context_config=PlannerContextConfig(context_window_tokens=1_000_000),
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    assert len(requests) == 1
+    # Initial user task + one compact history index + four recent action/result
+    # pairs. The append-only canonical conversation remains complete in memory.
+    assert len(requests[0].conversation_messages) == 10
+    assert "compacted transcript summary" in requests[0].conversation_messages[1][
+        "content"
+    ]
+    assert len(requests[0].tool_context["recent_transitions"]) == 3
+    assert len(requests[0].tool_context["transition_ledger"]) == 40
+
+    constrained = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        config=PlannerContextConfig(context_window_tokens=10_000),
+    )["context_budget"]["projection"]
+    assert constrained["triggered"] is True
+    assert constrained["entries_removed"] is True
+    assert constrained["fits_target"] is True
+    assert len(memory.model_conversation_messages()) == 81
+    assert len(memory.recent_events(None)) >= 81
+
+
+def test_layered_projection_does_not_replay_old_large_tool_results() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect a long manipulation trace")
+    for index in range(40):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "python_exec",
+                        "parameters": {"code": f"result = {index}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "python_exec",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "content": "ok",
+                                "details": {
+                                    "outputs": {
+                                        "result": {
+                                            "index": index,
+                                            "payload": f"marker-{index}-" + "x" * 4_000,
+                                        }
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    requests: list[PlannerBackendRequest] = []
+
+    def capture(request: PlannerBackendRequest) -> dict:
+        requests.append(request)
+        return {
+            "kind": "response",
+            "name": "talk",
+            "parameters": {"message": "history inspected"},
+        }
+
+    ToolCallingPlanner(
+        CallablePlannerBackend(capture),
+        context_config=PlannerContextConfig(context_window_tokens=1_000_000),
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    request = requests[0]
+    durable_messages = memory.model_conversation_messages()
+    projected_text = json.dumps(
+        {
+            "conversation": request.conversation_messages,
+            "context": request.tool_context,
+        },
+        ensure_ascii=False,
+    )
+    assert "marker-0-" not in projected_text
+    assert "marker-39-" in projected_text
+    assert len(request.conversation_messages) == 10
+    assert estimate_json_tokens(
+        {
+            "conversation": request.conversation_messages,
+            "context": request.tool_context,
+        }
+    ).tokens < estimate_json_tokens({"conversation": durable_messages}).tokens // 2
+    assert len(memory.model_conversation_messages()) == 81
 
 
 def test_planner_context_can_disable_context_window_threshold() -> None:
@@ -3512,11 +3728,21 @@ def test_planner_context_preserves_camera_pose_transform_for_move_to() -> None:
 
 def test_dummy_tool_handlers_return_standard_result_envelopes() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    packet_observation = _rgbd_observation(
+        task="find the cube",
+        views=[
+            (
+                "front",
+                Path("tests/fixtures/sam3/sam_test.png"),
+                Path("tests/fixtures/sam3/sam_test.png"),
+            )
+        ],
+    )
 
     perception = tools.call(
         "sam3",
-        {"image": "front", "prompt": "cube"},
-        observation=_observation(),
+        {"source_packet_id": "packet-rgbd", "prompt": "cube"},
+        observation=packet_observation,
     )
     planning = tools.call(
         "anygrasp",
@@ -3581,7 +3807,7 @@ def test_registry_promotes_legacy_tool_artifacts_into_standard_envelope() -> Non
 
     result = tools.call(
         "sam3",
-        {"image": "front-rgb.png", "prompt": "cube"},
+        {"source_packet_id": "packet-front", "prompt": "cube"},
         observation=_observation(),
     )
 
@@ -3703,7 +3929,7 @@ def test_pipeline_runs_post_failure_checker_after_configured_tool_call() -> None
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
             }
         )
     )
@@ -3742,7 +3968,7 @@ def test_pipeline_does_not_run_post_failure_checker_after_success() -> None:
             {
                 "kind": "tool_call",
                 "name": "sam3",
-                "parameters": {"image": "front", "prompt": "cube"},
+                "parameters": {"source_packet_id": "packet-front", "prompt": "cube"},
             }
         )
     )
@@ -3797,7 +4023,10 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
                 {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "front", "prompt": "cube"},
+                    "parameters": {
+                        "source_packet_id": "packet-front",
+                        "prompt": "cube",
+                    },
                     "reasoning": "Segment the target object.",
                 },
                 {
@@ -3865,7 +4094,10 @@ def test_episode_runner_stops_when_agent_reports_task_complete() -> None:
                 {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "front", "prompt": "cube"},
+                    "parameters": {
+                        "source_packet_id": "packet-front",
+                        "prompt": "cube",
+                    },
                 },
             ]
         )
@@ -4053,7 +4285,8 @@ def test_openai_compatible_backend_uses_chat_completions_transport() -> None:
                     "message": {
                         "content": (
                             '{"kind": "tool_call", "name": "sam3", '
-                            '"parameters": {"image": "front", "prompt": "cube"}, '
+                            '"parameters": {"source_packet_id": "packet-front", '
+                            '"prompt": "cube"}, '
                             '"reasoning": "Need segmentation."}'
                         )
                     },
@@ -4397,7 +4630,7 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
                     "message": {
                         "content": (
                             '{"kind":"tool_call","name":"sam3",'
-                            '"parameters":{"image":"scene.png",'
+                            '"parameters":{"source_packet_id":"packet-scene",'
                             '"prompt":"alphabet soup can",'
                             '"roi_bbox_xyxy":[2,3,20,18]}}'
                         )
@@ -4421,6 +4654,7 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
                 "task": "pick alphabet soup",
                     "pending_reference_localization": {
                     "scene_image": str(scene),
+                    "source_packet_id": "packet-scene",
                     "reference_images": [str(reference)],
                 },
             },

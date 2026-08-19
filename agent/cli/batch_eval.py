@@ -37,6 +37,7 @@ from agent.runtime.parallel import (
 )
 from agent.runtime.session_workspace import DEFAULT_MEMORY_ROOT, SessionWorkspace
 from agent.runtime.runtime_assembly import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
     assemble_runtime,
@@ -337,7 +338,9 @@ def build_mcp_episode_worker_factory(
                 runtime=runtime,
                 environment=environment,
                 interaction_resolver=(
-                    BackendGuidanceResolver(new_backend())
+                    BackendGuidanceResolver(
+                        new_backend(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+                    )
                     if policy.profile == SupervisionProfile.REVIEWED_AUTONOMY
                     else None
                 ),

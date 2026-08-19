@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import agent.cli.eval as eval_cli
+from agent.backends.provider_config import PlannerProviderConfig
 from agent.cli.eval import main as eval_main
 from agent.evals.plan import (
     EvaluationExecution,
@@ -24,6 +27,7 @@ from agent.evals.visual_history_rollout import (
 )
 from agent.runtime.episode import EpisodeResult
 from agent.runtime.parallel import ParallelEpisodeSpec, ParallelEpisodeWorker
+from agent.tools.grasp_geometry import DEFAULT_GRASP_PROFILE
 
 
 def _plan() -> EvaluationPlan:
@@ -84,6 +88,68 @@ def test_visual_history_canary_has_a_bounded_episode_budget() -> None:
     assert len(jobs) == 3
     assert all(job.spec.max_turns == 60 for job in jobs)
     assert all(job.spec.max_tool_calls == 120 for job in jobs)
+
+
+def test_eval_preflight_marks_incompatible_anygrasp_unavailable(monkeypatch) -> None:
+    assert "ik_preview_check" in eval_cli._REQUIRED_SIM_MCP_TOOLS
+
+    class SimulatorCatalog:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        def list_tools(self, *, timeout_s=None):
+            del timeout_s
+            return {
+                "tools": [
+                    {"name": name}
+                    for name in eval_cli._REQUIRED_SIM_MCP_TOOLS
+                ]
+            }
+
+    monkeypatch.setattr(
+        eval_cli,
+        "load_planner_provider_config",
+        lambda: PlannerProviderConfig(
+            model="fixture",
+            api_base="http://provider.example/v1",
+            api_key="test",
+        ),
+    )
+    monkeypatch.setattr(eval_cli, "SseSimulatorMcpTransport", SimulatorCatalog)
+    monkeypatch.setattr(
+        eval_cli,
+        "check_anygrasp_compatibility",
+        lambda **_kwargs: {
+            "backend": "anygrasp",
+            "configured": True,
+            "available": False,
+            "compatible": False,
+            "reason": "gripper_width_mismatch",
+            "message": "AnyGrasp is unavailable: redeploy with 0.08 m geometry.",
+        },
+    )
+    args = SimpleNamespace(
+        model="",
+        sim_url="http://sim.example/sse",
+        sam3_url="",
+        depth_prior_url="",
+        anygrasp_url="http://anygrasp.example/sse",
+        anyplace_url="",
+        graspgenx_url="",
+        contact_graspnet_url="",
+        molmopoint_url="",
+        calibration_profile=str(DEFAULT_GRASP_PROFILE),
+        skip_mcp_check=False,
+        mcp_timeout_s=1.0,
+    )
+
+    result = eval_cli._remote_preflight(args)
+
+    assert result["ok"] is True
+    assert result["mcp"]["anygrasp"]["reason"] == "gripper_width_mismatch"
+    assert result["warnings"][-1] == (
+        "AnyGrasp is unavailable: redeploy with 0.08 m geometry."
+    )
 
 
 def test_scheduler_persists_each_attempt_and_retries_infrastructure(tmp_path: Path) -> None:

@@ -18,10 +18,20 @@ from uuid import uuid4
 
 from adapter.protocol import JsonDict
 from agent.runtime.artifact_paths import artifact_session_id, artifact_session_root
+from agent.runtime.observation_packets import (
+    ObservationPacketResolutionError,
+    build_observation_packet_entries,
+    resolve_packet_source,
+)
 from agent.tools.attachment_probe import build_prepare_attachment_probe_handler
 from agent.tools.grasp_geometry import (
     build_compile_grasp_seed_handler,
     build_wrist_alignment_handler,
+)
+from agent.tools.grasp_pose_advisor import (
+    GRASP_SELECTION_ADVICE_SCHEMA,
+    GraspPoseAdvisor,
+    build_grasp_selection_bundle,
 )
 from agent.tools.registry import (
     ToolExecutionContext,
@@ -57,6 +67,7 @@ SAM3_EVIDENCE_ROLES = frozenset({DEFAULT_SAM3_EVIDENCE_ROLE, "placement_region"}
 DEFAULT_ANYPLACE_OUTPUT_ROOT = Path("tmp") / "tool_result" / "anyplace"
 DEFAULT_MOLMOPOINT_OUTPUT_ROOT = Path("tmp") / "tool_result" / "molmopoint"
 DEFAULT_GRASPGENX_OUTPUT_ROOT = Path("tmp") / "tool_result" / "graspgenx"
+DEFAULT_GRASP_SELECTION_OUTPUT_ROOT = Path("tmp") / "tool_result" / "grasp_selection"
 DEFAULT_DEPTH_PRIOR_OUTPUT_ROOT = Path("tmp") / "tool_result" / "depth_prior"
 GRASP_POSE_ESTIMATE_SCHEMA = "openeta.grasp_pose_estimate.v1"
 DEFAULT_GRASP_POSE_BACKEND_ORDER = (
@@ -72,6 +83,7 @@ GRASP_POSE_FALLBACK_REASONS = {
     "model_load_failed",
     "no_grasp_candidates",
     "no_executable_grasp_candidates",
+    "backend_gripper_width_mismatch",
     "target_mask_outside_depth_range",
     "unknown_error",
 }
@@ -199,12 +211,10 @@ def build_sam3_handler(
             raw_points = positive_points_value
         else:
             mode = explicit_mode or "text"
-        requested_image = _string_param(context.parameters.get("image"))
-        image = _resolve_current_observation_rgb_path(requested_image, context.observation)
-        source_camera_metadata = _current_observation_rgb_metadata(
-            image,
-            context.observation,
-        )
+        source_packet_id = _string_param(context.parameters.get("source_packet_id"))
+        requested_frame_id = _string_param(context.parameters.get("camera_frame_id"))
+        image = ""
+        source_camera_metadata: JsonDict = {}
         prompt = _string_param(context.parameters.get("prompt"))
         evidence_role = (
             _string_param(context.parameters.get("evidence_role")).lower()
@@ -214,9 +224,11 @@ def build_sam3_handler(
         points: list[JsonDict] = []
         request: JsonDict = {
             "mode": mode,
-            "image": image,
+            "source_packet_id": source_packet_id,
             "evidence_role": evidence_role,
         }
+        if requested_frame_id:
+            request["camera_frame_id"] = requested_frame_id
         if mode == "text":
             request["prompt"] = prompt
         elif mode == "points":
@@ -242,6 +254,10 @@ def build_sam3_handler(
             _write_json(request_ref, dict(context.parameters))
             details = dict(result.details)
             details["raw_output_ref"] = str(raw_output_ref)
+            if source_packet_id:
+                details.setdefault("source_packet_id", source_packet_id)
+            for key, value in source_camera_metadata.items():
+                details.setdefault(key, value)
             result.details = details
             raw_record: JsonDict = {"mcp_called": mcp_called}
             if isinstance(response, Mapping):
@@ -270,6 +286,40 @@ def build_sam3_handler(
                 },
             )
             return result
+
+        try:
+            source_observation = _resolve_sam3_source_observation(
+                context,
+                source_packet_id=source_packet_id,
+                camera_frame_id=requested_frame_id,
+            )
+            image = str(source_observation["rgb"])
+            source_camera_metadata = {
+                "source_packet_id": source_packet_id,
+                "source_observation": source_observation,
+                "source_frame_id": str(source_observation.get("frame_id") or ""),
+                **(
+                    {"source_camera_role": source_observation["role"]}
+                    if source_observation.get("role")
+                    else {}
+                ),
+            }
+        except ObservationPacketResolutionError as exc:
+            failure = _sam3_failure(
+                mode=mode,
+                prompt=prompt,
+                points=[],
+                source_image="",
+                reason=exc.code,
+                content=f"SAM3 segmentation failed: {exc}",
+                metadata={"source_packet_resolution": exc.to_dict()},
+            )
+            failure.details["diagnostics"] = [exc.to_dict()]
+            return finish(
+                failure,
+                mcp_called=False,
+                reason=exc.code,
+            )
 
         if evidence_role not in SAM3_EVIDENCE_ROLES:
             return finish(
@@ -545,7 +595,8 @@ def build_sam3_handler(
             points=points,
             source_image=image,
             request={
-                "image": image,
+                "source_packet_id": source_packet_id,
+                "camera_frame_id": source_observation.get("frame_id"),
                 "mode": mode,
                 "evidence_role": evidence_role,
                 "image_format": image_format,
@@ -594,96 +645,6 @@ def build_sam3_handler(
     return handler
 
 
-def _resolve_current_observation_rgb_path(image: str, observation: Any) -> str:
-    """Resolve a frame id only from the current observation's RGB artifacts."""
-
-    return _resolve_current_observation_artifact_path(
-        image,
-        observation,
-        kind="rgb",
-        allow_frame_alias=True,
-    )
-
-
-def _current_observation_rgb_metadata(image: str, observation: Any) -> JsonDict:
-    """Return provenance for the exact current-observation RGB artifact."""
-
-    if not image or observation is None:
-        return {}
-    metadata = getattr(observation, "metadata", None)
-    if not isinstance(metadata, dict):
-        return {}
-    artifacts = metadata.get("image_artifacts")
-    if not isinstance(artifacts, list):
-        return {}
-    for artifact in artifacts:
-        if not isinstance(artifact, dict) or artifact.get("kind") != "rgb":
-            continue
-        path = artifact.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        if not _same_resolved_path(path, image):
-            continue
-        provenance: JsonDict = {}
-        packet_id = _string_param(artifact.get("packet_id"))
-        if not packet_id:
-            try:
-                packet_id = Path(path).parent.name
-            except (OSError, ValueError):
-                packet_id = ""
-        frame_id = str(artifact.get("frame_id") or "")
-        role = str(artifact.get("role") or "")
-        if packet_id:
-            provenance["source_packet_id"] = packet_id
-        source_observation: JsonDict = {
-            "packet_id": packet_id,
-            "frame_id": frame_id,
-            "rgb": path,
-        }
-        for candidate in artifacts:
-            if (
-                not isinstance(candidate, dict)
-                or candidate.get("kind") != "depth"
-                or str(candidate.get("frame_id") or "") != frame_id
-            ):
-                continue
-            candidate_path = candidate.get("path")
-            if not isinstance(candidate_path, str) or not candidate_path:
-                continue
-            candidate_packet_id = _string_param(candidate.get("packet_id"))
-            if not candidate_packet_id:
-                try:
-                    candidate_packet_id = Path(candidate_path).parent.name
-                except (OSError, ValueError):
-                    candidate_packet_id = ""
-            if packet_id and candidate_packet_id == packet_id:
-                source_observation["depth"] = candidate_path
-                break
-        cameras = getattr(observation, "cameras", None)
-        if isinstance(cameras, list):
-            camera = next(
-                (
-                    candidate
-                    for candidate in cameras
-                    if str(getattr(candidate, "frame_id", "") or "") == frame_id
-                ),
-                None,
-            )
-            intrinsics = getattr(camera, "intrinsics", None)
-            if isinstance(intrinsics, dict) and intrinsics:
-                source_observation["intrinsics"] = dict(intrinsics)
-        provenance["source_observation"] = source_observation
-        # Keep the legacy role-less payload shape while adding packet provenance.
-        # Frame/camera labels are only part of the role-aware adapter contract.
-        if not role:
-            return provenance
-        if frame_id:
-            provenance["source_frame_id"] = frame_id
-        provenance["source_camera_role"] = role
-        return provenance
-    return {}
-
-
 def _resolve_current_observation_artifact_path(
     requested: str,
     observation: Any,
@@ -691,7 +652,7 @@ def _resolve_current_observation_artifact_path(
     kind: str,
     allow_frame_alias: bool = False,
 ) -> str:
-    """Repair one missing path only from a unique current-observation artifact."""
+    """Resolve an explicit current-frame alias without basename rebinding."""
 
     if not requested or Path(requested).is_file() or observation is None:
         return requested
@@ -701,8 +662,6 @@ def _resolve_current_observation_artifact_path(
     artifacts = metadata.get("image_artifacts")
     if not isinstance(artifacts, list):
         return requested
-    requested_name = Path(requested).name
-    basename_matches: list[str] = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
             continue
@@ -713,11 +672,64 @@ def _resolve_current_observation_artifact_path(
             continue
         if allow_frame_alias and artifact.get("frame_id") == requested:
             return path
-        if Path(path).name == requested_name and Path(path).is_file():
-            basename_matches.append(path)
-    if len(basename_matches) == 1:
-        return basename_matches[0]
     return requested
+
+
+def _resolve_sam3_source_observation(
+    context: ToolExecutionContext,
+    *,
+    source_packet_id: str,
+    camera_frame_id: str,
+) -> JsonDict:
+    """Resolve SAM3's planner-facing packet reference inside the active session."""
+
+    if not source_packet_id:
+        raise ObservationPacketResolutionError(
+            "missing_source_packet_id",
+            "source_packet_id is required; local image paths are not accepted.",
+        )
+    resolver = context.metadata.get("_observation_packet_resolver")
+    if callable(resolver):
+        resolved = resolver(source_packet_id, camera_frame_id)
+        if not isinstance(resolved, dict):
+            raise ObservationPacketResolutionError(
+                "invalid_source_packet_resolution",
+                "The host packet resolver returned an invalid result.",
+                details={"source_packet_id": source_packet_id},
+            )
+        return dict(resolved)
+
+    observation = context.observation
+    if observation is None:
+        raise ObservationPacketResolutionError(
+            "source_packet_resolver_unavailable",
+            "No session packet resolver or current observation is available.",
+            details={"source_packet_id": source_packet_id},
+        )
+    entries = build_observation_packet_entries(
+        observation,
+        observation_index=0,
+        scene_epoch=0,
+        object_scene_epoch=0,
+        robot_motion_epoch=0,
+    )
+    matching = [entry for entry in entries if entry.get("packet_id") == source_packet_id]
+    if not matching:
+        raise ObservationPacketResolutionError(
+            "unknown_source_packet_id",
+            "source_packet_id does not exist in the active observation packet index.",
+            details={
+                "source_packet_id": source_packet_id,
+                "available_source_packet_ids": [entry.get("packet_id") for entry in entries],
+            },
+        )
+    if len(matching) != 1:
+        raise ObservationPacketResolutionError(
+            "duplicate_source_packet_id",
+            "source_packet_id resolves to multiple packet records.",
+            details={"source_packet_id": source_packet_id},
+        )
+    return resolve_packet_source(matching[0], camera_frame_id=camera_frame_id)
 
 
 def build_stdio_sam3_mcp_segmenter(
@@ -1073,6 +1085,8 @@ def build_grasp_pose_estimate_handler(
     backend_order: Sequence[str] = DEFAULT_GRASP_POSE_BACKEND_ORDER,
     graspgenx_gripper_name: str = "franka_panda",
     graspgenx_up_direction_camera: Sequence[float] = (0.0, 0.0, -1.0),
+    advisor: GraspPoseAdvisor | None = None,
+    selection_output_root: str | Path = DEFAULT_GRASP_SELECTION_OUTPUT_ROOT,
 ) -> ToolHandler:
     """Build one agent-facing grasp estimator over independent backend handlers."""
 
@@ -1207,10 +1221,24 @@ def build_grasp_pose_estimate_handler(
                     hints=hints,
                 )
                 if normalized.success:
-                    return normalized
+                    return _attach_grasp_selection_advice(
+                        normalized,
+                        advisor=advisor,
+                        task=(
+                            str(context.observation.task or "")
+                            if context.observation is not None
+                            else str(context.metadata.get("task") or "")
+                        ),
+                        output_root=artifact_session_root(
+                            selection_output_root,
+                            artifact_session_id(context.metadata),
+                        ),
+                    )
                 reason = _grasp_backend_failure_reason(normalized)
                 attempt["status"] = "failed"
                 attempt["reason"] = reason
+                if reason == "backend_gripper_width_mismatch":
+                    attempt["message"] = normalized.content
                 diagnostics = _grasp_backend_diagnostics(normalized)
                 if diagnostics:
                     attempt["diagnostics"] = diagnostics
@@ -1225,18 +1253,148 @@ def build_grasp_pose_estimate_handler(
                     content=backend_result.content,
                 )
 
+        width_mismatch = next(
+            (
+                attempt
+                for attempt in attempts
+                if attempt.get("reason") == "backend_gripper_width_mismatch"
+            ),
+            None,
+        )
+        other_failures = any(
+            attempt.get("status") == "failed"
+            and attempt.get("reason") != "backend_gripper_width_mismatch"
+            for attempt in attempts
+        )
         reason = (
-            "all_backends_failed"
-            if any(attempt["status"] == "failed" for attempt in attempts)
-            else "no_compatible_backend"
+            "no_compatible_backend"
+            if width_mismatch is not None and not other_failures
+            else (
+                "all_backends_failed"
+                if any(attempt["status"] == "failed" for attempt in attempts)
+                else "no_compatible_backend"
+            )
         )
         return _grasp_pose_estimate_failure(
             reason,
             attempts=attempts,
             retryable=reason == "all_backends_failed",
+            content=(
+                str(width_mismatch.get("message") or "")
+                if width_mismatch is not None and not other_failures
+                else ""
+            ),
         )
 
     return handler
+
+
+def _attach_grasp_selection_advice(
+    result: ToolResult,
+    *,
+    advisor: GraspPoseAdvisor | None,
+    task: str,
+    output_root: str | Path,
+) -> ToolResult:
+    """Add visual advisory evidence without changing grasp activation semantics."""
+
+    if advisor is None:
+        return result
+    details = result.details if isinstance(result.details, dict) else {}
+    diagnostics = details.setdefault("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        diagnostics = []
+        details["diagnostics"] = diagnostics
+    try:
+        bundle, artifacts = build_grasp_selection_bundle(
+            details,
+            output_root=output_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - advisory evidence is fail-soft.
+        details["grasp_selection_advice"] = {
+            "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,
+            "status": "unavailable",
+            "decision": "abstain",
+            "recommended_candidate_id": "",
+            "alternatives": [],
+            "confidence": 0.0,
+            "reasons": [],
+            "rejected": {},
+            "uncertainties": [
+                "Candidate preview rendering failed; the main Agent retains full choice."
+            ],
+            "advisor_role": "read_only_grasp_pose_advisor",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        diagnostics.append(
+            {
+                "code": "grasp_selection_preview_unavailable",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+        )
+        result.details = details
+        return result
+
+    details["grasp_selection_bundle"] = bundle
+    existing_artifacts = details.setdefault("artifacts", [])
+    if not isinstance(existing_artifacts, list):
+        existing_artifacts = []
+        details["artifacts"] = existing_artifacts
+    existing_artifacts.extend(artifacts)
+    try:
+        advice = advisor.advise(bundle, task=task)
+    except Exception as exc:  # noqa: BLE001 - advisor cannot block perception.
+        advice = {
+            "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,
+            "status": "unavailable",
+            "decision": "abstain",
+            "recommended_candidate_id": "",
+            "alternatives": [],
+            "confidence": 0.0,
+            "reasons": [],
+            "rejected": {},
+            "uncertainties": [
+                "The isolated advisor failed; inspect the persisted selection bundle if needed."
+            ],
+            "bundle_id": bundle.get("bundle_id"),
+            "advisor_role": "read_only_grasp_pose_advisor",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        diagnostics.append(
+            {
+                "code": "grasp_pose_advisor_unavailable",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "bundle_id": bundle.get("bundle_id"),
+            }
+        )
+    details["grasp_selection_advice"] = advice
+    result.details = details
+    status = str(advice.get("status") or "")
+    recommended = str(advice.get("recommended_candidate_id") or "")
+    if status in {"completed", "skipped_single_candidate"} and recommended:
+        reasons = advice.get("reasons")
+        reason = (
+            str(reasons[0]).strip()
+            if isinstance(reasons, list) and reasons and str(reasons[0]).strip()
+            else ""
+        )
+        reason_summary = f"reason: {reason} " if reason else ""
+        result.content = (
+            f"{result.content} Read-only grasp advisor recommends {recommended} "
+            f"with confidence {float(advice.get('confidence') or 0.0):.2f}; "
+            f"{reason_summary}the main Agent must still choose and call "
+            "compile_grasp_seed explicitly."
+        )
+    elif status == "unavailable":
+        result.content = (
+            f"{result.content} Grasp preview evidence was persisted, but the read-only "
+            "advisor abstained or was unavailable; the main Agent retains full choice."
+        )
+    return result
 
 
 def build_contact_graspnet_handler(
@@ -1374,6 +1532,17 @@ def build_graspgenx_handler(
         intrinsics_value = context.parameters.get("intrinsics")
         gripper_name = _string_param(context.parameters.get("gripper_name"))
         up_value = context.parameters.get("up_direction_camera")
+        raw_depth_cutoff_factor = context.parameters.get(
+            "depth_cutoff_factor", 1.0
+        )
+        try:
+            depth_cutoff_factor = (
+                math.nan
+                if isinstance(raw_depth_cutoff_factor, bool)
+                else float(raw_depth_cutoff_factor)
+            )
+        except (TypeError, ValueError):
+            depth_cutoff_factor = math.nan
         object_mask_request = (
             dict(object_mask_value)
             if isinstance(object_mask_value, Mapping)
@@ -1390,6 +1559,7 @@ def build_graspgenx_handler(
             ),
             "gripper_name": gripper_name,
             "up_direction_camera": up_value,
+            "depth_cutoff_factor": depth_cutoff_factor,
         }
 
         def finish(
@@ -1471,6 +1641,12 @@ def build_graspgenx_handler(
             return fail("invalid_intrinsics")
         if not gripper_name:
             return fail("missing_gripper_name")
+        if (
+            not math.isfinite(depth_cutoff_factor)
+            or depth_cutoff_factor < 1.0
+            or depth_cutoff_factor > 4.0
+        ):
+            return fail("invalid_depth_cutoff_factor")
         up_direction = _normalise_graspgenx_up_direction(up_value)
         if up_direction is None:
             return fail("invalid_up_direction_camera")
@@ -1521,6 +1697,7 @@ def build_graspgenx_handler(
                     "intrinsics": intrinsics,
                     "gripper_name": gripper_name,
                     "up_direction_camera": up_direction,
+                    "depth_cutoff_factor": depth_cutoff_factor,
                 }
             )
         except Exception as exc:  # noqa: BLE001 - transport failures stay structured.
@@ -1541,6 +1718,7 @@ def build_graspgenx_handler(
             intrinsics=intrinsics,
             gripper_name=gripper_name,
             up_direction_camera=up_direction,
+            depth_cutoff_factor=depth_cutoff_factor,
         )
         if result.success:
             try:
@@ -2041,6 +2219,20 @@ def _scene_detector_handler(context: ToolExecutionContext) -> ToolResult:
 
 def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
     prompt = context.parameters.get("prompt", "object")
+    source_packet_id = _string_param(context.parameters.get("source_packet_id"))
+    try:
+        source_observation = _resolve_sam3_source_observation(
+            context,
+            source_packet_id=source_packet_id,
+            camera_frame_id=_string_param(context.parameters.get("camera_frame_id")),
+        )
+    except ObservationPacketResolutionError as exc:
+        return make_tool_result(
+            context,
+            success=False,
+            content=f"Dummy SAM3 segmentation failed: {exc}",
+            diagnostics=[exc.to_dict()],
+        )
     evidence_role = (
         _string_param(context.parameters.get("evidence_role")).lower()
         or DEFAULT_SAM3_EVIDENCE_ROLE
@@ -2051,7 +2243,9 @@ def _sam3_handler(context: ToolExecutionContext) -> ToolResult:
         success=True,
         content="dummy segmentation mask generated",
         outputs={
-            "image": context.parameters.get("image"),
+            "source_packet_id": source_packet_id,
+            "source_image": source_observation.get("rgb"),
+            "source_observation": source_observation,
             "prompt": prompt,
             "evidence_role": evidence_role,
             "masks": [
@@ -3276,8 +3470,8 @@ def _normalise_sam3_response(
             "detection_count": len(detections),
             "detections": detections,
             "ranking": "score_descending",
-            "selection_required": len(detections) > 1,
-            "selected_detection": detections[0] if len(detections) == 1 else None,
+            "selection_required": bool(detections),
+            "selected_detection": None,
             "selection_bundle": selection_bundle,
             "artifacts": artifacts,
             "diagnostics": visualization_diagnostics,
@@ -3944,6 +4138,7 @@ def _grasp_pose_backend_parameters(
             **common,
             "gripper_name": graspgenx_gripper_name,
             "up_direction_camera": up_direction,
+            "depth_cutoff_factor": hints.get("depth_cutoff_factor", 1.0),
         }
     return None
 
@@ -4000,6 +4195,96 @@ def _grasp_backend_diagnostics(result: ToolResult) -> JsonDict:
     return diagnostics
 
 
+def _target_mask_projection_diagnostic(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    object_mask: Mapping[str, Any] | None,
+    intrinsics: Mapping[str, Any],
+) -> JsonDict | None:
+    """Project candidate anchors into the target mask as bounded evidence.
+
+    Backend score alone does not reveal whether a grasp anchor lies near a thin
+    object edge.  This diagnostic gives the Agent image-relative evidence while
+    leaving candidate choice and recovery entirely model-owned.
+    """
+
+    mask_ref = _string_param(object_mask.get("mask_ref")) if object_mask else ""
+    fx = _finite_float(intrinsics.get("fx"))
+    fy = _finite_float(intrinsics.get("fy"))
+    cx = _finite_float(intrinsics.get("cx"))
+    cy = _finite_float(intrinsics.get("cy"))
+    if not mask_ref or None in {fx, fy, cx, cy} or fx <= 0 or fy <= 0:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(mask_ref) as image:
+            mask = image.convert("L")
+            width, height = mask.size
+            pixels = list(mask.tobytes())
+    except (OSError, ValueError):
+        return None
+    coords = [
+        (index % width, index // width)
+        for index, value in enumerate(pixels)
+        if int(value) > 0
+    ]
+    if not coords:
+        return None
+    xs = [value[0] for value in coords]
+    ys = [value[1] for value in coords]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    centroid = [sum(xs) / len(xs), sum(ys) / len(ys)]
+
+    def project(value: object) -> JsonDict | None:
+        point = _finite_vector(value, length=3)
+        if point is None or point[2] <= 0:
+            return None
+        u = float(fx) * point[0] / point[2] + float(cx)
+        v = float(fy) * point[1] / point[2] + float(cy)
+        px, py = int(round(u)), int(round(v))
+        inside_image = 0 <= px < width and 0 <= py < height
+        return {
+            "pixel_xy": [round(u, 2), round(v, 2)],
+            "inside_target_mask": bool(
+                inside_image and int(pixels[py * width + px]) > 0
+            ),
+            "bbox_fraction_xy": [
+                round((u - xmin) / max(1, xmax - xmin), 3),
+                round((v - ymin) / max(1, ymax - ymin), 3),
+            ],
+        }
+
+    projected: list[JsonDict] = []
+    for candidate in candidates[:20]:
+        translation = project(candidate.get("translation_xyz"))
+        tip = project(candidate.get("gripper_tip_position_xyz"))
+        if translation is None and tip is None:
+            continue
+        projected.append(
+            {
+                "candidate_id": str(candidate.get("id") or ""),
+                "rank": candidate.get("rank"),
+                "translation": translation,
+                "gripper_tip": tip,
+            }
+        )
+    if not projected:
+        return None
+    return {
+        "code": "target_mask_candidate_projection",
+        "coordinate_convention": "image_top_left_xy",
+        "mask_bbox_xyxy": [xmin, ymin, xmax, ymax],
+        "mask_centroid_xy": [round(centroid[0], 2), round(centroid[1], 2)],
+        "candidates": projected,
+        "interpretation": (
+            "Image-relative geometric evidence only; boundary proximity may indicate "
+            "a shallow or edge grasp but does not auto-reject or select a candidate."
+        ),
+    }
+
+
 def _normalise_grasp_pose_estimate_result(
     result: ToolResult,
     *,
@@ -4027,7 +4312,47 @@ def _normalise_grasp_pose_estimate_result(
     result_id = f"gpe-{uuid4().hex[:16]}"
     candidates: list[JsonDict] = []
     rejected_candidates: list[JsonDict] = []
+    diagnostics: list[JsonDict] = [
+        {
+            "code": "grasp_backend_fallback",
+            "backend": attempt["backend"],
+            "reason": attempt["reason"],
+        }
+        for attempt in attempts[:-1]
+        if attempt["status"] in {"failed", "unavailable"}
+    ]
     max_gripper_width_m = _finite_float(hints.get("max_gripper_width_m"))
+    backend_metadata = source_details.get("metadata")
+    backend_max_gripper_width_m = (
+        _finite_float(backend_metadata.get("max_gripper_width"))
+        if isinstance(backend_metadata, Mapping)
+        else None
+    )
+    if (
+        backend == "anygrasp"
+        and max_gripper_width_m is not None
+        and max_gripper_width_m > 0
+        and backend_max_gripper_width_m is not None
+        and abs(backend_max_gripper_width_m - max_gripper_width_m) > 1e-6
+    ):
+        return _grasp_pose_estimate_failure(
+            "backend_gripper_width_mismatch",
+            attempts=attempts,
+            retryable=False,
+            content=(
+                "AnyGrasp is unavailable: deployment max_gripper_width_m "
+                f"({backend_max_gripper_width_m:.6f} m) does not match the "
+                "execution gate/calibration width "
+                f"({max_gripper_width_m:.6f} m). Redeploy AnyGrasp with the "
+                "matching physical gripper width."
+            ),
+            diagnostics={
+                "backend": backend,
+                "backend_max_gripper_width_m": backend_max_gripper_width_m,
+                "physical_max_gripper_width_m": max_gripper_width_m,
+                "requires_redeployment": True,
+            },
+        )
     for backend_index, value in enumerate(raw_candidates):
         if not isinstance(value, Mapping):
             return _grasp_pose_estimate_failure(
@@ -4088,10 +4413,27 @@ def _normalise_grasp_pose_estimate_result(
                 "rejected_candidates": rejected_candidates,
             },
         )
+    if rejected_candidates and len(rejected_candidates) * 2 >= len(raw_candidates):
+        diagnostics.append(
+            {
+                "code": "high_infeasible_candidate_fraction",
+                "backend": backend,
+                "raw_candidate_count": len(raw_candidates),
+                "rejected_candidate_count": len(rejected_candidates),
+                "reason": "exceeds_physical_gripper_width",
+            }
+        )
     candidates.sort(key=lambda candidate: -float(candidate.get("score") or 0.0))
     for rank, candidate in enumerate(candidates):
         candidate["rank"] = rank
         candidate["id"] = f"{result_id}-{rank:03d}"
+    projection_diagnostic = _target_mask_projection_diagnostic(
+        candidates,
+        object_mask=object_mask,
+        intrinsics=intrinsics,
+    )
+    if projection_diagnostic is not None:
+        diagnostics.append(projection_diagnostic)
 
     source: JsonDict = {
         "source_tool": "grasp_pose_estimate",
@@ -4150,15 +4492,7 @@ def _normalise_grasp_pose_estimate_result(
             "ranking": "score_descending_backend_local",
             "backend_attempts": [dict(value) for value in attempts],
             "artifacts": artifacts,
-            "diagnostics": [
-                {
-                    "code": "grasp_backend_fallback",
-                    "backend": attempt["backend"],
-                    "reason": attempt["reason"],
-                }
-                for attempt in attempts[:-1]
-                if attempt["status"] in {"failed", "unavailable"}
-            ],
+            "diagnostics": diagnostics,
         },
     )
 
@@ -4452,6 +4786,7 @@ def _normalise_graspgenx_response(
     intrinsics: JsonDict,
     gripper_name: str,
     up_direction_camera: list[float],
+    depth_cutoff_factor: float,
 ) -> ToolResult:
     if not isinstance(response, Mapping):
         return _graspgenx_failure("mcp_call_failed")
@@ -4548,6 +4883,7 @@ def _normalise_graspgenx_response(
                 "intrinsics": dict(intrinsics),
                 "gripper_name": gripper_name,
                 "up_direction_camera": list(up_direction_camera),
+                "depth_cutoff_factor": depth_cutoff_factor,
             },
             "candidate_count": len(candidates),
             "grasp_candidates": candidates,

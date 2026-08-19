@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from adapter.protocol import EnvAction
+from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
 from agent.runtime.memory import AgentMemory
 from agent.runtime.reference_localization import ReferencePointLocalization
 from agent.tools.asset_references import (
@@ -64,6 +64,34 @@ def _context(parameters: dict, *, session_id: str = "asset-session"):
         spec=spec,
         parameters=parameters,
         metadata={"session_id": session_id},
+    )
+
+
+def _index_scene(
+    memory: AgentMemory,
+    scene: str | Path,
+    *,
+    packet_id: str = "packet-scene",
+) -> None:
+    if memory.session_id is None:
+        memory.start_session(task="localize target")
+    scene_path = str(scene)
+    memory.add_observation(
+        EnvObservation(
+            task="localize target",
+            cameras=[CameraFrame(frame_id="agentview", rgb=[])],
+            robot=RobotState(),
+            metadata={
+                "image_artifacts": [
+                    {
+                        "kind": "rgb",
+                        "frame_id": "agentview",
+                        "path": scene_path,
+                        "packet_id": packet_id,
+                    }
+                ]
+            },
+        )
     )
 
 
@@ -190,6 +218,7 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
         )
     )
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -215,7 +244,7 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": str(scene)},
+            parameters={"source_packet_id": "packet-scene"},
         )
         is None
     )
@@ -228,7 +257,8 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
                     {
                         "name": "sam3",
                         "parameters": {
-                            "image": str(scene),
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
                             "prompt": "alphabet soup can",
                             "roi_bbox_xyxy": [2, 3, 20, 18],
                         },
@@ -236,7 +266,8 @@ def test_asset_reference_result_creates_and_resolves_pending_localization_eviden
                             "success": True,
                             "details": {
                                 "parameters": {
-                                    "image": str(scene),
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
                                     "prompt": "alphabet soup can",
                                     "roi_bbox_xyxy": [2, 3, 20, 18],
                                 },
@@ -338,6 +369,7 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     assert len(outputs["reference_images"]) == 3
 
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -367,7 +399,7 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
         memory.detection_selection_gate_error(
             tool_name="sam3",
             parameters={
-                "image": str(scene),
+                "source_packet_id": "packet-scene",
                 "positive_points": [{"x": 23, "y": 31, "label": 1}],
             },
         )
@@ -376,7 +408,10 @@ def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": str(scene), "positive_points": outputs["positive_points"]},
+            parameters={
+                "source_packet_id": "packet-scene",
+                "positive_points": outputs["positive_points"],
+            },
         )
         is None
     )
@@ -386,6 +421,7 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     scene = "/tmp/current-scene.png"
     memory = AgentMemory()
     memory.start_session(task="pick alphabet soup")
+    _index_scene(memory, scene)
     memory.save_fact(
         "sam3_no_detection",
         {
@@ -470,10 +506,60 @@ def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": scene, "positive_points": points},
+            parameters={"source_packet_id": "packet-scene", "positive_points": points},
         )
         is None
     )
+
+    # The public SAM3 contract uses ``mode=points`` + ``points``.  The
+    # reference-localization evidence retains the historical
+    # ``positive_points`` spelling internally; a successful real-shaped call
+    # must still consume the obligation so select does not trigger another
+    # sam3 call on the following turn.
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "tool_calls": [
+                    {
+                        "name": "sam3",
+                        "parameters": {
+                            "mode": "points",
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
+                            "points": points,
+                        },
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "parameters": {
+                                    "mode": "points",
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
+                                    "points": points,
+                                },
+                                "outputs": {
+                                    "result_id": "sam3-point-1",
+                                    "source_image": scene,
+                                    "detections": [
+                                        {
+                                            "id": "detection_000",
+                                            "mask_ref": "/tmp/mask.png",
+                                            "bbox_xyxy": [250, 320, 300, 390],
+                                            "score": 0.9,
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    assert memory.pending_reference_localization() is None
+    assert memory.pending_sam3_selection()["result_id"] == "sam3-point-1"
 
 
 def test_object_memory_handler_returns_structured_search_ambiguity(tmp_path: Path) -> None:

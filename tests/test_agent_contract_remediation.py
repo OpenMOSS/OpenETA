@@ -83,7 +83,11 @@ def _record_target_selection(
                     {
                         "name": "sam3",
                         "status": "executed",
-                        "parameters": {"image": rgb, "prompt": "cube"},
+                        "parameters": {
+                            "source_packet_id": "packet-4",
+                            "camera_frame_id": "agentview",
+                            "prompt": "cube",
+                        },
                         "result": {
                             "success": True,
                             "details": {
@@ -139,6 +143,8 @@ def test_agent_owned_pipeline_does_not_turn_reference_work_into_a_task_gate() ->
         "pending_reference_localization",
         {
             "scene_image": "/session/rgb.png",
+            "source_packet_id": "packet-4",
+            "camera_frame_id": "agentview",
             "target_object": "alphabet soup",
             "required_parameter": "positive_points",
             "positive_points": [{"x": 20, "y": 30, "label": 1}],
@@ -237,7 +243,10 @@ def test_tool_result_separates_operational_success_from_semantic_outcome() -> No
         )
 
     tools.bind_handler("sam3", handler)
-    result = tools.call("sam3", {"image": "/session/rgb.png", "prompt": "cube"})
+    result = tools.call(
+        "sam3",
+        {"source_packet_id": "packet-4", "prompt": "cube"},
+    )
 
     assert result.success is True
     assert result.details["operational_success"] is True
@@ -273,6 +282,16 @@ def test_decision_state_is_bounded_index_over_packets_bundles_and_last_effect() 
                                 "outputs": {
                                     "result_id": "sam3-result-1",
                                     "detection_count": 1,
+                                    "grasp_selection_advice": {
+                                        "schema_version": "openeta.grasp_selection_advice.v1",
+                                        "recommended_candidate_id": "gpe-001",
+                                        "confidence": 0.8,
+                                    },
+                                    "grasp_selection_bundle": {
+                                        "schema_version": "openeta.grasp_selection_bundle.v1",
+                                        "bundle_id": "grasp-selection:example",
+                                        "bundle_ref": "/session/selection_bundle.json",
+                                    },
                                 },
                                 "artifacts": [
                                     {"path": "/session/selection.contact-sheet.png"}
@@ -308,6 +327,12 @@ def test_decision_state_is_bounded_index_over_packets_bundles_and_last_effect() 
     assert state["active_bundles"]["grasp_pose_estimate"]["status"] == "ready"
     assert state["last_action_effect"]["semantic_outcome"] == "detections_available"
     assert state["last_action_effect"]["outputs"]["result_id"] == "sam3-result-1"
+    assert state["last_action_effect"]["grasp_selection_advice"][
+        "recommended_candidate_id"
+    ] == "gpe-001"
+    assert state["last_action_effect"]["grasp_selection_bundle"]["bundle_id"] == (
+        "grasp-selection:example"
+    )
     assert state["last_action_effect"]["artifact_refs"] == [
         "/session/selection.contact-sheet.png"
     ]
@@ -478,6 +503,11 @@ def test_pipeline_reports_compiled_grasp_residual_budget_repair() -> None:
     )
     assert "per-call limit of 0.020 m" in blocked.tool_calls[0].reason
     assert "Last accepted residual" in blocked.tool_calls[0].reason
+    assert "not a limit on travel distance from the current EEF" in (
+        blocked.tool_calls[0].reason
+    )
+    assert "exact host reference xyz [0.1, 0.2, 0.15]" in blocked.tool_calls[0].reason
+    assert "omit compiled_grasp_id and waypoint_role" in blocked.tool_calls[0].reason
 
 
 def test_skill_contract_lint_rejects_stale_tool_references() -> None:

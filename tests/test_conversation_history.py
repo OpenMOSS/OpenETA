@@ -127,13 +127,33 @@ def test_user_constraint_survives_many_operational_events() -> None:
 
     assert messages[0] == {"role": "user", "content": "pick milk"}
     assert any("keep the gripper closed" in message["content"] for message in messages)
-    assert len(messages) <= 20
-    assert any("compacted transcript summary" in message["content"] for message in messages)
+    # Canonical history no longer stops at a local eight-action window.  The
+    # combined planner input projector trims it only when the total model
+    # context budget is actually reached.
+    assert len(messages) == 62
+    assert not any("compacted transcript summary" in message["content"] for message in messages)
     assert [message["role"] for message in messages[-2:]] == ["assistant", "user"]
     assert "OpenETA host execution evidence" in messages[-1]["content"]
     assert context["current_user_request"].startswith("You may pick the cube")
     assert context["task"] == context["current_user_request"]
     assert all(event["type"] != "user_message" for event in context["recent_events"])
+
+
+def test_zero_action_projection_keeps_dialogue_but_no_action_result_pairs() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick milk")
+    memory.begin_user_turn("Keep the basket upright.", source="human_answer")
+    for index in range(3):
+        memory.add_action(_action("move_to", index=index))
+
+    projected = memory.model_conversation_messages(max_action_groups=0)
+
+    assert any("pick milk" in message["content"] for message in projected)
+    assert any("Keep the basket upright" in message["content"] for message in projected)
+    assert not any('"openeta_action"' in message["content"] for message in projected)
+    assert not any("OpenETA host execution evidence" in message["content"] for message in projected)
+    assert any("compacted transcript summary" in message["content"] for message in projected)
+    assert len(memory.model_conversation_messages()) == 8
 
 
 def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> None:
@@ -191,7 +211,7 @@ def test_every_tool_projects_bounded_outputs_and_artifact_paths() -> None:
                 "request": {
                     "kind": "tool_call",
                     "name": "sam3",
-                    "parameters": {"image": "/session/rgb.png", "prompt": "cube"},
+                    "parameters": {"source_packet_id": "packet-1", "prompt": "cube"},
                 },
                 "tool_calls": [
                     {
@@ -427,12 +447,12 @@ def test_conversation_action_envelope_omits_inline_image_payload(tmp_path) -> No
     assert len(text) < 20_000
 
 
-def test_backend_orders_stable_history_before_dynamic_tool_context() -> None:
-    captured = {}
+def test_backend_places_cache_stable_context_before_growing_history() -> None:
+    captured = {"bodies": []}
 
     def fake_transport(url, body, headers, timeout_s):
         del url, headers, timeout_s
-        captured["body"] = body
+        captured["bodies"].append(body)
         return {
             "choices": [
                 {
@@ -457,9 +477,28 @@ def test_backend_orders_stable_history_before_dynamic_tool_context() -> None:
         ),
         transport=fake_transport,
     )
+    stable_fields = {
+        "available_tools": [
+            {
+                "name": "move_to",
+                "parameters": {"target_pose": "world-frame EEF pose"},
+            }
+        ],
+        "tool_references": [{"name": "move_to"}],
+        "relevant_skills": [{"name": "pick", "content": "Inspect before moving."}],
+        "skill_usage": {"mode": "text_guidance_only"},
+    }
     result = backend.decide(
         PlannerBackendRequest(
-            tool_context={"task": "close simulator", "scene_epoch": 4},
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "current_observation": {"step_idx": 4},
+                "operational_constraints": {
+                    "fresh_observation_required": False,
+                    "rules": {"world_mutation": "one atomic tool at a time"},
+                },
+                **stable_fields,
+            },
             system_prompt="return json",
             conversation_summary="Earlier move_to calls completed.",
             conversation_messages=[
@@ -469,9 +508,33 @@ def test_backend_orders_stable_history_before_dynamic_tool_context() -> None:
             ],
         )
     )
+    second_result = backend.decide(
+        PlannerBackendRequest(
+            # Deliberately reverse insertion order and change dynamic state. The
+            # serialized stable system message must remain byte-identical.
+            tool_context={
+                **dict(reversed(list(stable_fields.items()))),
+                "operational_constraints": {
+                    "rules": {"world_mutation": "one atomic tool at a time"},
+                    "fresh_observation_required": True,
+                },
+                "current_observation": {"step_idx": 5},
+                "schema_version": "openeta.agent_context.v2",
+            },
+            system_prompt="return json",
+            conversation_summary="Earlier move_to calls completed.",
+            conversation_messages=[
+                {"role": "user", "content": "pick milk"},
+                {"role": "assistant", "content": '{"openeta_action":{"name":"observe"}}'},
+                {"role": "user", "content": "close simulator"},
+                {"role": "assistant", "content": '{"openeta_action":{"name":"move_to"}}'},
+            ],
+        )
+    )
 
-    messages = captured["body"]["messages"]
+    messages = captured["bodies"][0]["messages"]
     assert [message["role"] for message in messages] == [
+        "system",
         "system",
         "system",
         "user",
@@ -479,6 +542,74 @@ def test_backend_orders_stable_history_before_dynamic_tool_context() -> None:
         "user",
         "user",
     ]
-    assert messages[2]["content"] == "pick milk"
-    assert json.loads(messages[-1]["content"])["tool_context"]["scene_epoch"] == 4
+    assert messages[3]["content"] == "pick milk"
+    stable_prompt = messages[1]["content"]
+    assert stable_prompt == captured["bodies"][1]["messages"][1]["content"]
+    stable_context = json.loads(stable_prompt.split("\n", 1)[1])
+    assert stable_context["schema_version"] == "openeta.planner_static_context.v1"
+    assert stable_context["available_tools"] == stable_fields["available_tools"]
+    assert stable_context["relevant_skills"] == stable_fields["relevant_skills"]
+    assert stable_context["operational_constraints"] == {
+        "rules": {"world_mutation": "one atomic tool at a time"}
+    }
+
+    dynamic_context = json.loads(messages[-1]["content"])["tool_context"]
+    assert dynamic_context["current_observation"] == {"step_idx": 4}
+    assert dynamic_context["operational_constraints"] == {
+        "fresh_observation_required": False
+    }
+    assert not set(stable_fields) & set(dynamic_context)
     assert result.details["usage"]["cached_tokens"] == 80
+    layout = result.details["prompt_layout"]
+    assert layout["schema_version"] == "openeta.planner_prompt_layout.v1"
+    assert layout["cache_stable_prefix_enabled"] is True
+    assert layout["static_before_conversation"] is True
+    assert layout["stable_context_chars"] == len(stable_prompt)
+    assert layout["stable_context_sha256"] == second_result.details["prompt_layout"][
+        "stable_context_sha256"
+    ]
+
+
+def test_backend_keeps_isolated_context_in_one_user_message() -> None:
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": '{"decision":"abstain"}'},
+                }
+            ],
+            "usage": {"total_tokens": 12},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="test-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+            enable_vision=False,
+        ),
+        transport=fake_transport,
+    )
+    result = backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "available_tools": [{"name": "move_to"}],
+                "role": "isolated_reviewer",
+            },
+            system_prompt="return json",
+            metadata={"isolated_context": True},
+        )
+    )
+
+    messages = captured["body"]["messages"]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert json.loads(messages[-1]["content"])["tool_context"]["available_tools"] == [
+        {"name": "move_to"}
+    ]
+    assert result.details["prompt_layout"]["cache_stable_prefix_enabled"] is False

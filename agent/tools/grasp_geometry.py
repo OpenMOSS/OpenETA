@@ -141,13 +141,22 @@ def build_compile_grasp_seed_handler(
     return handler
 
 
-def build_wrist_alignment_handler() -> ToolHandler:
-    """Build a read-only mask/depth wrist alignment calculator."""
+def build_wrist_alignment_handler(
+    profile_path: str | Path = DEFAULT_GRASP_PROFILE,
+) -> ToolHandler:
+    """Build a wrist alignment calculator bound to one embodiment profile."""
+
+    resolved_profile = Path(profile_path)
 
     def handler(context: ToolExecutionContext) -> ToolResult:
         try:
-            outputs = compute_wrist_alignment(context.parameters)
-        except (OSError, GraspGeometryError) as exc:
+            profile, profile_sha256 = _load_profile(resolved_profile)
+            outputs = compute_wrist_alignment(
+                context.parameters,
+                profile=profile,
+                profile_sha256=profile_sha256,
+            )
+        except (OSError, json.JSONDecodeError, GraspGeometryError) as exc:
             return make_tool_result(
                 context,
                 success=False,
@@ -492,10 +501,30 @@ def grasp_refinement_hover_pose(
     }
 
 
-def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
+def compute_wrist_alignment(
+    parameters: Mapping[str, Any],
+    *,
+    profile: Mapping[str, Any],
+    profile_sha256: str,
+) -> JsonDict:
     compiled = _mapping(parameters.get("compiled_grasp"), "compiled_grasp")
     if compiled.get("schema_version") != COMPILED_GRASP_SCHEMA:
         raise GraspGeometryError("compiled_grasp has an unsupported schema")
+    calibration_id = str(profile.get("calibration_id") or "").strip()
+    if not calibration_id:
+        raise GraspGeometryError("calibration profile calibration_id is required")
+    if str(compiled.get("calibration_id") or "") != calibration_id:
+        raise GraspGeometryError(
+            "compiled_grasp calibration_id does not match the loaded profile"
+        )
+    if str(compiled.get("profile_sha256") or "") != profile_sha256:
+        raise GraspGeometryError(
+            "compiled_grasp profile_sha256 does not match the loaded profile"
+        )
+    if "desired_pixel_xy" in parameters:
+        raise GraspGeometryError(
+            "desired_pixel_xy is host-derived from calibration and must not be supplied"
+        )
     target_mask = Path(str(parameters.get("target_mask") or ""))
     depth_path = Path(str(parameters.get("depth") or ""))
     if not target_mask.is_file() or not depth_path.is_file():
@@ -503,11 +532,20 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
     intrinsics = _mapping(parameters.get("intrinsics"), "intrinsics")
     fx = _positive_float(intrinsics.get("fx"), "intrinsics.fx")
     fy = _positive_float(intrinsics.get("fy"), "intrinsics.fy")
-    cx = _finite_float(intrinsics.get("cx"), "intrinsics.cx")
-    cy = _finite_float(intrinsics.get("cy"), "intrinsics.cy")
+    _finite_float(intrinsics.get("cx"), "intrinsics.cx")
+    _finite_float(intrinsics.get("cy"), "intrinsics.cy")
     scale = _positive_float(intrinsics.get("scale", 1000.0), "intrinsics.scale")
-    desired = parameters.get("desired_pixel_xy", [cx, cy])
-    desired_xy = _vector(desired, 2, "desired_pixel_xy")
+    current_pose = _mapping(parameters.get("current_eef_pose"), "current_eef_pose")
+    camera_extrinsics = _mapping(
+        parameters.get("camera_extrinsics"), "camera_extrinsics"
+    )
+    desired_xy, gripper_projection, r_world_cv = _project_configured_gripper_center(
+        profile=profile,
+        profile_sha256=profile_sha256,
+        current_eef_pose=current_pose,
+        camera_extrinsics=camera_extrinsics,
+        intrinsics=intrinsics,
+    )
     max_correction = _bounded_float(
         parameters.get("max_correction_m", 0.03),
         "max_correction_m",
@@ -525,6 +563,16 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         desired_xy=desired_xy,
         target_region=target_region,
     )
+    if not math.isclose(
+        _positive_float(intrinsics.get("width"), "intrinsics.width"),
+        float(width),
+    ) or not math.isclose(
+        _positive_float(intrinsics.get("height"), "intrinsics.height"),
+        float(height),
+    ):
+        raise GraspGeometryError(
+            "wrist intrinsics width/height do not match the mask and depth images"
+        )
     if not (0 <= desired_xy[0] < width and 0 <= desired_xy[1] < height):
         raise GraspGeometryError("desired_pixel_xy is outside the image")
     delta_camera = [
@@ -532,9 +580,6 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         (v - desired_xy[1]) * depth_m / fy,
         0.0,
     ]
-    r_world_cv, _ = _opencv_camera_to_world(
-        _mapping(parameters.get("camera_extrinsics"), "camera_extrinsics")
-    )
     delta_world = _matvec3(r_world_cv, delta_camera)
     norm = math.sqrt(sum(value * value for value in delta_world))
     if norm > max_correction:
@@ -542,7 +587,6 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         delta_world = [value * scale_factor for value in delta_world]
     residual_px = math.hypot(u - desired_xy[0], v - desired_xy[1])
 
-    current_pose = _mapping(parameters.get("current_eef_pose"), "current_eef_pose")
     current_xyz = _vector(current_pose.get("xyz"), 3, "current_eef_pose.xyz")
     contact_pose = _mapping(compiled.get("contact_pose"), "compiled_grasp.contact_pose")
     contact_xyz = _vector(contact_pose.get("xyz"), 3, "compiled_grasp.contact_pose.xyz")
@@ -583,6 +627,7 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
                 "mask": hashlib.sha256(target_mask.read_bytes()).hexdigest(),
                 "depth": hashlib.sha256(depth_path.read_bytes()).hexdigest(),
                 "delta_world": delta_world,
+                "gripper_center_projection": gripper_projection,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -600,6 +645,7 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         "scene_epoch": _nonnegative_int(parameters.get("scene_epoch"), "scene_epoch"),
         "target_pixel_xy": [round(u, 3), round(v, 3)],
         "desired_pixel_xy": _round_vector(desired_xy),
+        "gripper_center_projection": gripper_projection,
         "target_depth_m": round(depth_m, 6),
         "target_region": target_region,
         "residual_px_before": round(residual_px, 3),
@@ -609,6 +655,185 @@ def compute_wrist_alignment(parameters: Mapping[str, Any]) -> JsonDict:
         "adjusted_contact_pose": adjusted_contact,
         "adjusted_precontact_pose": adjusted_precontact,
     }
+
+
+def _project_configured_gripper_center(
+    *,
+    profile: Mapping[str, Any],
+    profile_sha256: str,
+    current_eef_pose: Mapping[str, Any],
+    camera_extrinsics: Mapping[str, Any],
+    intrinsics: Mapping[str, Any],
+) -> tuple[list[float], JsonDict, list[list[float]]]:
+    """Project the calibrated gripper centre into the current wrist image."""
+
+    wrist_alignment = _mapping(profile.get("wrist_alignment"), "wrist_alignment")
+    center_eef = _vector(
+        wrist_alignment.get("eef_to_gripper_center_xyz"),
+        3,
+        "wrist_alignment.eef_to_gripper_center_xyz",
+    )
+    p_world_eef = _vector(current_eef_pose.get("xyz"), 3, "current_eef_pose.xyz")
+    r_world_eef, orientation_source = _eef_rotation(current_eef_pose)
+    p_world_center = _add(p_world_eef, _matvec3(r_world_eef, center_eef))
+
+    r_world_cv, p_world_camera, extrinsics_source = (
+        _resolve_current_opencv_camera_to_world(
+            camera_extrinsics,
+            p_world_eef=p_world_eef,
+            r_world_eef=r_world_eef,
+        )
+    )
+    camera_delta = [
+        p_world_center[index] - p_world_camera[index] for index in range(3)
+    ]
+    p_camera_center = [
+        sum(r_world_cv[row][column] * camera_delta[row] for row in range(3))
+        for column in range(3)
+    ]
+    if p_camera_center[2] <= 1e-6:
+        raise GraspGeometryError(
+            "calibrated gripper center projects behind the wrist camera"
+        )
+
+    fx = _positive_float(intrinsics.get("fx"), "intrinsics.fx")
+    fy = _positive_float(intrinsics.get("fy"), "intrinsics.fy")
+    cx = _finite_float(intrinsics.get("cx"), "intrinsics.cx")
+    cy = _finite_float(intrinsics.get("cy"), "intrinsics.cy")
+    desired_xy = [
+        fx * p_camera_center[0] / p_camera_center[2] + cx,
+        fy * p_camera_center[1] / p_camera_center[2] + cy,
+    ]
+    width = _positive_float(intrinsics.get("width"), "intrinsics.width")
+    height = _positive_float(intrinsics.get("height"), "intrinsics.height")
+    if not (0 <= desired_xy[0] < width and 0 <= desired_xy[1] < height):
+        raise GraspGeometryError(
+            "calibrated gripper center projects outside the wrist image"
+        )
+
+    calibration_id = str(profile.get("calibration_id") or "")
+    return desired_xy, {
+        "schema_version": "openeta.gripper_center_projection.v1",
+        "calibration_id": calibration_id,
+        "profile_sha256": profile_sha256,
+        "reference_frame": str(profile.get("eef_frame") or ""),
+        "reference_point": str(wrist_alignment.get("reference_point") or ""),
+        "eef_to_gripper_center_xyz": _round_vector(center_eef),
+        "gripper_center_world_xyz": _round_vector(p_world_center),
+        "gripper_center_camera_xyz": _round_vector(p_camera_center),
+        "pixel_xy": _round_vector(desired_xy),
+        "eef_orientation_source": orientation_source,
+        "camera_extrinsics_source": extrinsics_source,
+        "input_camera_frame": str(
+            camera_extrinsics.get("camera_frame")
+            or ("opencv" if extrinsics_source != "live_camera_to_world" else "opengl")
+        ),
+        "projection_camera_frame": "opencv",
+    }, r_world_cv
+
+
+def _resolve_current_opencv_camera_to_world(
+    extrinsics: Mapping[str, Any],
+    *,
+    p_world_eef: Sequence[float],
+    r_world_eef: Sequence[Sequence[float]],
+) -> tuple[list[list[float]], list[float], str]:
+    """Resolve live or calibrated wrist extrinsics into world camera pose."""
+
+    if any(key in extrinsics for key in ("mat", "camera_to_world", "pose_mat", "matrix")):
+        frame_transform = str(extrinsics.get("frame_transform") or "camera_to_world")
+        if frame_transform != "camera_to_world":
+            raise GraspGeometryError(
+                "live wrist extrinsics frame_transform must be camera_to_world"
+            )
+        rotation, position = _opencv_camera_to_world(extrinsics)
+        return rotation, position, "live_camera_to_world"
+
+    mount_type = str(extrinsics.get("type") or "").strip()
+    if mount_type == "T_gripper_cam":
+        if str(extrinsics.get("frame") or "").strip() not in {"gripper", "eef", "tcp"}:
+            raise GraspGeometryError(
+                "T_gripper_cam extrinsics require frame gripper, eef, or tcp"
+            )
+        matrix = extrinsics.get("T_gripper_cam")
+        if not isinstance(matrix, list) or len(matrix) != 4:
+            raise GraspGeometryError("T_gripper_cam must be a 4x4 matrix")
+        rows = [_vector(row, 4, "camera_extrinsics.T_gripper_cam") for row in matrix]
+        r_eef_cv = _rotation(
+            [row[:3] for row in rows[:3]],
+            "camera_extrinsics.T_gripper_cam",
+        )
+        p_eef_camera = [rows[0][3], rows[1][3], rows[2][3]]
+        r_world_cv = _matmul3(r_world_eef, r_eef_cv)
+        p_world_camera = _add(
+            p_world_eef,
+            _matvec3(r_world_eef, p_eef_camera),
+        )
+        return r_world_cv, p_world_camera, "T_world_eef_x_T_gripper_cam"
+
+    if mount_type == "T_base_cam":
+        matrix = extrinsics.get("T_base_cam")
+        if not isinstance(matrix, list) or len(matrix) != 4:
+            raise GraspGeometryError("T_base_cam must be a 4x4 matrix")
+        rows = [_vector(row, 4, "camera_extrinsics.T_base_cam") for row in matrix]
+        rotation = _rotation(
+            [row[:3] for row in rows[:3]],
+            "camera_extrinsics.T_base_cam",
+        )
+        return rotation, [rows[0][3], rows[1][3], rows[2][3]], "T_base_cam"
+
+    raise GraspGeometryError(
+        "camera_extrinsics must provide live camera_to_world, T_gripper_cam, or T_base_cam"
+    )
+
+
+def _eef_rotation(pose: Mapping[str, Any]) -> tuple[list[list[float]], str]:
+    rotation_matrix = pose.get("rotation_matrix")
+    if rotation_matrix is not None:
+        return _rotation(rotation_matrix, "current_eef_pose.rotation_matrix"), "rotation_matrix"
+
+    quat = pose.get("quat_xyzw")
+    if quat is not None:
+        x, y, z, w = _vector(quat, 4, "current_eef_pose.quat_xyzw")
+        norm = math.sqrt(x * x + y * y + z * z + w * w)
+        if norm < 1e-9:
+            raise GraspGeometryError("current_eef_pose.quat_xyzw has zero length")
+        x, y, z, w = x / norm, y / norm, z / norm, w / norm
+        return [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], "quat_xyzw"
+
+    rotvec = pose.get("rotvec")
+    if rotvec is not None:
+        rx, ry, rz = _vector(rotvec, 3, "current_eef_pose.rotvec")
+        angle = math.sqrt(rx * rx + ry * ry + rz * rz)
+        if angle < 1e-12:
+            return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], "rotvec"
+        ax, ay, az = rx / angle, ry / angle, rz / angle
+        c, s, one_minus_c = math.cos(angle), math.sin(angle), 1 - math.cos(angle)
+        return [
+            [
+                c + ax * ax * one_minus_c,
+                ax * ay * one_minus_c - az * s,
+                ax * az * one_minus_c + ay * s,
+            ],
+            [
+                ay * ax * one_minus_c + az * s,
+                c + ay * ay * one_minus_c,
+                ay * az * one_minus_c - ax * s,
+            ],
+            [
+                az * ax * one_minus_c - ay * s,
+                az * ay * one_minus_c + ax * s,
+                c + az * az * one_minus_c,
+            ],
+        ], "rotvec"
+
+    raise GraspGeometryError(
+        "current_eef_pose requires rotation_matrix, quat_xyzw, or rotvec"
+    )
 
 
 def _load_profile(path: Path) -> tuple[JsonDict, str]:

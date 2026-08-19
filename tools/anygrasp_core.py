@@ -52,6 +52,20 @@ class AnyGraspBackend:
         self.max_candidates = max_candidates
         self._detector: Any | None = None
 
+    def capabilities(self) -> dict[str, Any]:
+        """Return deployment-bound geometry without loading the model."""
+
+        return {
+            "schema_version": "openeta.anygrasp_capabilities.v1",
+            "backend": "anygrasp_mcp",
+            "model": "anygrasp_sdk",
+            "max_gripper_width_m": float(self.max_gripper_width),
+            "gripper_height_m": float(self.gripper_height),
+            "depth_truncation_m": float(self.depth_truncation),
+            "max_candidates": int(self.max_candidates),
+            "geometry_change_requires_redeployment": True,
+        }
+
     def detect_grasps(
         self,
         *,

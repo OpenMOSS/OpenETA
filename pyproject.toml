@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "gymnasium>=1.0",
   "imageio[ffmpeg]>=2.34",
-  "mcp>=1.0",
+  "mcp>=1.0,<2",
   "numpy>=1.26",
   "Pillow>=10",
   "prompt_toolkit>=3.0",

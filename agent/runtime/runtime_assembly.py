@@ -7,13 +7,17 @@ from pathlib import Path
 from typing import Callable
 
 from adapter.protocol import JsonDict
-from agent.backends.planner import PlannerBackend
+from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+    PlannerBackend,
+)
 from agent.backends.provider_config import PlannerProviderConfig
 from agent.runtime.calibration import (
     BackendCalibrationReviewer,
     CalibrationLifecycleConfig,
     CalibrationLifecycleManager,
 )
+from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
 from agent.runtime.checkers import CheckerSubagentConfig
 from agent.runtime.grasp_strategy_lifecycle import (
     BackendGraspStrategyReviewer,
@@ -56,6 +60,11 @@ from agent.tools.asset_references import (
     build_object_memory_reference_handler,
     load_configured_asset_reference_catalog,
 )
+from agent.tools.anygrasp_capabilities import (
+    AnyGraspCapabilityQuery,
+    check_anygrasp_compatibility,
+    query_anygrasp_capabilities,
+)
 from agent.tools.attachment_probe import (
     build_assess_attachment_probe_handler,
     build_prepare_attachment_probe_handler,
@@ -80,7 +89,15 @@ from agent.tools.handlers import (
     build_sse_molmopoint_mcp_pointer,
     build_sse_sam3_mcp_segmenter,
 )
-from agent.tools.grasp_geometry import build_compile_grasp_seed_handler
+from agent.tools.grasp_geometry import (
+    build_compile_grasp_seed_handler,
+    build_wrist_alignment_handler,
+)
+from agent.tools.grasp_pose_advisor import (
+    GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
+    GRASP_POSE_ADVISOR_MAX_VISION_IMAGES,
+    BackendGraspPoseAdvisor,
+)
 from agent.tools.mcp_registry import load_mcp_server_url
 from agent.tools.object_memory import (
     ObjectMemoryBankClient,
@@ -111,6 +128,12 @@ PublicationApproval = Callable[[JsonDict], bool]
 SkillApproval = Callable[[str], bool]
 
 MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
+# Strong reasoning models may account hidden reasoning tokens against the
+# OpenAI-compatible completion limit. A 512-token cap can therefore yield an
+# otherwise valid response with no JSON content. This matches the established
+# experiment entry budget while still allowing normal responses to finish early.
+MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
+VDM_MAX_OUTPUT_TOKENS = 2048
 
 
 REMOTE_PLACEHOLDER_TOOLS = (
@@ -173,6 +196,9 @@ class RuntimeAssemblyConfig:
     tool_listeners: tuple[ToolEventListener, ...] = ()
     max_validation_retries: int = 2
     visual_history: VisualHistoryConfig = field(default_factory=VisualHistoryConfig.from_env)
+    perception_capability_timeout_s: float = 10.0
+    anygrasp_capability_query: AnyGraspCapabilityQuery | None = None
+    grasp_pose_advisor_enabled: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +208,7 @@ class RuntimeAssembly:
     runtime: OpenEtaAgentRuntime
     supervision_gate: SupervisionGate
     depth_prefetch: DepthPriorPrefetchCoordinator | None
+    perception_capabilities: JsonDict
 
 
 def resolve_runtime_mcp_endpoints(
@@ -242,6 +269,11 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         replace=True,
     )
     tools.bind_handler(
+        "compute_wrist_alignment",
+        build_wrist_alignment_handler(workspace.grasp_profile_path),
+        replace=True,
+    )
+    tools.bind_handler(
         "prepare_attachment_probe",
         build_prepare_attachment_probe_handler(),
         replace=True,
@@ -249,7 +281,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     tools.bind_handler(
         "assess_attachment_probe",
         build_assess_attachment_probe_handler(
-            config.backend_factory(max_tokens=256, max_vision_images=4)
+            config.backend_factory(
+                max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+                max_vision_images=4,
+            )
         ),
         replace=True,
     )
@@ -290,7 +325,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             publication_mode=lambda: policy_provider().skill_change_mode,
             human_approval=config.calibration_approval,
         ),
-        reviewer=BackendCalibrationReviewer(config.backend_factory()),
+        reviewer=BackendCalibrationReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.bind_handler(
         "propose_calibration_profile",
@@ -314,7 +351,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             publication_mode=lambda: policy_provider().skill_change_mode,
             human_approval=config.strategy_approval,
         ),
-        reviewer=BackendGraspStrategyReviewer(config.backend_factory()),
+        reviewer=BackendGraspStrategyReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.bind_handler(
         "propose_grasp_strategy",
@@ -332,15 +371,20 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         config=config.web_access_config,
         provider_config=config.provider,
     )
+    perception_capabilities, effective_endpoints = _preflight_perception_capabilities(
+        config
+    )
     depth_prefetch = bind_runtime_perception_tools(
         tools,
-        endpoints=config.endpoints,
+        endpoints=effective_endpoints,
         backend_factory=config.backend_factory,
         artifact_root=artifact_root,
+        grasp_pose_advisor_enabled=config.grasp_pose_advisor_enabled,
     )
 
     planner = ToolCallingPlanner(
         config.backend_factory(
+            max_tokens=MAIN_PLANNER_MAX_OUTPUT_TOKENS,
             max_vision_images=(
                 config.visual_history.planner_raw_image_capacity
                 + MAIN_PLANNER_AUX_IMAGE_RESERVE
@@ -358,7 +402,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     visual_history = (
         VisualHistoryManager(
             config=config.visual_history,
-            backend=config.backend_factory(max_tokens=384, max_vision_images=2),
+            backend=config.backend_factory(
+                max_tokens=VDM_MAX_OUTPUT_TOKENS,
+                max_vision_images=2,
+            ),
         )
         if config.visual_history.enabled
         else None
@@ -396,6 +443,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         self_improvement_reviewer=skill_reviewer,
         default_session_id=workspace.session_id,
         visual_history=visual_history,
+        startup_facts={
+            "perception_backend_capabilities": perception_capabilities,
+        },
     )
     configure_runtime_self_improvement(
         runtime,
@@ -412,7 +462,9 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     gate = SupervisionGate(
         config.supervision_policy,
         human_approval=config.human_action_approval,
-        action_reviewer=BackendActionReviewer(config.backend_factory(max_tokens=512)),
+        action_reviewer=BackendActionReviewer(
+            config.backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
     )
     tools.set_execution_gate(gate.authorize)
     for listener in config.tool_listeners:
@@ -421,7 +473,61 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         runtime=runtime,
         supervision_gate=gate,
         depth_prefetch=depth_prefetch,
+        perception_capabilities=perception_capabilities,
     )
+
+
+def _preflight_perception_capabilities(
+    config: RuntimeAssemblyConfig,
+) -> tuple[JsonDict, RuntimeMcpEndpoints]:
+    """Disable configured backends whose deployment geometry is unverifiable."""
+
+    report: JsonDict = {
+        "schema_version": "openeta.perception_capability_preflight.v1",
+        "backends": {},
+    }
+    effective = config.endpoints
+    if not config.endpoints.anygrasp_url:
+        report["backends"]["anygrasp"] = {
+            "backend": "anygrasp",
+            "configured": False,
+            "available": False,
+            "compatible": False,
+            "reason": "backend_not_configured",
+        }
+        return report, effective
+
+    try:
+        physical = load_grasp_calibration_capabilities(
+            config.workspace.grasp_profile_path
+        )["max_gripper_width_m"]
+        anygrasp = check_anygrasp_compatibility(
+            url=config.endpoints.anygrasp_url,
+            physical_max_gripper_width_m=float(physical),
+            timeout_s=config.perception_capability_timeout_s,
+            query=config.anygrasp_capability_query or query_anygrasp_capabilities,
+        )
+    except Exception as exc:  # noqa: BLE001 - assembly fails this backend closed.
+        anygrasp = {
+            "schema_version": "openeta.backend_compatibility.v1",
+            "backend": "anygrasp",
+            "configured": True,
+            "url": config.endpoints.anygrasp_url,
+            "available": False,
+            "compatible": False,
+            "reason": "host_capability_preflight_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "message": (
+                "AnyGrasp is unavailable because host capability preflight failed. "
+                "Verify the calibration profile and redeploy AnyGrasp with matching "
+                "gripper geometry."
+            ),
+        }
+    report["backends"]["anygrasp"] = anygrasp
+    if anygrasp.get("compatible") is not True:
+        effective = replace(config.endpoints, anygrasp_url="")
+    return report, effective
 
 
 def configure_runtime_self_improvement(
@@ -445,7 +551,9 @@ def configure_runtime_self_improvement(
         author=BackendSkillAuthoringSubagent(
             backend_factory(max_tokens=SKILL_AUTHORING_MAX_OUTPUT_TOKENS)
         ),
-        reviewer=BackendSkillChangeReviewer(backend_factory()),
+        reviewer=BackendSkillChangeReviewer(
+            backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+        ),
         executable_tools=_skill_authoring_tools(runtime.tools),
     )
 
@@ -456,6 +564,7 @@ def bind_runtime_perception_tools(
     endpoints: RuntimeMcpEndpoints,
     backend_factory: BackendFactory,
     artifact_root: Path,
+    grasp_pose_advisor_enabled: bool = True,
 ) -> DepthPriorPrefetchCoordinator | None:
     object_memory_configuration_error = ""
     try:
@@ -573,9 +682,23 @@ def bind_runtime_perception_tools(
             url=endpoints.contact_graspnet_url
         )
     if grasp_backends:
+        advisor = (
+            BackendGraspPoseAdvisor(
+                backend_factory(
+                    max_tokens=GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
+                    max_vision_images=GRASP_POSE_ADVISOR_MAX_VISION_IMAGES,
+                )
+            )
+            if grasp_pose_advisor_enabled
+            else None
+        )
         tools.bind_handler(
             "grasp_pose_estimate",
-            build_grasp_pose_estimate_handler(grasp_backends),
+            build_grasp_pose_estimate_handler(
+                grasp_backends,
+                advisor=advisor,
+                selection_output_root=artifact_root / "grasp_selection",
+            ),
             replace=True,
         )
     return depth_prefetch
@@ -713,7 +836,9 @@ def _authorize_skill_change(
             "source": "runtime_policy",
             "reason": "Standard profile permits session-local registry changes.",
         }
-    reviewed = BackendSkillChangeReviewer(backend_factory()).review(
+    reviewed = BackendSkillChangeReviewer(
+        backend_factory(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+    ).review(
         request=request,
         skill=skill,
     )

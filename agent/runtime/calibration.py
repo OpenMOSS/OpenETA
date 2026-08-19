@@ -674,6 +674,19 @@ def validate_calibration_profile(
                 or any(not isinstance(value, str) or not value.strip() for value in values)
             ):
                 raise ValueError(f"compatibility.{key} must be non-empty strings")
+        wrist_alignment = _required_object(
+            normalized.get("wrist_alignment"),
+            "wrist_alignment",
+        )
+        gripper_center = _vector(
+            wrist_alignment.get("eef_to_gripper_center_xyz"),
+            3,
+            "wrist_alignment.eef_to_gripper_center_xyz",
+        )
+        if any(abs(value) > 1.0 for value in gripper_center):
+            raise ValueError(
+                "wrist_alignment.eef_to_gripper_center_xyz exceeds 1 metre"
+            )
     normalized_fingerprint = _validate_fingerprint(fingerprint)
     normalized["profile_fingerprint"] = normalized_fingerprint
     normalized["validation_gates"] = validation_gates

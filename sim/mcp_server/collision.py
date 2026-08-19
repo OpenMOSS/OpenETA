@@ -501,6 +501,14 @@ class CollisionChecker:
           ``max_world_penetration``, ``max_self_penetration``,
           ``world_collision``, ``self_collision`` (positive = penetration).
         """
+        objects = objects or []
+        coverage = {
+            "check_mode": "post_step_configuration",
+            "trajectory_checked": False,
+            "self_checked": bool(self._available),
+            "world_checked": bool(self._available and objects),
+            "world_object_count": len(objects),
+        }
         if not self._available:
             # Report *why*, per backend.  A caller that cannot tell "checked and
             # clear" from "never checked" will read an unsupported robot as a
@@ -517,6 +525,7 @@ class CollisionChecker:
                 reason = "cuRobo not installed or CUDA unavailable"
             return False, {"available": False, "reason": reason,
                            "unsupported_robot": False,
+                           **coverage,
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
 
@@ -620,6 +629,7 @@ class CollisionChecker:
             "max_self_penetration": d_self_val,
             "world_collision": world_coll,
             "self_collision": self_coll,
+            **coverage,
         }
         if world_update_error:
             info["world_update_error"] = world_update_error

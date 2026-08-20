@@ -37,6 +37,121 @@ _curobo_available: bool | None = None
 _RECEPTACLE_CATEGORIES = frozenset({"basket", "bin", "bowl", "tray", "container"})
 
 
+def resolve_contact_authorization(
+    authorization: object,
+    objects: list[dict],
+    *,
+    max_anchor_distance_m: float = 0.15,
+    ambiguity_margin_m: float = 0.01,
+) -> tuple[dict | None, dict]:
+    """Bind host grasp evidence to exactly one current simulator object.
+
+    The Agent never supplies this authorization directly.  The harness resolves
+    a current compiled grasp to an opaque host block; the simulator adapter then
+    associates its 3-D target anchor with current privileged geometry.  This is
+    an evidence-to-safety adapter, not task-stage tracking.
+    """
+
+    if not isinstance(authorization, dict):
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_missing",
+            "message": "No host-resolved contact authorization was supplied.",
+        }
+    if authorization.get("schema_version") != "openeta.contact_authorization.v1":
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_schema_mismatch",
+            "message": "Contact authorization has an unsupported schema version.",
+        }
+    if authorization.get("waypoint_role") != "grasp_contact":
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_role_mismatch",
+            "message": "Only a host-resolved grasp_contact waypoint may authorize contact.",
+        }
+    anchor = authorization.get("target_anchor_world_xyz")
+    if not _finite_xyz(anchor):
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_anchor_invalid",
+            "message": "Contact authorization has no finite world-frame target anchor.",
+        }
+    anchor_xyz = [float(value) for value in anchor[:3]]
+    candidates: list[tuple[float, float, dict]] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        category = str(obj.get("category") or "").strip().lower()
+        if category in _RECEPTACLE_CATEGORIES:
+            continue
+        position = obj.get("position")
+        if not _finite_xyz(position):
+            continue
+        bounds = _object_aabb(obj)
+        surface_distance = (
+            _point_aabb_distance(anchor_xyz, *bounds)
+            if bounds is not None
+            else math.inf
+        )
+        center_distance = math.dist(
+            anchor_xyz,
+            [float(value) for value in position[:3]],
+        )
+        candidates.append((surface_distance, center_distance, obj))
+    if not candidates:
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_unavailable",
+            "message": "No non-receptacle scene object geometry can be associated with the grasp anchor.",
+        }
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2].get("name") or "")))
+    best_surface, best_center, best = candidates[0]
+    # Conservative rbound-derived AABBs may overlap, so surface distance alone
+    # cannot disambiguate.  Among equally containing/nearby bounds, require a
+    # clear centre-distance winner rather than silently choosing one object.
+    near_surface = [item for item in candidates if item[0] <= best_surface + 1e-9]
+    near_surface.sort(key=lambda item: item[1])
+    if len(near_surface) > 1 and (
+        near_surface[1][1] - near_surface[0][1] < ambiguity_margin_m
+    ):
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_ambiguous",
+            "message": (
+                "The compiled grasp anchor is equally close to multiple scene objects; "
+                "refresh target geometry instead of guessing which contact is intended."
+            ),
+            "candidate_objects": [
+                str(item[2].get("name") or "") for item in near_surface[:4]
+            ],
+        }
+    if best_surface > max_anchor_distance_m and best_center > max_anchor_distance_m:
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_not_found",
+            "message": (
+                "No scene object is within the contact-authorization association "
+                f"radius ({max_anchor_distance_m:.3f} m) of the compiled grasp anchor."
+            ),
+            "nearest_object": str(best.get("name") or ""),
+            "nearest_surface_distance_m": best_surface,
+            "nearest_center_distance_m": best_center,
+        }
+    return best, {
+        "ok": True,
+        "schema_version": "openeta.contact_authorization_resolution.v1",
+        "compiled_grasp_id": authorization.get("compiled_grasp_id"),
+        "target_evidence_id": authorization.get("target_evidence_id"),
+        "object_scene_epoch": authorization.get("object_scene_epoch"),
+        "target_object_name": str(best.get("name") or ""),
+        "target_object_category": str(best.get("category") or ""),
+        "anchor_world_xyz": anchor_xyz,
+        "surface_distance_m": best_surface,
+        "center_distance_m": best_center,
+    }
+
+
 def _detect_curobo() -> bool:
     """Check whether cuRobo and CUDA are usable.  Result is cached."""
     global _curobo_available
@@ -118,6 +233,7 @@ def check_attached_object_collision(
     objects: list[dict],
     predicted_eef_xyz: list[float],
     *,
+    baseline_eef_xyz: list[float] | None = None,
     margin_m: float = 0.005,
 ) -> tuple[bool, dict]:
     """Check a conservative attached-object AABB against scene obstacles.
@@ -133,10 +249,24 @@ def check_attached_object_collision(
     if not _finite_xyz(relative) or not _finite_xyz(dims) or not _finite_xyz(predicted_eef_xyz):
         return False, {"available": False, "reason": "attached_object_geometry_incomplete"}
     held_dims = [max(0.01, float(value)) for value in dims]
-    held_center = [float(predicted_eef_xyz[i]) + float(relative[i]) for i in range(3)]
-    held_min = [held_center[i] - held_dims[i] / 2.0 - margin_m for i in range(3)]
-    held_max = [held_center[i] + held_dims[i] / 2.0 + margin_m for i in range(3)]
+    held_center, held_min, held_max = _attached_aabb(
+        predicted_eef_xyz,
+        relative,
+        held_dims,
+        margin_m=margin_m,
+    )
+    baseline_bounds = (
+        _attached_aabb(
+            baseline_eef_xyz,
+            relative,
+            held_dims,
+            margin_m=margin_m,
+        )
+        if _finite_xyz(baseline_eef_xyz)
+        else None
+    )
     attached_name = str(attachment.get("object_name") or "")
+    egress_obstacles: list[str] = []
 
     for obstacle in objects:
         if not isinstance(obstacle, dict) or str(obstacle.get("name") or "") == attached_name:
@@ -157,6 +287,29 @@ def check_attached_object_collision(
         ):
             continue
         obstacle_name = str(obstacle.get("name") or category or "scene obstacle")
+        predicted_overlap = _aabb_overlap_volume(
+            held_min,
+            held_max,
+            obstacle_min,
+            obstacle_max,
+        )
+        baseline_overlap = 0.0
+        if baseline_bounds is not None:
+            _, baseline_min, baseline_max = baseline_bounds
+            baseline_overlap = _aabb_overlap_volume(
+                baseline_min,
+                baseline_max,
+                obstacle_min,
+                obstacle_max,
+            )
+        # A conservative proxy can already overlap a neighbouring object at the
+        # instant attachment is confirmed.  Rejecting every still-overlapping
+        # intermediate pose creates a deadlock in which even a vertical escape
+        # cannot begin.  Permit only strict monotonic egress from that existing
+        # overlap; new or unchanged/worsened overlap remains a hard stop.
+        if baseline_overlap > 0.0 and predicted_overlap < baseline_overlap - 1e-12:
+            egress_obstacles.append(obstacle_name)
+            continue
         return True, {
             "available": True,
             "world_collision": True,
@@ -168,6 +321,9 @@ def check_attached_object_collision(
             "obstacle": obstacle_name,
             "predicted_attached_center_xyz": held_center,
             "predicted_eef_xyz": [float(value) for value in predicted_eef_xyz],
+            "overlap_volume_m3": predicted_overlap,
+            "baseline_overlap_volume_m3": baseline_overlap,
+            "new_or_worsened": True,
             "message": (
                 f"Attached object {attached_name or '<unknown>'} would collide with "
                 f"{obstacle_name}. Raise or reroute the carry waypoint; for a "
@@ -175,7 +331,36 @@ def check_attached_object_collision(
                 "descending."
             ),
         }
-    return False, {"available": True, "attached_object_world_collision": False}
+    return False, {
+        "available": True,
+        "attached_object_world_collision": False,
+        **(
+            {
+                "egress_from_initial_overlap": True,
+                "egress_obstacles": egress_obstacles,
+                "message": (
+                    "The attached-object proxy still overlaps conservative scene "
+                    "geometry, but this controller increment strictly reduces that "
+                    "pre-existing overlap. Monotonic egress is allowed."
+                ),
+            }
+            if egress_obstacles
+            else {}
+        ),
+    }
+
+
+def _attached_aabb(
+    eef_xyz: list[float] | tuple[float, ...],
+    relative_xyz: list[float] | tuple[float, ...],
+    held_dims: list[float],
+    *,
+    margin_m: float,
+) -> tuple[list[float], list[float], list[float]]:
+    centre = [float(eef_xyz[i]) + float(relative_xyz[i]) for i in range(3)]
+    lower = [centre[i] - held_dims[i] / 2.0 - margin_m for i in range(3)]
+    upper = [centre[i] + held_dims[i] / 2.0 + margin_m for i in range(3)]
+    return centre, lower, upper
 
 
 def _finite_xyz(value: object) -> bool:
@@ -215,6 +400,35 @@ def _aabb_intersects(
     right_max: list[float],
 ) -> bool:
     return all(left_min[i] <= right_max[i] and left_max[i] >= right_min[i] for i in range(3))
+
+
+def _point_aabb_distance(
+    point: list[float],
+    lower: list[float],
+    upper: list[float],
+) -> float:
+    offsets = [
+        lower[index] - point[index]
+        if point[index] < lower[index]
+        else point[index] - upper[index]
+        if point[index] > upper[index]
+        else 0.0
+        for index in range(3)
+    ]
+    return math.sqrt(sum(value * value for value in offsets))
+
+
+def _aabb_overlap_volume(
+    left_min: list[float],
+    left_max: list[float],
+    right_min: list[float],
+    right_max: list[float],
+) -> float:
+    overlaps = [
+        max(0.0, min(left_max[i], right_max[i]) - max(left_min[i], right_min[i]))
+        for i in range(3)
+    ]
+    return overlaps[0] * overlaps[1] * overlaps[2]
 
 
 def _inside_receptacle_corridor(

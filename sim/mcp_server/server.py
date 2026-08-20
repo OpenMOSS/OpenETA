@@ -39,6 +39,7 @@ from sim.mcp_server.session import (
 from sim.mcp_server.worker_mgr import (
     _forget_obs_dirty,
     _proxy_observe,
+    _proxy_controller_goal,
     _proxy_reachability,
     _proxy_render,
     _proxy_reset,
@@ -48,6 +49,7 @@ from sim.mcp_server.collision import (
     check_attached_object_collision,
     get_checker,
     remove_checker,
+    resolve_contact_authorization as resolve_contact_object_authorization,
 )
 from sim.mcp_server.action_codecs import (
     ControlCodecError,
@@ -56,6 +58,7 @@ from sim.mcp_server.action_codecs import (
     codec_error_result,
     make_cartesian_action,
     make_gripper_action,
+    require_controller_capability,
 )
 from sim.mcp_server.rest_api import (
     session_dashboard,
@@ -63,6 +66,7 @@ from sim.mcp_server.rest_api import (
     session_stream,
     session_env_stream,
 )
+from sim.reachability import ROBUST_EXECUTION_JOINT_MARGIN_RAD
 
 # ── FastMCP server ────────────────────────────────────────────────────
 
@@ -431,7 +435,9 @@ def step_env(handle: str, action: list | None = None, *, num_steps: int = 1, ses
     if not meta:
         return {"error": f"Unknown: {handle}"}
     result = _proxy_step(meta, action, num_steps=num_steps)
-    _refresh_attachment_proxy(meta, result)
+    attachment_receipt = _refresh_attachment_proxy(meta, result)
+    if attachment_receipt is not None:
+        result["attachment_proxy_receipt"] = attachment_receipt
     return result
 
 
@@ -524,19 +530,52 @@ def _extract_gripper_state_from_result(result: dict) -> dict:
     return state if isinstance(state, dict) else {}
 
 
-def _arm_attachment_proxy(meta: dict, result: dict) -> None:
-    """Create a tentative held-object proxy after a non-empty close."""
+def _arm_attachment_proxy(
+    meta: dict,
+    result: dict,
+    *,
+    authorized_object: dict | None = None,
+) -> dict:
+    """Create a tentative held-object proxy after a non-empty close.
+
+    When the harness supplies compiled target provenance, bind the proxy to
+    that exact resolved object instead of guessing from nearest-neighbour
+    geometry.  The proxy remains tentative until independent co-motion
+    evidence exists; this receipt is collision-planning metadata, not proof of
+    a successful grasp.
+    """
 
     state = _extract_gripper_state_from_result(result)
     openness = state.get("openness")
     if not isinstance(openness, (int, float)) or isinstance(openness, bool) or openness < 0.08:
         meta.pop("_attachment_proxy", None)
-        return
+        return {
+            "schema_version": "openeta.attachment_proxy_receipt.v1",
+            "status": "not_armed",
+            "reason": "empty_close_or_no_measurable_contact",
+            "measured_open_fraction": openness,
+            "attachment_proven": False,
+            "interpretation": (
+                "The fingers closed near the empty-close value; no carried-object "
+                "collision proxy was armed. Inspect the returned views before lifting."
+            ),
+        }
     eef = _extract_ee_xyz_from_result(result)
     if len(eef) < 3:
-        return
+        return {
+            "schema_version": "openeta.attachment_proxy_receipt.v1",
+            "status": "not_armed",
+            "reason": "eef_pose_unavailable",
+            "measured_open_fraction": float(openness),
+            "attachment_proven": False,
+        }
     nearest: tuple[float, dict] | None = None
-    for obj in meta.get("_collision_objects", []):
+    candidates = (
+        [authorized_object]
+        if isinstance(authorized_object, dict)
+        else list(meta.get("_collision_objects", []))
+    )
+    for obj in candidates:
         if not isinstance(obj, dict):
             continue
         category = str(obj.get("category") or "").strip().lower()
@@ -553,7 +592,24 @@ def _arm_attachment_proxy(meta: dict, result: dict) -> None:
             nearest = (distance, obj)
     if nearest is None or nearest[0] > 0.12:
         meta.pop("_attachment_proxy", None)
-        return
+        return {
+            "schema_version": "openeta.attachment_proxy_receipt.v1",
+            "status": "not_armed",
+            "reason": "authorized_target_outside_contact_envelope",
+            "target_object_name": (
+                str(authorized_object.get("name") or "")
+                if isinstance(authorized_object, dict)
+                else None
+            ),
+            "eef_to_target_distance_m": nearest[0] if nearest is not None else None,
+            "max_contact_envelope_m": 0.12,
+            "measured_open_fraction": float(openness),
+            "attachment_proven": False,
+            "interpretation": (
+                "The close command completed, but the host-bound target was not near "
+                "the EEF contact envelope. Do not infer attachment from aperture alone."
+            ),
+        }
     obj = nearest[1]
     position = [float(value) for value in obj.get("position", [])[:3]]
     dims = obj.get("dims")
@@ -566,53 +622,88 @@ def _arm_attachment_proxy(meta: dict, result: dict) -> None:
         "relative_xyz": [position[i] - float(eef[i]) for i in range(3)],
         "dims": [max(0.01, float(value)) for value in dims[:3]],
         "anchor_eef_xyz": [float(value) for value in eef[:3]],
+        "binding_source": (
+            "host_compiled_target_provenance"
+            if isinstance(authorized_object, dict)
+            else "nearest_object_fallback"
+        ),
+    }
+    return {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "tentative",
+        "reason": "non_empty_close_near_bound_target",
+        "target_object_name": str(obj.get("name") or ""),
+        "binding_source": meta["_attachment_proxy"]["binding_source"],
+        "eef_to_target_distance_m": nearest[0],
+        "measured_open_fraction": float(openness),
+        "attachment_proven": False,
+        "interpretation": (
+            "A conservative carried-object collision proxy was armed for a lift "
+            "probe. This is not attachment proof; require post-lift co-motion and "
+            "source-vacancy evidence."
+        ),
     }
 
 
-def _refresh_attachment_proxy(meta: dict, result: dict) -> None:
-    """Confirm co-motion or retire a lost tentative/confirmed proxy."""
+def _refresh_attachment_proxy(meta: dict, result: dict) -> dict | None:
+    """Retain or retire a conservative proxy without claiming attachment.
+
+    ``meta['_collision_objects']`` is a reset-time geometry catalogue, not a
+    live object-state stream.  It must therefore never be used to infer
+    co-motion.  While the close command remains latched and measured aperture
+    has not collapsed to the empty-close range, keep the proxy tentative for
+    collision safety.  Independent visual evidence owns attachment verdicts.
+    """
 
     proxy = meta.get("_attachment_proxy")
     if not isinstance(proxy, dict):
-        return
+        return None
     state = _extract_gripper_state_from_result(result)
     openness = state.get("openness")
     if isinstance(openness, (int, float)) and not isinstance(openness, bool) and openness < 0.08:
+        object_name = str(proxy.get("object_name") or "")
         meta.pop("_attachment_proxy", None)
-        return
+        return {
+            "schema_version": "openeta.attachment_proxy_receipt.v1",
+            "status": "retired",
+            "reason": "aperture_collapsed_to_empty_close",
+            "target_object_name": object_name,
+            "binding_source": proxy.get("binding_source"),
+            "measured_open_fraction": float(openness),
+            "attachment_proven": False,
+            "interpretation": (
+                "The conservative carried-object proxy was retired because the "
+                "latched gripper closed into the empty-close aperture range. "
+                "Correlate this with fresh dual-view evidence and recover."
+            ),
+        }
     eef = _extract_ee_xyz_from_result(result)
-    obj = next(
-        (
-            item
-            for item in meta.get("_collision_objects", [])
-            if isinstance(item, dict) and str(item.get("name") or "") == proxy.get("object_name")
-        ),
-        None,
-    )
-    position = obj.get("position") if isinstance(obj, dict) else None
-    if len(eef) < 3 or not isinstance(position, list) or len(position) < 3:
-        return
-    relative = [float(position[i]) - float(eef[i]) for i in range(3)]
-    prior_relative = proxy.get("relative_xyz")
-    if not isinstance(prior_relative, list) or len(prior_relative) < 3:
-        return
-    relative_error = math.dist(relative, [float(value) for value in prior_relative[:3]])
     anchor = proxy.get("anchor_eef_xyz")
     displacement = (
         math.dist([float(value) for value in eef[:3]], [float(value) for value in anchor[:3]])
-        if isinstance(anchor, list) and len(anchor) >= 3
-        else 0.0
+        if len(eef) >= 3 and isinstance(anchor, list) and len(anchor) >= 3
+        else None
     )
-    if proxy.get("status") == "tentative":
-        if displacement >= 0.015 and relative_error <= 0.025:
-            proxy["status"] = "confirmed"
-            proxy["relative_xyz"] = relative
-        elif relative_error > 0.05:
-            meta.pop("_attachment_proxy", None)
-    elif relative_error > 0.05:
-        meta.pop("_attachment_proxy", None)
-    else:
-        proxy["relative_xyz"] = relative
+    proxy["status"] = "tentative"
+    return {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "tentative",
+        "reason": "awaiting_independent_co_motion_evidence",
+        "target_object_name": str(proxy.get("object_name") or ""),
+        "binding_source": proxy.get("binding_source"),
+        "measured_open_fraction": (
+            float(openness)
+            if isinstance(openness, (int, float)) and not isinstance(openness, bool)
+            else None
+        ),
+        "eef_displacement_since_close_m": displacement,
+        "attachment_proven": False,
+        "interpretation": (
+            "The host keeps a conservative tentative collision proxy while the "
+            "latched close retains non-empty aperture. Confirm or reject attachment "
+            "from fresh dual-view co-motion and source-vacancy evidence."
+        ),
+    }
 
 
 def _collision_objects_without_attached(meta: dict) -> list[dict]:
@@ -706,8 +797,8 @@ def ik_preview_check(
     The result is deliberately tri-state. ``unreachable`` is a structured
     rejection, while ``unknown`` means the numerical/backend budget could not
     certify either outcome and must not be presented as a safe approval.
-    Path feasibility is not checked here; use ``obstacle_avoidance`` for that
-    separate question.
+    Path feasibility is not checked here. Require a later motion-controller
+    receipt with explicit per-step trajectory/world collision coverage.
     """
 
     sid = session_id or _current_session.get() or ""
@@ -759,7 +850,10 @@ def ik_preview_check(
     result.setdefault("collision", {"checked": False})
     result["path"] = {
         "checked": False,
-        "reason": "path feasibility is owned by obstacle_avoidance",
+        "reason": (
+            "endpoint IK does not check a path; require explicit per-step "
+            "trajectory/world collision coverage from the motion controller"
+        ),
     }
     if check_endpoint_collision and result.get("kinematic_status") == "reachable":
         candidate = result.get("best_candidate")
@@ -816,6 +910,71 @@ def ik_preview_check(
                 }
             )
 
+    candidate = result.get("best_candidate")
+    margin = candidate.get("joint_margin_min_rad") if isinstance(candidate, dict) else None
+    if (
+        isinstance(margin, int | float)
+        and float(margin) < ROBUST_EXECUTION_JOINT_MARGIN_RAD
+    ):
+        margin_value = float(margin)
+        risk_level = "critical" if margin_value < 0.05 else "elevated"
+        solver = result.get("solver")
+        solver = solver if isinstance(solver, dict) else {}
+        seed_search = solver.get("execution_seed_search")
+        seed_search = seed_search if isinstance(seed_search, dict) else {}
+        result["execution_seed_quality"] = {
+            "risk_level": risk_level,
+            "selected_joint_margin_rad": margin_value,
+            "robust_margin_threshold_rad": ROBUST_EXECUTION_JOINT_MARGIN_RAD,
+            "robust_alternative_found": (
+                seed_search.get("robust_solution_selected") is True
+            ),
+            "feasible_solution_count": seed_search.get("feasible_solution_count"),
+            "distant_robust_solution_count": seed_search.get(
+                "distant_robust_solution_count"
+            ),
+            "interpretation": (
+                "The endpoint is kinematically feasible, but the selected IK branch "
+                "remains close enough to a hard joint limit that local full-pose "
+                "control may fail. This is not a positive execution recommendation. "
+                "Prefer a materially different waypoint, wrist orientation, or grasp "
+                "candidate when one is available; if executing anyway, inspect the "
+                "motion receipt and do not replay a failed target. A mathematically "
+                "robust but distant IK branch is reported as evidence, not silently "
+                "used as a long local-controller posture route."
+            ),
+        }
+        suggestions = result.setdefault("suggestions", [])
+        for suggestion in (
+            "select_higher_joint_margin_target_or_orientation",
+            "compare_alternative_grasp_candidate_before_motion",
+        ):
+            if suggestion not in suggestions:
+                suggestions.append(suggestion)
+        result["message"] = (
+            str(result.get("message") or "IK solution found.").rstrip()
+            + f" Execution seed margin is only {margin_value:.6f} rad; "
+            "the endpoint is feasible but execution-fragile."
+        )
+
+    if isinstance(margin, int | float) and float(margin) < 0.05:
+        proximity = {
+            "near_limit": True,
+            "margin_rad": float(margin),
+            "warning_threshold_rad": 0.05,
+            "nearest_joint_limit": candidate.get("nearest_joint_limit"),
+            "interpretation": (
+                "The endpoint has a joint-limit-respecting IK solution, but its "
+                "minimum hard-limit margin is small. Bind this exact preview receipt "
+                "to execution; if local motion cannot converge, change the waypoint "
+                "or wrist orientation instead of replaying the same target."
+            ),
+        }
+        result["joint_limit_proximity"] = proximity
+        suggestions = result.setdefault("suggestions", [])
+        if "select_higher_joint_margin_target_or_orientation" not in suggestions:
+            suggestions.append("select_higher_joint_margin_target_or_orientation")
+
     status = str(result.get("status") or "unknown")
     result["ok"] = status != "unreachable"
     result["success"] = status != "unreachable"
@@ -829,7 +988,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
             num_steps: int = 100, tolerance: float = 0.002, ori_tolerance: float = 0.05,
             session_id: str = "",
-            enable_collision_check: bool = True) -> dict:
+            enable_collision_check: bool = True,
+            contact_authorization: dict | None = None,
+            ik_execution_seed: dict | None = None) -> dict:
     """Move the end-effector to an absolute pose using closed-loop interpolation.
 
     Re-observes the EE pose from step results for closed-loop correction:
@@ -881,6 +1042,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
     import math as _math
 
     try:
+        controller_capability = require_controller_capability(
+            meta,
+            backend,
+            orientation_requested=use_ori,
+        )
         scale, ori_scale = cartesian_scales(meta, backend)
         command_frame = cartesian_command_frame(meta, backend)
     except ControlCodecError as exc:
@@ -905,6 +1071,96 @@ def move_to(handle: str, x: float, y: float, z: float, *,
     target_quat: list[float] = []
     if use_ori:
         target_quat = _euler_to_quat(_math.radians(roll), _math.radians(pitch), _math.radians(yaw))
+
+    if controller_capability.get("goal_executor") == "openeta.worker_mink_goal.v1":
+        attachment = meta.get("_attachment_proxy")
+        if enable_collision_check and isinstance(attachment, dict):
+            with _session_last_obs_lock:
+                cached = _session_last_obs.get(sid, {}).get(_obs_key(meta), {})
+            baseline_eef = _extract_ee_xyz_from_result(cached)
+            attached_collision, attached_info = check_attached_object_collision(
+                attachment,
+                list(meta.get("_collision_objects", [])),
+                [float(x), float(y), float(z)],
+                baseline_eef_xyz=baseline_eef,
+            )
+            if attached_collision:
+                return {
+                    "ok": False,
+                    "code": "attached_object_endpoint_collision",
+                    "error": str(
+                        attached_info.get("message")
+                        or "The carried-object endpoint would collide with scene geometry."
+                    ),
+                    "collision": {
+                        "detected": True,
+                        "endpoint_checked": True,
+                        "trajectory_checked": False,
+                        "world_checked": True,
+                        **attached_info,
+                    },
+                    "steps_executed": 0,
+                    "reached_target": False,
+                    "stop_reason": "collision_detected",
+                }
+        resolved_contact: dict | None = None
+        if contact_authorization is not None:
+            target_object, resolution = resolve_contact_object_authorization(
+                contact_authorization,
+                list(meta.get("_collision_objects", [])),
+            )
+            if target_object is None:
+                return {
+                    "ok": False,
+                    "code": str(
+                        resolution.get("code")
+                        or "contact_authorization_resolution_failed"
+                    ),
+                    "error": str(
+                        resolution.get("message")
+                        or "Host contact evidence could not be associated with scene geometry."
+                    ),
+                    "contact_authorization": resolution,
+                    "steps_executed": 0,
+                    "reached_target": False,
+                    "stop_reason": "contact_authorization_unresolved",
+                }
+            resolved_contact = {
+                **resolution,
+                "target_object_name": str(target_object.get("name") or ""),
+            }
+        body = {
+            "target_xyz": [float(x), float(y), float(z)],
+            "preserve_current_orientation": not use_ori,
+            "max_steps": int(num_steps),
+            "position_tolerance_m": float(tolerance),
+            "orientation_tolerance_rad": float(ori_tolerance),
+            "gripper_command": float(_gripper_cmd(meta)) if "_gripper_cmd" in meta else 0.0,
+            "enable_collision_check": bool(enable_collision_check),
+        }
+        if resolved_contact is not None:
+            body["contact_authorization"] = resolved_contact
+        if isinstance(ik_execution_seed, dict):
+            body["ik_execution_seed"] = dict(ik_execution_seed)
+        if isinstance(attachment, dict):
+            body["attachment_proxy"] = {
+                key: attachment.get(key)
+                for key in (
+                    "status",
+                    "object_name",
+                    "category",
+                    "relative_xyz",
+                    "dims",
+                    "anchor_eef_xyz",
+                )
+            }
+        if use_ori:
+            body["target_quat_xyzw"] = list(target_quat)
+        result = _proxy_controller_goal(meta, body)
+        attachment_receipt = _refresh_attachment_proxy(meta, result)
+        if attachment_receipt is not None:
+            result["attachment_proxy_receipt"] = attachment_receipt
+        return result
 
     # ── get initial EE pose ────────────────────────────────────────
     current_xyz: list[float] = []
@@ -995,7 +1251,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         if (
             enable_collision_check
             and isinstance(attachment, dict)
-            and attachment.get("status") == "confirmed"
+            and attachment.get("status") in {"tentative", "confirmed"}
         ):
             predicted_eef = [
                 current_xyz[0] + ax * scale * batch_steps,
@@ -1006,6 +1262,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                 attachment,
                 list(meta.get("_collision_objects", [])),
                 predicted_eef,
+                baseline_eef_xyz=current_xyz,
             )
             if collision_detected:
                 break
@@ -1069,7 +1326,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         if final_terminated or control_error:
             break
 
-        _refresh_attachment_proxy(meta, final_result)
+        attachment_receipt = _refresh_attachment_proxy(meta, final_result)
+        if attachment_receipt is not None:
+            final_result["attachment_proxy_receipt"] = attachment_receipt
 
         # Re-read pose from last step result (no extra HTTP call)
         new_xyz = _extract_ee_xyz_from_result(final_result)
@@ -1186,6 +1445,28 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         result["stop_reason"] = "iteration_limit"
     else:
         result["stop_reason"] = "controller_stopped"
+    result["controller_receipt"] = {
+        "schema_version": "openeta.controller_execution_receipt.v1",
+        "controller_id": str(
+            controller_capability.get("controller_id") or f"{backend}.undeclared"
+        ),
+        "configured_name": str(controller_capability.get("configured_name") or ""),
+        "command_interface": str(
+            controller_capability.get("command_interface") or "backend_default"
+        ),
+        "goal_executor": str(
+            controller_capability.get("goal_executor")
+            or "openeta.outer_closed_loop_cartesian.v1"
+        ),
+        "execution_location": str(
+            controller_capability.get("execution_location") or "mcp_server"
+        ),
+        "orientation_policy": "explicit" if use_ori else "preserve_current",
+        "iteration_budget": int(num_steps),
+        "steps_executed": int(total_steps),
+        "stop_reason": result["stop_reason"],
+        "reached_target": reached_target,
+    }
     if control_error:
         result["ok"] = False
         result["code"] = "control_step_failed"
@@ -1397,6 +1678,13 @@ def follow_eef_trajectory(
     final = results[-1] if results else {}
     final_target = waypoints[-1] if waypoints else {}
     reached_target = completed == len(waypoints)
+    controller_receipt = final.get("controller_receipt")
+    if isinstance(controller_receipt, dict):
+        controller_receipt = {
+            **controller_receipt,
+            "trajectory_waypoints_requested": len(waypoints),
+            "trajectory_waypoints_completed": completed,
+        }
     return {
         "trajectory": trajectory,
         "waypoints_requested": len(trajectory),
@@ -1419,6 +1707,11 @@ def follow_eef_trajectory(
         "reward": final.get("reward", 0.0),
         "collision": final.get("collision"),
         "waypoint_results": results,
+        **(
+            {"controller_receipt": controller_receipt}
+            if isinstance(controller_receipt, dict)
+            else {}
+        ),
         **({"error": final.get("error")} if final.get("error") else {}),
     }
 
@@ -1461,12 +1754,21 @@ def gripper_open(handle: str, *, session_id: str = "") -> dict:
 
 @_blocking_tool
 @_serialized_env_control
-def gripper_close(handle: str, *, session_id: str = "") -> dict:
+def gripper_close(
+    handle: str,
+    *,
+    session_id: str = "",
+    contact_authorization: dict | None = None,
+) -> dict:
     """Close the gripper (10 steps).
 
     Args:
         handle: Environment handle from create_env.
         session_id: Optional session id to reuse an existing session.
+        contact_authorization: Optional host-private compiled target evidence.
+            When supplied, the tentative carried-object collision proxy is
+            bound to that exact scene object instead of nearest-neighbour
+            inference. It never proves attachment.
 
     Returns:
         Same structure as ``step_env`` (observation, reward, terminated,
@@ -1477,6 +1779,32 @@ def gripper_close(handle: str, *, session_id: str = "") -> dict:
     meta = _session_envs.get(sid, {}).get(handle)
     if not meta:
         return {"error": f"Unknown: {handle}"}
+    authorized_object: dict | None = None
+    authorization_receipt: dict | None = None
+    if contact_authorization is not None:
+        authorized_object, authorization_receipt = resolve_contact_object_authorization(
+            contact_authorization,
+            list(meta.get("_collision_objects", [])),
+        )
+        if authorized_object is None:
+            return {
+                "ok": False,
+                "code": str(
+                    authorization_receipt.get("code")
+                    or "contact_authorization_resolution_failed"
+                ),
+                "error": str(
+                    authorization_receipt.get("message")
+                    or "Host attachment target evidence could not be resolved."
+                ),
+                "contact_authorization": authorization_receipt,
+                "attachment_proxy_receipt": {
+                    "schema_version": "openeta.attachment_proxy_receipt.v1",
+                    "status": "not_armed",
+                    "reason": "host_target_resolution_failed",
+                    "attachment_proven": False,
+                },
+            }
     backend = meta.get("backend", "")
     meta["_gripper_cmd"] = 1.0  # latch CLOSED — held (clamping) on every subsequent step
     try:
@@ -1484,7 +1812,13 @@ def gripper_close(handle: str, *, session_id: str = "") -> dict:
     except ControlCodecError as exc:
         return codec_error_result(exc)
     result = _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
-    _arm_attachment_proxy(meta, result)
+    result["attachment_proxy_receipt"] = _arm_attachment_proxy(
+        meta,
+        result,
+        authorized_object=authorized_object,
+    )
+    if isinstance(authorization_receipt, dict):
+        result["contact_authorization"] = authorization_receipt
     return result
 
 

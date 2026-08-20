@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from adapter.protocol import EnvObservation, JsonDict
 from agent.runtime.actions import (
     CommandKind,
@@ -19,7 +21,12 @@ from agent.runtime.interfaces import ActionInterfaceRegistry, build_default_acti
 from agent.runtime.memory import AgentMemory
 from agent.runtime.planner import PlannerDecision
 from agent.runtime.skills import SkillRegistry
+from agent.tools.runtime_contract_bindings import (
+    HostResolutionFailure,
+    resolve_host_parameters,
+)
 from agent.tools.registry import ToolRegistry, ToolResult
+from agent.tools.contracts import ToolContractCatalog, ToolContractRuntimePolicy
 
 
 class ActionPipeline:
@@ -31,10 +38,36 @@ class ActionPipeline:
         execute_safe_checks: bool = True,
         checker_subagents: CheckerSubagentConfig | None = None,
         interfaces: ActionInterfaceRegistry | None = None,
+        tool_contract_catalog: ToolContractCatalog | None = None,
+        tool_contract_policy: ToolContractRuntimePolicy | None = None,
     ) -> None:
         self.execute_safe_checks = execute_safe_checks
         self.checker_subagents = checker_subagents or CheckerSubagentConfig()
         self.interfaces = interfaces or build_default_action_interfaces()
+        self.tool_contract_catalog = (
+            tool_contract_catalog or _default_gate_contract_catalog()
+        )
+        self.tool_contract_policy = tool_contract_policy or ToolContractRuntimePolicy()
+        self.tool_contract_policy.ensure_valid(self.tool_contract_catalog)
+
+    def _gate_repair_bundle(
+        self,
+        memory: AgentMemory | None,
+        *,
+        code: str,
+        reason: str,
+        request: CommandRequest,
+        checker_calls: list[PipelineCall] | None = None,
+    ) -> JsonDict:
+        return _gate_repair_bundle(
+            memory,
+            code=code,
+            reason=reason,
+            request=request,
+            checker_calls=checker_calls,
+            tool_contract_catalog=self.tool_contract_catalog,
+            tool_contract_policy=self.tool_contract_policy,
+        )
 
     def compile(
         self,
@@ -103,23 +136,406 @@ class ActionPipeline:
             resolved_parameters = request.parameters
             bundle_resolution: JsonDict | None = None
             bundle_kind = ""
-            if request.name == "anyplace" or (
-                request.name == "grasp_pose_estimate"
-                and isinstance(request.parameters.get("bundle_id"), str)
-            ):
-                bundle_id = str(request.parameters.get("bundle_id") or "").strip()
-                bundle_kind = (
-                    "anyplace" if request.name == "anyplace" else "grasp_pose_estimate"
+            host_resolution_receipt: JsonDict | None = None
+            # Unknown mutation outcome outranks every parameter/reference check:
+            # no pose evidence can be interpreted until the same handle is
+            # observed and reconciled.
+            execution_gate_error = (
+                memory.motion_reconciliation_gate_error(tool_name=request.name)
+                if memory is not None
+                else None
+            )
+            if execution_gate_error:
+                tool_call = _skipped_tool_call(
+                    request.name,
+                    request.parameters,
+                    reason=execution_gate_error,
                 )
+                return CommandPipelinePlan(
+                    request=request,
+                    status=PipelineStatus.BLOCKED,
+                    tool_calls=[tool_call],
+                    metadata={
+                        "interface": self.interfaces.descriptor(
+                            request.kind, request.name
+                        ),
+                        "planner_metadata": decision.metadata,
+                        "execution_rule": _tool_execution_rule(tool_call, tools),
+                        "motion_reconciliation_gate": {
+                            "blocked": True,
+                            "reason": execution_gate_error,
+                        },
+                        "repair_bundle": self._gate_repair_bundle(
+                            memory,
+                            code="motion_reconciliation_required",
+                            reason=execution_gate_error,
+                            request=request,
+                        ),
+                    },
+                )
+            reference_kind = ""
+            if request.name == "ik_preview_check" and isinstance(
+                request.parameters.get("compiled_grasp_id"), str
+            ):
+                reference_kind = "compiled_grasp_pose"
                 try:
                     if memory is None:
                         raise ValueError("runtime memory is unavailable")
-                    bundle_resolution = (
-                        memory.resolve_anyplace_input_bundle(bundle_id)
-                        if bundle_kind == "anyplace"
-                        else memory.resolve_grasp_input_bundle(bundle_id)
+                    if "target_pose" in request.parameters:
+                        raise ValueError(
+                            "provide compiled_grasp_id + waypoint_role without target_pose; "
+                            "the host resolves the immutable pose"
+                        )
+                    resolution = memory.resolve_compiled_grasp_pose_reference(
+                        compiled_grasp_id=str(
+                            request.parameters.get("compiled_grasp_id") or ""
+                        ),
+                        waypoint_role=str(
+                            request.parameters.get("waypoint_role") or ""
+                        ),
                     )
+                    resolved = resolution.get("parameters")
+                    if not isinstance(resolved, dict):
+                        raise ValueError(
+                            "compiled grasp pose resolver returned invalid parameters"
+                        )
+                    resolved_parameters = {
+                        **resolved,
+                        **{
+                            key: request.parameters[key]
+                            for key in (
+                                "position_tolerance_m",
+                                "orientation_tolerance_rad",
+                                "check_endpoint_collision",
+                            )
+                            if key in request.parameters
+                        },
+                    }
+                    bundle_resolution = resolution
                 except ValueError as exc:
+                    reason = f"ik_preview_check reference resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "reference_resolution_gate": {
+                                "blocked": True,
+                                "reference_kind": reference_kind,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code="invalid_compiled_grasp_reference",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+            elif (
+                request.name == "move_to"
+                and not (
+                    isinstance(request.parameters.get("target_pose"), dict)
+                    and self.execute_safe_checks
+                    and self.checker_subagents.pre_safety_checks.get("move_to")
+                    == "ik_preview_check"
+                )
+            ):
+                reference_kind = "ik_receipt"
+                try:
+                    if memory is None:
+                        raise ValueError("runtime memory is unavailable")
+                    if "target_pose" in request.parameters:
+                        raise ValueError(
+                            "move_to no longer accepts model-copied target_pose; pass "
+                            "the exact ik_receipt_id returned by ik_preview_check"
+                        )
+                    resolution = memory.resolve_ik_motion_reference(
+                        str(request.parameters.get("ik_receipt_id") or "")
+                    )
+                    resolved = resolution.get("parameters")
+                    if not isinstance(resolved, dict):
+                        raise ValueError("IK receipt resolver returned invalid parameters")
+                    resolved_parameters = {
+                        **resolved,
+                        **{
+                            key: request.parameters[key]
+                            for key in (
+                                "num_steps",
+                                "tolerance",
+                                "ori_tolerance",
+                                "enable_collision_check",
+                            )
+                            if key in request.parameters
+                        },
+                    }
+                    bundle_resolution = resolution
+                except ValueError as exc:
+                    reason = f"move_to IK receipt resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "reference_resolution_gate": {
+                                "blocked": True,
+                                "reference_kind": reference_kind,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code="invalid_ik_receipt_reference",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+            elif request.name == "follow_eef_trajectory":
+                reference_kind = "ik_trajectory_receipts"
+                try:
+                    if memory is None:
+                        raise ValueError("runtime memory is unavailable")
+                    if "trajectory" in request.parameters:
+                        raise ValueError(
+                            "follow_eef_trajectory no longer accepts a model-copied "
+                            "trajectory; pass ordered ik_receipt_ids returned by "
+                            "ik_preview_check"
+                        )
+                    resolution = memory.resolve_ik_trajectory_reference(
+                        request.parameters.get("ik_receipt_ids")
+                    )
+                    resolved = resolution.get("parameters")
+                    if not isinstance(resolved, dict):
+                        raise ValueError(
+                            "IK trajectory resolver returned invalid parameters"
+                        )
+                    resolved_parameters = {
+                        **resolved,
+                        **{
+                            key: request.parameters[key]
+                            for key in (
+                                "num_steps_per_waypoint",
+                                "tolerance",
+                                "ori_tolerance",
+                                "enable_collision_check",
+                            )
+                            if key in request.parameters
+                        },
+                    }
+                    bundle_resolution = resolution
+                except ValueError as exc:
+                    reason = (
+                        "follow_eef_trajectory IK receipt resolution failed: "
+                        f"{exc}"
+                    )
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "reference_resolution_gate": {
+                                "blocked": True,
+                                "reference_kind": reference_kind,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code="invalid_ik_trajectory_reference",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+            if request.name in {
+                "retrieve_asset_reference",
+                "sam3",
+                "molmopoint",
+                "estimate_depth_prior",
+                "enhance_depth",
+            }:
+                try:
+                    resolution_contract = self.tool_contract_catalog.get(
+                        request.name
+                    ).host_resolution
+                    resolution_result = resolve_host_parameters(
+                        tool_name=request.name,
+                        resolver_id=resolution_contract.resolver,
+                        parameters=request.parameters,
+                        memory=memory,
+                    )
+                    resolved_parameters = resolution_result.parameters
+                    host_resolution_receipt = {
+                        "schema_version": "openeta.host_resolution_receipt.v1",
+                        "status": "resolved",
+                        "tool": request.name,
+                        "resolver_id": resolution_contract.resolver,
+                        "implementation": resolution_contract.implementation,
+                        "dispatch_authority": "tool_contract",
+                        "public_parameter_keys": sorted(request.parameters),
+                        "resolved_parameter_keys": sorted(resolved_parameters),
+                    }
+                except HostResolutionFailure as exc:
+                    reason = f"{request.name} source packet resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "source_packet_gate": {
+                                "blocked": True,
+                                "reason": str(exc),
+                            },
+                            "host_resolution_receipt": {
+                                "schema_version": (
+                                    "openeta.host_resolution_receipt.v1"
+                                ),
+                                "status": "rejected",
+                                "tool": request.name,
+                                "resolver_id": resolution_contract.resolver,
+                                "implementation": (
+                                    resolution_contract.implementation
+                                ),
+                                "dispatch_authority": "tool_contract",
+                                "repair_code": exc.repair_code,
+                                "public_parameter_keys": sorted(
+                                    request.parameters
+                                ),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code=exc.repair_code,
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+            if (
+                request.name
+                in {
+                    "anyplace",
+                    "camera_pose_to_world",
+                    "compile_grasp_seed",
+                    "compute_wrist_alignment",
+                    "propose_wrist_viewpoints",
+                }
+                and (
+                    request.name != "camera_pose_to_world"
+                    or isinstance(
+                        request.parameters.get("placement_result_id"), str
+                    )
+                )
+            ) or (
+                request.name == "grasp_pose_estimate"
+                and isinstance(request.parameters.get("bundle_id"), str)
+            ) or (
+                request.name == "ik_preview_check"
+                and isinstance(
+                    request.parameters.get("viewpoint_proposal_id"), str
+                )
+            ):
+                bundle_id = str(request.parameters.get("bundle_id") or "").strip()
+                bundle_kind = request.name
+                try:
+                    if bundle_kind == "ik_preview_check":
+                        if memory is None:
+                            raise ValueError("runtime memory is unavailable")
+                        bundle_resolution = memory.resolve_wrist_viewpoint_candidate(
+                            proposal_id=str(
+                                request.parameters.get("viewpoint_proposal_id") or ""
+                            ),
+                            candidate_id=str(
+                                request.parameters.get("candidate_id") or ""
+                            ),
+                        )
+                        resolved = bundle_resolution.get("parameters")
+                        if not isinstance(resolved, dict):
+                            raise ValueError(
+                                "provenance resolver returned invalid parameters"
+                            )
+                        resolved_parameters = {
+                            **resolved,
+                            **{
+                                key: request.parameters[key]
+                                for key in (
+                                    "position_tolerance_m",
+                                    "orientation_tolerance_rad",
+                                    "check_endpoint_collision",
+                                )
+                                if key in request.parameters
+                            },
+                            "viewpoint_proposal_id": request.parameters.get(
+                                "viewpoint_proposal_id"
+                            ),
+                            "candidate_id": request.parameters.get("candidate_id"),
+                        }
+                    else:
+                        resolution_contract = self.tool_contract_catalog.get(
+                            request.name
+                        ).host_resolution
+                        resolution_result = resolve_host_parameters(
+                            tool_name=request.name,
+                            resolver_id=resolution_contract.resolver,
+                            parameters=request.parameters,
+                            memory=memory,
+                        )
+                        resolved_parameters = resolution_result.parameters
+                        bundle_resolution = resolution_result.evidence
+                        host_resolution_receipt = {
+                            "schema_version": "openeta.host_resolution_receipt.v1",
+                            "status": "resolved",
+                            "tool": request.name,
+                            "resolver_id": resolution_contract.resolver,
+                            "implementation": resolution_contract.implementation,
+                            "dispatch_authority": "tool_contract",
+                            "public_parameter_keys": sorted(request.parameters),
+                            "resolved_parameter_keys": sorted(resolved_parameters),
+                        }
+                except (HostResolutionFailure, ValueError) as exc:
+                    repair_code = (
+                        exc.repair_code
+                        if isinstance(exc, HostResolutionFailure)
+                        else "invalid_provenance_bundle"
+                    )
                     reason = f"{request.name} provenance bundle resolution failed: {exc}"
                     tool_call = _skipped_tool_call(
                         request.name,
@@ -142,18 +558,36 @@ class ActionPipeline:
                                 "bundle_id": bundle_id or None,
                                 "reason": str(exc),
                             },
-                            "repair_bundle": _gate_repair_bundle(
+                            **(
+                                {
+                                    "host_resolution_receipt": {
+                                        "schema_version": (
+                                            "openeta.host_resolution_receipt.v1"
+                                        ),
+                                        "status": "rejected",
+                                        "tool": request.name,
+                                        "resolver_id": resolution_contract.resolver,
+                                        "implementation": (
+                                            resolution_contract.implementation
+                                        ),
+                                        "dispatch_authority": "tool_contract",
+                                        "repair_code": repair_code,
+                                        "public_parameter_keys": sorted(
+                                            request.parameters
+                                        ),
+                                    }
+                                }
+                                if isinstance(exc, HostResolutionFailure)
+                                else {}
+                            ),
+                            "repair_bundle": self._gate_repair_bundle(
                                 memory,
-                                code="invalid_provenance_bundle",
+                                code=repair_code,
                                 reason=reason,
                                 request=request,
                             ),
                         },
                     )
-                resolved = bundle_resolution.get("parameters")
-                if not isinstance(resolved, dict):
-                    raise RuntimeError("AnyPlace bundle resolver returned invalid parameters")
-                resolved_parameters = resolved
 
             selection_gate_error = _detection_selection_gate_error(
                 request,
@@ -177,7 +611,7 @@ class ActionPipeline:
                             "blocked": True,
                             "reason": selection_gate_error,
                         },
-                        "repair_bundle": _gate_repair_bundle(
+                        "repair_bundle": self._gate_repair_bundle(
                             memory,
                             code="perception_provenance_integrity",
                             reason=selection_gate_error,
@@ -212,7 +646,7 @@ class ActionPipeline:
                             "blocked": True,
                             "reason": provenance_gate_error,
                         },
-                        "repair_bundle": _gate_repair_bundle(
+                        "repair_bundle": self._gate_repair_bundle(
                             memory,
                             code=_compiled_grasp_gate_code(provenance_gate_error),
                             reason=provenance_gate_error,
@@ -247,7 +681,7 @@ class ActionPipeline:
                             "blocked": True,
                             "reason": probe_gate_error,
                         },
-                        "repair_bundle": _gate_repair_bundle(
+                        "repair_bundle": self._gate_repair_bundle(
                             memory,
                             code="articulated_probe_integrity",
                             reason=probe_gate_error,
@@ -256,16 +690,35 @@ class ActionPipeline:
                     },
                 )
 
-            execution_gate_error = (
-                memory.motion_reconciliation_gate_error(tool_name=request.name)
-                if memory is not None
+            inline_ik_checker = (
+                self.execute_safe_checks
+                and self.checker_subagents.pre_safety_checks.get(request.name)
+                == "ik_preview_check"
+            )
+            ik_gate_error = (
+                memory.ik_execution_gate_error(
+                    tool_name=request.name,
+                    parameters=resolved_parameters,
+                )
+                if memory is not None and not inline_ik_checker
                 else None
             )
-            if execution_gate_error:
+            if ik_gate_error:
+                ik_gate_code = (
+                    "ik_target_hard_infeasible"
+                    if ik_gate_error.startswith("ik_target_hard_infeasible:")
+                    else "ik_collision_delegation_not_authorized"
+                    if ik_gate_error.startswith(
+                        "ik_collision_delegation_not_authorized:"
+                    )
+                    else "ik_preview_not_feasible"
+                    if ik_gate_error.startswith("ik_preview_not_feasible:")
+                    else "ik_preview_required"
+                )
                 tool_call = _skipped_tool_call(
                     request.name,
                     resolved_parameters,
-                    reason=execution_gate_error,
+                    reason=ik_gate_error,
                 )
                 return CommandPipelinePlan(
                     request=request,
@@ -275,14 +728,15 @@ class ActionPipeline:
                         "interface": self.interfaces.descriptor(request.kind, request.name),
                         "planner_metadata": decision.metadata,
                         "execution_rule": _tool_execution_rule(tool_call, tools),
-                        "motion_reconciliation_gate": {
+                        "ik_execution_gate": {
                             "blocked": True,
-                            "reason": execution_gate_error,
+                            "code": ik_gate_code,
+                            "reason": ik_gate_error,
                         },
-                        "repair_bundle": _gate_repair_bundle(
+                        "repair_bundle": self._gate_repair_bundle(
                             memory,
-                            code="motion_reconciliation_required",
-                            reason=execution_gate_error,
+                            code=ik_gate_code,
+                            reason=ik_gate_error,
                             request=request,
                         ),
                     },
@@ -295,10 +749,15 @@ class ActionPipeline:
                 observation=observation,
             )
             if safety_checks and not _checks_allow_tool_execution(safety_checks):
+                checker_reason = _failed_checker_reason(safety_checks)
+                rejection_reason = (
+                    "Tool call skipped because its pre-tool safety checker did not pass. "
+                    + checker_reason
+                ).strip()
                 tool_call = _skipped_tool_call(
                     request.name,
                     resolved_parameters,
-                    reason="Tool call skipped because a pre-tool safety checker did not pass.",
+                    reason=rejection_reason,
                 )
                 return CommandPipelinePlan(
                     request=request,
@@ -313,6 +772,13 @@ class ActionPipeline:
                             "pre_safety_checks": [call.to_dict() for call in safety_checks],
                             "post_failure_checks": [],
                         },
+                        "repair_bundle": self._gate_repair_bundle(
+                            memory,
+                            code=_checker_gate_code(safety_checks),
+                            reason=rejection_reason,
+                            request=request,
+                            checker_calls=safety_checks,
+                        ),
                     },
                 )
 
@@ -323,6 +789,16 @@ class ActionPipeline:
                 observation=observation,
                 reason="Direct planner-requested tool call.",
             )
+            if resolved_parameters is not request.parameters:
+                # Host-only paths, matrices, and frozen bundle payloads are execution
+                # inputs, not Agent-owned conversation state. Preserve the planner's
+                # short public references in the action/transition ledger while the
+                # durable tool-event stream retains the exact dispatched parameters.
+                tool_call.parameters = dict(request.parameters)
+                if isinstance(tool_call.result, dict):
+                    result_details = tool_call.result.get("details")
+                    if isinstance(result_details, dict):
+                        result_details["parameters"] = dict(request.parameters)
             post_failure_checks = self._compile_post_failure_checks(tool_call)
             return CommandPipelinePlan(
                 request=request,
@@ -338,6 +814,11 @@ class ActionPipeline:
                         "post_failure_checks": [call.to_dict() for call in post_failure_checks],
                     },
                     **(
+                        {"host_resolution_receipt": host_resolution_receipt}
+                        if isinstance(host_resolution_receipt, dict)
+                        else {}
+                    ),
+                    **(
                         {
                             "provenance_bundle_resolution": {
                                 key: bundle_resolution.get(key)
@@ -347,6 +828,7 @@ class ActionPipeline:
                                     "target_evidence_id",
                                     "grasp_evidence_id",
                                     "placement_evidence_id",
+                                    "compiled_grasp_id",
                                 )
                             }
                         }
@@ -393,14 +875,31 @@ class ActionPipeline:
                 skill_call=failed_call,
             )
 
-        del observation, tools
+        del observation
+        declared_allowed_tools = list(skill.allowed_tools)
+        available_allowed_tools = [
+            name for name in declared_allowed_tools if tools.can_execute(name)
+        ]
+        unavailable_allowed_tools = [
+            name for name in declared_allowed_tools if not tools.can_execute(name)
+        ]
+        availability_rule = (
+            "allowed_tools is the static skill declaration, not proof that an "
+            "optional backend is configured. Call only available_allowed_tools. "
+            "If a required capability is unavailable, choose an explicitly "
+            "documented executable alternative or report the capability gap; "
+            "never retry an unbound tool."
+        )
         skill_call = PipelineCall(
             kind=CommandKind.TOOL_CALL,
             name=skill.name,
             parameters={
                 "requested_parameters": request.parameters,
                 "task_patterns": list(skill.task_patterns),
-                "allowed_tools": list(skill.allowed_tools),
+                "allowed_tools": declared_allowed_tools,
+                "available_allowed_tools": available_allowed_tools,
+                "unavailable_allowed_tools": unavailable_allowed_tools,
+                "tool_availability_rule": availability_rule,
             },
             status=PipelineStatus.PLANNED,
             result={
@@ -412,6 +911,9 @@ class ActionPipeline:
                     "version": skill.version,
                     "editable": skill.editable,
                     "metadata": skill.metadata,
+                    "available_allowed_tools": available_allowed_tools,
+                    "unavailable_allowed_tools": unavailable_allowed_tools,
+                    "tool_availability_rule": availability_rule,
                 },
             },
             reason=request.reasoning
@@ -701,6 +1203,11 @@ class ActionPipeline:
             )
 
         status = PipelineStatus.BLOCKED if blocked else _aggregate_status(compiled_calls)
+        repair_bundles = [
+            _batch_gate_repair(memory, call)
+            for call in compiled_calls
+            if call.status in {PipelineStatus.BLOCKED, PipelineStatus.SKIPPED}
+        ]
         return CommandPipelinePlan(
             request=request,
             status=status,
@@ -714,6 +1221,7 @@ class ActionPipeline:
                     "blocked_effects": ["world_mutating"],
                     "requires_observation_after_batch": False,
                 },
+                **({"repair_bundles": repair_bundles} if repair_bundles else {}),
             },
         )
 
@@ -831,10 +1339,14 @@ def _gate_repair_bundle(
     code: str,
     reason: str,
     request: CommandRequest,
+    checker_calls: list[PipelineCall] | None = None,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
 ) -> JsonDict:
     if memory is None:
-        return {
+        bundle = {
             "schema_version": "openeta.gate_repair.v1",
+            "extensions": {},
             "code": code,
             "violated_invariant": reason,
             "requested_call": {
@@ -845,16 +1357,172 @@ def _gate_repair_bundle(
             "allowed_next_calls": [],
             "stale_evidence": [],
         }
-    return memory.gate_repair_bundle(
+    else:
+        bundle = memory.gate_repair_bundle(
+            code=code,
+            reason=reason,
+            requested_tool=request.name,
+            requested_parameters=request.parameters,
+        )
+    if checker_calls:
+        bundle["checker_evidence"] = [call.to_dict() for call in checker_calls]
+    contract_validation = _gate_contract_shadow_validation(
+        request.name,
+        bundle,
+        tool_contract_catalog=tool_contract_catalog,
+        tool_contract_policy=tool_contract_policy,
+    )
+    bundle["contract_shadow_validation"] = contract_validation
+    if (
+        contract_validation.get("enforcing") is True
+        and contract_validation.get("conformant") is False
+    ):
+        # The world-mutating call is already blocked. Keep it blocked, expose the
+        # host defect, and offer only a fresh observation while the malformed
+        # repair envelope is retained for diagnosis.
+        bundle["contract_enforcement"] = {
+            "status": "repair_envelope_rejected",
+            "authority": "tool_contract",
+            "violations": list(contract_validation.get("violations") or []),
+        }
+        bundle["allowed_next_calls"] = [{"tool": "observe", "parameters": {}}]
+    return bundle
+
+
+def _gate_contract_shadow_validation(
+    tool_name: str,
+    bundle: JsonDict,
+    *,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
+) -> JsonDict:
+    """Audit repair feedback and expose its independent validation authority."""
+
+    from agent.tools.contracts import ContractMaturity, check_gate_repair_conformance
+
+    catalog = tool_contract_catalog or _default_gate_contract_catalog()
+    policy = tool_contract_policy or ToolContractRuntimePolicy()
+    try:
+        contract = catalog.get(tool_name)
+    except KeyError:
+        return {
+            "schema_version": "openeta.gate_contract_shadow_validation.v1",
+            "evaluated": False,
+            "enforcing": False,
+            "tool": tool_name,
+            "reason": "no ToolContract is registered",
+        }
+    if contract.maturity is ContractMaturity.INFERRED:
+        return {
+            "schema_version": "openeta.gate_contract_shadow_validation.v1",
+            "evaluated": False,
+            "enforcing": False,
+            "tool": tool_name,
+            "contract_maturity": contract.maturity.value,
+            "reason": "inferred contracts are inventory-only",
+        }
+    violations = check_gate_repair_conformance(contract, bundle)
+    contract_authoritative = policy.gate_repair_is_authoritative(tool_name)
+    repair_code = str(bundle.get("code") or "")
+    matching_bindings = [
+        binding.to_dict()
+        for binding in contract.gate.bindings
+        if repair_code in binding.repair_codes
+    ]
+    return {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": True,
+        "enforcing": contract_authoritative,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": (
+            "tool_contract" if contract_authoritative else "legacy_runtime"
+        ),
+        "tool": tool_name,
+        "contract_maturity": contract.maturity.value,
+        "contract_gate_checks": list(contract.gate.checks),
+        "contract_gate_binding_count": len(contract.gate.bindings),
+        "matched_gate_bindings": matching_bindings,
+        "conformant": not violations,
+        "violations": [violation.to_dict() for violation in violations],
+    }
+
+
+@lru_cache(maxsize=1)
+def _default_gate_contract_catalog():
+    from agent.tools.contracts import build_default_tool_contract_catalog
+    from agent.tools.registry import build_default_tool_registry
+
+    return build_default_tool_contract_catalog(build_default_tool_registry().list())
+
+
+def _failed_checker_reason(calls: list[PipelineCall]) -> str:
+    for call in calls:
+        result = call.result if isinstance(call.result, dict) else {}
+        details = result.get("details") if isinstance(result.get("details"), dict) else {}
+        outputs = details.get("outputs") if isinstance(details.get("outputs"), dict) else {}
+        reachability = outputs.get("reachability")
+        if isinstance(reachability, dict):
+            return (
+                f"{call.name} reported {reachability.get('status')!r}: "
+                f"{reachability.get('reason_code') or reachability.get('message') or 'no reason'}"
+            )
+        content = str(result.get("content") or call.reason or "").strip()
+        if content:
+            return f"{call.name}: {content}"
+    return "The checker returned no usable explanation; this is a checker contract defect."
+
+
+def _checker_gate_code(calls: list[PipelineCall]) -> str:
+    for call in calls:
+        result = call.result if isinstance(call.result, dict) else {}
+        details = result.get("details") if isinstance(result.get("details"), dict) else {}
+        outputs = details.get("outputs") if isinstance(details.get("outputs"), dict) else {}
+        receipt = outputs.get("ik_preview_receipt")
+        if isinstance(receipt, dict) and receipt.get("classification") == "hard_infeasible":
+            return "ik_target_hard_infeasible"
+        if call.name == "ik_preview_check":
+            return "ik_preview_not_feasible"
+    return "pre_safety_check_failed"
+
+
+def _batch_gate_repair(
+    memory: AgentMemory | None, call: PipelineCall
+) -> JsonDict:
+    reason = call.reason or "Batched tool call was rejected without a reason."
+    lowered = reason.lower()
+    if call.name == "anyplace":
+        code = "anyplace_requires_atomic_call"
+    elif "unverified segmentation" in lowered or "mask_ref" in lowered:
+        code = "perception_provenance_integrity"
+    elif "compiled_grasp" in lowered:
+        code = _compiled_grasp_gate_code(reason)
+    elif "reconciliation" in lowered or "transport-unknown" in lowered:
+        code = "motion_reconciliation_required"
+    elif "fresh observation" in lowered or "tool effect" in lowered:
+        code = "batch_requires_observation_boundary"
+    else:
+        code = "batch_gate_rejection"
+    request = CommandRequest(
+        kind=CommandKind.TOOL_CALL,
+        name=call.name,
+        parameters=dict(call.parameters),
+    )
+    return _gate_repair_bundle(
+        memory,
         code=code,
         reason=reason,
-        requested_tool=request.name,
-        requested_parameters=request.parameters,
+        request=request,
     )
 
 
 def _compiled_grasp_gate_code(reason: str) -> str:
-    if reason.startswith("compiled_grasp_adjustment_"):
+    if reason.startswith(
+        (
+            "compiled_grasp_adjustment_",
+            "compiled_clearance_",
+            "compiled_contact_",
+        )
+    ):
         return reason.split(":", 1)[0]
     return "compiled_grasp_target_superseded"
 

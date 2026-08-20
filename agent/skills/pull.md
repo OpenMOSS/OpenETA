@@ -47,8 +47,10 @@ as a short closed-gripper pull. Do not treat opening as a pick-and-place task.
    reachability and path-collision checks; stop on a structured rejection.
 6. After close, propose an attachment probe from current agentview+wrist evidence.
    Drawers normally use a world-frame linear direction. Hinged doors may use a
-   local 2-5 waypoint arc. The host freezes exactly 5 cm; execute only the returned
-   move/trajectory, then call `assess_attachment_probe`. Keep the resulting position
+   local 2-5 waypoint arc. The host freezes exactly 5 cm. Run every returned
+   `ik_preview_request` in order, then pass only its receipt id to `move_to` or the
+   ordered receipt ids to `follow_eef_trajectory`; never copy or edit the frozen
+   poses. Then call `assess_attachment_probe`. Keep the resulting position
    on PASS. UNKNOWN permits one fresh observation and one reassessment only.
 7. After verified handle attachment, preserve the closed gripper and EEF
    orientation. Execute one short world-frame pull segment along the drawer's

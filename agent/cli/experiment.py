@@ -41,6 +41,7 @@ from agent.runtime.experiments import (
 )
 from agent.runtime.artifact_paths import safe_artifact_component
 from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
+from agent.runtime.mcp_catalog import simulator_mcp_contract_diagnostics
 from agent.runtime.grasp_strategy_lifecycle import (
     BackendGraspStrategyAuthor,
     BackendGraspStrategyReviewer,
@@ -76,13 +77,7 @@ from agent.tools.sim_mcp import SseSimulatorMcpTransport
 
 _UNATTENDED_PROFILE = SupervisionProfile.REVIEWED_AUTONOMY.value
 _BATCH_UNBOUND_TOOLS = {
-    "scene_detector",
-    "hand_pose_database",
     "ik_preview_check",
-    "obstacle_avoidance",
-    "lower_body_control_policy",
-    "anydexgrasp",
-    "slam",
 }
 _REQUIRED_SIM_MCP_TOOLS = {
     "create_env",
@@ -145,7 +140,6 @@ def preflight(args: argparse.Namespace) -> JsonDict:
         sim_url,
         sam3_url,
         anygrasp_url,
-        contact_graspnet_url,
         graspgenx_url,
         anyplace_url,
         molmopoint_url,
@@ -170,16 +164,25 @@ def preflight(args: argparse.Namespace) -> JsonDict:
                     if isinstance(tool, dict)
                 }
                 missing_tools = sorted(_REQUIRED_SIM_MCP_TOOLS - remote_names)
+                contract_diagnostics = simulator_mcp_contract_diagnostics(
+                    list(catalog.get("tools", []))
+                )
                 catalog_summary = {
                     "checked": True,
                     "url": sim_url,
                     "tool_count": len(remote_names),
                     "missing_required_tools": missing_tools,
+                    "contract_compatible": not contract_diagnostics,
+                    "contract_diagnostics": contract_diagnostics,
                 }
                 if missing_tools:
                     errors.append(
                         "simulator MCP is missing required tools: " + ", ".join(missing_tools)
                     )
+                warnings.extend(
+                    str(item.get("message") or item.get("code"))
+                    for item in contract_diagnostics
+                )
             except Exception as exc:  # noqa: BLE001 - preflight reports all checks.
                 catalog_summary = {
                     "checked": True,
@@ -283,16 +286,10 @@ def preflight(args: argparse.Namespace) -> JsonDict:
             "simulator": catalog_summary,
             "sam3": {"configured": bool(sam3_url), "url": sam3_url},
             "grasp_pose_estimate": {
-                "configured": bool(
-                    anygrasp_url or contact_graspnet_url or graspgenx_url
-                ),
+                "configured": bool(anygrasp_url or graspgenx_url),
                 "backends": {
                     "anygrasp": {
                         **anygrasp_summary,
-                    },
-                    "contact_graspnet": {
-                        "configured": bool(contact_graspnet_url),
-                        "url": contact_graspnet_url,
                     },
                     "graspgenx": {
                         "configured": bool(graspgenx_url),
@@ -912,7 +909,6 @@ def _run_batch(
         anygrasp_url=args.anygrasp_url,
         anyplace_url=args.anyplace_url,
         graspgenx_url=args.graspgenx_url,
-        contact_graspnet_url=args.contact_graspnet_url,
         molmopoint_url=args.molmopoint_url,
         supervision_profile=args.approvement,
         provider_concurrency=args.provider_concurrency,
@@ -1008,16 +1004,11 @@ def _write_generation_result(
 
 def _resolved_mcp_urls(
     args: argparse.Namespace,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     return (
         args.sim_url or load_mcp_server_url("openeta-sim", aliases=("sim",)),
         args.sam3_url or load_mcp_server_url("openeta-sam3", aliases=("sam3",)),
         args.anygrasp_url or load_mcp_server_url("openeta-anygrasp", aliases=("anygrasp",)),
-        getattr(args, "contact_graspnet_url", "")
-        or load_mcp_server_url(
-            "openeta-contact-graspnet",
-            aliases=("contact-graspnet", "contact_graspnet"),
-        ),
         getattr(args, "graspgenx_url", "")
         or load_mcp_server_url("openeta-graspgenx", aliases=("graspgenx",)),
         getattr(args, "anyplace_url", "")
@@ -1148,7 +1139,6 @@ def _add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--sim-url", default="")
     parser.add_argument("--sam3-url", default="")
     parser.add_argument("--anygrasp-url", default="")
-    parser.add_argument("--contact-graspnet-url", default="")
     parser.add_argument("--graspgenx-url", default="")
     parser.add_argument("--anyplace-url", default="")
     parser.add_argument("--molmopoint-url", default="")

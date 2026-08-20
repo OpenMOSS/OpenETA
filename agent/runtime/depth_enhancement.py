@@ -319,13 +319,18 @@ def enhance_rgbd_depth(
         )
         scale = None
     if scale is None:
-        diagnostics.append(
-            {
-                "code": "insufficient_alignment_pixels",
-                "alignment_pixel_count": int(alignment_count),
-                "min_alignment_pixels": int(cfg.min_alignment_pixels),
-            }
-        )
+        # ``_fit_scale_only`` also returns ``None`` when the fitted scale was
+        # rejected above. Do not misreport that case as a pixel shortage: the
+        # Agent needs the actual repair signal and should not chase more pixels
+        # when the two depth sources disagree in scale.
+        if not alignment_reason:
+            diagnostics.append(
+                {
+                    "code": "insufficient_alignment_pixels",
+                    "alignment_pixel_count": int(alignment_count),
+                    "min_alignment_pixels": int(cfg.min_alignment_pixels),
+                }
+            )
         fused = safety_depth.copy()
         provenance = np.where(
             sensor_reliable,

@@ -9,6 +9,7 @@ Apply these obligations on every planning turn:
 - Follow selected skill guidance unless a live tool schema or current environment evidence conflicts with it. Explain the conflict before deviating.
 - Treat runtime tool catalogs and schemas as authoritative. Never reconstruct parameters from stale examples when an exact tool result or artifact reference exists.
 - Reuse exact artifact references and structured outputs from prior calls. Do not invent aliases for masks, poses, images, handles, or sessions.
+- Use typed cross-tool references whenever a tool returns them. In particular, pass `ik_preview_check`'s exact `ik_receipt_id` to `move_to`, or ordered `ik_receipt_ids` to `follow_eef_trajectory`; never reproduce its xyz, orientation, or trajectory arrays.
 - Keep execution closed-loop: observe, act once, inspect the result, and replan. When evidence is missing or contradictory, gather evidence instead of claiming success.
 - Treat AnyGrasp output as a camera-frame GraspNet seed, not a robot EEF target. Compile it with the current staged calibration and use the compiled pose as a world-frame reference. Fresh visual feedback may justify a bounded pose adjustment inside the runtime envelope before one atomic move.
 - Treat AnyPlace output as a placement reference, not an immutable release command. Transform it with matching camera calibration, then use current visual feedback for bounded adjustment before moving and releasing.

@@ -76,7 +76,10 @@ def build_prepare_attachment_probe_handler() -> ToolHandler:
         return make_tool_result(
             context,
             success=True,
-            content="articulated attachment probe prepared and frozen",
+            content=(
+                "articulated attachment probe geometry frozen; run the returned "
+                "ordered IK preview requests, then execute by receipt id(s)"
+            ),
             outputs=outputs,
         )
 
@@ -339,6 +342,32 @@ def prepare_attachment_probe(
     ).hexdigest()
     probe_id = f"probe:{path_sha256}"
     _stamp_probe_metadata(tool_parameters, path_sha256=path_sha256)
+    preview_requests = [
+        {
+            "tool": "ik_preview_check",
+            "parameters": {
+                "target_pose": dict(pose),
+                "position_tolerance_m": 0.01,
+                "orientation_tolerance_rad": 0.10,
+                "check_endpoint_collision": True,
+            },
+        }
+        for pose in frozen_path
+    ]
+    execution_parameters = (
+        {
+            "ik_receipt_id": "<receipt id from the single preview above>",
+            "enable_collision_check": True,
+        }
+        if tool_name == "move_to"
+        else {
+            "ik_receipt_ids": [
+                f"<receipt id from preview {index + 1}>"
+                for index in range(len(frozen_path))
+            ],
+            "enable_collision_check": True,
+        }
+    )
     pre_probe_images = _current_rgb_paths(observation)
     if len(pre_probe_images) != 2:
         raise AttachmentProbeError(
@@ -358,7 +387,16 @@ def prepare_attachment_probe(
         "direction_world_xyz": _round_vector(direction),
         "frozen_path": frozen_path,
         "path_sha256": path_sha256,
-        "frozen_action": {"name": tool_name, "parameters": tool_parameters},
+        "frozen_motion": {"name": tool_name, "parameters": tool_parameters},
+        "ik_preview_requests": preview_requests,
+        "execution_handoff": {
+            "tool": tool_name,
+            "parameters": execution_parameters,
+            "instruction": (
+                "Run every IK preview in order, then pass only the returned receipt "
+                "id or ids to the named motion tool. Do not copy the frozen poses."
+            ),
+        },
         "pre_probe_image_paths": pre_probe_images,
         "proposal_reason": reason,
         "checked_by": "host_probe_geometry",

@@ -7,6 +7,7 @@ import math
 import re
 import time
 import urllib.parse
+from functools import lru_cache
 from hashlib import sha256
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -47,7 +48,12 @@ from agent.runtime.visual_history import (
     VisualHistoryConfig,
     build_visual_history_projection,
 )
-from agent.tools.registry import ToolRegistry, ToolSpec
+from agent.tools.registry import GRASP_POSE_BACKENDS, ToolRegistry, ToolSpec
+from agent.tools.contracts import (
+    ToolContractCatalog,
+    ToolContractRuntimePolicy,
+    check_tool_request_conformance,
+)
 
 
 _SKILL_MATCH_STOPWORDS = {
@@ -79,6 +85,9 @@ _CAMERA_ROLE_PREFERENCE = {
 DEFAULT_MAX_SKILL_CONTENT_CHARS = 8000
 DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS = 4
 DEFAULT_RECENT_TRANSITION_OBSERVATIONS = 3
+TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION = (
+    "openeta.tool_contract_shadow_validation.v1"
+)
 
 
 @dataclass(slots=True)
@@ -149,10 +158,17 @@ class ToolCallingPlanner(BasePlanner):
         max_validation_retries: int = 1,
         system_prompt: str = "",
         context_config: PlannerContextConfig | None = None,
+        tool_contract_catalog: ToolContractCatalog | None = None,
+        tool_contract_policy: ToolContractRuntimePolicy | None = None,
     ) -> None:
         self.backend = backend or PlaceholderPlannerBackend()
         self.max_validation_retries = max(0, max_validation_retries)
         self.context_config = context_config or PlannerContextConfig()
+        self.tool_contract_catalog = (
+            tool_contract_catalog or _default_tool_contract_catalog()
+        )
+        self.tool_contract_policy = tool_contract_policy or ToolContractRuntimePolicy()
+        self.tool_contract_policy.ensure_valid(self.tool_contract_catalog)
         base_prompt = system_prompt or _agent_owned_tool_planner_system_prompt()
         self.system_prompt, self.prompt_metadata = compose_main_planner_prompt(base_prompt)
         self.rollout_recorder: RolloutRecorder | None = None
@@ -236,6 +252,8 @@ class ToolCallingPlanner(BasePlanner):
                 last_result,
                 tools=tools,
                 skills=skills,
+                tool_contract_catalog=self.tool_contract_catalog,
+                tool_contract_policy=self.tool_contract_policy,
             )
             canonicalizations = _canonicalize_host_parameters(
                 decision,
@@ -508,17 +526,22 @@ class RuleBasedPlanner(BasePlanner):
         if _contains_any(task, ("place", "put", "放", "放置")):
             return PlannerDecision(
                 action_type="tool_call",
-                action="scene_detector",
-                parameters={"image": _first_camera_id(observation)},
-                reasoning="Task asks for placement; first locate candidate receptacles.",
+                action="observe",
+                parameters={"reason": "locate candidate placement receptacles"},
+                reasoning="Task asks for placement; first inspect the current scene.",
             )
 
         if _contains_any(task, ("navigate", "go to", "move to", "room", "导航", "移动")):
             return PlannerDecision(
-                action_type="tool_call",
-                action="slam",
-                parameters={"target_location": "task-specified location"},
-                reasoning="Task asks for navigation or base movement; query spatial map first.",
+                action_type="response",
+                action="talk",
+                parameters={
+                    "message": (
+                        "No base-navigation tool is registered in this runtime; "
+                        "I cannot execute the requested navigation safely."
+                    )
+                },
+                reasoning="The default runtime has no executable base-navigation facade.",
             )
 
         if _contains_any(task, ("wait", "等待")):
@@ -550,13 +573,34 @@ def _decision_from_backend_result(
     *,
     tools: ToolRegistry,
     skills: SkillRegistry,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
 ) -> tuple[PlannerDecision, list[str]]:
     payload, parse_errors = _parse_backend_payload(result.payload)
     if parse_errors:
         return _invalid_decision(parse_errors), parse_errors
 
     decision, build_errors = _build_planner_decision(payload)
-    validation_errors = [*build_errors, *_validate_planner_decision(decision, tools, skills)]
+    catalog = tool_contract_catalog or _default_tool_contract_catalog()
+    policy = tool_contract_policy or ToolContractRuntimePolicy()
+    validation_errors = [
+        *build_errors,
+        *_validate_planner_decision(
+            decision,
+            tools,
+            skills,
+            tool_contract_catalog=catalog,
+            tool_contract_policy=policy,
+        ),
+    ]
+    contract_shadow = _tool_contract_shadow_validation(
+        decision,
+        tools=tools,
+        tool_contract_catalog=catalog,
+        tool_contract_policy=policy,
+    )
+    if contract_shadow is not None:
+        decision.metadata["tool_contract_shadow_validation"] = contract_shadow
     if validation_errors:
         return decision, validation_errors
     return decision, []
@@ -656,6 +700,9 @@ def _validate_planner_decision(
     decision: PlannerDecision,
     tools: ToolRegistry,
     skills: SkillRegistry,
+    *,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
 ) -> list[str]:
     errors: list[str] = []
     kind = _planner_kind_alias(decision.action_type, decision.skill)
@@ -705,7 +752,26 @@ def _validate_planner_decision(
                         f"Tool requested by planner is not executable: {decision.action}."
                     )
                 else:
-                    errors.extend(_validate_tool_parameters(decision.action, decision.parameters))
+                    policy = tool_contract_policy or ToolContractRuntimePolicy()
+                    if policy.request_is_authoritative(decision.action):
+                        catalog = tool_contract_catalog or _default_tool_contract_catalog()
+                        contract = catalog.get(decision.action)
+                        errors.extend(
+                            _format_tool_contract_request_violations(
+                                decision.action,
+                                check_tool_request_conformance(
+                                    contract,
+                                    decision.parameters,
+                                ),
+                            )
+                        )
+                    else:
+                        errors.extend(
+                            _validate_tool_parameters(
+                                decision.action,
+                                decision.parameters,
+                            )
+                        )
 
     if kind == CommandKind.RESPONSE and decision.action not in {
         "ask_human",
@@ -749,14 +815,26 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
         return _validate_sam3_parameters(parameters)
     if tool_name == "molmopoint":
         return _validate_molmopoint_parameters(parameters)
+    if tool_name == "estimate_depth_prior":
+        return _validate_depth_packet_parameters(
+            tool_name,
+            parameters,
+            optional_fields={"resolution_level"},
+        )
+    if tool_name == "enhance_depth":
+        return _validate_depth_packet_parameters(
+            tool_name,
+            parameters,
+            optional_fields={"config"},
+        )
     if tool_name == "anyplace":
         return _validate_anyplace_parameters(parameters)
+    if tool_name == "camera_pose_to_world":
+        return _validate_camera_pose_to_world_parameters(parameters)
     if tool_name == "gripper_control":
         return _validate_gripper_control_parameters(parameters)
     if tool_name == "grasp_pose_estimate":
         return _validate_grasp_pose_estimate_parameters(parameters)
-    if tool_name == "contact_graspnet":
-        return _validate_contact_graspnet_parameters(parameters)
     if tool_name == "graspgenx":
         return _validate_graspgenx_parameters(parameters)
     if tool_name != "anygrasp":
@@ -796,6 +874,105 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
                 + ". Copy fx/fy/cx/cy/scale from the same observe/render camera metadata."
             )
     return errors
+
+
+def _tool_contract_shadow_validation(
+    decision: PlannerDecision,
+    *,
+    tools: ToolRegistry,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
+) -> JsonDict | None:
+    """Record legacy/contract parity and the selected per-tool authority."""
+
+    if decision.action_type.strip().lower() != "tool_call":
+        return None
+    if decision.action in {
+        "sense",
+        "tool_batch",
+        "batch",
+        "safe_check",
+        "code_policy",
+        "skill_call",
+    }:
+        return None
+    try:
+        tools.get(decision.action)
+    except KeyError:
+        return None
+
+    from agent.tools.contracts import ContractMaturity
+
+    try:
+        contract = (tool_contract_catalog or _default_tool_contract_catalog()).get(
+            decision.action
+        )
+    except KeyError:
+        return None
+    if contract.maturity is ContractMaturity.INFERRED:
+        return {
+            "schema_version": TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION,
+            "tool": decision.action,
+            "contract_maturity": contract.maturity.value,
+            "evaluated": False,
+            "enforcing": False,
+            "authoritative_validator": "legacy_planner",
+            "reason": "inferred contracts are inventory-only",
+        }
+
+    policy = tool_contract_policy or ToolContractRuntimePolicy()
+    contract_authoritative = policy.request_is_authoritative(decision.action)
+    legacy_errors = _validate_tool_parameters(decision.action, decision.parameters)
+    contract_violations = check_tool_request_conformance(
+        contract,
+        decision.parameters,
+    )
+    legacy_accepted = not legacy_errors
+    contract_accepted = not contract_violations
+    return {
+        "schema_version": TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION,
+        "tool": decision.action,
+        "contract_maturity": contract.maturity.value,
+        "evaluated": True,
+        "enforcing": contract_authoritative,
+        "authoritative_validator": (
+            "tool_contract" if contract_authoritative else "legacy_planner"
+        ),
+        "legacy_accepted": legacy_accepted,
+        "contract_accepted": contract_accepted,
+        "acceptance_match": legacy_accepted == contract_accepted,
+        "legacy_errors": list(legacy_errors),
+        "contract_violations": [
+            violation.to_dict() for violation in contract_violations
+        ],
+    }
+
+
+def _format_tool_contract_request_violations(
+    tool_name: str,
+    violations: tuple[object, ...],
+) -> list[str]:
+    """Turn structured contract failures into concise Agent repair feedback."""
+
+    errors: list[str] = []
+    for violation in violations:
+        code = str(getattr(violation, "code", "request_contract_violation"))
+        path = str(getattr(violation, "path", "parameters"))
+        message = str(getattr(violation, "message", "request does not match schema"))
+        errors.append(
+            f"{tool_name} request violates ToolContract at `{path}` ({code}): {message}"
+        )
+    return errors
+
+
+@lru_cache(maxsize=1)
+def _default_tool_contract_catalog():
+    """Cache immutable default declarations used by non-enforcing shadow checks."""
+
+    from agent.tools.contracts import build_default_tool_contract_catalog
+    from agent.tools.registry import build_default_tool_registry
+
+    return build_default_tool_contract_catalog(build_default_tool_registry().list())
 
 
 def _validate_gripper_control_parameters(parameters: JsonDict) -> list[str]:
@@ -955,22 +1132,45 @@ def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
 
 def _validate_molmopoint_parameters(parameters: JsonDict) -> list[str]:
     errors: list[str] = []
-    images = parameters.get("images")
-    if not isinstance(images, list) or not 1 <= len(images) <= 4:
+    if "images" in parameters:
         errors.append(
-            "molmopoint requires `parameters.images` as an ordered list of one to four "
-            "concrete local image paths."
+            "molmopoint no longer accepts `parameters.images`; use ordered packet "
+            "sources so the host resolves session-owned images and provenance."
+        )
+    sources = parameters.get("sources")
+    if not isinstance(sources, list) or not 1 <= len(sources) <= 4:
+        errors.append(
+            "molmopoint requires `parameters.sources` as an ordered list of one to "
+            "four objects containing source_packet_id and optional camera_frame_id."
         )
     else:
-        for image_index, value in enumerate(images):
-            if (
-                not isinstance(value, str)
-                or not value.strip()
-                or _looks_like_placeholder_path(value)
+        for source_index, source in enumerate(sources):
+            if not isinstance(source, dict):
+                errors.append(
+                    f"molmopoint sources[{source_index}] must be an object containing "
+                    "source_packet_id and optional camera_frame_id."
+                )
+                continue
+            extra = sorted(set(source) - {"source_packet_id", "camera_frame_id"})
+            if extra:
+                errors.append(
+                    f"molmopoint sources[{source_index}] contains unsupported fields: "
+                    + ", ".join(extra)
+                    + ". Do not pass paths or copied observation payloads."
+                )
+            source_packet_id = source.get("source_packet_id")
+            if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+                errors.append(
+                    f"molmopoint sources[{source_index}].source_packet_id must be a "
+                    "non-empty id copied exactly from visible observation evidence."
+                )
+            camera_frame_id = source.get("camera_frame_id")
+            if camera_frame_id is not None and (
+                not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
             ):
                 errors.append(
-                    "molmopoint requires each `parameters.images` entry as a concrete "
-                    f"local image path; entry {image_index} is invalid."
+                    f"molmopoint sources[{source_index}].camera_frame_id must be a "
+                    "non-empty string when set."
                 )
     prompt = parameters.get("prompt")
     if (
@@ -986,10 +1186,60 @@ def _validate_molmopoint_parameters(parameters: JsonDict) -> list[str]:
     return errors
 
 
+def _validate_depth_packet_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+    *,
+    optional_fields: set[str],
+) -> list[str]:
+    errors: list[str] = []
+    allowed = {"source_packet_id", "camera_frame_id", *optional_fields}
+    extra = sorted(set(parameters) - allowed)
+    if extra:
+        errors.append(
+            f"{tool_name} accepts observation packet references, not model-supplied "
+            "paths or calibration payloads; unsupported fields: "
+            + ", ".join(extra)
+            + "."
+        )
+    source_packet_id = parameters.get("source_packet_id")
+    if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+        errors.append(
+            f"{tool_name} requires `parameters.source_packet_id` copied exactly "
+            "from visible observation evidence."
+        )
+    camera_frame_id = parameters.get("camera_frame_id")
+    if camera_frame_id is not None and (
+        not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
+    ):
+        errors.append(
+            f"{tool_name} `parameters.camera_frame_id` must be a non-empty string when set."
+        )
+    if "resolution_level" in optional_fields and "resolution_level" in parameters:
+        value = parameters.get("resolution_level")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value < 10
+        ):
+            errors.append(
+                "estimate_depth_prior `parameters.resolution_level` must be an integer "
+                "in [0, 10)."
+            )
+    if "config" in optional_fields and "config" in parameters:
+        if not isinstance(parameters.get("config"), dict):
+            errors.append("enhance_depth `parameters.config` must be an object when set.")
+    return errors
+
+
 def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
     bundle_id = parameters.get("bundle_id")
     if isinstance(bundle_id, str) and bundle_id.strip():
-        extra = sorted(str(key) for key in parameters if key != "bundle_id")
+        extra = sorted(
+            str(key)
+            for key in parameters
+            if key not in {"bundle_id", "backend_preference"}
+        )
         if extra:
             return [
                 "grasp_pose_estimate bundle references cannot be overridden with "
@@ -997,7 +1247,7 @@ def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
                 + ", ".join(extra)
                 + "."
             ]
-        return []
+        return _validate_grasp_backend_preference(parameters.get("backend_preference"))
     errors: list[str] = []
     mode = str(parameters.get("mode") or "targeted").strip().lower()
     if mode not in {"targeted", "scene"}:
@@ -1042,42 +1292,40 @@ def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
     hints = parameters.get("hints")
     if hints is not None and not isinstance(hints, dict):
         errors.append("grasp_pose_estimate hints must be an object when provided.")
+    errors.extend(_validate_grasp_backend_preference(parameters.get("backend_preference")))
     return errors
 
 
-def _validate_contact_graspnet_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
-    for key in ("rgb", "depth"):
-        value = parameters.get(key)
-        if not isinstance(value, str) or not value.strip() or _looks_like_placeholder_path(value):
-            errors.append(
-                f"contact_graspnet requires `parameters.{key}` as a concrete local file path."
-            )
-
-    object_mask = parameters.get("object_mask")
-    if not isinstance(object_mask, dict):
-        errors.append(
-            "contact_graspnet requires `parameters.object_mask` as a SAM3 artifact "
-            "containing mask_ref and source_image; bare mask paths are not accepted."
-        )
-    else:
-        for key in ("mask_ref", "source_image"):
-            value = object_mask.get(key)
-            if (
-                not isinstance(value, str)
-                or not value.strip()
-                or _looks_like_placeholder_path(value)
-            ):
-                errors.append(
-                    f"contact_graspnet object_mask requires a concrete `{key}` local path."
-                )
-
-    _validate_required_intrinsics(
-        parameters.get("intrinsics"),
-        label="contact_graspnet `parameters.intrinsics`",
-        errors=errors,
-    )
-    return errors
+def _validate_grasp_backend_preference(value: object) -> list[str]:
+    if value is None:
+        return []
+    allowed = ", ".join(GRASP_POSE_BACKENDS)
+    if not isinstance(value, list) or not value:
+        return [
+            "grasp_pose_estimate backend_preference must be a non-empty ordered "
+            f"list chosen from: {allowed}."
+        ]
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        return [
+            "grasp_pose_estimate backend_preference entries must be non-empty "
+            f"backend names chosen from: {allowed}."
+        ]
+    normalized = [str(item).strip().lower() for item in value]
+    unknown = sorted(set(normalized).difference(GRASP_POSE_BACKENDS))
+    if unknown:
+        return [
+            "grasp_pose_estimate backend_preference contains unknown backend(s): "
+            + ", ".join(unknown)
+            + f". Allowed backends: {allowed}."
+        ]
+    duplicates = sorted({item for item in normalized if normalized.count(item) > 1})
+    if duplicates:
+        return [
+            "grasp_pose_estimate backend_preference must not repeat backend(s): "
+            + ", ".join(duplicates)
+            + "."
+        ]
+    return []
 
 
 def _validate_graspgenx_parameters(parameters: JsonDict) -> list[str]:
@@ -1179,6 +1427,39 @@ def _validate_anyplace_parameters(parameters: JsonDict) -> list[str]:
     if extra:
         return [
             "anyplace bundle references cannot be overridden with model-supplied fields: "
+            + ", ".join(extra)
+            + "."
+        ]
+    return []
+
+
+def _validate_camera_pose_to_world_parameters(parameters: JsonDict) -> list[str]:
+    """Keep AnyPlace handoff opaque while preserving the generic geometry path."""
+
+    result_id = parameters.get("placement_result_id")
+    candidate_id = parameters.get("candidate_id")
+    uses_placement_reference = result_id is not None or candidate_id is not None
+    if not uses_placement_reference:
+        return []
+    if not isinstance(result_id, str) or not result_id.strip():
+        return [
+            "camera_pose_to_world AnyPlace handoff requires a non-empty "
+            "`placement_result_id` returned by anyplace."
+        ]
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        return [
+            "camera_pose_to_world AnyPlace handoff requires an exact non-empty "
+            "`candidate_id` from that placement result."
+        ]
+    extra = sorted(
+        str(key)
+        for key in parameters
+        if key not in {"placement_result_id", "candidate_id"}
+    )
+    if extra:
+        return [
+            "camera_pose_to_world placement references cannot be overridden with "
+            "model-supplied pose or calibration fields: "
             + ", ".join(extra)
             + "."
         ]
@@ -1355,7 +1636,10 @@ def _agent_owned_tool_planner_system_prompt() -> str:
         "calibration, scene epochs, or provenance. Tool outputs, semantic outcomes, "
         "artifact paths, diagnostics, and recovery options are direct evidence: inspect "
         "them, record useful hypotheses in Agent memory, and do not repeat a call unless "
-        "you can state what input or observation changed. Infrastructure failure is not "
+        "you can state what input or observation changed. A new observation packet id "
+        "created after a read-only tool is not by itself a semantic change: reuse a "
+        "result whose validity epochs and geometry identity remain unchanged. "
+        "Infrastructure failure is not "
         "task or candidate failure. If unresolved_obligations.provenance_integrity says "
         "a compiled grasp was superseded by newer target evidence, safe retreat and "
         "clearance motion remain available, but re-estimate and compile before contact "
@@ -1535,46 +1819,19 @@ def _canonicalize_host_parameters(
             }
         ]
     if decision.action == "retrieve_asset_reference":
-        current_rgb = [
-            artifact
-            for artifact in tool_context.get("current_camera_artifacts", [])
-            if isinstance(artifact, dict)
-            and artifact.get("kind") == "rgb"
-            and isinstance(artifact.get("path"), str)
-        ]
-        wrist = tool_context.get("wrist_reference_obligation")
-        wrist_parameters = wrist.get("required_parameters") if isinstance(wrist, dict) else None
-        required_image = (
-            wrist_parameters.get("scene_image") if isinstance(wrist_parameters, dict) else None
-        )
-        if not isinstance(required_image, str):
-            no_detection = tool_context.get("sam3_no_detection")
-            source_image = (
-                no_detection.get("source_image") if isinstance(no_detection, dict) else None
-            )
-            source_name = Path(source_image).name if isinstance(source_image, str) else ""
-            matching = next(
-                (
-                    artifact["path"]
-                    for artifact in current_rgb
-                    if source_name and Path(artifact["path"]).name == source_name
-                ),
-                None,
-            )
-            required_image = matching or (current_rgb[0]["path"] if current_rgb else None)
         supplied_image = decision.parameters.get("scene_image")
-        if not isinstance(required_image, str) or _same_local_artifact(
-            supplied_image, required_image
-        ):
+        if supplied_image is None:
             return []
-        decision.parameters = {**decision.parameters, "scene_image": required_image}
+        parameters = dict(decision.parameters)
+        parameters.pop("scene_image", None)
+        decision.parameters = parameters
         return [
             {
                 "field": "scene_image",
                 "tool": "retrieve_asset_reference",
-                "reason": "bind_reference_localizer_to_current_camera_rgb",
+                "reason": "strip_agent_visual_transport_path",
                 "supplied": supplied_image,
-                "canonical": required_image,
+                "canonical": "host_resolved_from_source_packet_id",
             }
         ]
     return []
@@ -1934,21 +2191,33 @@ def _build_tool_context_payload(
     config: PlannerContextConfig,
 ) -> JsonDict:
     executable_tools = [tool for tool in tools.list() if tools.can_execute(tool.name)]
+    tool_references, tool_contract_projection_audit = (
+        _contract_driven_tool_references(executable_tools)
+    )
+    executable_tool_names = {tool.name for tool in executable_tools}
     selected_skill_guidance = _selected_skill_guidance(
         skills.list(),
         observation=observation,
         memory=memory,
         config=config,
     )
+    for skill_guidance in selected_skill_guidance:
+        _annotate_skill_tool_availability(
+            skill_guidance,
+            executable_tool_names=executable_tool_names,
+        )
     skill_usage = _skill_usage_guidance(selected_skill_guidance, memory)
     memory_context = memory.planning_context(max_events=config.max_memory_events)
+    tool_loop_warning = _motion_failure_attractor_warning(
+        memory
+    ) or _conversation_no_progress_warning(memory)
     effective_task = _effective_task_text(observation, memory)
     task_playbook = _matched_task_playbook(
         observation=observation,
         memory=memory,
         task=effective_task,
     )
-    camera_artifacts = _current_camera_artifacts(observation)
+    camera_artifacts = _current_camera_artifacts(observation, memory=memory)
     visual_history: JsonDict | None = None
     if config.visual_history.enabled:
         visual_projection = build_visual_history_projection(
@@ -1994,12 +2263,14 @@ def _build_tool_context_payload(
         "pending_reference_localization": memory_context.get(
             "pending_reference_localization"
         ),
+        "target_identity_anchor": memory_context.get("target_identity_anchor"),
         "retained_targeted_grasp": memory_context.get("retained_targeted_grasp"),
         "provenance_evidence_graph": memory_context.get(
             "provenance_evidence_graph"
         ),
         "grasp_adjustment_budget": memory_context.get("grasp_adjustment_budget"),
         "grasp_input_bundle": memory_context.get("grasp_input_bundle"),
+        "wrist_alignment_bundle": memory_context.get("wrist_alignment_bundle"),
         "anyplace_input_bundle": memory_context.get("anyplace_input_bundle"),
         "articulated_attachment_probe": memory_context.get(
             "articulated_attachment_probe"
@@ -2007,6 +2278,7 @@ def _build_tool_context_payload(
         "gripper_command_state": memory_context.get("gripper_command_state"),
         "attachment_evidence": memory_context.get("attachment_evidence"),
         "motion_reconciliation": memory_context.get("motion_reconciliation"),
+        "ik_preview_receipts": memory_context.get("ik_preview_receipts"),
         "fresh_observation_obligation": {
             "schema_version": "openeta.fresh_observation_obligation.v1",
             "required": True,
@@ -2018,14 +2290,25 @@ def _build_tool_context_payload(
         "object_scene_epoch": memory_context.get("object_scene_epoch"),
         "robot_motion_epoch": memory_context.get("robot_motion_epoch"),
         "transition_ledger": memory_context.get("transition_ledger"),
+        "latest_compiled_clearance_execution": memory_context.get(
+            "latest_compiled_clearance_execution"
+        ),
+        "latest_compiled_contact_execution": memory_context.get(
+            "latest_compiled_contact_execution"
+        ),
         "latest_environment_receipt": memory_context.get("latest_environment_receipt"),
-        "tool_references": [_tool_reference(tool) for tool in executable_tools],
+        "tool_references": tool_references,
+        # Host-only migration evidence. The Agent receives the contract-driven
+        # references above; this audit remains outside agent_context and records
+        # where legacy ToolSpec parameter names intentionally differ.
+        "tool_contract_projection_audit": tool_contract_projection_audit,
         "registered_tool_handlers": tools.handler_names(),
         "skill_references": [_selected_skill_reference(skill) for skill in selected_skill_guidance],
         "available_skill_count": len(skills.list()),
         "selected_skill_guidance": selected_skill_guidance,
         "skill_usage": skill_usage,
         "execution_rules": _tool_calling_rules(),
+        "tool_loop_warning": tool_loop_warning,
     }
     context["agent_context"] = _build_agent_decision_context(context, config=config)
     return context
@@ -2123,6 +2406,9 @@ def _build_agent_decision_context(
     provenance_inconsistencies = evidence_graph.get("inconsistencies")
     if isinstance(provenance_inconsistencies, list) and provenance_inconsistencies:
         unresolved_obligations["provenance_integrity"] = provenance_inconsistencies
+    tool_loop_warning = runtime_context.get("tool_loop_warning")
+    if isinstance(tool_loop_warning, dict):
+        unresolved_obligations["no_progress_tool_loop"] = tool_loop_warning
     camera_artifacts = runtime_context.get("current_camera_artifacts")
     camera_artifacts = camera_artifacts if isinstance(camera_artifacts, list) else []
     packet_ids = list(
@@ -2147,8 +2433,20 @@ def _build_agent_decision_context(
         },
         "active_bundles": active_bundles,
         "grasp_adjustment_budget": memory.get("grasp_adjustment_budget"),
+        # Execution receipt only: an Agent-chosen clearance is optional, but an
+        # explicit miss cannot be silently treated as a successful contact premise.
+        "latest_compiled_clearance_execution": memory.get(
+            "latest_compiled_clearance_execution"
+        ),
+        # This is an execution receipt, not a host-owned task phase.  Keeping it
+        # in the compact decision index lets the Agent reason from the actual
+        # contact outcome even before a dependent close is attempted.
+        "latest_compiled_contact_execution": memory.get(
+            "latest_compiled_contact_execution"
+        ),
         "unresolved_obligations": unresolved_obligations,
         "last_action_effect": _latest_action_effect(recent_events),
+        "no_progress_tool_loop": tool_loop_warning,
         "available_tools": [
             reference.get("name")
             for reference in tool_references
@@ -2177,6 +2475,7 @@ def _build_agent_decision_context(
         "evidence_graph": evidence_graph,
         "host_resolved_inputs": {
             "grasp_pose_estimate": memory.get("grasp_input_bundle"),
+            "wrist_alignment": memory.get("wrist_alignment_bundle"),
             "anyplace": memory.get("anyplace_input_bundle"),
         },
         "decision_state": decision_state,
@@ -2192,6 +2491,7 @@ def _build_agent_decision_context(
         # Full schemas remain in the canonical context once. The provider backend
         # moves this cache-stable block ahead of growing conversation history; the
         # legacy tool_references field stays a name-only compatibility index.
+        "available_tools_schema_version": "openeta.agent_tool_contract.v1",
         "available_tools": runtime_context.get("tool_references", []),
         "tool_references": [
             {"name": reference.get("name")}
@@ -2208,6 +2508,319 @@ def _build_agent_decision_context(
         "vision_image_paths": runtime_context.get("vision_image_paths", []),
         "vision_evidence": visual_evidence,
     }
+
+
+def _conversation_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect repeated semantically equivalent tool requests without host progress.
+
+    Observation packet ids are provenance handles, not task progress. Read-only
+    turns can mint a new handle for unchanged geometry, so the signature omits
+    packet ids while retaining the actual tool, prompt, camera, bundle, and
+    candidate identifiers. This is Agent-visible reflection evidence, not a
+    required-next-action state machine or an execution gate.
+    """
+
+    actions: list[tuple[str, str, JsonDict]] = []
+    for item in reversed(memory.conversation.items):
+        if item.role != "assistant" or item.kind != "action":
+            continue
+        request = item.data.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            break
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        stable_parameters = _without_packet_provenance(parameters)
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": stable_parameters},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        actions.append((name, signature, parameters))
+        if len(actions) >= 8:
+            break
+    if not actions:
+        return None
+    latest_name, latest_signature, _ = actions[0]
+    repeated = 0
+    packet_ids: list[str] = []
+    for name, signature, parameters in actions:
+        if name != latest_name or signature != latest_signature:
+            break
+        repeated += 1
+        packet_id = parameters.get("source_packet_id")
+        if isinstance(packet_id, str) and packet_id:
+            packet_ids.append(packet_id)
+    if repeated >= 2:
+        return {
+            "schema_version": "openeta.no_progress_tool_loop.v1",
+            "tool": latest_name,
+            "equivalent_call_count": repeated,
+            "semantic_signature": latest_signature,
+            "packet_ids_changed": len(set(packet_ids)) > 1,
+            "interpretation": (
+                "The same semantic tool request was repeated without an intervening "
+                "different action. Packet-id-only refresh is provenance churn, not new "
+                "geometry or task progress. Inspect and consume the latest result, choose "
+                "a materially different input/action, or explain the observed change."
+            ),
+            "host_policy": "reflection_warning_only; no tool is forced or blocked",
+        }
+    return _interleaved_no_progress_warning(memory)
+
+
+def _interleaved_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect equivalent calls hidden inside a short read-only/planning cycle.
+
+    A common failure mode is ``sam3 -> select -> sam3 -> select``.  Adjacent-call
+    detection misses it even though no world mutation occurred.  This detector
+    deliberately remains advisory: it exposes a ready bundle and asks the Agent
+    to consume it, but never blocks a legitimate refresh after visible change.
+    """
+
+    actions: list[tuple[str, str, JsonDict]] = []
+    world_mutating = {"move_to", "follow_eef_trajectory", "gripper_control"}
+    for event in reversed(memory.events[-160:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            continue
+        name = str(request.get("name") or "")
+        if name in world_mutating:
+            break
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        stable_parameters = _semantic_repeat_parameters(name, parameters)
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": stable_parameters},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        actions.append((name, signature, parameters))
+        if len(actions) >= 12:
+            break
+    if len(actions) < 2:
+        return None
+    latest_name, latest_signature, _ = actions[0]
+    matches = [
+        (name, parameters)
+        for name, signature, parameters in actions
+        if name == latest_name and signature == latest_signature
+    ]
+    if len(matches) < 2:
+        return None
+    intervening_tools = [name for name, _, _ in actions[1:] if name != latest_name]
+    reusable_bundles: JsonDict = {}
+    for key, bundle in {
+        "grasp_pose_estimate": memory.grasp_input_bundle(),
+        "anyplace": memory.anyplace_input_bundle(),
+    }.items():
+        if isinstance(bundle, dict) and bundle.get("status") == "ready":
+            reusable_bundles[key] = {
+                "bundle_id": bundle.get("bundle_id"),
+                "status": bundle.get("status"),
+                "target_evidence_id": bundle.get("target_evidence_id"),
+            }
+    packet_ids = [
+        str(parameters.get("source_packet_id"))
+        for _, parameters in matches
+        if parameters.get("source_packet_id")
+    ]
+    return {
+        "schema_version": "openeta.no_progress_tool_loop.v1",
+        "tool": latest_name,
+        "trigger_type": "interleaved_equivalent_read_only_cycle",
+        "equivalent_call_count": len(matches),
+        "semantic_signature": latest_signature,
+        "packet_ids_changed": len(set(packet_ids)) > 1,
+        "intervening_tools": list(dict.fromkeys(intervening_tools)),
+        "reusable_bundles": reusable_bundles,
+        "interpretation": (
+            "The same semantic request recurred inside a read-only/planning cycle with "
+            "no world change. Consume the latest successful result or a ready bundle. "
+            "Repeat localization only when current visual/VDM evidence shows object "
+            "motion, occlusion, mask invalidity, or another material input change."
+        ),
+        "host_policy": "reflection_warning_only; no tool is forced or blocked",
+    }
+
+
+def _semantic_repeat_parameters(name: str, parameters: JsonDict) -> JsonDict:
+    stable = _without_packet_provenance(parameters)
+    stable = stable if isinstance(stable, dict) else {}
+    if name == "sam3" and not stable.get("mode"):
+        stable["mode"] = "text"
+    if name == "select_sam3_detection":
+        return {
+            key: stable.get(key)
+            for key in (
+                "evidence_role",
+                "identity_anchor_id",
+                "identity_relation",
+                "target_geometry_family",
+            )
+            if stable.get(key) is not None
+        }
+    return stable
+
+
+def _motion_failure_attractor_warning(memory: AgentMemory) -> JsonDict | None:
+    """Expose repeated controller convergence to the same wrong endpoint.
+
+    This is outcome-based rather than request-adjacency-based: perception,
+    preview, and recovery calls may occur between two attempts.  It remains a
+    reflection warning only and never selects or blocks an action.
+    """
+
+    failures: dict[str, JsonDict] = {}
+    for event in reversed(memory.events[-160:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        calls = command.get("tool_calls")
+        calls = calls if isinstance(calls, list) else []
+        for call in reversed(calls):
+            if not isinstance(call, dict) or str(call.get("name") or "") != "move_to":
+                continue
+            result = call.get("result")
+            result = result if isinstance(result, dict) else {}
+            details = result.get("details")
+            details = details if isinstance(details, dict) else {}
+            if details.get("operational_success") is not False:
+                continue
+            outputs = details.get("outputs")
+            outputs = outputs if isinstance(outputs, dict) else {}
+            motion = outputs.get("motion_summary")
+            motion = motion if isinstance(motion, dict) else {}
+            if motion.get("reached_target") is not False:
+                continue
+            parameters = call.get("parameters")
+            parameters = parameters if isinstance(parameters, dict) else {}
+            pose_signature = _motion_pose_policy_signature(parameters)
+            end = motion.get("end")
+            end = end if isinstance(end, dict) else {}
+            actual_xyz = end.get("xyz")
+            if not pose_signature or not _finite_planner_xyz(actual_xyz):
+                continue
+            current = {
+                "actual_xyz": [float(value) for value in actual_xyz[:3]],
+                "position_error_m": motion.get("position_error_m"),
+                "steps_executed": motion.get("steps_executed"),
+                "stop_reason": motion.get("stop_reason"),
+            }
+            newer = failures.get(pose_signature)
+            if isinstance(newer, dict) and _planner_xyz_distance(
+                newer.get("actual_xyz"), current["actual_xyz"]
+            ) <= 0.005:
+                return {
+                    "schema_version": "openeta.no_progress_tool_loop.v1",
+                    "trigger_type": "repeated_failed_motion_attractor",
+                    "tool": "move_to",
+                    "semantic_signature": pose_signature,
+                    "attempt_count": 2,
+                    "actual_endpoint_a_xyz": newer.get("actual_xyz"),
+                    "actual_endpoint_b_xyz": current["actual_xyz"],
+                    "position_error_m": newer.get("position_error_m"),
+                    "steps_executed": newer.get("steps_executed"),
+                    "stop_reason": newer.get("stop_reason"),
+                    "interpretation": (
+                        "Multiple executions of the same endpoint/orientation policy "
+                        "converged to the same wrong EEF pose within 5 mm. More retries "
+                        "are unlikely to add evidence. Change candidate, orientation "
+                        "policy, controller-compatible waypoint, or recovery strategy."
+                    ),
+                    "host_policy": "reflection_warning_only; no tool is forced or blocked",
+                }
+            failures[pose_signature] = current
+    return None
+
+
+def _motion_pose_policy_signature(parameters: JsonDict) -> str:
+    target = parameters.get("target_pose")
+    if not isinstance(target, dict):
+        return ""
+    xyz = target.get("xyz", target.get("translation_xyz"))
+    if not _finite_planner_xyz(xyz):
+        return ""
+    orientation = {
+        key: target.get(key)
+        for key in (
+            "rotation_matrix",
+            "quat_xyzw",
+            "quaternion",
+            "rotvec",
+            "roll",
+            "pitch",
+            "yaw",
+        )
+        if target.get(key) is not None
+    }
+    preserve_current = parameters.get("preserve_current_orientation")
+    if preserve_current is None:
+        preserve_current = not orientation
+    canonical = {
+        "target_xyz": [float(value) for value in xyz[:3]],
+        "orientation_policy": (
+            "preserve_current" if preserve_current is True else "explicit_orientation"
+        ),
+        "orientation": orientation,
+    }
+    return sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def _finite_planner_xyz(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) >= 3
+        and all(
+            isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and math.isfinite(float(item))
+            for item in value[:3]
+        )
+    )
+
+
+def _planner_xyz_distance(left: object, right: object) -> float:
+    if not _finite_planner_xyz(left) or not _finite_planner_xyz(right):
+        return float("inf")
+    return math.sqrt(sum((float(left[i]) - float(right[i])) ** 2 for i in range(3)))
+
+
+def _without_packet_provenance(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _without_packet_provenance(item)
+            for key, item in value.items()
+            if str(key)
+            not in {
+                "source_packet_id",
+                "source_packet_ids",
+                "source_observation",
+                "source_observations",
+            }
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_packet_provenance(item) for item in value]
+    return value
 
 
 def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
@@ -2446,7 +3059,11 @@ def _matched_task_playbook(
         return None
 
 
-def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
+def _current_camera_artifacts(
+    observation: EnvObservation,
+    *,
+    memory: AgentMemory,
+) -> list[JsonDict]:
     """Return current RGB/depth artifacts in stable planner preference order."""
 
     if observation.metadata.get("fresh_observation_required") is True:
@@ -2476,6 +3093,9 @@ def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
             value = raw.get(artifact_field)
             if value is not None:
                 artifact[artifact_field] = value
+        packet_reference = memory.observation_packet_reference_for_path(path)
+        if packet_reference.get("source_packet_id"):
+            artifact["packet_id"] = packet_reference["source_packet_id"]
         artifact["_sort_key"] = (
             _CAMERA_ROLE_PREFERENCE.get(role, preferred_frames.get(frame_id, 3)),
             0 if kind == "rgb" else 1,
@@ -2910,6 +3530,10 @@ def _tool_context_summary(context: JsonDict) -> JsonDict:
     recent_events = memory.get("recent_events", [])
     if not isinstance(recent_events, list):
         recent_events = []
+    projection_audit = context.get("tool_contract_projection_audit")
+    projection_audit = (
+        projection_audit if isinstance(projection_audit, dict) else {}
+    )
     return {
         "schema_version": "openeta.planner_context_summary.v1",
         "task": context.get("task"),
@@ -2934,6 +3558,15 @@ def _tool_context_summary(context: JsonDict) -> JsonDict:
         },
         "tool_count": len(context.get("tool_references", []) or []),
         "registered_handler_count": len(context.get("registered_tool_handlers", []) or []),
+        "tool_contract_projection": {
+            "authoritative_projection": projection_audit.get(
+                "authoritative_projection"
+            ),
+            "tool_count": projection_audit.get("tool_count", 0),
+            "matching_tool_count": projection_audit.get("matching_tool_count", 0),
+            "mismatch_count": projection_audit.get("mismatch_count", 0),
+            "mismatches": list(projection_audit.get("mismatches") or []),
+        },
         "skill_count": len(context.get("skill_references", []) or []),
         "selected_skills": [
             {
@@ -2989,16 +3622,37 @@ def _observation_summary(
     return summary
 
 
-def _tool_reference(tool: ToolSpec) -> JsonDict:
-    return {
-        "name": tool.name,
-        "category": tool.category,
-        "description": tool.description,
-        "parameters": tool.parameters,
-        "safe_by_default": tool.safe_by_default,
-        "effect": tool.effect.value,
-        "batchable": tool.allows_batched_observation,
-        "requires_observation_after_call": tool.requires_observation_after_call,
+def _contract_driven_tool_references(
+    tools: list[ToolSpec],
+) -> tuple[list[JsonDict], JsonDict]:
+    """Build Agent-visible schemas from ToolContract, not duplicate ToolSpec prose."""
+
+    from agent.tools.contracts import (
+        audit_agent_tool_projection,
+        build_default_tool_contract_catalog,
+        project_agent_tool_contract,
+    )
+
+    catalog = build_default_tool_contract_catalog(tools)
+    references: list[JsonDict] = []
+    audit_rows: list[JsonDict] = []
+    for spec in tools:
+        contract = catalog.get(spec.name)
+        references.append(project_agent_tool_contract(contract))
+        audit_rows.append(audit_agent_tool_projection(contract, spec))
+    mismatches = [row for row in audit_rows if row.get("matches") is not True]
+    return references, {
+        "schema_version": "openeta.agent_tool_contract_projection_catalog_audit.v1",
+        "authoritative_projection": "tool_contract",
+        "runtime_authority": "tool_registry_handler_binding",
+        "tool_count": len(audit_rows),
+        "matching_tool_count": len(audit_rows) - len(mismatches),
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "interpretation": (
+            "Parameter-name mismatches are migration evidence; they do not change "
+            "legacy Planner validation or runtime gate authority."
+        ),
     }
 
 
@@ -3025,6 +3679,9 @@ def _selected_skill_reference(skill: JsonDict) -> JsonDict:
             "description",
             "task_patterns",
             "allowed_tools",
+            "available_allowed_tools",
+            "unavailable_allowed_tools",
+            "tool_availability_rule",
             "source",
             "version",
             "editable",
@@ -3036,6 +3693,39 @@ def _selected_skill_reference(skill: JsonDict) -> JsonDict:
             "content_truncated",
         }
     }
+
+
+def _annotate_skill_tool_availability(
+    skill: JsonDict,
+    *,
+    executable_tool_names: set[str],
+) -> None:
+    """Project one static skill contract onto this runtime's bound handlers.
+
+    ``allowed_tools`` remains the durable authoring declaration.  It must not be
+    interpreted as proof that an optional MCP/backend is configured for the
+    current process, so the Agent receives the executable intersection and the
+    unavailable remainder explicitly on every turn.
+    """
+
+    declared = [
+        str(name)
+        for name in skill.get("allowed_tools", [])
+        if isinstance(name, str) and name
+    ]
+    skill["available_allowed_tools"] = [
+        name for name in declared if name in executable_tool_names
+    ]
+    skill["unavailable_allowed_tools"] = [
+        name for name in declared if name not in executable_tool_names
+    ]
+    skill["tool_availability_rule"] = (
+        "allowed_tools is static skill guidance, not an availability receipt. "
+        "Call only tools listed in available_allowed_tools and the current "
+        "tool_references. If a required capability is unavailable, use an "
+        "explicitly documented executable alternative or report the capability "
+        "gap; never retry the unbound tool."
+    )
 
 
 def _selected_skill_guidance(

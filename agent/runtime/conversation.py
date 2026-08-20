@@ -13,6 +13,7 @@ from adapter.protocol import EnvAction, JsonDict
 
 CONVERSATION_SCHEMA_VERSION = "openeta.conversation.v1"
 CONVERSATION_CHECKPOINT_SCHEMA_VERSION = "openeta.conversation_checkpoint.v1"
+PLANNER_VALIDATION_RECEIPT_SCHEMA_VERSION = "openeta.planner_validation_receipt.v1"
 # These constants remain as explicit-compaction defaults for callers that ask
 # for a durable checkpoint. Normal model projection uses the planner's total
 # token budget instead of a fixed action window.
@@ -132,6 +133,19 @@ class ConversationHistory:
             "tool_calls": _summarize_tool_calls(command.get("tool_calls")),
             "skill_call": _summarize_skill_call(command.get("skill_call")),
         }
+        command_metadata = command.get("metadata")
+        if isinstance(command_metadata, dict):
+            repair_bundle = command_metadata.get("repair_bundle")
+            if isinstance(repair_bundle, dict):
+                result_data["repair_bundle"] = _bounded_value(
+                    repair_bundle,
+                    max_depth=7,
+                    max_items=24,
+                    max_string_chars=4_000,
+                )
+            validation_receipt = _planner_validation_receipt(command_metadata)
+            if validation_receipt is not None:
+                result_data["planner_validation_receipt"] = validation_receipt
         if kind == "response":
             content = _response_text(name, parameters)
             item = ConversationItem(
@@ -358,6 +372,61 @@ def checkpoint_record(checkpoint: JsonDict) -> JsonDict:
     return {"record_type": "checkpoint", **dict(checkpoint)}
 
 
+def _planner_validation_receipt(command_metadata: JsonDict) -> JsonDict | None:
+    """Preserve rejected same-decision attempts as model-visible host evidence."""
+
+    planner_metadata = command_metadata.get("planner_metadata")
+    if not isinstance(planner_metadata, dict):
+        return None
+    history = planner_metadata.get("validation_attempt_history")
+    if not isinstance(history, list) or len(history) <= 1:
+        return None
+    attempts: list[JsonDict] = []
+    for raw in history[:8]:
+        if not isinstance(raw, dict):
+            continue
+        raw_errors = raw.get("validation_errors")
+        raw_errors = raw_errors if isinstance(raw_errors, list) else []
+        errors = [
+            str(error)
+            for error in raw_errors[:16]
+            if isinstance(error, str) and error
+        ]
+        decision = raw.get("decision")
+        decision = decision if isinstance(decision, dict) else {}
+        attempts.append(
+            {
+                "attempt": raw.get("attempt"),
+                "candidate": {
+                    "kind": decision.get("kind"),
+                    "name": decision.get("name"),
+                },
+                "accepted": not errors,
+                "validation_errors": errors,
+            }
+        )
+    if len(attempts) <= 1:
+        return None
+    rejected = [item for item in attempts if item["accepted"] is False]
+    return {
+        "schema_version": PLANNER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+        "attempt_count": len(attempts),
+        "accepted_attempt": next(
+            (
+                item["attempt"]
+                for item in reversed(attempts)
+                if item["accepted"] is True
+            ),
+            None,
+        ),
+        "rejected_attempts": rejected,
+        "interpretation": (
+            "Rejected candidates were not executed; the accepted candidate below "
+            "was the only action dispatched to the tool pipeline."
+        ),
+    }
+
+
 def _select_recent_message_ids(
     items: list[ConversationItem],
     max_chars: int,
@@ -469,6 +538,11 @@ def _summarize_tool_calls(value: Any) -> list[JsonDict]:
                 "name": raw.get("name"),
                 "status": raw.get("status"),
                 "result": result_summary,
+                **(
+                    {"reason": str(raw.get("reason"))[:4_000]}
+                    if str(raw.get("reason") or "").strip()
+                    else {}
+                ),
             }
         )
     return calls
@@ -516,9 +590,14 @@ def _compact_host_result(result_data: JsonDict) -> JsonDict:
                 "name": call.get("name"),
                 "status": call.get("status"),
                 "result": compacted_result,
+                **(
+                    {"reason": str(call.get("reason"))[:800]}
+                    if str(call.get("reason") or "").strip()
+                    else {}
+                ),
             }
         )
-    return {
+    compacted: JsonDict = {
         "action_id": result_data.get("action_id"),
         "status": result_data.get("status"),
         "tool_calls": compacted_calls,
@@ -530,6 +609,23 @@ def _compact_host_result(result_data: JsonDict) -> JsonDict:
             ),
         },
     }
+    repair_bundle = result_data.get("repair_bundle")
+    if isinstance(repair_bundle, dict):
+        compacted["repair_bundle"] = _bounded_value(
+            repair_bundle,
+            max_depth=5,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    validation_receipt = result_data.get("planner_validation_receipt")
+    if isinstance(validation_receipt, dict):
+        compacted["planner_validation_receipt"] = _bounded_value(
+            validation_receipt,
+            max_depth=6,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    return compacted
 
 
 def _summarize_skill_call(value: Any) -> JsonDict | None:

@@ -726,6 +726,30 @@ def _proxy_reachability(meta: dict, body: dict) -> dict:
     )
 
 
+def _proxy_controller_goal(meta: dict, body: dict) -> dict:
+    """Execute a worker-local host-selected controller goal and cache its state."""
+
+    mgr = _get_mgr()
+    result = mgr.proxy_handle_op(
+        meta,
+        f"/env/{meta['remote_handle']}/controller-goal",
+        method="POST",
+        body=body,
+    )
+    _capture_internal_objects(meta, result)
+    observation = result.get("observation")
+    if isinstance(observation, dict):
+        sid = meta.get("_sid", "")
+        key = _obs_key(meta)
+        with _session_last_obs_lock:
+            _session_last_obs.setdefault(sid, {})[key] = _public_observation_result(
+                meta,
+                observation,
+            )
+        _mark_obs_dirty(key)
+    return _public_observation_result(meta, result)
+
+
 def _proxy_render(meta: dict) -> dict:
     """Proxy a render request to the worker."""
     mgr = _get_mgr()

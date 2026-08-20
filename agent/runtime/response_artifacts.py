@@ -112,6 +112,9 @@ def build_response_reference(
     reachability_summary = build_reachability_summary(payload)
     if reachability_summary:
         reference["reachability_summary"] = reachability_summary
+    control_spec = payload.get("control_spec")
+    if isinstance(control_spec, dict):
+        reference["control_spec"] = _plain_json_value(control_spec)
     for key in ("envs", "tasks", "items", "results"):
         if key in payload and isinstance(payload[key], list):
             reference[f"{key}_count"] = len(payload[key])
@@ -144,7 +147,16 @@ def build_reachability_summary(payload: JsonDict) -> JsonDict:
         value = payload.get(key)
         if _is_small_scalar(value) or value is None:
             summary[key] = value
-    for key in ("target", "tolerances", "best_candidate", "collision", "path", "solver"):
+    for key in (
+        "target",
+        "tolerances",
+        "best_candidate",
+        "joint_limit_proximity",
+        "execution_seed_quality",
+        "collision",
+        "path",
+        "solver",
+    ):
         value = payload.get(key)
         if isinstance(value, dict):
             summary[key] = _plain_json_value(value)
@@ -291,6 +303,17 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
     collision = payload.get("collision")
     if isinstance(collision, dict):
         summary["collision"] = _compact_scalar_mapping(collision)
+    controller_receipt = payload.get("controller_receipt")
+    if isinstance(controller_receipt, dict):
+        summary["controller_receipt"] = _compact_scalar_mapping(controller_receipt)
+    controller_failure = payload.get("controller_failure")
+    if isinstance(controller_failure, dict):
+        summary["controller_failure"] = _compact_scalar_mapping(controller_failure)
+    convergence_diagnostics = payload.get("convergence_diagnostics")
+    if isinstance(convergence_diagnostics, dict):
+        summary["convergence_diagnostics"] = _plain_json_value(
+            convergence_diagnostics
+        )
     for key in ("start", "end", "target"):
         value = payload.get(key)
         if isinstance(value, dict):

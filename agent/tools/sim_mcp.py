@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
 import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -62,6 +64,7 @@ DEFAULT_SIMULATOR_IMAGE_HEIGHT = 512
 DEFAULT_MCP_SSE_READ_TIMEOUT_S = 300.0
 MCP_SSE_TIMEOUT_GRACE_S = 5.0
 ENVIRONMENT_RECEIPT_SCHEMA_VERSION = "openeta.environment_receipt.v1"
+RESOLVED_TOOL_EXECUTION_SCHEMA_VERSION = "openeta.resolved_tool_execution.v1"
 
 SIMULATOR_CONTROL_MCP_TOOL_NAMES = (
     "move_to",
@@ -447,6 +450,11 @@ class SimulatorMcpToolProxy:
         self.config = config or SimulatorMcpToolProxyConfig()
         self._artifact_sequence = 0
         self._artifact_instance_id = uuid4().hex[:10]
+        # Capability observation, not task progress: once a backend accepts a
+        # host contact authorization but omits the required attachment receipt,
+        # keep later lift feedback honest instead of silently pretending that
+        # the carried-object proxy is active.
+        self._attachment_proxy_contract_missing = False
 
     def handler_for(self, tool_name: str) -> ToolHandler:
         def handler(context: ToolExecutionContext) -> ToolResult:
@@ -488,37 +496,47 @@ class SimulatorMcpToolProxy:
             transport_unknown = context.spec.effect.value == "world_mutating" and (
                 transport_timeout or transport_connection_lost
             )
+            details = make_tool_result_details(
+                context.spec,
+                context.parameters,
+                success=False,
+                outputs={
+                    "mcp": {
+                        "tool": mcp_tool,
+                        "agent_tool": agent_tool,
+                        "session_id": arguments.get("session_id", ""),
+                        "handle": arguments.get("handle", ""),
+                    },
+                    "motion_outcome": "unknown" if transport_unknown else "failed",
+                    "reconciliation_required": transport_unknown,
+                },
+                diagnostics=[
+                    {
+                        "code": (
+                            "simulator_mcp_transport_timeout"
+                            if transport_timeout
+                            else "simulator_mcp_transport_connection_lost"
+                            if transport_unknown
+                            else "simulator_mcp_call_failed"
+                        ),
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ],
+            )
+            execution_receipt = _resolved_tool_execution_receipt(
+                agent_tool,
+                context.parameters,
+                dispatch_status=(
+                    "outcome_unknown" if transport_unknown else "transport_failed"
+                ),
+            )
+            if execution_receipt:
+                details["host_execution_receipt"] = execution_receipt
             return ToolResult(
                 False,
                 content=f"Simulator MCP tool failed: {mcp_tool}: {exc}",
-                details=make_tool_result_details(
-                    context.spec,
-                    context.parameters,
-                    success=False,
-                    outputs={
-                        "mcp": {
-                            "tool": mcp_tool,
-                            "agent_tool": agent_tool,
-                            "session_id": arguments.get("session_id", ""),
-                            "handle": arguments.get("handle", ""),
-                        },
-                        "motion_outcome": "unknown" if transport_unknown else "failed",
-                        "reconciliation_required": transport_unknown,
-                    },
-                    diagnostics=[
-                        {
-                            "code": (
-                                "simulator_mcp_transport_timeout"
-                                if transport_timeout
-                                else "simulator_mcp_transport_connection_lost"
-                                if transport_unknown
-                                else "simulator_mcp_call_failed"
-                            ),
-                            "error_type": type(exc).__name__,
-                            "message": str(exc),
-                        }
-                    ],
-                ),
+                details=details,
             )
 
         success = _response_success(raw_response)
@@ -536,10 +554,138 @@ class SimulatorMcpToolProxy:
             artifact_session_id=artifact_session_id(context.metadata),
             execution_metadata=context.metadata,
         )
+        attachment_contract_missing = False
+        if mcp_tool == "gripper_open":
+            # Opening retires any candidate attachment.  The backend capability
+            # observation intentionally remains sticky for this proxy/session.
+            pass
+        elif mcp_tool == "gripper_close" and not isinstance(
+            raw_response.get("attachment_proxy_receipt"), dict
+        ):
+            authorization = arguments.get("contact_authorization")
+            if isinstance(authorization, dict):
+                self._attachment_proxy_contract_missing = True
+                attachment_contract_missing = True
+                receipt = _missing_attachment_proxy_receipt(
+                    authorization=authorization,
+                    source_tool=mcp_tool,
+                )
+            else:
+                receipt = _unarmed_attachment_proxy_receipt(source_tool=mcp_tool)
+            normalized["outputs"]["attachment_proxy_receipt"] = receipt
+            normalized["outputs"]["response"]["attachment_proxy_receipt"] = receipt
+        elif (
+            agent_tool in {"move_to", "follow_eef_trajectory"}
+            and self._attachment_proxy_contract_missing
+            and isinstance(arguments.get("contact_authorization"), dict)
+            and not isinstance(raw_response.get("attachment_proxy_receipt"), dict)
+        ):
+            attachment_contract_missing = True
+            receipt = _missing_attachment_proxy_receipt(
+                authorization=arguments["contact_authorization"],
+                source_tool=mcp_tool,
+                refresh=True,
+            )
+            normalized["outputs"]["attachment_proxy_receipt"] = receipt
+            normalized["outputs"]["response"]["attachment_proxy_receipt"] = receipt
+        collision_coverage = _collision_coverage_receipt(
+            raw_response,
+            agent_tool=agent_tool,
+            requested_collision_check=context.parameters.get(
+                "enable_collision_check",
+                context.parameters.get("check_endpoint_collision"),
+            ),
+        )
+        if collision_coverage:
+            normalized["outputs"]["collision_coverage"] = collision_coverage
+            normalized["outputs"]["response"]["collision_coverage"] = collision_coverage
         if agent_tool in {"move_to", "follow_eef_trajectory"}:
             pose_feedback = _pose_feedback(context.parameters, raw_response)
             if pose_feedback:
                 normalized["outputs"]["pose_feedback"] = pose_feedback
+        if agent_tool == "move_to":
+            evidence_handoff = _post_motion_evidence_handoff(
+                context.parameters,
+                raw_response,
+            )
+            if evidence_handoff:
+                normalized["outputs"]["post_motion_evidence_handoff"] = (
+                    evidence_handoff
+                )
+                normalized["outputs"]["response"][
+                    "post_motion_evidence_handoff"
+                ] = evidence_handoff
+        if agent_tool == "ik_preview_check":
+            # Execution authorization is host-owned. A backend may return a
+            # legacy or stale execution reference, but it cannot authorize a
+            # world-mutating call in the Agent-visible projection. Preserve the
+            # complete backend response in the durable raw artifact and rebuild
+            # only the host-verified fields below.
+            for payload in (
+                normalized["outputs"],
+                normalized["outputs"].get("response"),
+                normalized["outputs"].get("mcp"),
+            ):
+                if not isinstance(payload, dict):
+                    continue
+                for field_name in (
+                    "motion_execution_ref",
+                    "execution_authorization",
+                    "ik_receipt_id",
+                ):
+                    payload.pop(field_name, None)
+            reachability = normalized["outputs"].get("reachability")
+            if isinstance(reachability, dict):
+                ik_receipt = _ik_preview_receipt(
+                    context.parameters,
+                    reachability,
+                )
+                capability_resolver = context.metadata.get(
+                    "_controller_capabilities_resolver"
+                )
+                controller_capabilities = (
+                    capability_resolver() if callable(capability_resolver) else None
+                )
+                collision_delegation = _ik_motion_collision_delegation(
+                    ik_receipt,
+                    controller_capabilities=(
+                        controller_capabilities
+                        if isinstance(controller_capabilities, dict)
+                        else {}
+                    ),
+                )
+                ik_receipt["motion_collision_delegation"] = collision_delegation
+                normalized["outputs"]["ik_preview_receipt"] = ik_receipt
+                normalized["outputs"]["ik_receipt_id"] = ik_receipt.get("receipt_id")
+                execution_authorization = _ik_execution_authorization(ik_receipt)
+                normalized["outputs"]["execution_authorization"] = (
+                    execution_authorization
+                )
+                normalized["outputs"]["response"]["ik_receipt_id"] = (
+                    ik_receipt.get("receipt_id")
+                )
+                normalized["outputs"]["response"]["execution_authorization"] = (
+                    execution_authorization
+                )
+                if execution_authorization["authorized_for_move_to"] is True:
+                    execution_ref = {
+                        "schema_version": "openeta.ik_motion_execution_ref.v1",
+                        "tool": "move_to",
+                        "ik_receipt_id": ik_receipt.get("receipt_id"),
+                        "instruction": (
+                            "Pass this ik_receipt_id to move_to; do not copy target_pose."
+                        ),
+                    }
+                    normalized["outputs"]["motion_execution_ref"] = execution_ref
+                    normalized["outputs"]["response"]["motion_execution_ref"] = (
+                        execution_ref
+                    )
+                normalized["outputs"]["motion_collision_delegation"] = (
+                    collision_delegation
+                )
+                normalized["outputs"]["response"]["motion_collision_delegation"] = (
+                    collision_delegation
+                )
         if agent_tool == "move_to" and _is_anyplace_pose(context.parameters):
             normalized["outputs"]["mcp"]["target_orientation_mode"] = "preserve_current"
         elif agent_tool == "move_to" and _is_ranked_grasp_candidate_pose(context.parameters):
@@ -554,10 +700,17 @@ class SimulatorMcpToolProxy:
             and _response_lost_action_receipt(raw_response)
         )
         motion_target_not_reached = (
-            success
-            and agent_tool in {"move_to", "follow_eef_trajectory"}
+            agent_tool in {"move_to", "follow_eef_trajectory"}
+            and not response_unknown
             and build_motion_summary(raw_response).get("reached_target") is False
         )
+        motion_already_within_tolerance = (
+            agent_tool in {"move_to", "follow_eef_trajectory"}
+            and not response_unknown
+            and _motion_already_within_tolerance(raw_response)
+        )
+        if motion_already_within_tolerance:
+            normalized["outputs"]["motion_outcome"] = "no_state_change"
         if response_unknown:
             normalized["outputs"].update(
                 {
@@ -583,27 +736,94 @@ class SimulatorMcpToolProxy:
                 if not success or motion_target_not_reached
                 else []
             )
-        semantic_outcome = "target_not_reached" if motion_target_not_reached else None
-        recovery_options = (
-            [
+        if (
+            collision_coverage
+            and collision_coverage.get("coverage_complete") is not True
+            and collision_coverage.get("collision_detected") is not True
+        ):
+            diagnostics.append(
                 {
-                    "action": "inspect_fresh_observation",
-                    "reason": (
-                        "the controller executed but did not reach the requested pose; "
-                        "use the reported end pose and fresh images before deciding whether "
-                        "to retry, replan, or continue"
-                    ),
-                },
+                    "code": "collision_coverage_incomplete",
+                    "severity": "warning",
+                    "message": collision_coverage["interpretation"],
+                    "coverage_status": collision_coverage["coverage_status"],
+                    "trajectory_checked": collision_coverage["trajectory_checked"],
+                    "world_checked": collision_coverage["world_checked"],
+                    "world_object_count": collision_coverage["world_object_count"],
+                }
+            )
+        if attachment_contract_missing:
+            diagnostics.append(
                 {
-                    "action": "replan_from_actual_pose",
-                    "reason": (
-                        "do not treat the requested target pose as the robot's current pose"
+                    "code": "attachment_proxy_backend_contract_missing",
+                    "severity": "warning",
+                    "message": (
+                        "The simulator accepted host contact authorization but did "
+                        "not return an attachment-proxy receipt. Physical attachment "
+                        "and carried-object collision coverage remain unknown."
                     ),
-                },
-            ]
-            if motion_target_not_reached
-            else None
+                    "backend_tool": mcp_tool,
+                }
+            )
+        ik_receipt = normalized["outputs"].get("ik_preview_receipt")
+        ik_classification = (
+            str(ik_receipt.get("classification") or "")
+            if isinstance(ik_receipt, dict)
+            else ""
         )
+        semantic_outcome = (
+            "attachment_contract_unavailable"
+            if attachment_contract_missing
+            else "target_not_reached"
+            if motion_target_not_reached
+            else "target_already_within_tolerance"
+            if motion_already_within_tolerance
+            else (f"ik_{ik_classification}" if ik_classification else None)
+        )
+        recovery_options = (
+            _attachment_contract_recovery_options()
+            if attachment_contract_missing
+            else _motion_target_miss_recovery_options(raw_response)
+            if motion_target_not_reached
+            else _motion_noop_recovery_options(raw_response)
+            if motion_already_within_tolerance
+            else (
+                _ik_recovery_options(ik_receipt)
+                if isinstance(ik_receipt, dict)
+                and ik_classification
+                in {
+                    "repairable",
+                    "inconclusive",
+                    "kinematically_feasible_collision_deferred",
+                    "hard_infeasible",
+                }
+                else None
+            )
+        )
+        details = make_tool_result_details(
+            context.spec,
+            context.parameters,
+            success=success,
+            outputs=normalized["outputs"],
+            artifacts=normalized["artifacts"],
+            state_delta=normalized["state_delta"],
+            environment_receipt=normalized["environment_receipt"],
+            diagnostics=diagnostics,
+            semantic_outcome=semantic_outcome,
+            recovery_options=recovery_options,
+            operational_success=(
+                True
+                if agent_tool == "ik_preview_check" and ik_classification
+                else (success and not motion_target_not_reached)
+            ),
+        )
+        execution_receipt = _resolved_tool_execution_receipt(
+            agent_tool,
+            context.parameters,
+            dispatch_status="response_received",
+        )
+        if execution_receipt:
+            details["host_execution_receipt"] = execution_receipt
         return ToolResult(
             success,
             content=_response_content(
@@ -611,18 +831,7 @@ class SimulatorMcpToolProxy:
                 mcp_tool=mcp_tool,
                 success=success,
             ),
-            details=make_tool_result_details(
-                context.spec,
-                context.parameters,
-                success=success,
-                outputs=normalized["outputs"],
-                artifacts=normalized["artifacts"],
-                state_delta=normalized["state_delta"],
-                environment_receipt=normalized["environment_receipt"],
-                diagnostics=diagnostics,
-                semantic_outcome=semantic_outcome,
-                recovery_options=recovery_options,
-            ),
+            details=details,
         )
 
     def _mcp_call(
@@ -633,11 +842,18 @@ class SimulatorMcpToolProxy:
     ) -> tuple[str, JsonDict]:
         if agent_tool == "gripper_control":
             binary_position = self._binary_gripper_position(context.parameters)
+            arguments: JsonDict = {}
+            if binary_position == 0:
+                resolver = context.metadata.get("_attachment_candidate_resolver")
+                if callable(resolver):
+                    authorization = resolver()
+                    if isinstance(authorization, dict):
+                        arguments["contact_authorization"] = authorization
             if agent_tool in self.config.tool_name_map:
                 return self.config.tool_name_map[agent_tool], self._with_session(
-                    {"position": binary_position}
+                    {"position": binary_position, **arguments}
                 )
-            return self._gripper_tool_name(binary_position), self._with_session({})
+            return self._gripper_tool_name(binary_position), self._with_session(arguments)
         if agent_tool in self.config.tool_name_map:
             return self.config.tool_name_map[agent_tool], self._with_session(
                 dict(context.parameters)
@@ -649,9 +865,17 @@ class SimulatorMcpToolProxy:
                 context.parameters
             )
         if agent_tool == "move_to":
-            return self._mcp_tool_name(agent_tool), self._move_to_arguments(context.parameters)
+            return self._mcp_tool_name(agent_tool), self._move_to_arguments(
+                context.parameters,
+                metadata=context.metadata,
+            )
         if agent_tool == "follow_eef_trajectory":
-            return self._mcp_tool_name(agent_tool), self._with_session(dict(context.parameters))
+            arguments = dict(context.parameters)
+            # Receipt ids are a host-side authorization/reference mechanism.  The
+            # simulator owns only the resolved path and must not need to understand
+            # OpenETA memory identifiers.
+            arguments.pop("ik_receipt_ids", None)
+            return self._mcp_tool_name(agent_tool), self._with_session(arguments)
         return self._mcp_tool_name(agent_tool), self._with_session(dict(context.parameters))
 
     def _mcp_tool_name(self, agent_tool: str) -> str:
@@ -671,7 +895,12 @@ class SimulatorMcpToolProxy:
             )
         return arguments
 
-    def _move_to_arguments(self, parameters: JsonDict) -> JsonDict:
+    def _move_to_arguments(
+        self,
+        parameters: JsonDict,
+        *,
+        metadata: JsonDict | None = None,
+    ) -> JsonDict:
         x, y, z = _extract_xyz(parameters, tool_name="move_to")
         arguments: JsonDict = {"x": x, "y": y, "z": z}
         if "speed" in parameters:
@@ -698,6 +927,17 @@ class SimulatorMcpToolProxy:
         for key in ("num_steps", "tolerance", "ori_tolerance", "enable_collision_check"):
             if key in parameters:
                 arguments[key] = parameters[key]
+        target_pose = parameters.get("target_pose")
+        resolver = (metadata or {}).get("_contact_authorization_resolver")
+        if callable(resolver) and isinstance(target_pose, dict):
+            authorization = resolver(target_pose)
+            if isinstance(authorization, dict):
+                arguments["contact_authorization"] = authorization
+        seed_resolver = (metadata or {}).get("_ik_execution_seed_resolver")
+        if callable(seed_resolver):
+            execution_seed = seed_resolver(parameters)
+            if isinstance(execution_seed, dict):
+                arguments["ik_execution_seed"] = execution_seed
         return self._with_session(arguments)
 
     def _ik_preview_arguments(self, parameters: JsonDict) -> JsonDict:
@@ -816,6 +1056,11 @@ class SimulatorMcpToolProxy:
             summary = response_ref.get(key)
             if isinstance(summary, dict):
                 outputs[key] = summary
+        for key in ("attachment_proxy_receipt", "contact_authorization"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                outputs[key] = dict(value)
+                response_ref[key] = dict(value)
         reachability_summary = build_reachability_summary(payload)
         if reachability_summary:
             outputs["reachability"] = reachability_summary
@@ -1865,9 +2110,262 @@ def _response_success(response: JsonDict) -> bool:
     return "error" not in response
 
 
+def _collision_coverage_receipt(
+    response: JsonDict,
+    *,
+    agent_tool: str,
+    requested_collision_check: object,
+) -> JsonDict:
+    """Describe what collision evidence a remote result actually covers."""
+
+    if agent_tool not in {"ik_preview_check", "move_to", "follow_eef_trajectory"}:
+        return {}
+    collision = response.get("collision")
+    collision = collision if isinstance(collision, dict) else {}
+
+    def explicit_bool(*keys: str) -> bool:
+        for key in keys:
+            value = collision.get(key)
+            if isinstance(value, bool):
+                return value
+        return False
+
+    # IK services commonly expose a configuration-level collision receipt as
+    # ``collision.checked`` rather than the motion-oriented
+    # ``endpoint_checked`` spelling.  For IK that configuration is the
+    # requested endpoint, so preserve the evidence instead of reporting the
+    # scope as wholly unavailable.  Motion tools must still name endpoint
+    # coverage explicitly; a generic ``checked`` bit is too ambiguous there.
+    endpoint_checked = explicit_bool("endpoint_checked", "check_endpoint_collision")
+    if agent_tool == "ik_preview_check" and not endpoint_checked:
+        endpoint_checked = explicit_bool("checked")
+    trajectory_checked = explicit_bool("trajectory_checked", "path_checked")
+    world_checked = explicit_bool("world_checked", "scene_checked")
+    world_count_value = collision.get("world_object_count")
+    world_object_count = (
+        int(world_count_value)
+        if isinstance(world_count_value, int) and not isinstance(world_count_value, bool)
+        else None
+    )
+    detected = collision.get("detected") if isinstance(collision.get("detected"), bool) else None
+    if trajectory_checked and world_checked:
+        status = "trajectory_and_world"
+    elif trajectory_checked:
+        status = "trajectory_without_world"
+    elif endpoint_checked and world_checked:
+        status = "endpoint_and_world"
+    elif endpoint_checked:
+        status = "endpoint_only"
+    elif collision:
+        status = "remote_collision_result_without_coverage"
+    else:
+        status = "unavailable"
+    coverage_complete = (
+        trajectory_checked and world_checked
+        if agent_tool in {"move_to", "follow_eef_trajectory"}
+        else endpoint_checked and world_checked
+    )
+    return {
+        "schema_version": "openeta.collision_coverage_receipt.v1",
+        "agent_tool": agent_tool,
+        "requested_collision_check": (
+            requested_collision_check
+            if isinstance(requested_collision_check, bool)
+            else None
+        ),
+        "coverage_status": status,
+        "coverage_complete": coverage_complete,
+        "endpoint_checked": endpoint_checked,
+        "trajectory_checked": trajectory_checked,
+        "world_checked": world_checked,
+        "world_object_count": world_object_count,
+        "collision_detected": detected,
+        "interpretation": (
+            "No collision was reported, but the remote receipt does not prove full "
+            "trajectory-and-world collision coverage. Treat it as unknown outside the "
+            "explicit checked scope; inspect fresh visual evidence and use conservative "
+            "clearance."
+            if not coverage_complete and detected is not True
+            else "Collision coverage is explicit for this request."
+            if coverage_complete
+            else "The remote service reported a collision; replan from the named evidence."
+        ),
+    }
+
+
 def _context_execution_cancelled(context: ToolExecutionContext) -> bool:
     event = context.metadata.get("_cancel_event")
     return bool(event is not None and callable(getattr(event, "is_set", None)) and event.is_set())
+
+
+def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
+    """Turn a failed motion receipt into executable recovery evidence.
+
+    A zero-step collision is materially different from a controller that moved
+    and stopped later.  In the former case the current configuration is already
+    on or beyond a collision boundary; re-segmenting the same object cannot
+    change that robot configuration.  Tell the Agent to escape from the actual
+    endpoint first while leaving the retreat direction to its visual reasoning.
+    """
+
+    motion = build_motion_summary(response)
+    collision = motion.get("collision")
+    collision = collision if isinstance(collision, dict) else {}
+    steps = motion.get("steps_executed")
+    end = motion.get("end")
+    actual_xyz = _motion_xyz(end) if isinstance(end, dict) else None
+    controller_failure = motion.get("controller_failure")
+    if isinstance(controller_failure, dict):
+        return [
+            {
+                "action": "exit_reported_controller_boundary",
+                "parameters": {
+                    "actual_eef_xyz": actual_xyz,
+                    "preserve_current_orientation": True,
+                    "enable_collision_check": True,
+                },
+                "evidence": dict(controller_failure),
+                "reason": str(
+                    controller_failure.get("recovery")
+                    or "Choose a materially different waypoint from the actual EEF pose."
+                ),
+            },
+            {
+                "action": "change_wrist_orientation_or_candidate",
+                "reason": (
+                    "If a short monotonic-clearance waypoint is unavailable, reject "
+                    "this pose candidate rather than replaying the same QP attractor."
+                ),
+            },
+        ]
+    if steps == 0 and collision.get("detected") is True:
+        geometry_names = [
+            str(collision.get(key))
+            for key in ("geom1_name", "geom2_name", "attached_object", "obstacle")
+            if collision.get(key)
+        ]
+        minimum_distance = collision.get("minimum_distance_m")
+        boundary = collision.get("constraint_boundary_recovery")
+        boundary = boundary if isinstance(boundary, dict) else {}
+        return [
+            {
+                "action": "escape_current_collision_boundary",
+                "parameters": {
+                    "actual_eef_xyz": actual_xyz,
+                    "preserve_current_orientation": True,
+                    "enable_collision_check": True,
+                },
+                "evidence": {
+                    "collision_geometry": geometry_names,
+                    "minimum_distance_m": minimum_distance,
+                    "boundary_recovery_policy": boundary.get("policy"),
+                },
+                "reason": (
+                    "No controller step executed because the current configuration is "
+                    "already on or beyond the named collision boundary. Inspect the "
+                    "returned agentview/wrist images, choose a short retreat from "
+                    "actual_eef_xyz that increases separation, preview it, and execute "
+                    "it with the current orientation and collision checking. The "
+                    "controller permits only a monotonic boundary exit; do not rotate "
+                    "toward a new candidate until the current contact is cleared."
+                ),
+            },
+            {
+                "action": "consume_returned_motion_evidence",
+                "reason": (
+                    "The tool already returned a fresh observation, the unchanged actual "
+                    "EEF pose, and named collision geometry. Re-segmenting the same object "
+                    "does not move the robot or clear this boundary unless the image shows "
+                    "that the object itself moved."
+                ),
+            },
+            {
+                "action": "replan_from_actual_pose",
+                "parameters": {"actual_eef_xyz": actual_xyz},
+                "reason": (
+                    "Do not treat the rejected target pose as the robot's current pose."
+                ),
+            },
+        ]
+    return [
+        {
+            "action": "inspect_fresh_observation",
+            "reason": (
+                "the controller executed but did not reach the requested pose; use the "
+                "reported end pose and fresh images before deciding whether to retry, "
+                "replan, or continue"
+            ),
+        },
+        {
+            "action": "replan_from_actual_pose",
+            "reason": "do not treat the requested target pose as the robot's current pose",
+        },
+    ]
+
+
+def _missing_attachment_proxy_receipt(
+    *,
+    authorization: JsonDict,
+    source_tool: str,
+    refresh: bool = False,
+) -> JsonDict:
+    """Describe an old/incomplete simulator contract without inventing state."""
+
+    return {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "backend_contract_missing",
+        "reason": (
+            "remote_attachment_proxy_refresh_receipt_missing"
+            if refresh
+            else "remote_attachment_proxy_receipt_missing"
+        ),
+        "source_tool": source_tool,
+        "target_object_name": str(authorization.get("target_object_name") or ""),
+        "compiled_grasp_id": str(authorization.get("compiled_grasp_id") or ""),
+        "contact_authorization_forwarded": True,
+        "attachment_proven": False,
+        "collision_proxy_active": None,
+    }
+
+
+def _unarmed_attachment_proxy_receipt(*, source_tool: str) -> JsonDict:
+    """Make a close-without-host-target explicit to the Agent and auditor."""
+
+    return {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "not_armed",
+        "reason": "no_active_contact_authorization",
+        "source_tool": source_tool,
+        "contact_authorization_forwarded": False,
+        "attachment_proven": False,
+        "collision_proxy_active": False,
+    }
+
+
+def _attachment_contract_recovery_options() -> list[JsonDict]:
+    return [
+        {
+            "action": "inspect_fresh_dual_view",
+            "reason": (
+                "the backend did not establish whether the target is attached; "
+                "use source vacancy and object/gripper co-location evidence"
+            ),
+        },
+        {
+            "action": "small_guarded_lift_probe",
+            "reason": (
+                "if visual evidence is plausible, use only a small checked lift and "
+                "verify co-motion before transport"
+            ),
+        },
+        {
+            "action": "upgrade_or_restart_simulator_service",
+            "reason": (
+                "the running service must return attachment_proxy_receipt for "
+                "host-authorized close and carried-object proxy refresh"
+            ),
+        },
+    ]
 
 
 def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> str:
@@ -1883,45 +2381,205 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
         status = str(reachability.get("status") or "unknown")
         reason = str(reachability.get("reason_code") or "unspecified")
         message = str(reachability.get("message") or "").strip()
-        return f"IK preview {status} ({reason}). {message}".strip()
-    if not success:
+        coverage = response.get("collision_coverage")
+        coverage_note = ""
+        if isinstance(coverage, dict) and coverage.get("coverage_complete") is not True:
+            coverage_note = (
+                " Endpoint kinematics do not prove path/world clearance: "
+                + str(coverage.get("interpretation") or "collision coverage is incomplete")
+            )
+        delegation = response.get("motion_collision_delegation")
+        delegation_note = ""
+        if isinstance(delegation, dict) and delegation.get("applicable") is True:
+            if delegation.get("available_for_matching_move") is True:
+                delegation_note = (
+                    " The current environment controller explicitly owns per-step "
+                    "pre-actuation and post-step trajectory/world collision checking. "
+                    "This exact pose may be passed to move_to with "
+                    "enable_collision_check=true; the motion receipt, not this endpoint "
+                    "preview, will provide path/world coverage."
+                )
+            else:
+                delegation_note = (
+                    " The current controller does not declare the required per-step "
+                    "trajectory/world collision ownership, so this deferred preview "
+                    "does not authorize motion."
+                )
+        receipt_id = str(response.get("ik_receipt_id") or "").strip()
+        execution_ref = response.get("motion_execution_ref")
+        authorization = response.get("execution_authorization")
+        if receipt_id and isinstance(execution_ref, dict):
+            receipt_note = (
+                f" Execution reference: ik_receipt_id={receipt_id}; pass only this id "
+                "to move_to and do not copy target_pose."
+            )
+        elif receipt_id and isinstance(authorization, dict):
+            receipt_note = " " + str(
+                authorization.get("instruction")
+                or "This IK receipt does not authorize motion."
+            )
+        else:
+            receipt_note = ""
+        return (
+            f"IK preview {status} ({reason}). {message}{coverage_note}"
+            f"{delegation_note}{receipt_note}"
+        ).strip()
+    has_motion_evidence = isinstance(response.get("motion_summary"), dict) or any(
+        key in response for key in ("start", "end", "target", "controller_failure")
+    )
+    if not success and not has_motion_evidence:
         return str(
             response.get("message")
             or response.get("error")
             or f"Simulator MCP tool failed: {mcp_tool}"
         )
     response_path = response.get("response_path")
+    attachment_receipt = response.get("attachment_proxy_receipt")
+    if mcp_tool == "gripper_close" and isinstance(attachment_receipt, dict):
+        status = str(attachment_receipt.get("status") or "unknown")
+        target = str(attachment_receipt.get("target_object_name") or "")
+        reason = str(attachment_receipt.get("reason") or "unspecified")
+        aperture = attachment_receipt.get("measured_open_fraction")
+        facts = [
+            "binary close command is latched",
+            f"attachment_proxy_status={status}",
+            f"target_object={target}" if target else "",
+            f"reason={reason}",
+            (
+                f"measured_open_fraction={float(aperture):.4f}"
+                if isinstance(aperture, int | float) and not isinstance(aperture, bool)
+                else ""
+            ),
+            "attachment_proven=false",
+        ]
+        suffix = f" Full response saved to {response_path}" if response_path else ""
+        prefix = (
+            "Simulator MCP gripper close acknowledged: "
+            + "; ".join(item for item in facts if item)
+        )
+        if status == "tentative":
+            guidance = (
+                ". Use the fresh dual-view observation and an Agent-chosen 2-5 cm "
+                "lift probe from the measured current EEF pose for co-motion/source-"
+                "vacancy evidence before transport. Exact-IK-check the new probe pose; "
+                "do not reuse a prior grasp_clearance or grasp_precontact waypoint, "
+                "which is usually too long or lateral for attachment verification."
+            )
+        elif status == "backend_contract_missing":
+            guidance = (
+                ". The running simulator did not report whether its carried-object "
+                "collision proxy was armed. Physical attachment is unknown: inspect "
+                "fresh dual-view evidence and, only if plausible, use a small guarded "
+                "lift to verify co-motion. Upgrade or restart the simulator service "
+                "before relying on attachment-aware collision coverage."
+            )
+        else:
+            guidance = (
+                ". No carried-object proxy is active. Do NOT treat a lift as an "
+                "attachment probe; inspect the fresh dual-view observation, reopen "
+                "the gripper, and repair or reacquire contact before lifting."
+            )
+        return prefix + guidance + suffix
+    attachment_note = ""
+    if isinstance(attachment_receipt, dict):
+        attachment_status = str(attachment_receipt.get("status") or "unknown")
+        attachment_reason = str(attachment_receipt.get("reason") or "unspecified")
+        attachment_target = str(
+            attachment_receipt.get("target_object_name") or ""
+        )
+        attachment_note = (
+            " Carried-object proxy feedback: "
+            f"status={attachment_status}; reason={attachment_reason}; "
+            + (f"target_object={attachment_target}; " if attachment_target else "")
+            + "attachment_proven=false. Use fresh dual-view evidence for the "
+            "attachment verdict."
+        )
+    compact_motion = response.get("motion_summary")
     collision = response.get("collision")
+    if not isinstance(collision, dict) and isinstance(compact_motion, dict):
+        collision = compact_motion.get("collision")
     if _collision_rejects_motion(collision):
         message = str(
             collision.get("message")
             or "Simulator collision check stopped motion before the requested target."
         )
+        steps = compact_motion.get("steps_executed") if isinstance(compact_motion, dict) else None
+        stop_note = (
+            " No controller step executed; choose a checked waypoint that reduces or "
+            "escapes this named collision instead of replaying the motion."
+            if steps == 0
+            else ""
+        )
         suffix = f" Full response saved to {response_path}" if response_path else ""
-        return f"Simulator MCP tool stopped for collision: {message}{suffix}"
-    compact_motion = response.get("motion_summary")
+        return (
+            f"Simulator MCP tool stopped for collision: {message}{stop_note}"
+            f"{attachment_note}{suffix}"
+        )
     motion = (
         dict(compact_motion)
         if isinstance(compact_motion, dict)
         else build_motion_summary(response)
     )
+    evidence_handoff = response.get("post_motion_evidence_handoff")
+    evidence_handoff = (
+        evidence_handoff if isinstance(evidence_handoff, dict) else {}
+    )
+    handoff_note = ""
+    if evidence_handoff.get("status") == "fresh_wrist_packet_expected":
+        camera_frame_id = str(evidence_handoff.get("camera_frame_id") or "wrist")
+        handoff_note = (
+            " Wrist observation viewpoint reached. This gathered evidence; it did "
+            "not refine the older contact pose. In the next planner context copy "
+            "current_observation.source_packet_id, segment the same target with "
+            f"camera_frame_id={camera_frame_id}, confirm its identity, then consume "
+            "the ready wrist-alignment bundle or run a full wrist grasp estimate "
+            "before reusing the scene-view contact reference."
+        )
     if motion.get("reached_target") is False:
         target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
         end = motion.get("end") if isinstance(motion.get("end"), dict) else {}
         target_xyz = _motion_xyz(target)
         end_xyz = _motion_xyz(end)
         error_m = _position_error_m(target_xyz, end_xyz)
+        controller_receipt = motion.get("controller_receipt")
+        controller_id = (
+            str(controller_receipt.get("controller_id") or "")
+            if isinstance(controller_receipt, dict)
+            else ""
+        )
+        controller_failure = motion.get("controller_failure")
+        controller_failure = (
+            controller_failure if isinstance(controller_failure, dict) else {}
+        )
         facts = [
             f"requested_target_xyz={target_xyz}" if target_xyz else "",
             f"actual_end_xyz={end_xyz}" if end_xyz else "",
             f"position_error_m={error_m:.4f}" if error_m is not None else "",
+            f"controller_id={controller_id}" if controller_id else "",
+            (
+                f"controller_failure={controller_failure.get('code')}"
+                if controller_failure.get("code")
+                else ""
+            ),
+            (
+                f"current_minimum_distance_m={controller_failure.get('current_minimum_distance_m')}"
+                if controller_failure.get("current_minimum_distance_m") is not None
+                else ""
+            ),
+            (
+                f"predicted_minimum_distance_m={controller_failure.get('predicted_minimum_distance_m')}"
+                if controller_failure.get("predicted_minimum_distance_m") is not None
+                else ""
+            ),
         ]
         summary = "; ".join(item for item in facts if item)
         suffix = f" Full response saved to {response_path}" if response_path else ""
         return (
             f"Simulator MCP tool executed: {mcp_tool}, but the requested target was NOT "
             f"reached. {summary}. Do not assume the requested pose was achieved; inspect "
-            f"the fresh observation and replan from the actual end pose.{suffix}"
+            f"the fresh observation and replan from the actual end pose. "
+            f"{controller_failure.get('recovery') or ''}"
+            f"{attachment_note}{suffix}"
         )
     if motion:
         target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
@@ -1936,11 +2594,63 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
         ]
         summary = "; ".join(item for item in facts if item)
         suffix = f" Full response saved to {response_path}" if response_path else ""
+        if _motion_already_within_tolerance({"motion_summary": motion}):
+            return (
+                "Simulator MCP tool executed zero controller steps because the current "
+                f"EEF pose was already inside the requested tolerance; {summary}. The "
+                "robot and physical camera viewpoint did NOT change. A newly captured "
+                "packet is not a materially new view. If a different view is required, "
+                "propose a checked pose outside the current tolerance envelope or use "
+                "a justified tighter tolerance/orientation, then preview that exact pose."
+                f"{attachment_note}{suffix}"
+            )
         if summary:
-            return f"Simulator MCP tool executed: {mcp_tool}; {summary}.{suffix}"
+            return (
+                f"Simulator MCP tool executed: {mcp_tool}; {summary}."
+                f"{handoff_note}{attachment_note}{suffix}"
+            )
     if isinstance(response_path, str) and response_path:
         return f"Simulator MCP tool executed: {mcp_tool}; response saved to {response_path}"
     return f"Simulator MCP tool executed: {mcp_tool}"
+
+
+def _motion_already_within_tolerance(response: JsonDict) -> bool:
+    nested = response.get("motion_summary")
+    motion = dict(nested) if isinstance(nested, dict) else build_motion_summary(response)
+    if motion.get("reached_target") is not True or motion.get("steps_executed") != 0:
+        return False
+    start = motion.get("start")
+    end = motion.get("end")
+    start_xyz = _motion_xyz(start if isinstance(start, dict) else None)
+    end_xyz = _motion_xyz(end if isinstance(end, dict) else None)
+    if not start_xyz or not end_xyz:
+        return False
+    distance = _position_error_m(start_xyz, end_xyz)
+    return distance is not None and distance <= 1e-9
+
+
+def _motion_noop_recovery_options(response: JsonDict) -> list[JsonDict]:
+    motion = build_motion_summary(response)
+    return [
+        {
+            "action": "consume_existing_visual_evidence",
+            "reason": (
+                "zero controller steps means the physical viewpoint did not change; "
+                "do not repeat perception merely because a new packet id was minted"
+            ),
+        },
+        {
+            "action": "propose_materially_distinct_checked_endpoint",
+            "evidence": {
+                "actual_eef_pose": motion.get("end"),
+                "requested_target": motion.get("target"),
+            },
+            "reason": (
+                "if the task needs a different camera view or contact geometry, choose "
+                "a pose outside the current tolerance envelope and preview it exactly"
+            ),
+        },
+    ]
 
 
 def _pose_feedback(parameters: JsonDict, response: JsonDict) -> JsonDict:
@@ -1969,6 +2679,407 @@ def _pose_feedback(parameters: JsonDict, response: JsonDict) -> JsonDict:
             "object-relative contact and task progress."
         ),
     }
+
+
+def _resolved_tool_execution_receipt(
+    agent_tool: str,
+    parameters: JsonDict,
+    *,
+    dispatch_status: str,
+) -> JsonDict:
+    """Persist exact host-resolved motion inputs outside Agent-owned parameters.
+
+    The public planner contract intentionally carries short IK receipt ids.  Memory
+    still needs the exact geometry that the trusted simulator proxy consumed in
+    order to derive contact/clearance receipts and reconcile unknown outcomes.
+    This receipt remains a top-level ToolResult detail, so bounded conversation
+    projections do not replay the full pose or trajectory to the Agent.
+    """
+
+    if agent_tool not in {"move_to", "follow_eef_trajectory"}:
+        return {}
+    geometry_key = "target_pose" if agent_tool == "move_to" else "trajectory"
+    geometry = parameters.get(geometry_key)
+    if not isinstance(geometry, dict if geometry_key == "target_pose" else list):
+        return {}
+    resolved_parameters = deepcopy(parameters)
+    reference_kind = (
+        "ik_receipt"
+        if agent_tool == "move_to" and parameters.get("ik_receipt_id")
+        else "ik_trajectory_receipts"
+        if agent_tool == "follow_eef_trajectory" and parameters.get("ik_receipt_ids")
+        else "host_resolved_geometry"
+    )
+    return {
+        "schema_version": RESOLVED_TOOL_EXECUTION_SCHEMA_VERSION,
+        "receipt_id": f"resolved-execution:{uuid4().hex}",
+        "tool": agent_tool,
+        "reference_kind": reference_kind,
+        "dispatch_status": dispatch_status,
+        "parameters": resolved_parameters,
+    }
+
+
+def _post_motion_evidence_handoff(
+    parameters: JsonDict,
+    response: JsonDict,
+) -> JsonDict:
+    """Expose how an observation waypoint should be consumed after motion.
+
+    This is receipt-derived workflow information, not a task stage or a motion
+    authorization.  It prevents a successful camera move from being mistaken for
+    an update to the older grasp contact geometry.
+    """
+
+    target_pose = parameters.get("target_pose")
+    if not isinstance(target_pose, dict):
+        return {}
+    if str(target_pose.get("waypoint_role") or "") != "wrist_observation_viewpoint":
+        return {}
+    motion = build_motion_summary(response)
+    reached_target = motion.get("reached_target") is True
+    steps_executed = motion.get("steps_executed")
+    materially_new_view = bool(
+        reached_target
+        and isinstance(steps_executed, int)
+        and not isinstance(steps_executed, bool)
+        and steps_executed > 0
+    )
+    status = (
+        "fresh_wrist_packet_expected"
+        if materially_new_view
+        else "no_new_physical_view"
+        if reached_target
+        else "viewpoint_not_reached"
+    )
+    camera_frame_id = str(target_pose.get("camera_frame_id") or "wrist")
+    return {
+        "schema_version": "openeta.post_motion_evidence_handoff.v1",
+        "waypoint_role": "wrist_observation_viewpoint",
+        "status": status,
+        "reached_target": reached_target,
+        "materially_new_view": materially_new_view,
+        "camera_frame_id": camera_frame_id,
+        "compiled_grasp_id": str(target_pose.get("compiled_grasp_id") or ""),
+        "viewpoint_candidate_id": str(
+            target_pose.get("viewpoint_candidate_id") or ""
+        ),
+        "fresh_packet_source": (
+            "current_observation.source_packet_id in the next planner context"
+            if materially_new_view
+            else None
+        ),
+        "agent_discretion": True,
+        "recommended_next_actions": (
+            [
+                {
+                    "tool": "sam3",
+                    "parameters_from_next_context": {
+                        "source_packet_id": "current_observation.source_packet_id",
+                        "camera_frame_id": camera_frame_id,
+                    },
+                    "purpose": "segment the same target on the fresh wrist view",
+                },
+                {
+                    "tool": "select_sam3_detection",
+                    "purpose": "confirm cross-view target identity",
+                },
+                {
+                    "tool": "compute_wrist_alignment_or_grasp_pose_estimate",
+                    "purpose": (
+                        "refine lateral contact from the ready host bundle or replace "
+                        "uncertain orientation/depth using a full wrist estimate"
+                    ),
+                },
+            ]
+            if materially_new_view
+            else []
+        ),
+        "interpretation": (
+            "The observation viewpoint was reached, but the older scene-view contact "
+            "pose was not thereby refined. Consume the fresh wrist evidence before "
+            "reusing that contact reference."
+            if materially_new_view
+            else (
+                "The requested observation viewpoint did not produce a new physical "
+                "camera view; do not claim fresh near-field evidence."
+            )
+        ),
+    }
+
+
+def _ik_preview_receipt(parameters: JsonDict, reachability: JsonDict) -> JsonDict:
+    target_pose = parameters.get("target_pose")
+    target_pose = dict(target_pose) if isinstance(target_pose, dict) else {}
+    orientation = {
+        key: target_pose.get(key)
+        for key in (
+            "rotation_matrix",
+            "quat_xyzw",
+            "quaternion",
+            "rotvec",
+            "roll",
+            "pitch",
+            "yaw",
+        )
+        if target_pose.get(key) is not None
+    }
+    preserve_current = parameters.get("preserve_current_orientation")
+    if preserve_current is None:
+        preserve_current = not orientation
+    canonical = {
+        "target_xyz": target_pose.get("xyz", target_pose.get("translation_xyz")),
+        "orientation_policy": (
+            "preserve_current" if preserve_current is True else "explicit_orientation"
+        ),
+        "orientation": orientation,
+        "position_tolerance_m": parameters.get(
+            "position_tolerance_m", parameters.get("tolerance")
+        ),
+        "orientation_tolerance_rad": parameters.get(
+            "orientation_tolerance_rad", parameters.get("ori_tolerance")
+        ),
+        "check_endpoint_collision": parameters.get("check_endpoint_collision"),
+    }
+    target_signature = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    pose_policy_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "target_xyz": canonical["target_xyz"],
+                "orientation_policy": canonical["orientation_policy"],
+                "orientation": canonical["orientation"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:24]
+    classification = _ik_reachability_classification(reachability)
+    receipt_id = hashlib.sha256(
+        json.dumps(
+            {"target": canonical, "reachability": reachability},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+    return {
+        "schema_version": "openeta.ik_preview_receipt.v1",
+        "receipt_id": receipt_id,
+        "target_signature": target_signature,
+        "pose_policy_signature": pose_policy_signature,
+        "classification": classification,
+        "target_pose": target_pose,
+        "orientation_policy": canonical["orientation_policy"],
+        "tolerances": {
+            "position_tolerance_m": canonical["position_tolerance_m"],
+            "orientation_tolerance_rad": canonical["orientation_tolerance_rad"],
+        },
+        "reason_code": reachability.get("reason_code"),
+        "message": reachability.get("message"),
+        "best_candidate": reachability.get("best_candidate"),
+        "suggestions": reachability.get("suggestions", []),
+        "reachability": dict(reachability),
+    }
+
+
+def _ik_reachability_classification(reachability: JsonDict) -> str:
+    status = str(reachability.get("status") or "unknown").lower()
+    if status == "reachable":
+        return "feasible"
+    if (
+        status == "unknown"
+        and str(reachability.get("reason_code") or "")
+        == "endpoint_collision_check_unavailable"
+        and isinstance(reachability.get("best_candidate"), dict)
+    ):
+        return "kinematically_feasible_collision_deferred"
+    if status == "unknown":
+        return "inconclusive"
+    collision = reachability.get("collision")
+    if isinstance(collision, dict) and collision.get("detected") is True:
+        return "hard_infeasible"
+    reason = str(reachability.get("reason_code") or "").lower()
+    if any(
+        marker in reason
+        for marker in (
+            "outside_workspace",
+            "joint_limit",
+            "endpoint_collision",
+            "self_collision",
+            "invalid_target",
+        )
+    ):
+        return "hard_infeasible"
+    if (
+        reachability.get("position_only_reachable") is True
+        or reachability.get("orientation_only_reachable") is True
+        or isinstance(reachability.get("best_candidate"), dict)
+        or bool(reachability.get("suggestions"))
+    ):
+        return "repairable"
+    return "hard_infeasible"
+
+
+def _ik_motion_collision_delegation(
+    receipt: JsonDict,
+    *,
+    controller_capabilities: JsonDict,
+) -> JsonDict:
+    applicable = (
+        str(receipt.get("classification") or "")
+        == "kinematically_feasible_collision_deferred"
+        and str(receipt.get("reason_code") or "")
+        == "endpoint_collision_check_unavailable"
+    )
+    available = bool(
+        applicable
+        and controller_capabilities.get("motion_owns_trajectory_world_collision")
+        is True
+    )
+    return {
+        "schema_version": "openeta.ik_motion_collision_delegation.v1",
+        "applicable": applicable,
+        "available_for_matching_move": available,
+        "controller_id": str(controller_capabilities.get("controller_id") or ""),
+        "goal_executor": str(controller_capabilities.get("goal_executor") or ""),
+        "collision_scope": str(controller_capabilities.get("collision_scope") or ""),
+        "required_move_parameters": {"enable_collision_check": True},
+        "pose_requirement": "same_numerically_equivalent_target_and_orientation_policy",
+        "interpretation": (
+            "Endpoint IK proved kinematics; the declared motion controller will own "
+            "trajectory/world collision checking for the matching move."
+            if available
+            else (
+                "Endpoint collision was deferred and no verified collision-owning "
+                "motion controller is declared."
+                if applicable
+                else "Collision delegation is not needed for this IK classification."
+            )
+        ),
+    }
+
+
+def _ik_execution_authorization(receipt: JsonDict) -> JsonDict:
+    """Separate durable IK evidence from permission to execute that exact pose."""
+
+    classification = str(receipt.get("classification") or "")
+    delegation = receipt.get("motion_collision_delegation")
+    delegated = bool(
+        classification == "kinematically_feasible_collision_deferred"
+        and isinstance(delegation, dict)
+        and delegation.get("available_for_matching_move") is True
+    )
+    authorized = classification == "feasible" or delegated
+    receipt_id = str(receipt.get("receipt_id") or "")
+    reason_code = str(receipt.get("reason_code") or "unspecified")
+    if authorized:
+        instruction = (
+            f"Pass ik_receipt_id={receipt_id} to move_to and do not copy target_pose. "
+            "The authorization is valid only for the numerically equivalent target "
+            "and orientation policy recorded by this receipt."
+        )
+    else:
+        instruction = (
+            f"Do not pass ik_receipt_id={receipt_id} to move_to: this receipt is "
+            f"non-executable ({reason_code}). Change the target pose, orientation "
+            "policy, or grasp candidate and run ik_preview_check again. Repeating the "
+            "same xyz and explicit orientation while merely omitting a tolerance is "
+            "not a recovery."
+        )
+    return {
+        "schema_version": "openeta.ik_execution_authorization.v1",
+        "ik_receipt_id": receipt_id,
+        "authorized_for_move_to": authorized,
+        "authorization_basis": (
+            "endpoint_feasible"
+            if classification == "feasible"
+            else (
+                "kinematics_plus_verified_motion_collision_delegation"
+                if delegated
+                else f"rejected_{classification or 'unknown'}"
+            )
+        ),
+        "exact_pose_and_orientation_policy_only": authorized,
+        "same_pose_retry_disposition": (
+            "execution_reference_available"
+            if authorized
+            else "requires_materially_changed_pose_or_policy"
+        ),
+        "instruction": instruction,
+    }
+
+
+def _ik_recovery_options(receipt: JsonDict) -> list[JsonDict]:
+    reason_code = str(receipt.get("reason_code") or "").strip().lower()
+    if reason_code == "endpoint_collision_check_unavailable":
+        delegation = receipt.get("motion_collision_delegation")
+        delegation = delegation if isinstance(delegation, dict) else {}
+        if delegation.get("available_for_matching_move") is True:
+            return [
+                {
+                    "action": "execute_exact_pose_with_verified_motion_collision",
+                    "parameters": {"enable_collision_check": True},
+                    "reason": (
+                        "The current controller capability directly confirms per-step "
+                        "pre/post trajectory-and-world collision ownership. Execute "
+                        "only this numerically equivalent pose and inspect the motion "
+                        "receipt."
+                    ),
+                },
+                {
+                    "action": "choose_non_execution_recovery",
+                    "reason": (
+                        "The Agent may still choose another candidate, viewpoint, or "
+                        "observation when visual evidence does not support the move."
+                    ),
+                },
+            ]
+        return [
+            {
+                "action": "delegate_collision_to_verified_motion_controller",
+                "parameters": {"enable_collision_check": True},
+                "reason": (
+                    "IK already produced a valid joint solution. Execute this exact "
+                    "pose only if controller_capabilities says motion owns per-step "
+                    "pre/post trajectory-and-world collision checking; keep "
+                    "enable_collision_check=true. Repeating the same IK with collision "
+                    "disabled adds no evidence."
+                ),
+            },
+            {
+                "action": "restore_endpoint_collision_backend",
+                "reason": (
+                    "If endpoint collision proof is mandatory, install or repair the "
+                    "reported collision backend before retrying this check."
+                ),
+            },
+        ]
+    options: list[JsonDict] = [
+        {
+            "action": "inspect_fresh_observation",
+            "reason": "observation is read-only and can be refreshed without executing the rejected pose",
+        }
+    ]
+    best = receipt.get("best_candidate")
+    if isinstance(best, dict):
+        options.append(
+            {
+                "action": "review_nearest_reachable_candidate",
+                "candidate": dict(best),
+                "reason": "use it as evidence for an Agent-authored adjusted endpoint, not a silent host substitution",
+            }
+        )
+    for suggestion in receipt.get("suggestions", []) or []:
+        if isinstance(suggestion, str):
+            options.append({"action": suggestion, "reason": "IK backend repair suggestion"})
+    options.append(
+        {
+            "action": "preview_modified_pose",
+            "reason": "change xyz or orientation policy, then run a new endpoint preview",
+        }
+    )
+    return options[:10]
 
 
 def _motion_xyz(value: object) -> list[float]:

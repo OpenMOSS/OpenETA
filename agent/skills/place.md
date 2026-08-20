@@ -15,7 +15,6 @@ allowed_tools:
   - anyplace
   - camera_pose_to_world
   - ik_preview_check
-  - obstacle_avoidance
   - move_to
   - gripper_control
 ---
@@ -48,6 +47,10 @@ before choosing the next tool call.
    `placement_evidence_reuse.mode=fixed_camera_identity`: the host has safely
    retained the unchanged receptacle mask while rebinding RGB-D to a newer grasp
    source on the same fixed scene camera, so do not segment it again. If the bundle
+   reports `grasp_rebase.mode=calibrated_world_invariant`, a wrist-refined grasp
+   has been expressed in the prior fixed-camera geometry using exact packet-owned
+   extrinsics. Call the ready bundle directly; do not discard the wrist candidate
+   or rebuild a fixed-camera grasp. If the bundle
    reports `placement_source_mismatch`, execute its exact `repair_call` parameters
    instead of choosing a current or remembered image path yourself. The repair
    may request `placement_region` on the grasp source, or `target_object` on a
@@ -60,41 +63,56 @@ before choosing the next tool call.
 4. Complete the pickup using the selected grasp. After closing the gripper,
    call `observe` and require positive evidence that the object moved with the
    end effector before starting placement.
-5. Choose one complete `placement_candidates[i].place_grasp_pose` from the
-   retained AnyPlace result as the placement reference. When matching
-   intrinsics and a receptacle mask are available, prefer the compatible
-   candidate whose projected gripper tip has the greatest interior mask
-   clearance; score/rank remains a fallback, not proof of a safe release.
-   Transform the selected pose with
-   `camera_pose_to_world` using the matching original camera extrinsics; do not
-   reuse a receptacle grasp pose or invent an unrelated world-frame coordinate.
+5. Choose one complete `placement_candidates[i]` from the retained AnyPlace
+   result as the placement reference. Copy only the result's `result_id` and
+   that candidate's `id` into `camera_pose_to_world` as
+   `placement_result_id` and `candidate_id`. The host atomically resolves the
+   exact `place_grasp_pose`, original observation packet, and matching camera
+   extrinsics. Never open the AnyPlace artifact with `python_exec` merely to
+   reconstruct these fields, and never mix the two IDs with model-supplied pose
+   or calibration overrides. If the returned candidates already include an
+   interior-mask clearance metric, prefer the compatible candidate with the
+   greatest clearance. Otherwise use the returned rank/score plus visual
+   judgment; do not delay an executable handoff merely to reconstruct an
+   unavailable clearance metric from artifacts. Rank remains a heuristic, not
+   proof of a safe release.
+   Do not reuse a receptacle grasp pose or invent an unrelated world-frame
+   coordinate.
 6. Treat the transformed AnyPlace pose as the low release reference, not as a
-   one-step carry trajectory. First move the closed gripper to the profile-derived
-   pre-place hover over the same world X/Y. Raise to the supplied clearance before
-   translating, then use the bounded horizontal waypoints from
-   `placement_motion_guidance` rather than one long carry. Preserve the current
-   EEF orientation and do not combine lateral carry with receptacle descent. A
-   planned endpoint should pass `ik_preview_check` before motion. Use its
+   one-step carry trajectory. Its `placement_reference.execution_authorized=false`
+   is deliberate: use the current EEF receipt and fresh agentview/wrist evidence
+   to propose a safe raised carry waypoint, followed by one or more bounded
+   horizontal waypoints and a separate descent. Preserve the current EEF
+   orientation unless an exact explicit-orientation IK check supports a change,
+   and do not combine lateral carry with receptacle descent.
+   Every planned endpoint must pass a current-epoch `ik_preview_check` for the
+   exact xyz and the same explicit-or-preserve-current orientation policy before
+   motion. Pass the returned `ik_receipt_id` to `move_to`; never reproduce the
+   checked pose or rotation arrays. A gripper or robot mutation invalidates the previous receipt. Use its
    position/orientation residuals to adjust an unreachable waypoint; do not treat
-   `unknown` as proof of safety. This is endpoint IK only, so retain separate
-   `obstacle_avoidance` evidence for the carry path. A
+   `unknown` as proof of safety. This is endpoint IK only. Keep
+   `enable_collision_check=true` and require the motion receipt to report
+   complete per-step trajectory/world coverage from the active controller. A
    confirmed held object participates in the collision envelope. If motion is
    rejected with `collision_type=attached_object_world`, use the named obstacle
-   and predicted pose to choose a higher or more central waypoint; do not repeat
-   the same diagonal path.
+   and predicted pose to choose a higher or more central IK-checked waypoint;
+   do not repeat the same diagonal path. `steps_executed=0` means no motion
+   occurred. If conservative geometry overlaps at the starting pose, choose a
+   monotonic escape increment that reduces the overlap; never disable collision
+   checking to force the carry.
 7. Inspect the fresh image after every carry waypoint. The earlier lift-probe
    PASS is stale after motion: continue only when the target is still co-located
    with the gripper and its source location remains vacant. If the target is
    visible elsewhere and the closed-gripper openness has collapsed to the empty
    threshold, follow the `attachment_lost` recovery action so the current grasp
    candidate is rejected before regrasping.
-8. Treat the transformed AnyPlace Z as a low geometric reference. Descend only
-   to the profile-derived `placement_motion_guidance.release_pose`, so the held
-   object enters the receptacle without
-   driving the gripper or object into its rim. A bounded world-frame adjustment
-   is allowed when fresh visual feedback improves receptacle clearance. Centre
-   the held object inside the receptacle's reported placement corridor before
-   descending; corridor entry permits intentional insertion but not rim overlap.
+8. Treat the transformed AnyPlace Z as a low geometric reference. Propose the
+   final release pose from that reference plus fresh visual feedback; it remains
+   subject to exact IK and attached-object collision checks. A bounded
+   world-frame adjustment is allowed when visual evidence improves receptacle
+   clearance. Centre the held object inside the receptacle before descending;
+   the collision adapter may permit intentional corridor entry but will still
+   reject rim overlap.
 9. Call `gripper_control` with `position=1` only after the vertical placement
    motion succeeds and fresh evidence still supports attachment over the
    receptacle.

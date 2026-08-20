@@ -62,8 +62,11 @@ def compact_mcp_tool_catalog(
     tools = catalog.get("tools", [])
     if not isinstance(tools, list):
         tools = []
+    contract_diagnostics = simulator_mcp_contract_diagnostics(tools)
     return {
         "available": True,
+        "contract_compatible": not contract_diagnostics,
+        "contract_diagnostics": contract_diagnostics,
         "url": url,
         "mcp_server_url": mcp_server_url_from_endpoint(url),
         "tool_count": catalog.get("tool_count", len(tools)),
@@ -75,6 +78,67 @@ def compact_mcp_tool_catalog(
             if isinstance(tool, dict)
         ],
     }
+
+
+def simulator_mcp_contract_diagnostics(tools: list[object]) -> list[JsonDict]:
+    """Report host/private arguments that an older simulator will ignore.
+
+    This is intentionally a schema compatibility check, not a task-state gate.
+    The controller remains usable, while both the Agent and experiment audit can
+    see which safety/evidence receipts cannot be expected from this deployment.
+    """
+
+    schemas: dict[str, set[str]] = {}
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        schema = item.get("input_schema")
+        schema = schema if isinstance(schema, dict) else {}
+        properties = schema.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        schemas[name] = {str(key) for key in properties}
+
+    expected = {
+        "gripper_close": {
+            "contact_authorization": (
+                "attachment_proxy_contract_outdated",
+                "Gripper close cannot bind the host-selected target or return a "
+                "trustworthy attachment-proxy receipt.",
+            )
+        },
+        "move_to": {
+            "contact_authorization": (
+                "motion_contact_authorization_unsupported",
+                "Contact/lift motion cannot bind host provenance to collision geometry.",
+            ),
+            "ik_execution_seed": (
+                "motion_ik_seed_unsupported",
+                "A previewed IK solution cannot be bound to the subsequent execution.",
+            ),
+        },
+    }
+    diagnostics: list[JsonDict] = []
+    for tool_name, requirements in expected.items():
+        if tool_name not in schemas:
+            continue
+        for parameter, (code, message) in requirements.items():
+            if parameter in schemas[tool_name]:
+                continue
+            diagnostics.append(
+                {
+                    "code": code,
+                    "severity": "warning",
+                    "tool": tool_name,
+                    "missing_parameter": parameter,
+                    "message": message,
+                    "recovery": (
+                        "Restart or redeploy the simulator MCP from the current "
+                        "OpenETA repository before relying on this contract."
+                    ),
+                }
+            )
+    return diagnostics
 
 
 def _compact_mcp_tool_doc(tool: JsonDict) -> JsonDict:

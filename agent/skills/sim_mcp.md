@@ -109,8 +109,16 @@ matches an honestly reported geometry family, compilation preserves the estimato
 orientation and approach under the physical gripper limits. Do not send a normalized
 grasp pose directly to `camera_pose_to_world` or simulator control tools.
 
-Simulator control tools should accept world-frame targets. If a `move_to`
-argument carries `target_pose.frame`, it must be `world`.
+Agent-authored simulator targets submitted to `ik_preview_check` must be in the
+world frame. `move_to` accepts the returned `ik_receipt_id`, not a copied
+`target_pose`; the host expands the exact checked pose before calling the MCP
+server.
+
+`reachable` is a kinematic classification, not proof that a local controller will
+converge cleanly. Inspect `execution_seed_quality`, joint margin, and solver search
+summary. When risk is elevated or critical, prefer a different waypoint,
+orientation, or grasp candidate when available; if the motion fails, use the actual
+EEF/controller receipt and do not replay the same target.
 
 For normalized grasps, the Agent owns the execution sequence. It should normally
 use a hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed
@@ -120,9 +128,11 @@ host-authored required-next-action state machine.
 For portable objects, the Agent proposes a small lift and uses fresh dual-view
 co-motion evidence to decide whether to continue. Articulated handles use
 `prepare_attachment_probe(compiled_grasp_id=...)` to freeze a 5 cm linear or arc
-path; execute its `frozen_action` exactly and assess it by `probe_id`. Each edge
+path; preview every returned frozen waypoint, execute by the resulting receipt id
+or ordered receipt ids, and assess it by `probe_id`. Each edge
 remains one ordinary control call. Compiled poses are anchors. Fresh dual-view
-evidence may justify xyz adjustment with the same `move_to`; preserve provenance.
+evidence may justify xyz adjustment; preview that adjusted pose and execute it by
+`ik_receipt_id`, preserving provenance.
 The host caps derived residual changes at 2 cm/call and 10 cm total. Frozen
 attachment-probe paths and gripper parameters remain exact. The 2 cm cap measures
 offset from the compiled anchor, not EEF travel to it: call an exact compiled pose

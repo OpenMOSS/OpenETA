@@ -29,10 +29,15 @@ from agent.evals.runner import (
 from agent.evals.store import DEFAULT_EVALUATION_ROOT, EvaluationRunStore
 from agent.runtime.planner import ToolCallingPlanner
 from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
+from agent.runtime.mcp_catalog import simulator_mcp_contract_diagnostics
 from agent.runtime.visual_history import VisualHistoryConfig
 from agent.tools.anygrasp_capabilities import check_anygrasp_compatibility
 from agent.tools.grasp_geometry import DEFAULT_GRASP_PROFILE
 from agent.tools.mcp_registry import load_mcp_server_url
+from agent.tools.object_memory import (
+    load_configured_object_memory_bank,
+    probe_object_memory_bank,
+)
 from agent.tools.sim_mcp import SseSimulatorMcpTransport
 
 
@@ -153,7 +158,6 @@ def _execute(
         anygrasp_url=args.anygrasp_url,
         anyplace_url=args.anyplace_url,
         graspgenx_url=args.graspgenx_url,
-        contact_graspnet_url=args.contact_graspnet_url,
         molmopoint_url=args.molmopoint_url,
         supervision_profile=execution.supervision_profile,
         provider_concurrency=execution.provider_concurrency,
@@ -244,6 +248,11 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
         "compatible": False,
         "checked": False,
     }
+    object_memory: JsonDict = {
+        "configured": False,
+        "checked": False,
+        "available": False,
+    }
     if not sim_url:
         errors.append("simulator MCP URL is required")
     elif not args.skip_mcp_check:
@@ -260,16 +269,25 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
                     if isinstance(item, dict)
                 }
                 missing = sorted(_REQUIRED_SIM_MCP_TOOLS - names)
+                contract_diagnostics = simulator_mcp_contract_diagnostics(
+                    list(response.get("tools", []))
+                )
                 catalog = {
                     "checked": True,
                     "url": sim_url,
                     "tool_count": len(names),
                     "missing_required_tools": missing,
+                    "contract_compatible": not contract_diagnostics,
+                    "contract_diagnostics": contract_diagnostics,
                 }
                 if missing:
                     errors.append(
                         "simulator MCP is missing required tools: " + ", ".join(missing)
                     )
+                warnings.extend(
+                    str(item.get("message") or item.get("code"))
+                    for item in contract_diagnostics
+                )
             except Exception as exc:  # noqa: BLE001 - aggregate preflight diagnostics.
                 catalog = {
                     "checked": True,
@@ -304,6 +322,34 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
             warnings.append(
                 str(anygrasp.get("message") or "AnyGrasp is unavailable")
             )
+    try:
+        object_memory_config = load_configured_object_memory_bank()
+        object_memory = probe_object_memory_bank(
+            object_memory_config,
+            timeout_s=min(max(args.mcp_timeout_s, 0.25), 3.0),
+        )
+    except Exception as exc:  # noqa: BLE001 - aggregate sanitized diagnostics.
+        object_memory = {
+            "schema_version": "openeta.object_memory_health.v1",
+            "configured": False,
+            "checked": True,
+            "available": False,
+            "reason": "object_memory_preflight_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+    if object_memory.get("available") is not True:
+        reason = str(
+            object_memory.get("reason")
+            or object_memory.get("error")
+            or object_memory.get("status")
+            or "health check did not report available=true"
+        )
+        errors.append(
+            "required Object Memory Bank is unavailable from the evaluation "
+            f"worker: {reason}. Restore the configured service before starting "
+            "the evaluation."
+        )
     return {
         "ok": not errors,
         "errors": errors,
@@ -312,7 +358,11 @@ def _remote_preflight(args: argparse.Namespace) -> JsonDict:
             "provider": provider.provider,
             "model": provider.model,
         },
-        "mcp": {"simulator": catalog, "anygrasp": anygrasp},
+        "mcp": {
+            "simulator": catalog,
+            "anygrasp": anygrasp,
+            "object_memory": object_memory,
+        },
         "execution_inputs": inputs,
     }
 
@@ -337,11 +387,6 @@ def _resolved_execution_inputs(args: argparse.Namespace, *, model: str) -> JsonD
         or load_mcp_server_url("openeta-anyplace", aliases=("anyplace",)),
         "graspgenx_url": args.graspgenx_url
         or load_mcp_server_url("openeta-graspgenx", aliases=("graspgenx",)),
-        "contact_graspnet_url": args.contact_graspnet_url
-        or load_mcp_server_url(
-            "openeta-contact-graspnet",
-            aliases=("contact-graspnet", "contact_graspnet"),
-        ),
         "molmopoint_url": args.molmopoint_url
         or load_mcp_server_url("openeta-molmopoint", aliases=("molmopoint",)),
         "calibration_profile": str(args.calibration_profile),
@@ -364,7 +409,6 @@ def _restore_execution_inputs(
         "anygrasp_url",
         "anyplace_url",
         "graspgenx_url",
-        "contact_graspnet_url",
         "molmopoint_url",
     ):
         if not getattr(args, key, "") and persisted.get(key):
@@ -439,7 +483,6 @@ def _add_execution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--anygrasp-url", default="")
     parser.add_argument("--anyplace-url", default="")
     parser.add_argument("--graspgenx-url", default="")
-    parser.add_argument("--contact-graspnet-url", default="")
     parser.add_argument("--molmopoint-url", default="")
     parser.add_argument(
         "--calibration-profile",

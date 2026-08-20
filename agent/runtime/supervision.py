@@ -209,17 +209,27 @@ class BackendActionReviewer:
                 ]
             )
         )[:2]
+        from agent.tools.contracts import (
+            build_default_tool_contract_catalog,
+            project_agent_tool_contract,
+        )
+
+        contract = build_default_tool_contract_catalog([context.spec]).get(
+            context.spec.name
+        )
+        reviewer_contract = project_agent_tool_contract(contract)
+        reviewer_contract["host_resolution"] = contract.host_resolution.to_dict()
+        reviewer_contract["gate_check_ids"] = [
+            binding.check_id for binding in contract.gate.bindings
+        ]
         tool_context: JsonDict = {
             "schema_version": SUPERVISION_SCHEMA_VERSION,
             "role": "independent_action_reviewer",
             "task": str(context.metadata.get("task") or ""),
             "session_context": session_context,
             "tool": context.name,
-            "tool_contract": {
-                "description": context.spec.description,
-                "effect": context.spec.effect.value,
-                "parameters": dict(context.spec.parameters),
-            },
+            "tool_contract": reviewer_contract,
+            "parameter_authority": "host_resolved_execution_input",
             "parameters": dict(context.parameters),
             "observation": observation_summary,
             "vision_image_paths": vision_image_paths,

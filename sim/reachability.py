@@ -15,6 +15,20 @@ from typing import Any
 import numpy as np
 
 
+# A solution below this margin is still kinematically valid, but it is a poor
+# default seed for a local joint-velocity controller.  In that case we spend a
+# small, bounded amount of extra read-only search looking for another IK branch.
+# This is seed selection, not a reachability gate: the original feasible result
+# remains available when no more robust branch is found.
+ROBUST_EXECUTION_JOINT_MARGIN_RAD = 0.10
+FRAGILE_SOLUTION_EXTRA_ATTEMPTS = 7
+# A global IK branch can be mathematically safer yet many radians farther from
+# the live arm.  Feeding such a branch to a local posture-guided controller can
+# create a long, collision-prone null-space route.  Compare robustness only
+# inside this bounded extra-travel envelope around the nearest feasible branch.
+LOCAL_IK_BRANCH_EXTRA_TRAVEL_L2_RAD = 1.50
+
+
 def check_endpoint_reachability(
     env: object,
     *,
@@ -173,6 +187,7 @@ def _solve_problem(
     model = problem["model"]
     data = problem["data"]
     current_qpos = problem["current_qpos"]
+    current_arm_q = np.asarray(problem["current_arm_q"], dtype=np.float64)
     qpos_indices = problem["qpos_indices"]
     lower = problem["lower"]
     upper = problem["upper"]
@@ -203,13 +218,31 @@ def _solve_problem(
         score = max_axis / position_tolerance_m
         if orientation_error is not None:
             score = max(score, orientation_error / orientation_tolerance_rad)
+        joint_margins = np.minimum(q - lower, upper - q)
+        joint_delta = q - current_arm_q
+        nearest_joint_index = int(np.argmin(joint_margins))
+        nearest_boundary = (
+            "lower"
+            if q[nearest_joint_index] - lower[nearest_joint_index]
+            < upper[nearest_joint_index] - q[nearest_joint_index]
+            else "upper"
+        )
         return {
             "joint_positions": [float(value) for value in q],
             "position_error_m": norm,
             "max_axis_position_error_m": max_axis,
             "orientation_error_rad": orientation_error,
             "normalized_worst_constraint": float(score),
-            "joint_margin_min_rad": float(np.min(np.minimum(q - lower, upper - q))),
+            "joint_margin_min_rad": float(joint_margins[nearest_joint_index]),
+            "joint_travel_l2_rad": float(np.linalg.norm(joint_delta)),
+            "joint_travel_max_rad": float(np.max(np.abs(joint_delta))),
+            "nearest_joint_limit": {
+                "joint_index": nearest_joint_index,
+                "boundary": nearest_boundary,
+                "position_rad": float(q[nearest_joint_index]),
+                "lower_rad": float(lower[nearest_joint_index]),
+                "upper_rad": float(upper[nearest_joint_index]),
+            },
         }
 
     def residual(q: np.ndarray, mode: str) -> np.ndarray:
@@ -226,20 +259,32 @@ def _solve_problem(
 
     seeds = _joint_seeds(problem, target, target_quat, max_attempts)
 
-    def run(mode: str, attempts: int) -> tuple[bool, dict[str, Any], int, int]:
+    def run(
+        mode: str,
+        attempts: int,
+    ) -> tuple[bool, dict[str, Any], int, int, dict[str, Any]]:
         best: dict[str, Any] | None = None
+        feasible_candidates: list[dict[str, Any]] = []
         completed = 0
         evaluations = 0
+        optional_search_deadline: int | None = None
+        optional_search_timed_out = False
         for seed in seeds[:attempts]:
-            solved = least_squares(
-                lambda q: residual(q, mode),
-                seed,
-                bounds=(lower, upper),
-                max_nfev=max_nfev_per_attempt,
-                ftol=1e-10,
-                xtol=1e-10,
-                gtol=1e-10,
-            )
+            try:
+                solved = least_squares(
+                    lambda q: residual(q, mode),
+                    seed,
+                    bounds=(lower, upper),
+                    max_nfev=max_nfev_per_attempt,
+                    ftol=1e-10,
+                    xtol=1e-10,
+                    gtol=1e-10,
+                )
+            except _SearchTimeout:
+                if mode != "full" or not feasible_candidates:
+                    raise
+                optional_search_timed_out = True
+                break
             completed += 1
             evaluations += int(solved.nfev)
             candidate = metrics(np.asarray(solved.x, dtype=np.float64))
@@ -256,23 +301,72 @@ def _solve_problem(
             if best is None or candidate_score < best["_mode_score"]:
                 best = {**candidate, "_mode_score": float(candidate_score)}
             if passed:
-                return True, best, completed, evaluations
+                if mode != "full":
+                    return True, best, completed, evaluations, {}
+                feasible_candidates.append(candidate)
+                margin = float(candidate["joint_margin_min_rad"])
+                if (
+                    margin >= ROBUST_EXECUTION_JOINT_MARGIN_RAD
+                    and _within_local_execution_branch_envelope(
+                        candidate,
+                        feasible_candidates,
+                    )
+                ):
+                    selected = _select_execution_seed(feasible_candidates)
+                    return (
+                        True,
+                        selected,
+                        completed,
+                        evaluations,
+                        _execution_seed_search_summary(
+                            feasible_candidates,
+                            selected=selected,
+                            optional_search_timed_out=False,
+                        ),
+                    )
+                if optional_search_deadline is None:
+                    optional_search_deadline = min(
+                        attempts,
+                        completed + FRAGILE_SOLUTION_EXTRA_ATTEMPTS,
+                    )
+            if (
+                mode == "full"
+                and feasible_candidates
+                and optional_search_deadline is not None
+                and completed >= optional_search_deadline
+            ):
+                break
+        if mode == "full" and feasible_candidates:
+            selected = _select_execution_seed(feasible_candidates)
+            return (
+                True,
+                selected,
+                completed,
+                evaluations,
+                _execution_seed_search_summary(
+                    feasible_candidates,
+                    selected=selected,
+                    optional_search_timed_out=optional_search_timed_out,
+                ),
+            )
         assert best is not None
-        return False, best, completed, evaluations
+        return False, best, completed, evaluations, {}
 
     try:
-        full_ok, best, completed, evaluations = run("full", len(seeds))
+        full_ok, best, completed, evaluations, execution_seed_search = run(
+            "full", len(seeds)
+        )
         position_ok = full_ok
         orientation_ok: bool | None = full_ok if target_quat is not None else None
         component_attempts = min(8, len(seeds))
         if not full_ok:
-            position_ok, _position_best, p_completed, p_evaluations = run(
+            position_ok, _position_best, p_completed, p_evaluations, _ = run(
                 "position", component_attempts
             )
             completed += p_completed
             evaluations += p_evaluations
             if target_quat is not None:
-                orientation_ok, _orientation_best, o_completed, o_evaluations = run(
+                orientation_ok, _orientation_best, o_completed, o_evaluations, _ = run(
                     "orientation", component_attempts
                 )
                 completed += o_completed
@@ -344,8 +438,131 @@ def _solve_problem(
                 None if full_ok else "completed_multistart_search_no_feasible_solution"
             ),
             "formal_infeasibility_proof": False,
+            "execution_seed_search": execution_seed_search,
         },
         "suggestions": suggestions,
+    }
+
+
+def _select_execution_seed(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Choose an execution-friendly IK branch without changing feasibility."""
+
+    if not candidates:
+        raise ValueError("at least one feasible IK candidate is required")
+    minimum_travel = min(
+        float(candidate.get("joint_travel_l2_rad") or math.inf)
+        for candidate in candidates
+    )
+    local = [
+        candidate
+        for candidate in candidates
+        if float(candidate.get("joint_travel_l2_rad") or math.inf)
+        <= minimum_travel + LOCAL_IK_BRANCH_EXTRA_TRAVEL_L2_RAD
+    ]
+    robust = [
+        candidate
+        for candidate in local
+        if float(candidate.get("joint_margin_min_rad") or 0.0)
+        >= ROBUST_EXECUTION_JOINT_MARGIN_RAD
+    ]
+    if robust:
+        # Once safely away from hard limits, prefer the branch nearest the live
+        # arm so the local controller does not take an unnecessarily large route.
+        pool = robust
+        selected = min(
+            pool,
+            key=lambda value: (
+                float(value.get("joint_travel_l2_rad") or math.inf),
+                -float(value.get("joint_margin_min_rad") or 0.0),
+            ),
+        )
+    else:
+        # No robust *local* branch was found in the bounded search.  Preserve a
+        # valid result and choose the safest branch inside the local envelope.
+        # A distant robust branch is evidence, not a suitable default posture
+        # seed; the caller exposes this tradeoff to the Agent.
+        selected = max(
+            local,
+            key=lambda value: (
+                float(value.get("joint_margin_min_rad") or 0.0),
+                -float(value.get("joint_travel_l2_rad") or math.inf),
+            ),
+        )
+    return dict(selected)
+
+
+def _within_local_execution_branch_envelope(
+    candidate: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> bool:
+    travel = float(candidate.get("joint_travel_l2_rad") or math.inf)
+    minimum_travel = min(
+        float(value.get("joint_travel_l2_rad") or math.inf)
+        for value in candidates
+    )
+    return travel <= minimum_travel + LOCAL_IK_BRANCH_EXTRA_TRAVEL_L2_RAD
+
+
+def _execution_seed_search_summary(
+    candidates: list[dict[str, Any]],
+    *,
+    selected: dict[str, Any],
+    optional_search_timed_out: bool,
+) -> dict[str, Any]:
+    margins = [float(value["joint_margin_min_rad"]) for value in candidates]
+    selected_margin = float(selected["joint_margin_min_rad"])
+    minimum_travel = min(
+        float(value.get("joint_travel_l2_rad") or math.inf)
+        for value in candidates
+    )
+    candidate_summaries = [
+        {
+            "joint_margin_rad": float(value["joint_margin_min_rad"]),
+            "joint_travel_l2_rad": value.get("joint_travel_l2_rad"),
+            "robust_margin": (
+                float(value["joint_margin_min_rad"])
+                >= ROBUST_EXECUTION_JOINT_MARGIN_RAD
+            ),
+            "within_local_travel_envelope": (
+                float(value.get("joint_travel_l2_rad") or math.inf)
+                <= minimum_travel + LOCAL_IK_BRANCH_EXTRA_TRAVEL_L2_RAD
+            ),
+            "selected": (
+                value.get("joint_positions") == selected.get("joint_positions")
+                if value.get("joint_positions") is not None
+                else value is selected
+                or (
+                    value.get("joint_margin_min_rad")
+                    == selected.get("joint_margin_min_rad")
+                    and value.get("joint_travel_l2_rad")
+                    == selected.get("joint_travel_l2_rad")
+                )
+            ),
+        }
+        for value in candidates
+    ]
+    return {
+        "policy": "prefer_local_robust_margin_then_minimize_joint_travel",
+        "robust_margin_threshold_rad": ROBUST_EXECUTION_JOINT_MARGIN_RAD,
+        "local_branch_extra_travel_limit_l2_rad": (
+            LOCAL_IK_BRANCH_EXTRA_TRAVEL_L2_RAD
+        ),
+        "feasible_solution_count": len(candidates),
+        "fragile_solution_count": sum(
+            margin < ROBUST_EXECUTION_JOINT_MARGIN_RAD for margin in margins
+        ),
+        "selected_joint_margin_rad": selected_margin,
+        "selected_joint_travel_l2_rad": selected.get("joint_travel_l2_rad"),
+        "robust_solution_selected": (
+            selected_margin >= ROBUST_EXECUTION_JOINT_MARGIN_RAD
+        ),
+        "distant_robust_solution_count": sum(
+            summary["robust_margin"]
+            and not summary["within_local_travel_envelope"]
+            for summary in candidate_summaries
+        ),
+        "optional_search_timed_out": optional_search_timed_out,
+        "candidate_summaries": candidate_summaries,
     }
 
 

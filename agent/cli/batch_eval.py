@@ -122,7 +122,6 @@ def build_mcp_episode_worker_factory(
     anygrasp_url: str = "",
     anyplace_url: str = "",
     graspgenx_url: str = "",
-    contact_graspnet_url: str = "",
     molmopoint_url: str = "",
     supervision_profile: SupervisionProfile | str = SupervisionProfile.STANDARD,
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
@@ -144,7 +143,6 @@ def build_mcp_episode_worker_factory(
             anygrasp_url=anygrasp_url,
             anyplace_url=anyplace_url,
             graspgenx_url=graspgenx_url,
-            contact_graspnet_url=contact_graspnet_url,
             molmopoint_url=molmopoint_url,
         ),
         loader=load_mcp_server_url,
@@ -399,7 +397,6 @@ def resume_paused_episode(
     anygrasp_url: str = "",
     anyplace_url: str = "",
     graspgenx_url: str = "",
-    contact_graspnet_url: str = "",
     molmopoint_url: str = "",
     supervision_profile: SupervisionProfile | str | None = None,
 ) -> JsonDict:
@@ -447,7 +444,6 @@ def resume_paused_episode(
         anygrasp_url=anygrasp_url,
         anyplace_url=anyplace_url,
         graspgenx_url=graspgenx_url,
-        contact_graspnet_url=contact_graspnet_url,
         molmopoint_url=molmopoint_url,
         supervision_profile=(supervision_profile or record.supervision_profile),
     )(spec, record.batch_id)
@@ -631,11 +627,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Override GraspGenX MCP SSE URL.",
     )
     parser.add_argument(
-        "--contact-graspnet-url",
-        default="",
-        help="Override Contact-GraspNet MCP SSE URL.",
-    )
-    parser.add_argument(
         "--molmopoint-url",
         default="",
         help="Override MolmoPoint MCP SSE URL.",
@@ -673,7 +664,6 @@ def main(argv: list[str] | None = None) -> int:
                 anygrasp_url=args.anygrasp_url,
                 anyplace_url=args.anyplace_url,
                 graspgenx_url=args.graspgenx_url,
-                contact_graspnet_url=args.contact_graspnet_url,
                 molmopoint_url=args.molmopoint_url,
                 supervision_profile=args.approvement or None,
             )
@@ -702,7 +692,6 @@ def main(argv: list[str] | None = None) -> int:
             anygrasp_url=args.anygrasp_url,
             anyplace_url=args.anyplace_url,
             graspgenx_url=args.graspgenx_url,
-            contact_graspnet_url=args.contact_graspnet_url,
             molmopoint_url=args.molmopoint_url,
             supervision_profile=(args.approvement or SupervisionProfile.STANDARD.value),
             provider_concurrency=args.provider_concurrency,

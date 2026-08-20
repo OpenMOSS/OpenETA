@@ -67,6 +67,11 @@ class DepthPriorPrefetchCoordinator:
                 "status": "skipped",
                 "reason": "matching_camera_intrinsics_unavailable",
             }
+        source_packet_id = str(context.parameters.get("source_packet_id") or "").strip()
+        camera_frame_id = str(context.parameters.get("camera_frame_id") or "").strip()
+        if source_packet_id:
+            parameters["source_packet_id"] = source_packet_id
+            parameters["camera_frame_id"] = camera_frame_id or parameters.get("camera_id")
         depth_context = ToolExecutionContext(
             name=self._spec.name,
             spec=self._spec,
@@ -87,8 +92,8 @@ class DepthPriorPrefetchCoordinator:
             "source_rgb": parameters["rgb"],
             "camera_id": parameters["camera_id"],
             "next_tool_hint": (
-                "Call estimate_depth_prior with this same rgb, intrinsics, and "
-                "camera_id before enhance_depth; the host will reuse this prefetch."
+                "Call estimate_depth_prior with this same source_packet_id and "
+                "camera_frame_id before enhance_depth; the host will reuse this prefetch."
             ),
         }
 

@@ -70,6 +70,10 @@ from agent.tools.attachment_probe import (
     build_prepare_attachment_probe_handler,
 )
 from agent.tools.coding import PythonExecConfig, PythonExecRuntime
+from agent.tools.contracts import (
+    ToolContractRuntimePolicy,
+    build_default_tool_contract_catalog,
+)
 from agent.tools.depth_prefetch import DepthPriorPrefetchCoordinator
 from agent.tools.handlers import (
     bind_dummy_tool_handlers,
@@ -82,7 +86,6 @@ from agent.tools.handlers import (
     build_sam3_handler,
     build_sse_anygrasp_mcp_grasper,
     build_sse_anyplace_mcp_placer,
-    build_sse_contact_graspnet_mcp_predictor,
     build_sse_depth_prior_mcp_estimator,
     build_sse_graspgenx_mcp_gripper_lister,
     build_sse_graspgenx_mcp_predictor,
@@ -92,6 +95,7 @@ from agent.tools.handlers import (
 from agent.tools.grasp_geometry import (
     build_compile_grasp_seed_handler,
     build_wrist_alignment_handler,
+    build_wrist_viewpoint_proposal_handler,
 )
 from agent.tools.grasp_pose_advisor import (
     GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS,
@@ -134,20 +138,13 @@ MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 # experiment entry budget while still allowing normal responses to finish early.
 MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
 VDM_MAX_OUTPUT_TOKENS = 2048
+DEFAULT_PERCEPTION_TOOL_TIMEOUT_S = 120.0
 
 
 REMOTE_PLACEHOLDER_TOOLS = (
-    "scene_detector",
     "sam3",
-    "anygrasp",
     "grasp_pose_estimate",
-    "contact_graspnet",
-    "graspgenx",
-    "list_graspgenx_grippers",
-    "hand_pose_database",
     "ik_preview_check",
-    "obstacle_avoidance",
-    "lower_body_control_policy",
     "estimate_depth_prior",
 )
 
@@ -168,7 +165,6 @@ class RuntimeMcpEndpoints:
     anygrasp_url: str = ""
     anyplace_url: str = ""
     graspgenx_url: str = ""
-    contact_graspnet_url: str = ""
     molmopoint_url: str = ""
 
 
@@ -195,8 +191,12 @@ class RuntimeAssemblyConfig:
     pre_safety_checks: dict[str, str] = field(default_factory=dict)
     tool_listeners: tuple[ToolEventListener, ...] = ()
     max_validation_retries: int = 2
+    tool_contract_policy: ToolContractRuntimePolicy = field(
+        default_factory=ToolContractRuntimePolicy
+    )
     visual_history: VisualHistoryConfig = field(default_factory=VisualHistoryConfig.from_env)
     perception_capability_timeout_s: float = 10.0
+    perception_tool_timeout_s: float = DEFAULT_PERCEPTION_TOOL_TIMEOUT_S
     anygrasp_capability_query: AnyGraspCapabilityQuery | None = None
     grasp_pose_advisor_enabled: bool = True
 
@@ -233,11 +233,6 @@ def resolve_runtime_mcp_endpoints(
         or loader("openeta-anyplace", aliases=("anyplace",)),
         graspgenx_url=configured.graspgenx_url
         or loader("openeta-graspgenx", aliases=("graspgenx",)),
-        contact_graspnet_url=configured.contact_graspnet_url
-        or loader(
-            "openeta-contact-graspnet",
-            aliases=("contact-graspnet", "contact_graspnet"),
-        ),
         molmopoint_url=configured.molmopoint_url
         or loader(
             "openeta-molmopoint",
@@ -271,6 +266,11 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     tools.bind_handler(
         "compute_wrist_alignment",
         build_wrist_alignment_handler(workspace.grasp_profile_path),
+        replace=True,
+    )
+    tools.bind_handler(
+        "propose_wrist_viewpoints",
+        build_wrist_viewpoint_proposal_handler(),
         replace=True,
     )
     tools.bind_handler(
@@ -380,7 +380,10 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         backend_factory=config.backend_factory,
         artifact_root=artifact_root,
         grasp_pose_advisor_enabled=config.grasp_pose_advisor_enabled,
+        timeout_s=config.perception_tool_timeout_s,
     )
+    tool_contract_catalog = build_default_tool_contract_catalog(tools.list())
+    config.tool_contract_policy.ensure_valid(tool_contract_catalog)
 
     planner = ToolCallingPlanner(
         config.backend_factory(
@@ -398,6 +401,8 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             token_estimator_model=config.provider.model,
             visual_history=config.visual_history,
         ),
+        tool_contract_catalog=tool_contract_catalog,
+        tool_contract_policy=config.tool_contract_policy,
     )
     visual_history = (
         VisualHistoryManager(
@@ -439,6 +444,8 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         skills=skill_registry,
         pipeline=ActionPipeline(
             checker_subagents=checker_config,
+            tool_contract_catalog=tool_contract_catalog,
+            tool_contract_policy=config.tool_contract_policy,
         ),
         self_improvement_reviewer=skill_reviewer,
         default_session_id=workspace.session_id,
@@ -565,7 +572,10 @@ def bind_runtime_perception_tools(
     backend_factory: BackendFactory,
     artifact_root: Path,
     grasp_pose_advisor_enabled: bool = True,
+    timeout_s: float = DEFAULT_PERCEPTION_TOOL_TIMEOUT_S,
 ) -> DepthPriorPrefetchCoordinator | None:
+    if timeout_s <= 0:
+        raise ValueError("perception tool timeout must be positive")
     object_memory_configuration_error = ""
     try:
         object_memory_config = load_configured_object_memory_bank()
@@ -609,7 +619,10 @@ def bind_runtime_perception_tools(
     depth_prefetch: DepthPriorPrefetchCoordinator | None = None
     if endpoints.depth_prior_url:
         depth_handler = build_depth_prior_handler(
-            build_sse_depth_prior_mcp_estimator(url=endpoints.depth_prior_url),
+            build_sse_depth_prior_mcp_estimator(
+                url=endpoints.depth_prior_url,
+                timeout_seconds=timeout_s,
+            ),
             output_root=artifact_root / "depth_prior_results",
         )
         depth_prefetch = DepthPriorPrefetchCoordinator(
@@ -625,10 +638,14 @@ def bind_runtime_perception_tools(
         tools.bind_handler(
             "sam3",
             build_sam3_handler(
-                build_sse_sam3_mcp_segmenter(url=endpoints.sam3_url),
+                build_sse_sam3_mcp_segmenter(
+                    url=endpoints.sam3_url,
+                    timeout_seconds=timeout_s,
+                ),
                 segment_points=build_sse_sam3_mcp_segmenter(
                     url=endpoints.sam3_url,
                     tool_name="segment_points",
+                    timeout_seconds=timeout_s,
                 ),
                 depth_prior_prefetch=(
                     depth_prefetch.prefetch_for_sam3
@@ -644,7 +661,10 @@ def bind_runtime_perception_tools(
         tools.bind_handler(
             "molmopoint",
             build_molmopoint_handler(
-                build_sse_molmopoint_mcp_pointer(url=endpoints.molmopoint_url),
+                build_sse_molmopoint_mcp_pointer(
+                    url=endpoints.molmopoint_url,
+                    timeout_seconds=timeout_s,
+                ),
                 output_root=artifact_root / "molmopoint_results",
             ),
             replace=True,
@@ -653,7 +673,10 @@ def bind_runtime_perception_tools(
         tools.bind_handler(
             "anyplace",
             build_anyplace_handler(
-                build_sse_anyplace_mcp_placer(url=endpoints.anyplace_url),
+                build_sse_anyplace_mcp_placer(
+                    url=endpoints.anyplace_url,
+                    timeout_seconds=timeout_s,
+                ),
                 output_root=artifact_root / "anyplace_results",
             ),
             replace=True,
@@ -662,24 +685,24 @@ def bind_runtime_perception_tools(
     grasp_backends = {}
     if endpoints.anygrasp_url:
         grasp_backends["anygrasp"] = build_anygrasp_handler(
-            build_sse_anygrasp_mcp_grasper(url=endpoints.anygrasp_url),
+            build_sse_anygrasp_mcp_grasper(
+                url=endpoints.anygrasp_url,
+                timeout_seconds=timeout_s,
+            ),
             output_root=artifact_root / "anygrasp_results",
         )
     if endpoints.graspgenx_url:
         list_grippers = build_sse_graspgenx_mcp_gripper_lister(
-            url=endpoints.graspgenx_url
+            url=endpoints.graspgenx_url,
+            timeout_seconds=timeout_s,
         )
         grasp_backends["graspgenx"] = build_graspgenx_handler(
-            build_sse_graspgenx_mcp_predictor(url=endpoints.graspgenx_url),
+            build_sse_graspgenx_mcp_predictor(
+                url=endpoints.graspgenx_url,
+                timeout_seconds=timeout_s,
+            ),
             list_grippers,
             output_root=artifact_root / "graspgenx_results",
-        )
-    # Contact-GraspNet is temporarily disabled for the simulator drawer track.
-    # Resolve its configured client so TUI and batch assembly validate the same
-    # endpoint, but do not expose it as an executable grasp backend here.
-    if endpoints.contact_graspnet_url:
-        build_sse_contact_graspnet_mcp_predictor(
-            url=endpoints.contact_graspnet_url
         )
     if grasp_backends:
         advisor = (

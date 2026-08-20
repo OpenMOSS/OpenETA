@@ -17,13 +17,18 @@ from typing import Callable
 
 from adapter.protocol import JsonDict
 from agent.runtime.actions import PipelineStatus
-from agent.backends.provider_config import PlannerProviderConfig, ProviderEndpointConfig
+from agent.backends.provider_config import (
+    DEFAULT_PLANNER_PROVIDER_TIMEOUT_S,
+    PlannerProviderConfig,
+    ProviderEndpointConfig,
+)
 from agent.runtime.token_counting import estimate_json_tokens, estimate_text_tokens
 
 
 PLANNER_STATIC_CONTEXT_SCHEMA_VERSION = "openeta.planner_static_context.v1"
 _MAIN_AGENT_CONTEXT_SCHEMA_VERSION = "openeta.agent_context.v2"
 _CACHE_STABLE_AGENT_CONTEXT_KEYS = (
+    "available_tools_schema_version",
     "available_tools",
     "tool_references",
     "relevant_skills",
@@ -321,7 +326,7 @@ class OpenAICompatiblePlannerBackendConfig:
     model: str = ""
     api_base: str = ""
     api_key: str = ""
-    timeout_s: float = 60.0
+    timeout_s: float = DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
     max_attempts: int = 3
     retry_backoff_s: float = 0.5
     temperature: float = 0.0
@@ -442,18 +447,24 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             )
 
         stable_context, dynamic_context = _partition_planner_tool_context(request)
+        prompt_dynamic_context = (
+            _planner_visible_main_agent_context(dynamic_context)
+            if request.tool_context.get("schema_version")
+            == _MAIN_AGENT_CONTEXT_SCHEMA_VERSION
+            else dynamic_context
+        )
         stable_context_prompt = (
             _stable_planner_context_prompt(stable_context) if stable_context else ""
         )
         prompt_layout = _planner_prompt_layout_summary(
             stable_context=stable_context,
             stable_context_prompt=stable_context_prompt,
-            dynamic_context=dynamic_context,
+            dynamic_context=prompt_dynamic_context,
         )
         user_content, vision_attachments = _planner_user_content(
             request,
             self.config,
-            prompt_tool_context=dynamic_context,
+            prompt_tool_context=prompt_dynamic_context,
         )
         messages: list[JsonDict] = [
             {"role": "system", "content": request.system_prompt},
@@ -818,20 +829,53 @@ def _planner_user_prompt(
     *,
     tool_context: JsonDict | None = None,
 ) -> str:
-    instruction = (
-        "Follow the system prompt for this isolated role. Return only the exact "
-        "JSON object requested by that prompt, without markdown."
-        if request.metadata.get("isolated_context") is True
-        else (
-            "Choose exactly one next OpenETA action. Return only JSON with "
-            "fields: kind, name, parameters, reasoning. Do not include markdown."
+    isolated = request.metadata.get("isolated_context") is True
+    if request.validation_errors:
+        instruction = (
+            f"Your previous candidate action from attempt {max(1, request.attempt - 1)} "
+            "was rejected by the host validator. The requested first attempt is now "
+            "complete. Return a corrected candidate for the current attempt and do not "
+            "repeat the same rejected kind/name/parameters. Repair every item in "
+            "validation_errors using exact values already present in tool_context; do "
+            "not invent references. Return only the exact JSON object requested by the "
+            "system prompt, without markdown."
+            if isolated
+            else (
+                f"Your previous OpenETA action from attempt "
+                f"{max(1, request.attempt - 1)} was rejected by the host validator. "
+                "The requested first attempt is now complete. Return a corrected next "
+                "action for the current attempt and do not repeat the same rejected "
+                "kind/name/parameters. Repair every item in validation_errors using "
+                "exact values already present in tool_context; do not invent references. "
+                "Return only JSON with fields: kind, name, parameters, reasoning. Do "
+                "not include markdown."
+            )
         )
-    )
+    else:
+        instruction = (
+            "Follow the system prompt for this isolated role. Return only the exact "
+            "JSON object requested by that prompt, without markdown."
+            if isolated
+            else (
+                "Choose exactly one next OpenETA action. Return only JSON with "
+                "fields: kind, name, parameters, reasoning. Do not include markdown."
+            )
+        )
     payload = {
         "instruction": instruction,
         "tool_context": request.tool_context if tool_context is None else tool_context,
         "attempt": request.attempt,
         "validation_errors": request.validation_errors,
+        "validation_feedback": (
+            {
+                "status": "previous_attempt_rejected",
+                "rejected_attempt": max(1, request.attempt - 1),
+                "must_change_rejected_action": True,
+                "errors": list(request.validation_errors),
+            }
+            if request.validation_errors
+            else {"status": "none"}
+        ),
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -890,6 +934,59 @@ def _stable_planner_context_prompt(stable_context: JsonDict) -> str:
         "schemas, guidance documents, and execution rules as authoritative. "
         "The final user message supplies the current turn state.\n" + payload
     )
+
+
+def _planner_visible_main_agent_context(dynamic_context: JsonDict) -> JsonDict:
+    """Hide transport-local visual paths from the main Agent's text prompt.
+
+    The backend still reads the canonical request to attach image bytes.  The
+    Agent reasons with packet/frame identities and short host-resolved bundles,
+    so filesystem paths cannot become accidental tool arguments.
+    """
+
+    visible = dict(dynamic_context)
+    visible.pop("vision_image_paths", None)
+    for key in (
+        "vision_evidence",
+        "visual_history",
+        "current_observation",
+        "decision_state",
+        "pending_target_selection",
+        "selected_sam3_detection",
+        "selected_sam3_detections",
+        "pending_reference_localization",
+    ):
+        if key in visible:
+            visible[key] = _strip_visual_transport_paths(visible[key])
+    return visible
+
+
+_VISUAL_TRANSPORT_PATH_KEYS = {
+    "path",
+    "rgb_path",
+    "depth_path",
+    "image_path",
+    "source_image",
+    "scene_image",
+    "original_image_ref",
+    "contact_sheet_ref",
+    "overlay_ref",
+    "crop_ref",
+    "mask_ref",
+    "marked_scene_image_ref",
+}
+
+
+def _strip_visual_transport_paths(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_visual_transport_paths(item)
+            for key, item in value.items()
+            if key not in _VISUAL_TRANSPORT_PATH_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_visual_transport_paths(item) for item in value]
+    return value
 
 
 def _planner_prompt_layout_summary(

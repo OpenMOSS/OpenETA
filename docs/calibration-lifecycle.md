@@ -49,6 +49,22 @@ projects this point using the current EEF pose and exact wrist intrinsics and
 extrinsics. Live `camera_to_world` and calibrated eye-in-hand
 `T_gripper_cam` are supported. Missing or mismatched calibration fails closed;
 the camera principal point `cx/cy` is not a fallback for the gripper centre.
+The Planner calls this path only with the active
+`host_resolved_inputs.wrist_alignment.bundle_id`; mask/depth paths, current EEF
+pose, camera calibration, compiled grasp, and freshness epochs remain host-owned
+bundle contents.
+
+Wrist alignment has a separate geometric operating-region contract. A bundle is
+resolvable only while both its object-scene and robot-motion epochs remain current
+and its selected target identity is continuous with the compiled grasp evidence.
+The calculator also checks that the wrist mask is not clipped by the image border,
+the measured EEF is within 8 cm of the compiled clearance reference, the raw
+correction does not hit its requested clamp, and all returned references fit the
+host residual budget. Failure is an operationally successful diagnostic result:
+`semantic_outcome=requires_better_view`, structured failed checks, and null pose
+fields. The correction vector remains diagnostic and is never executable by
+itself. These checks define tool validity; they do not prescribe an Agent motion
+sequence or introduce grasp phases.
 
 ## Session Ownership
 

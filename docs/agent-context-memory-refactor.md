@@ -233,18 +233,23 @@ Freshness now separates two host-owned counters:
   changes. A pure `move_to`, trajectory, or lower-body motion advances this
   counter without making a world-frame target pose stale.
 
-Gripper close conservatively advances both counters. Opening advances the
-object-scene counter only when a prior close/attachment means release is
-possible; opening an already empty gripper before approach does not invalidate
-the compiled grasp. Transport-unknown actions advance the same counters only
-after observation-based reconciliation confirms execution.
+Gripper command acknowledgement advances only `robot_motion_epoch`. A close is
+not attachment proof and an open is not release proof, so neither command alone
+invalidates object-relative evidence. `object_scene_epoch` advances only from a
+fresh host observation carrying `object_scene_change.changed=true` (or the
+compact boolean equivalent), with an idempotent change id and an auditable
+reason. Transport-unknown actions advance motion freshness only after
+observation-based reconciliation confirms execution.
 
 `compile_grasp_seed.hover_pose` is an ordinary `waypoint_role=grasp_clearance`
 reference. Its role is geometric and does not imply a required successor.
 After reaching a useful clearance pose, the Agent should normally use a fresh
 wrist RGB-D packet for full target segmentation, targeted grasp estimation, and
 candidate compilation. `compute_wrist_alignment` remains an optional bounded
-correction, not the default replacement for wrist-view grasp estimation. Its
+correction, not the default replacement for wrist-view grasp estimation. After
+a wrist target selection the host exposes one opaque
+`wrist_alignment:<digest>` input bundle; the Planner never reconstructs mask,
+depth, camera calibration, measured EEF pose, compiled grasp, or epochs. Its
 desired gripper pixel is host-derived by projecting the configured
 `eef_to_gripper_center_xyz` through the current EEF and wrist-camera transforms;
 the optical principal point is not treated as the gripper location. The result
@@ -255,10 +260,34 @@ lateral contact placement needs correction; use a full wrist SAM3 → targeted
 grasp estimate → explicit compile when orientation, surface, or axial contact
 depth is uncertain. Neither path silently activates or replaces a candidate.
 
+The opaque wrist bundle is bound to both object-scene and robot-motion epochs and
+to target-identity continuity. `compute_wrist_alignment` publishes a nested
+`openeta.wrist_alignment_operating_region.v1` receipt covering mask clipping,
+epoch freshness, distance to the compiled clearance reference, correction clamp,
+and the ordinary residual budget. If any check fails, it returns
+`requires_better_view` with no aligned/adjusted poses. The Agent remains free to
+choose whether to reposition, re-observe, resegment, compile a new grasp, or stop;
+the host does not encode hover/align/descend transitions.
+
 The host also maintains a read-only `openeta.provenance_evidence_graph.v1`.
 Compiling a candidate binds its exact host-captured targeted grasp artifact to a
 stable evidence id. A placement-region SAM3 selection on the same source image
 then produces `openeta.anyplace_input_bundle.v1`. The model sees only:
+
+The first explicitly confirmed target selection also creates an immutable
+`openeta.target_identity_anchor.v1` containing its source packet, mask crop,
+semantic phrase, and available asset-reference evidence. Later wrist or recovery
+localizers must copy the active `identity_anchor_id` and explicitly declare
+`identity_relation=same_instance` after cross-view comparison; the host never
+silently binds new detection evidence to the old instance. If fresh evidence
+shows that the first selection was wrong, the Agent may explicitly request
+`replace_misidentified_anchor` with a concrete reason. That creates a new anchor
+and leaves prior grasp evidence auditable/superseded rather than relabeling it.
+An exact-instance verifier `mismatch` or `abstain` attached to the
+same point prompt is a hard identity conflict; a generic class label cannot
+override it, and an anchor with an exact verifier match cannot be replaced by
+generic semantic evidence. Same-anchor wrist refinement does not supersede the original
+compiled grasp provenance.
 
 ```json
 {
@@ -360,7 +389,8 @@ The remediation applies six rules:
    violated invariant, rejected call, evidence ids, stale evidence, and concrete
    allowed next calls with host-grounded parameters. A prose-only rejection is a
    contract defect.
-3. `host_resolved_inputs.grasp_pose_estimate` generalizes the AnyPlace pattern.
+3. `host_resolved_inputs.grasp_pose_estimate` and
+   `host_resolved_inputs.wrist_alignment` generalize the AnyPlace pattern.
    After target selection, the host freezes the selected mask and its aligned
    source RGB-D packet, intrinsics, camera frame, and object-scene epoch behind a
    `grasp:<digest>` id. The preferred planner call contains only `bundle_id`; the
@@ -477,6 +507,26 @@ world, but its ToolResult is now:
 The inline content explicitly warns the Agent not to assume the requested pose
 was achieved. This avoids both unsafe false failure semantics and the earlier
 ambiguous `success=true` message that encouraged repeated identical commands.
+The host does not impose a clearance/contact successor relation. Every later
+motion is checked from the actual robot state; a different direct proposal is
+allowed when its own endpoint/path evidence is safe.
+
+`ik_preview_check` additionally publishes an
+`openeta.ik_preview_receipt.v1` bound to target xyz, orientation policy,
+tolerances, and the current robot/object epochs. Results are classified as
+`feasible`, `repairable`, `inconclusive`, or `hard_infeasible`. Repairable poses
+remain task-space anchors and expose backend residuals/suggestions. Only an
+unchanged hard-infeasible pose in the same epochs is replay-blocked; adjusted
+xyz, a different orientation policy, a safe intermediate viewpoint, or changed
+world/robot evidence receives a new check.
+
+Motion execution uses that receipt as a typed handoff. The planner passes only
+`ik_receipt_id` to `move_to`; the host resolves the exact checked pose and
+orientation policy from durable working evidence. Exact compiled anchors may be
+submitted to IK by `compiled_grasp_id + waypoint_role`, while visual corrections
+remain Agent-authored poses at the IK boundary. This removes duplicated matrices
+and coordinates from the conversational history without hiding the Agent's
+choice or introducing task-progress state.
 
 Compiled grasp execution now uses the same Agent-owned `move_to` primitive for
 visual correction; there is no separate micro-adjust tool or host task phase. The

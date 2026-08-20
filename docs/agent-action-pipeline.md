@@ -3,6 +3,10 @@
 This document defines the first structured agent-command schema and execution
 pipeline for the lightweight OpenETA agent runtime.
 
+Cross-tool result projection, packet-validity semantics, no-progress reflection,
+and the durable rollout auditor are specified in
+[`tool-contract-audit-and-grasp-recovery.md`](tool-contract-audit-and-grasp-recovery.md).
+
 ## Goal
 
 The agent should not send an unstructured dict to the simulator. The primary
@@ -271,6 +275,14 @@ the SAM3 request's explicit `evidence_role`. `target_object` is the compatible
 default; `placement_region` retains a receptacle independently. Starting or
 resolving one role never deletes the other role's mask or source-observation
 bundle, and a selection cannot change the role declared by its pending result.
+The first target selection creates `openeta.target_identity_anchor.v1`. A later
+target selection from different detection evidence must copy its exact
+`identity_anchor_id` and declare either `identity_relation=same_instance` or
+`identity_relation=replace_misidentified_anchor`. The former is an auditable
+cross-view identity confirmation; the latter requires a concrete correction
+reason, creates a new anchor, and cannot override an exact reference-verifier
+match. Missing or mismatched identity parameters leave the SAM3 selection
+pending and return executable correction guidance.
 Targeted AnyGrasp and GraspGenX may consume only a mask whose semantic selection
 has been explicitly recorded; an unresolved result is rejected as unverified
 provenance, with the result id and reason returned to the Agent. After selection,
@@ -392,6 +404,22 @@ world-frame poses before control, including OpenCV grasp pose to OpenGL sim
 camera conversions when required. Simulator control tools such as `move_to`
 should receive world-frame targets only.
 
+For AnyPlace, the planner-facing conversion contract is reference-only:
+`camera_pose_to_world({placement_result_id, candidate_id})`. A successful
+AnyPlace call stores the five candidates and their immutable source observation
+lineage in host memory. The pipeline resolves the chosen `place_grasp_pose` and
+the original packet's camera extrinsics atomically. Mixed calls that combine
+these IDs with model-authored pose or calibration fields are rejected. The
+generic explicit-pose conversion form remains available for non-AnyPlace
+geometry operations.
+
+The resolved AnyPlace transform also returns
+`openeta.placement_world_reference.v1`. It explicitly marks the world pose as a
+low release geometric reference with `execution_authorized=false`; no fixed
+carry script or fabricated clearance is implied. The Agent proposes waypoints
+from current visual/EEF evidence, while exact-pose IK and controller-side
+trajectory/attached-object collision checks remain the execution boundary.
+
 Any test, smoke run, or integration runner that calls `create_env` against a
 remote simulator MCP server must call `close_env` in a `finally` block once the
 test is done. Remote env handles consume simulator resources on another
@@ -406,8 +434,11 @@ transport boundary, but they must not be copied into planner context,
 multi-turn memory, or downstream tool parameters because they can dominate the
 context window.
 
-Agent-side simulator facades and MCP-backed tool handlers should run
-`materialize_mcp_images` before exposing an observation to the planner. The
+Agent-side simulator facades and MCP-backed tool handlers should run the
+host-internal `materialize_mcp_images()` utility before exposing an observation
+to the planner. It is deliberately not registered as a main-Agent tool because
+the Agent never receives raw MCP base64 payloads and therefore has no valid
+reason to call it. The
 materializer writes each image to `outputs/mcp_images/runs/<bundle_id>/` by
 default, removes the inline base64 payload, and inserts lightweight references
 such as:
@@ -446,7 +477,10 @@ This is the current placeholder for future safety/failure sub-agents:
   `{"move_to": "ik_preview_check"}` runs `ik_preview_check` before the
   world-mutating move. If the checker is pending, failed, or returns
   `success=false`, the target tool call is skipped and the command is marked
-  `blocked`. CLI pre-check gates are deliberately opt-in through the
+  `blocked`. The rejection always carries `openeta.gate_repair.v1`, including
+  the complete checker call/result, violated invariant, rejected parameters,
+  current evidence ids, and executable recovery calls. Empty skipped-call
+  feedback is a contract failure. CLI pre-check gates are deliberately opt-in through the
   `OPENETA_PRE_SAFETY_CHECKS` JSON object because its default safety handlers
   are deterministic placeholders, not real safety backends.
 - `post_failure_checks`: lists target tools that should trigger a post-tool
@@ -457,6 +491,11 @@ This is the current placeholder for future safety/failure sub-agents:
 - A blocked or failed pipeline also writes a bounded `recovery_feedback` memory
   event. Its compact command status, request, tool result, and checker metadata
   are visible in the next planner turn for explicit replan/recovery.
+
+Batch-level rejections use the same repair schema per blocked member. No gate
+uses a manipulation-stage label as evidence: later motion is evaluated from the
+actual EEF state reported by the previous receipt, not from the previous
+requested target.
 
 The hook output deliberately stays in `metadata.checker_results` and existing
 `PipelineCall` records. A final standalone `SafetyVerdict` / `FailureVerdict`

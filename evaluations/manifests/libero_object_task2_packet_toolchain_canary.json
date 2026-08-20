@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-packet-toolchain-canary",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Tool-contract canary only; do not move the robot or actuate the gripper. Use the initial agentview observation packet to call molmopoint with one ordered source and a complete English prompt asking for the center of the salad dressing bottle. If molmopoint returns a structured backend failure, do not retry it in this canary; record the diagnostic and continue. Then call estimate_depth_prior using only that same source_packet_id and camera_frame_id, and call enhance_depth with only the same two packet references. Never pass local rgb/depth/prior paths, copied intrinsics, or image payloads. Inspect every result. After all three tools return, use talk to report whether packet resolution, point provenance, depth-prior provenance, and depth-enhancement provenance preserved the same source packet and camera. This canary does not claim physical task completion.",
+      "seed": 2,
+      "max_turns": 12,
+      "recovery_turns_per_branch": 3,
+      "max_recovery_turns": 6,
+      "max_tool_calls": 18,
+      "timeout_s": 1200,
+      "max_total_tokens": 800000
+    }
+  ]
+}

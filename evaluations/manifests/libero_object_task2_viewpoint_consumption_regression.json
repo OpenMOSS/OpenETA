@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-viewpoint-consumption-regression",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Tool-contract canary only; do not move the robot. Locate the salad dressing, select the target, estimate one grasp, and compile it using only grasp_result_id + candidate_id. Call propose_wrist_viewpoints exactly once, then pass only viewpoint_proposal_id + candidate_id to ik_preview_check so the host resolves the exact full pose. After the IK result, respond with talk summarizing the proposal_id, chosen candidate_id, and reachability. A newer source_packet_id after the read-only proposal does not invalidate it.",
+      "seed": 2,
+      "max_turns": 24,
+      "recovery_turns_per_branch": 4,
+      "max_recovery_turns": 8,
+      "max_tool_calls": 32,
+      "timeout_s": 1800,
+      "max_total_tokens": 2500000
+    }
+  ]
+}

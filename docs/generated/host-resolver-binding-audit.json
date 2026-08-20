@@ -1,0 +1,43 @@
+{
+  "schema_version": "openeta.host_resolver_binding_audit.v1",
+  "bound_count": 30,
+  "contract_driven_dispatch_count": 11,
+  "contract_driven_dispatch_tools": [
+    "anyplace",
+    "camera_pose_to_world",
+    "compile_grasp_seed",
+    "compute_wrist_alignment",
+    "enhance_depth",
+    "estimate_depth_prior",
+    "grasp_pose_estimate",
+    "molmopoint",
+    "propose_wrist_viewpoints",
+    "retrieve_asset_reference",
+    "sam3"
+  ],
+  "identity_only_count": 19,
+  "identity_only_tools": [
+    "assess_attachment_probe",
+    "close_simulator_env",
+    "create_simulator_env",
+    "follow_eef_trajectory",
+    "ik_preview_check",
+    "move_to",
+    "observe",
+    "prepare_attachment_probe",
+    "promote_calibration_profile",
+    "promote_grasp_strategy",
+    "propose_calibration_profile",
+    "propose_grasp_strategy",
+    "python_exec",
+    "register_skill",
+    "reject_sam3_detections",
+    "select_sam3_detection",
+    "update_skill",
+    "web_fetch",
+    "web_search"
+  ],
+  "issue_count": 0,
+  "conformant": true,
+  "issues": []
+}

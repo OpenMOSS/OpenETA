@@ -1,0 +1,121 @@
+{
+  "schema_version": "openeta.toolchain_coverage_spec.v1",
+  "sequences": [
+    {
+      "id": "wrist_alignment_bundle_consumption",
+      "description": "Reach a declared wrist observation viewpoint, consume its fresh wrist image, select the same target, and execute the lightweight alignment consumer.",
+      "milestones": [
+        "propose_wrist_viewpoints",
+        {
+          "tool": "ik_preview_check",
+          "where": {
+            "parameters.target_pose.waypoint_role": "wrist_observation_viewpoint",
+            "success": true
+          }
+        },
+        {
+          "tool": "move_to",
+          "where": {
+            "outputs.post_motion_evidence_handoff.status": "fresh_wrist_packet_expected",
+            "outputs.motion_summary.reached_target": true
+          }
+        },
+        {
+          "tool": "sam3",
+          "where": {
+            "parameters.camera_frame_id": "wrist"
+          },
+          "any_of": [
+            {
+              "semantic_outcome": "detections_available"
+            },
+            {
+              "semantic_outcome": "no_detection"
+            }
+          ]
+        },
+        {
+          "tool": "select_sam3_detection",
+          "where": {
+            "outputs.selected_detection.source_observation.frame_id": "wrist"
+          }
+        },
+        "compute_wrist_alignment"
+      ]
+    },
+    {
+      "id": "wrist_full_pose_fallback",
+      "description": "Use a full wrist-camera grasp estimate when lightweight alignment is unavailable or insufficient.",
+      "milestones": [
+        "propose_wrist_viewpoints",
+        {
+          "tool": "move_to",
+          "where": {
+            "outputs.post_motion_evidence_handoff.status": "fresh_wrist_packet_expected",
+            "outputs.motion_summary.reached_target": true
+          }
+        },
+        {
+          "tool": "sam3",
+          "where": {
+            "parameters.camera_frame_id": "wrist"
+          }
+        },
+        {
+          "tool": "select_sam3_detection",
+          "where": {
+            "outputs.selected_detection.source_observation.frame_id": "wrist"
+          }
+        },
+        {
+          "tool": "grasp_pose_estimate",
+          "where": {
+            "parameters.camera_frame_id": "wrist"
+          }
+        }
+      ]
+    },
+    {
+      "id": "same_view_point_recovery",
+      "description": "Recover a wrist text-segmentation miss with point grounding while preserving the same physical view.",
+      "max_gap": 3,
+      "milestones": [
+        {
+          "tool": "sam3",
+          "where": {
+            "parameters.camera_frame_id": "wrist",
+            "semantic_outcome": "no_detection"
+          },
+          "capture": {
+            "wrist_packet_id": "parameters.source_packet_id"
+          }
+        },
+        {
+          "tool": "molmopoint",
+          "where": {
+            "parameters.camera_frame_id": "wrist",
+            "parameters.source_packet_id": {
+              "$ref": "wrist_packet_id"
+            }
+          }
+        },
+        {
+          "tool": "sam3",
+          "where": {
+            "parameters.camera_frame_id": "wrist",
+            "parameters.mode": "points",
+            "parameters.source_packet_id": {
+              "$ref": "wrist_packet_id"
+            }
+          }
+        },
+        {
+          "tool": "select_sam3_detection",
+          "where": {
+            "outputs.selected_detection.source_observation.frame_id": "wrist"
+          }
+        }
+      ]
+    }
+  ]
+}

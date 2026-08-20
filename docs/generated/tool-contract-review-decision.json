@@ -1,0 +1,34 @@
+{
+  "schema_version": "openeta.tool_contract_review_decision.v1",
+  "review_date": "2026-08-20",
+  "review_status": "approved",
+  "review_scope": "three_person_review",
+  "decisions": {
+    "fact_authority_categories": {
+      "status": "approved",
+      "values": ["agent", "host", "tool", "backend", "environment"],
+      "note": "Human authority is deferred until a concrete ToolContract needs to encode human confirmation."
+    },
+    "verified_promotion_granularity": {
+      "status": "approved",
+      "maturity_scope": "per_tool",
+      "evidence_scope": "per_semantic_outcome",
+      "runtime_authority_scope": "separate_per_capability_allowlists",
+      "contract_field_maturity": "not_used"
+    },
+    "gate_repair_extensions": {
+      "status": "approved_with_reserved_placeholder",
+      "field": "extensions",
+      "current_shape": "empty_object",
+      "inner_schema": "intentionally_undefined_until_first_concrete_need"
+    },
+    "first_authority_canary": {
+      "status": "approved",
+      "tool": "estimate_depth_prior",
+      "request_validation_authority": true,
+      "gate_repair_envelope_authority": false,
+      "executable_gate_authority": "legacy_runtime"
+    }
+  },
+  "shared_rfc_sync_authorized": true
+}

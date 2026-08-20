@@ -1,0 +1,22 @@
+{
+  "schema_version": "openeta.tool_contract_authority_audit.v1",
+  "source_root": ".openeta_eval/audits/toolcontract-authority-shadow-20260820-r40",
+  "manifest_count": 1,
+  "auditable_manifest_count": 1,
+  "conformant": true,
+  "violation_count": 0,
+  "violations": [],
+  "runs": [
+    {
+      "manifest": ".openeta_eval/audits/toolcontract-authority-shadow-20260820-r40/sessions/authority-shadow-r40/rollout/manifest.json",
+      "session_id": "authority-shadow-r40",
+      "catalog_sha256": "8e87f68f5ac7af24d979bf3cb99a2d48f7a56d447ddcc8ea0e11ec32ecc1b6d0",
+      "request_validation_authority": [],
+      "gate_repair_envelope_authority": [],
+      "request_trace_count": 0,
+      "request_enforcing_trace_count": 0,
+      "gate_trace_count": 0,
+      "gate_enforcing_trace_count": 0
+    }
+  ]
+}

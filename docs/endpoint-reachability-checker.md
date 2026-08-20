@@ -22,8 +22,9 @@ return `unknown/backend_unsupported`; they do not fall back to the dummy
 - Endpoint kinematics: owned by `ik_preview_check` and always attempted.
 - Endpoint collision: optional in `ik_preview_check`; disabled by default until
   intended-contact allowances and scene geometry are calibrated.
-- Path feasibility: not checked here and remains owned by
-  `obstacle_avoidance`.
+- Path feasibility: not checked here. The later motion controller must declare
+  and return explicit per-step trajectory/world collision coverage. The current
+  production runtime does not expose a separate path-planning tool.
 - Execution attainment: reported by the later `move_to` environment receipt.
 
 The top-level status is tri-state:
@@ -39,6 +40,64 @@ The top-level status is tri-state:
 Only `unreachable` is emitted as a failed `ToolResult` and therefore blocks an
 opt-in pre-tool checker hook. `unknown` stays visible to the Agent but does not
 become a false hard rejection.
+
+The Agent-side proxy derives a second, execution-oriented classification without
+discarding the backend status:
+
+- `feasible`: the exact endpoint passed;
+- `repairable`: the full pose failed but component reachability, a nearest
+  candidate, or solver suggestions provide useful adjustment evidence;
+- `inconclusive`: the solver/backend could not decide;
+- `kinematically_feasible_collision_deferred`: IK found a valid joint solution,
+  but the explicitly requested endpoint collision backend was unavailable;
+- `hard_infeasible`: collision, explicit workspace/joint-limit failure, or an
+  otherwise completed rejection with no repair evidence.
+
+`openeta.ik_preview_receipt.v1` binds that classification to target xyz,
+orientation policy, tolerances, and, when stored by Agent memory, the current
+`robot_motion_epoch` and `object_scene_epoch`. An unchanged current-epoch
+hard-infeasible pose is replay-blocked. Repairable poses remain reference anchors:
+the Agent may preserve current orientation, adjust xyz, choose a separately
+checked intermediate viewpoint, refresh observation, or preview another pose.
+The host never silently substitutes the nearest candidate.
+
+Every result retains a short `ik_receipt_id` as durable evidence, but only an
+executable receipt is also an Agent-facing motion handoff. The explicit
+`openeta.ik_execution_authorization.v1` block sets
+`authorized_for_move_to=true` and exposes `motion_execution_ref` only for a
+`feasible` result, or for `kinematically_feasible_collision_deferred` when a
+verified collision-owning controller is available. Repairable, inconclusive,
+and hard-infeasible receipts expose no motion reference and explicitly require a
+changed target pose, orientation policy, or candidate before another preview.
+
+`move_to` consumes the authorized receipt id rather than a second model-authored
+copy of the target pose. The host expands the stored target and orientation
+policy, rejects unknown, non-executable, or stale ids, and then applies the
+ordinary freshness, compiled-residual, collision-delegation, and controller
+gates. Exact compiled waypoints can likewise be previewed by
+`compiled_grasp_id` plus `waypoint_role`, while Agent-authored visual adjustments
+remain explicit full poses at the preview boundary.
+
+Multi-waypoint motion uses the same rule: each endpoint is previewed separately,
+then `follow_eef_trajectory` receives one to five ordered `ik_receipt_ids`. The
+host resolves the exact trajectory, checks every waypoint, and strips the
+host-only ids before dispatching the path to the simulator. Raw Agent-authored
+trajectory arrays are rejected at the motion boundary.
+
+After dispatch, the simulator proxy emits a host-only
+`openeta.resolved_tool_execution.v1` ToolResult detail containing the exact
+resolved motion parameters. Its existing environment-authority provenance
+distinguishes it from Agent-authored content. This receipt is durable for memory,
+reconciliation, attachment-probe, and audit consumers, but bounded conversation
+projections omit it; the Agent continues to see the compact receipt-id request,
+ordinary pose feedback, diagnostics, and recovery actions.
+
+The deferred classification prevents a wasteful and misleading retry with
+`check_endpoint_collision=false`. It is consumable only when the session's
+host-captured controller capability declares per-step trajectory/world collision
+ownership and the receipt-referenced `move_to` explicitly keeps collision checking enabled.
+The later motion receipt must then report complete coverage. This separates
+kinematic feasibility from collision responsibility without weakening either.
 
 ## Implementation
 
@@ -80,7 +139,7 @@ artifact by the normal simulator proxy.
   "collision": {"checked": false},
   "path": {
     "checked": false,
-    "reason": "path feasibility is owned by obstacle_avoidance"
+    "reason": "endpoint IK does not check a path; require explicit per-step trajectory/world collision coverage from the motion controller"
   },
   "solver": {
     "method": "bounded_multistart_least_squares",

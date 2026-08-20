@@ -1,0 +1,35 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "wrist-viewpoint-consumption-regression-v1",
+  "description": "Short live regression proving that a packet-resolved wrist viewpoint proposal is consumed by exact full-pose IK instead of refreshed in a read-only loop.",
+  "episode_manifest": "manifests/libero_object_task2_viewpoint_consumption_regression.json",
+  "variants": [
+    {
+      "variant_id": "consume_proposal",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 4
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "wrist-viewpoint-consumption-regression",
+    "purpose": "validate proposal value projection, validity semantics, and downstream IK consumption"
+  }
+}

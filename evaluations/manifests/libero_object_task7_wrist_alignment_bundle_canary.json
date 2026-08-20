@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-7-wrist-alignment-bundle-canary",
+      "env_id": "openeta/libero_libero_object_task7-v0",
+      "task": "Pick up the milk and place it in the basket. Coverage requirement for this canary: before the first grasp contact, once a safe near-field wrist view is available, obtain a fresh wrist-camera target segmentation, explicitly relate that selection to the active target identity, and invoke compute_wrist_alignment using the host-provided wrist-alignment bundle_id. Continue the task if it remains safe to do so.",
+      "seed": 7,
+      "max_turns": 70,
+      "recovery_turns_per_branch": 14,
+      "max_recovery_turns": 42,
+      "max_tool_calls": 140,
+      "timeout_s": 5400,
+      "max_total_tokens": 7500000
+    }
+  ]
+}

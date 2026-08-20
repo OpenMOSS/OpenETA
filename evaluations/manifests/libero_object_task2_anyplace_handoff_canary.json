@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-anyplace-handoff-canary",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Tool-contract canary only; do not move the robot or actuate the gripper. On the initial agentview observation, identify and select the salad dressing target and woven basket placement region, obtain and compile one targeted grasp candidate so the host can form an AnyPlace bundle, call AnyPlace with the exact host-issued bundle_id, choose one returned placement candidate using available rank/score evidence, then call camera_pose_to_world with only the returned placement result_id as placement_result_id and the chosen candidate id as candidate_id. Do not use python_exec, do not open artifacts, and do not copy pose matrices or camera extrinsics. After a successful world-frame transform that preserves both IDs, call task_complete and state that this geometry handoff canary passed; no physical task completion is claimed.",
+      "seed": 2,
+      "max_turns": 18,
+      "recovery_turns_per_branch": 4,
+      "max_recovery_turns": 8,
+      "max_tool_calls": 36,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000
+    }
+  ]
+}

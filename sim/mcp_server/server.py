@@ -61,6 +61,8 @@ from sim.mcp_server.action_codecs import (
     make_cartesian_action,
     make_gripper_action,
     require_controller_capability,
+    trunk_hold_values,
+    trunk_layout,
 )
 from sim.mcp_server.rest_api import (
     session_dashboard,
@@ -1343,6 +1345,10 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     start_xyz = current_xyz[:3]
     start_quat = current_quat[:4] if use_ori else []
+    # Latch the pre-motion trunk pose so every Cartesian substep re-sends it.
+    # pose_result is whichever source above produced a usable EE pose, so it is
+    # the freshest observation available before the arm starts moving.
+    _capture_trunk_hold(meta, pose_result if isinstance(pose_result, dict) else {})
     final_result: dict = {}
     final_reward = 0.0
     final_terminated = False
@@ -2292,16 +2298,28 @@ def base_control(
     lateral: float = 0.0,
     yaw: float = 0.0,
     torso: float = 0.0,
+    trunk: float | list[float] | None = None,
     command: str = "",
     num_steps: int = 10,
     session_id: str = "",
 ) -> dict:
-    """Control RoboCasa's PandaOmron mobile base and torso.
+    """Drive a mobile base, and command or hold the trunk.
 
-    The four normalized controls are torso height, forward velocity, lateral
-    velocity, and counter-clockwise yaw velocity.  A named command can be used
-    instead of the three base velocities.  This tool is intentionally rejected
-    for fixed-base or non-RoboCasa environments.
+    The base controls are normalized rates: forward, lateral, and
+    counter-clockwise yaw velocity.  A named command can be used instead.
+    Motion stops when the commands stop, so omitting a base control means
+    "no motion on that axis".
+
+    Trunk control differs in kind and so differs in default.  It is a
+    **position** target, not a rate: on RoboCasa a single normalized height, on
+    BEHAVIOR R1Pro a 4-joint torso chain.  ``0.0`` in a position slot is not
+    neutral -- it scales onto the middle of the joint range -- so ``trunk`` left
+    unset means *hold the current pose*, reading the trunk back from the
+    observation.  Passing ``trunk`` explicitly commands it; passing ``torso``
+    keeps the original RoboCasa spelling.
+
+    Supported where the environment declares a base: RoboCasa PandaOmron and
+    BEHAVIOR R1Pro.  Fixed-base environments are rejected.
     """
 
     sid = session_id or _current_session.get() or ""
@@ -2310,10 +2328,38 @@ def base_control(
     if not meta:
         return {"error": f"Unknown: {handle}"}
     backend = meta.get("backend", "")
-    if backend != "robocasa" or int(meta.get("action_dim") or 0) != 12:
-        return {
-            "error": "base_control is only available for RoboCasa PandaOmron environments"
-        }
+    if backend == "robocasa":
+        if int(meta.get("action_dim") or 0) != 12:
+            return {
+                "error": "base_control requires the 12-dim RoboCasa PandaOmron action layout"
+            }
+        return _base_control_robocasa(
+            meta, forward=forward, lateral=lateral, yaw=yaw,
+            torso=torso, trunk=trunk, command=command, num_steps=num_steps,
+        )
+    if backend == "behavior":
+        return _base_control_behavior(
+            meta, forward=forward, lateral=lateral, yaw=yaw,
+            trunk=trunk, torso=torso, command=command, num_steps=num_steps,
+        )
+    return {
+        "error": f"base_control is not available for backend {backend!r}",
+        "code": "unsupported_base_control",
+    }
+
+
+def _base_control_robocasa(
+    meta: dict,
+    *,
+    forward: float,
+    lateral: float,
+    yaw: float,
+    torso: float,
+    trunk: float | list[float] | None,
+    command: str,
+    num_steps: int,
+) -> dict:
+    """RoboCasa PandaOmron: 3 base velocities plus a 1-dim torso position."""
     if command:
         normalized = command.strip().lower().replace("-", "_").replace(" ", "_")
         if normalized not in _BASE_COMMANDS:
@@ -2334,6 +2380,11 @@ def base_control(
     action[7] = clipped(forward)
     action[8] = clipped(lateral)
     action[9] = clipped(yaw)
+    # `trunk` is the cross-backend spelling; `torso` is kept for compatibility.
+    # A scalar or a 1-element list both name RoboCasa's single torso dim.
+    if trunk is not None:
+        torso = float(trunk[0]) if isinstance(trunk, (list, tuple)) and trunk else float(
+            trunk if not isinstance(trunk, (list, tuple)) else 0.0)
     action[10] = clipped(torso)
     action[11] = 1.0
     result = _proxy_step(meta, action, num_steps=max(1, int(num_steps)))
@@ -2345,6 +2396,152 @@ def base_control(
         "num_steps": max(1, int(num_steps)),
     }
     return result
+
+
+def _base_control_behavior(
+    meta: dict,
+    *,
+    forward: float,
+    lateral: float,
+    yaw: float,
+    trunk: float | list[float] | None,
+    torso: float,
+    command: str,
+    num_steps: int,
+) -> dict:
+    """BEHAVIOR R1Pro: 3 holonomic base rates plus a 4-joint trunk chain.
+
+    Slots come from the declared control_spec, never from constants: R1Pro's
+    action_dim is 21 under our IK overrides but 23 under the raw
+    r1pro_behavior.yaml joint controllers, so hard-coded indices would drive the
+    wrong actuators in one of the two configurations.
+    """
+    spec = meta.get("control_spec")
+    base = spec.get("base") if isinstance(spec, dict) else None
+    if not isinstance(base, dict) or not base.get("supported"):
+        return {
+            "error": "this BEHAVIOR robot declares no mobile base",
+            "code": "unsupported_base_control",
+        }
+    base_slots = [int(i) for i in (base.get("indices") or [])]
+    if len(base_slots) != 3:
+        return {
+            "error": f"expected 3 holonomic base slots, got {len(base_slots)}",
+            "code": "unsupported_base_control",
+        }
+
+    if command:
+        normalized = command.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized not in _BASE_COMMANDS:
+            return {
+                "error": f"Unknown base command: {command}",
+                "available_commands": sorted(_BASE_COMMANDS),
+            }
+        forward, lateral, yaw = _BASE_COMMANDS[normalized]
+
+    def clipped(value: float) -> float:
+        return max(-1.0, min(1.0, float(value)))
+
+    try:
+        dim = int(meta.get("action_dim") or 0) or len(
+            make_cartesian_action(meta, (0.0, 0.0, 0.0), "behavior"))
+    except ControlCodecError as exc:
+        return codec_error_result(exc)
+    action = [0.0] * dim
+    for slot, value in zip(base_slots, (forward, lateral, yaw)):
+        if 0 <= slot < dim:
+            action[slot] = clipped(value)
+
+    # Trunk: explicit target, or hold.  These are position commands, so an
+    # unset trunk cannot be left at 0.0 -- that scales to the middle of each
+    # joint's range and would move the torso on a pure base command.
+    tl = trunk_layout(meta)
+    trunk_report: Any = None
+    trunk_slots = [int(i) for i in (tl.get("indices") or [])] if tl else []
+    if tl and trunk_slots:
+        explicit = trunk if trunk is not None else (torso if torso else None)
+        if explicit is not None:
+            values = ([float(v) for v in explicit]
+                      if isinstance(explicit, (list, tuple))
+                      else [float(explicit)] * len(trunk_slots))
+            if len(values) != len(trunk_slots):
+                return {
+                    "error": (f"trunk expects {len(trunk_slots)} values "
+                              f"(joints {tl.get('joint_names') or trunk_slots}), "
+                              f"got {len(values)}"),
+                    "code": "invalid_trunk_command",
+                }
+            for slot, value in zip(trunk_slots, values):
+                if 0 <= slot < dim:
+                    action[slot] = clipped(value)
+            trunk_report = {"mode": "commanded",
+                            "values": [action[s] for s in trunk_slots]}
+        else:
+            obs = _proxy_observe(meta)
+            robot = (obs.get("observation") or {}).get("robot") or {}
+            slots, held = trunk_hold_values(
+                meta,
+                [float(v) for v in (robot.get("joint_positions") or [])],
+                [str(n) for n in (robot.get("joint_names") or [])],
+            )
+            if slots:
+                for slot, value in zip(slots, held):
+                    if 0 <= slot < dim:
+                        action[slot] = float(value)
+                trunk_report = {"mode": "held", "values": held}
+            else:
+                # Say so rather than silently sending the mid-range default:
+                # the caller asked for base motion and would otherwise get an
+                # unexplained torso move.
+                trunk_report = {
+                    "mode": "unknown",
+                    "reason": ("trunk pose unavailable (needs joint_names and "
+                               "declared trunk limits); slots left at their "
+                               "mid-range default and the torso may move"),
+                }
+
+    result = _proxy_step(meta, action, num_steps=max(1, int(num_steps)))
+    result["control"] = {
+        "forward": action[base_slots[0]],
+        "lateral": action[base_slots[1]],
+        "yaw": action[base_slots[2]],
+        "command_type": "velocity",
+        "num_steps": max(1, int(num_steps)),
+    }
+    if trunk_report is not None:
+        result["control"]["trunk"] = trunk_report
+    return result
+
+
+def _capture_trunk_hold(meta: dict, result: dict) -> None:
+    """Latch the trunk pose from *result* so motion steps can hold it.
+
+    Captured once before a motion rather than re-read per step: the trunk is a
+    position-mode target, so re-reading a still-settling angle each step would
+    chase it and drift.  "Hold" means the pose the trunk had when the motion
+    started.
+    """
+    robot = (result.get("observation") or {}).get("robot") or {}
+    jp = [float(v) for v in (robot.get("joint_positions") or [])]
+    jn = [str(n) for n in (robot.get("joint_names") or [])]
+    slots, values = trunk_hold_values(meta, jp, jn)
+    if slots:
+        meta["_trunk_hold"] = (slots, values)
+
+
+def _overlay_trunk_hold(meta: dict, act: list[float]) -> None:
+    """Write the latched trunk hold into *act*, if one was captured.
+
+    Without this the trunk slots stay 0.0, which position-mode scaling turns
+    into a mid-range target -- so a Cartesian arm motion would drag the torso.
+    """
+    held = meta.get("_trunk_hold")
+    if not held:
+        return
+    slots, values = held
+    for slot, value in zip(slots, values):
+        if 0 <= int(slot) < len(act):
+            act[int(slot)] = float(value)
 
 
 def _make_action_for_step(meta: dict, delta_xyz: tuple[float, float, float], backend: str,
@@ -2366,6 +2563,7 @@ def _make_action_for_step(meta: dict, delta_xyz: tuple[float, float, float], bac
     the held gripper vector.
     """
     act = make_cartesian_action(meta, delta_xyz, backend, delta_rot=delta_rot)
+    _overlay_trunk_hold(meta, act)
     if "_gripper_cmd" not in meta:
         return act  # no explicit gripper command yet — don't force the dim
     try:

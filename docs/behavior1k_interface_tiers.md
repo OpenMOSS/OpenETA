@@ -209,5 +209,10 @@ Closing this needs an R1Pro cuRobo config (URDF plus collision spheres) and
 wiring it, feed the checker **measured joint state**: the arms command 6 dims
 over a 7-joint chain, so the action vector describes a pose the robot is not in.
 
-`drive_base` / `set_trunk` tools are not implemented — the spec now declares the
-slots they need, but no MCP tool consumes them yet.
+The proposed `drive_base` / `set_trunk` split was **not** built as two tools.
+Both slot groups are consumed by one `base_control` call, which emits a single
+action covering base and trunk together — they share one action vector, so
+splitting them would mean two steps where the robot can do one. The `trunk`
+argument defaults to *hold*, not to `0.0`, because a position-mode slot at `0.0`
+scales onto the middle of the joint range. See
+[`sim-mcp-control-surface.md`](sim-mcp-control-surface.md) for the built surface.

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import agent.cli.eval as eval_cli
 from agent.backends.provider_config import PlannerProviderConfig
 from agent.cli.eval import main as eval_main
@@ -118,6 +120,17 @@ def test_eval_preflight_marks_incompatible_anygrasp_unavailable(monkeypatch) -> 
     monkeypatch.setattr(eval_cli, "SseSimulatorMcpTransport", SimulatorCatalog)
     monkeypatch.setattr(
         eval_cli,
+        "probe_object_memory_bank",
+        lambda *_args, **_kwargs: {
+            "configured": True,
+            "checked": True,
+            "available": True,
+            "endpoint": "http://10.11.18.197:8080",
+            "status": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        eval_cli,
         "check_anygrasp_compatibility",
         lambda **_kwargs: {
             "backend": "anygrasp",
@@ -136,7 +149,6 @@ def test_eval_preflight_marks_incompatible_anygrasp_unavailable(monkeypatch) -> 
         anygrasp_url="http://anygrasp.example/sse",
         anyplace_url="",
         graspgenx_url="",
-        contact_graspnet_url="",
         molmopoint_url="",
         calibration_profile=str(DEFAULT_GRASP_PROFILE),
         skip_mcp_check=False,
@@ -150,6 +162,92 @@ def test_eval_preflight_marks_incompatible_anygrasp_unavailable(monkeypatch) -> 
     assert result["warnings"][-1] == (
         "AnyGrasp is unavailable: redeploy with 0.08 m geometry."
     )
+
+
+def test_eval_preflight_requires_object_memory_bank_even_when_mcp_checks_are_skipped(
+    monkeypatch,
+) -> None:
+    class SimulatorCatalog:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        def list_tools(self, *, timeout_s=None):
+            del timeout_s
+            return {
+                "tools": [
+                    {"name": name}
+                    for name in eval_cli._REQUIRED_SIM_MCP_TOOLS
+                ]
+            }
+
+    monkeypatch.setattr(
+        eval_cli,
+        "load_planner_provider_config",
+        lambda: PlannerProviderConfig(
+            model="fixture",
+            api_base="http://provider.example/v1",
+            api_key="test",
+        ),
+    )
+    monkeypatch.setattr(eval_cli, "SseSimulatorMcpTransport", SimulatorCatalog)
+    monkeypatch.setattr(
+        eval_cli,
+        "probe_object_memory_bank",
+        lambda *_args, **_kwargs: {
+            "configured": True,
+            "checked": True,
+            "available": False,
+            "endpoint": "http://memory.example",
+            "reason": "connection_refused",
+        },
+    )
+    args = SimpleNamespace(
+        model="",
+        sim_url="http://sim.example/sse",
+        sam3_url="",
+        depth_prior_url="",
+        anygrasp_url="",
+        anyplace_url="",
+        graspgenx_url="",
+        molmopoint_url="",
+        calibration_profile=str(DEFAULT_GRASP_PROFILE),
+        skip_mcp_check=True,
+        mcp_timeout_s=1.0,
+    )
+
+    result = eval_cli._remote_preflight(args)
+
+    assert result["ok"] is False
+    assert result["mcp"]["object_memory"]["reason"] == "connection_refused"
+    assert all("Memory Bank" not in warning for warning in result["warnings"])
+    assert result["errors"] == [
+        "required Object Memory Bank is unavailable from the evaluation worker: "
+        "connection_refused. Restore the configured service before starting the "
+        "evaluation."
+    ]
+
+
+def test_failed_required_preflight_does_not_create_a_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        eval_cli,
+        "_remote_preflight",
+        lambda _args: {
+            "ok": False,
+            "errors": ["required Object Memory Bank is unavailable"],
+        },
+    )
+    args = SimpleNamespace(
+        plan="evaluations/agent_first_milk_canary.json",
+        root=str(tmp_path),
+        run_id="must-not-exist",
+    )
+
+    with pytest.raises(ValueError, match="required Object Memory Bank"):
+        eval_cli.run_plan(args)
+
+    assert not (tmp_path / "must-not-exist").exists()
 
 
 def test_scheduler_persists_each_attempt_and_retries_infrastructure(tmp_path: Path) -> None:
@@ -265,6 +363,33 @@ def test_failure_classification_separates_provider_task_and_resource() -> None:
             },
         }
     )["class"] == "resource_limit"
+    provider_pause = classify_evaluation_failure(
+        {
+            "status": "need_human",
+            "episode": {
+                "steps": [
+                    {
+                        "action": {
+                            "request_name": "ask_human",
+                            "request_parameters": {
+                                "message": "Planner provider request failed.",
+                                "error_type": "TimeoutError",
+                                "provider_attempts": 3,
+                            },
+                        }
+                    }
+                ]
+            },
+        }
+    )
+    assert provider_pause == {
+        "class": "infrastructure",
+        "stage": "provider",
+        "code": "planner_provider_request_failed",
+        "retryable": True,
+        "error_type": "TimeoutError",
+        "provider_attempts": 3,
+    }
 
 
 def test_visual_history_extractor_reads_rollout_without_touching_generic_report(

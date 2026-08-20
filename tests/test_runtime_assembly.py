@@ -109,7 +109,6 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
         anygrasp_url="http://anygrasp.example/sse",
         anyplace_url="http://anyplace.example/sse",
         graspgenx_url="http://graspgenx.example/sse",
-        contact_graspnet_url="http://contact.example/sse",
         molmopoint_url="http://molmo.example/sse",
     )
     transport = FakeSimulatorTransport()
@@ -147,6 +146,20 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
     )
 
     assert _contract_snapshot(tui) == _contract_snapshot(batch)
+    assert (
+        tui.runtime.planner.tool_contract_policy
+        is tui.runtime.pipeline.tool_contract_policy
+    )
+    assert (
+        tui.runtime.planner.tool_contract_catalog
+        is tui.runtime.pipeline.tool_contract_catalog
+    )
+    assert tui.runtime.planner.tool_contract_policy.to_dict() == {
+        "schema_version": "openeta.tool_contract_runtime_policy.v1",
+        "request_validation_authority": [],
+        "gate_repair_envelope_authority": [],
+        "executable_gate_authority": "legacy_runtime",
+    }
     assert tui.depth_prefetch is not None
     assert batch.depth_prefetch is not None
     assert tui_workspace.grasp_profile_id == batch_workspace.grasp_profile_id
@@ -272,7 +285,7 @@ def test_shared_endpoint_resolution_owns_names_aliases_and_overrides() -> None:
     assert not any(name == "openeta-anygrasp" for name, _aliases in calls)
 
 
-def test_contact_graspnet_is_disabled_from_executable_runtime(tmp_path) -> None:
+def test_contact_graspnet_is_absent_from_runtime_registry(tmp_path) -> None:
     workspace = SessionWorkspace.create("contact-disabled", root=tmp_path)
     assembly = assemble_runtime(
         RuntimeAssemblyConfig(
@@ -287,13 +300,14 @@ def test_contact_graspnet_is_disabled_from_executable_runtime(tmp_path) -> None:
             endpoints=RuntimeMcpEndpoints(
                 anygrasp_url="http://anygrasp.example/sse",
                 graspgenx_url="http://graspgenx.example/sse",
-                contact_graspnet_url="http://contact.example/sse",
             ),
             web_access_config=WebAccessConfig(),
         )
     )
 
-    assert assembly.runtime.tools.can_execute("contact_graspnet") is False
+    assert "contact_graspnet" not in {
+        tool.name for tool in assembly.runtime.tools.list()
+    }
     assert assembly.runtime.tools.can_execute("grasp_pose_estimate") is True
 
 
@@ -348,7 +362,6 @@ def test_real_tui_and_batch_entries_have_runtime_parity(monkeypatch, tmp_path) -
         "openeta-anygrasp": "http://anygrasp.example/sse",
         "openeta-anyplace": "http://anyplace.example/sse",
         "openeta-graspgenx": "http://graspgenx.example/sse",
-        "openeta-contact-graspnet": "http://contact.example/sse",
         "openeta-molmopoint": "http://molmo.example/sse",
     }
 

@@ -15,7 +15,22 @@ import sim.mcp_server.server as s
 
 def test_move_to_uses_latched_gripper_on_each_step(monkeypatch):
     """The real move_to loop must use the same latch overlay as the helper."""
-    meta = {"backend": "libero", "_gripper_cmd": 1.0}
+    meta = {
+        "backend": "libero",
+        "_gripper_cmd": 1.0,
+        "control_spec": {
+            "controller": {
+                "controller_id": "robosuite.osc_pose",
+                "configured_name": "OSC_POSE",
+                "command_interface": "normalized_cartesian_delta_pose",
+                "goal_executor": "openeta.outer_closed_loop_cartesian.v1",
+                "execution_location": "mcp_server",
+                "supports_position": True,
+                "supports_orientation": True,
+            },
+            "cartesian_delta": {"supported": True},
+        },
+    }
     sent_actions = []
     state = {"steps": 0}
 

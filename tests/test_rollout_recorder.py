@@ -19,6 +19,7 @@ from agent.runtime.memory_store import JsonMemoryStore
 from agent.runtime.planner import PlannerDecision, ToolCallingPlanner
 from agent.runtime.rollout import RolloutRecorder, validate_rollout_bundle
 from agent.runtime.runtime import OpenEtaAgentRuntime
+from agent.evals.tool_contract_authority import audit_tool_contract_authority
 from agent.tools.registry import ToolResult, build_default_tool_registry
 
 
@@ -29,7 +30,7 @@ def _rows(path: Path) -> list[dict]:
 def _tools():
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "get_memory",
         lambda context: ToolResult(
             True,
             content="detected",
@@ -52,8 +53,8 @@ def test_rollout_records_rejected_and_accepted_planner_attempts(tmp_path: Path) 
                 },
                 {
                     "kind": "tool_call",
-                    "name": "scene_detector",
-                    "parameters": {"image": "front"},
+                    "name": "get_memory",
+                    "parameters": {},
                     "reasoning": "valid candidate",
                 },
             ]
@@ -77,7 +78,7 @@ def test_rollout_records_rejected_and_accepted_planner_attempts(tmp_path: Path) 
     assert calls[0]["parsed_decision"]["parameters"] == {"value": 1}
     assert calls[0]["validation"]["accepted"] is False
     assert calls[0]["validation"]["errors"]
-    assert calls[1]["result"]["payload"]["name"] == "scene_detector"
+    assert calls[1]["result"]["payload"]["name"] == "get_memory"
     assert calls[1]["validation"] == {"accepted": True, "errors": []}
     assert [call["seq"] for call in calls] == [1, 2]
 
@@ -94,8 +95,8 @@ def test_rollout_transition_preserves_media_state_action_and_reward(tmp_path: Pa
             StaticPlannerBackend(
                 {
                     "kind": "tool_call",
-                    "name": "scene_detector",
-                    "parameters": {"image": "front"},
+                    "name": "get_memory",
+                    "parameters": {},
                 }
             )
         ),
@@ -119,13 +120,35 @@ def test_rollout_transition_preserves_media_state_action_and_reward(tmp_path: Pa
 
     assert manifest["schema_version"] == "openeta.rollout.v1"
     assert manifest["provenance"]["git"]["commit"]
-    assert any(tool["name"] == "scene_detector" for tool in manifest["provenance"]["tools"])
+    assert any(tool["name"] == "get_memory" for tool in manifest["provenance"]["tools"])
+    memory_contract = next(
+        tool["contract"]
+        for tool in manifest["provenance"]["tools"]
+        if tool["name"] == "get_memory"
+    )
+    assert memory_contract["schema_version"] == "openeta.tool_contract.v1"
+    assert memory_contract["maturity"] == "declared"
+    contract_runtime = manifest["provenance"]["tool_contract_runtime"]
+    assert contract_runtime["schema_version"] == (
+        "openeta.tool_contract_runtime_provenance.v1"
+    )
+    assert len(contract_runtime["catalog_sha256"]) == 64
+    assert contract_runtime["catalog_summary"]["tool_count"] == 35
+    assert contract_runtime["policy"] == {
+        "schema_version": "openeta.tool_contract_runtime_policy.v1",
+        "request_validation_authority": [],
+        "gate_repair_envelope_authority": [],
+        "executable_gate_authority": "legacy_runtime",
+    }
+    assert contract_runtime["planner_pipeline_alignment"]["catalog_match"] is True
+    assert contract_runtime["planner_pipeline_alignment"]["policy_match"] is True
+    assert contract_runtime["planner_pipeline_alignment"]["pipeline_present"] is True
     assert [event["event"] for event in episodes] == ["start", "result"]
     assert len(transitions) == 1
     transition = transitions[0]
     assert transition["reward"] == 0.0
     assert transition["terminated"] is True
-    assert transition["action"]["command"]["request"]["name"] == "scene_detector"
+    assert transition["action"]["command"]["request"]["name"] == "get_memory"
     assert transition["observation"]["objects"] == [
         {"name": "cube", "position": [0.2, 0.0, 0.0]}
     ]
@@ -145,6 +168,10 @@ def test_rollout_transition_preserves_media_state_action_and_reward(tmp_path: Pa
     assert validation["valid"] is True
     assert validation["streams"]["transitions"] == 1
     assert validation["artifact_count"] == 2
+    authority = audit_tool_contract_authority(rollout)
+    assert authority["conformant"] is True
+    assert authority["manifest_count"] == 1
+    assert authority["runs"][0]["request_validation_authority"] == []
 
 
 def test_rollout_externalizes_provider_images_and_redacts_secrets(tmp_path: Path) -> None:

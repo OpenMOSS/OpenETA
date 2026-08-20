@@ -398,7 +398,7 @@ def test_cli_binds_depth_prior_only_when_url_is_configured(monkeypatch) -> None:
         artifact_root=Path("artifacts"),
     )
     assert tools.can_execute("estimate_depth_prior") is True
-    assert calls == [("http://unidepth.example/sse", "estimate_depth", 600.0)]
+    assert calls == [("http://unidepth.example/sse", "estimate_depth", 120.0)]
 
 
 def test_cli_binds_call_time_object_memory_warning_when_unconfigured(
@@ -556,7 +556,7 @@ def test_cli_binds_molmopoint_only_when_url_is_configured(monkeypatch) -> None:
         artifact_root=Path("artifacts"),
     )
     assert tools.can_execute("molmopoint") is True
-    assert calls == [("http://molmo.example/sse", "point_image", 600.0)]
+    assert calls == [("http://molmo.example/sse", "point_image", 120.0)]
 
 
 def test_cli_binds_graspgenx_behind_unified_grasp_tool(
@@ -627,8 +627,8 @@ def test_cli_binds_graspgenx_behind_unified_grasp_tool(
     assert tools.can_execute("list_graspgenx_grippers") is False
     assert facade_backends == {"graspgenx": prediction_handler}
     assert calls == [
-        ("list", "http://graspgenx.example/sse", "list_grippers", 600.0),
-        ("predict", "http://graspgenx.example/sse", "predict_grasps", 600.0),
+        ("list", "http://graspgenx.example/sse", "list_grippers", 120.0),
+        ("predict", "http://graspgenx.example/sse", "predict_grasps", 120.0),
     ]
 
 
@@ -637,17 +637,14 @@ def test_cli_binds_perception_mcp_handlers_from_registry(monkeypatch, tmp_path) 
         "openeta-sam3": "http://sam3.example/sse",
         "openeta-anygrasp": "http://anygrasp.example/sse",
         "openeta-anyplace": "http://anyplace.example/sse",
-        "openeta-contact-graspnet": "http://contact.example/sse",
     }
     calls = {
         "sam3_urls": [],
         "anygrasp_urls": [],
         "anyplace_urls": [],
-        "contact_urls": [],
         "sam3": [],
         "anygrasp": [],
         "anyplace": [],
-        "contact": [],
     }
 
     def fake_load_mcp_url(name, *, aliases=(), path=".mcp.json"):
@@ -826,11 +823,6 @@ def test_cli_binds_perception_mcp_handlers_from_registry(monkeypatch, tmp_path) 
         "build_sse_anyplace_mcp_placer",
         fake_anyplace_placer,
     )
-    monkeypatch.setattr(
-        runtime_assembly,
-        "build_sse_contact_graspnet_mcp_predictor",
-        fake_contact_predictor,
-    )
 
     image = tmp_path / "rgb.png"
     depth = tmp_path / "depth.png"
@@ -916,19 +908,19 @@ def test_cli_binds_perception_mcp_handlers_from_registry(monkeypatch, tmp_path) 
     )
 
     assert calls["sam3_urls"] == [
-        ("http://sam3.example/sse", "segment", 600.0),
-        ("http://sam3.example/sse", "segment_points", 600.0),
+        ("http://sam3.example/sse", "segment", 120.0),
+        ("http://sam3.example/sse", "segment_points", 120.0),
     ]
-    assert calls["anygrasp_urls"] == [("http://anygrasp.example/sse", "detect_grasps", 600.0)]
-    assert calls["anyplace_urls"] == [("http://anyplace.example/sse", "predict_placement", 600.0)]
-    assert calls["contact_urls"] == [("http://contact.example/sse", "predict_grasps", 600.0)]
+    assert calls["anygrasp_urls"] == [("http://anygrasp.example/sse", "detect_grasps", 120.0)]
+    assert calls["anyplace_urls"] == [("http://anyplace.example/sse", "predict_placement", 120.0)]
     assert calls["sam3"][0]["prompt"] == "cube"
     assert calls["anygrasp"][0]["mode"] == "targeted"
     assert sam3.success is True
     assert grasp.success is True
     assert runtime.tools.can_execute("anygrasp") is False
-    assert runtime.tools.can_execute("contact_graspnet") is False
-    assert calls["contact"] == []
+    assert "contact_graspnet" not in {
+        tool.name for tool in runtime.tools.list()
+    }
     assert calls["anyplace"][0]["selected_grasp"]["id"].startswith("gpe-")
     assert anyplace.success is True
     assert anyplace.details["outputs"]["candidate_count"] == 5

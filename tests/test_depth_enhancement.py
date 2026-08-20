@@ -8,6 +8,7 @@ from PIL import Image
 
 from adapter.protocol import EnvAction
 from agent.runtime.runtime import OpenEtaAgentRuntime
+from agent.runtime.planner import _validate_tool_parameters
 from agent.runtime.depth_enhancement import (
     PROVENANCE_MONO_FILLED,
     PROVENANCE_SENSOR,
@@ -19,6 +20,10 @@ from agent.runtime.depth_enhancement import (
 from agent.tools.handlers import build_depth_prior_handler
 from agent.tools.registry import ToolExecutionContext
 from agent.tools.registry import build_default_tool_registry
+from agent.tools.contracts import (
+    build_default_tool_contract_catalog,
+    check_tool_result_conformance,
+)
 
 
 def _rgb(height: int = 3, width: int = 3) -> np.ndarray:
@@ -149,6 +154,31 @@ def test_aligned_prior_is_range_checked_after_scale() -> None:
     assert result.provenance_mask[1, 1] == 0
 
 
+def test_out_of_bounds_alignment_scale_is_not_misreported_as_pixel_shortage() -> None:
+    result = enhance_rgbd_depth(
+        rgb=_rgb(),
+        sensor_depth_m=np.full((3, 3), 1.0, dtype=np.float32),
+        intrinsics=_intrinsics(),
+        prior_prediction=DepthPriorPrediction(
+            depth_m=np.full((3, 3), 4.0, dtype=np.float32),
+            confidence=np.ones((3, 3), dtype=np.float32),
+        ),
+        config=DepthEnhancementConfig(
+            min_alignment_pixels=4,
+            min_alignment_scale=0.5,
+            max_alignment_scale=2.0,
+            edge_guard_pixels=0,
+        ),
+    )
+
+    assert result.enabled is False
+    assert result.reason == "alignment_scale_out_of_bounds"
+    assert [item["code"] for item in result.diagnostics] == [
+        "alignment_scale_out_of_bounds"
+    ]
+    assert result.alignment["reliable_pixel_count"] == 9
+
+
 def test_uncertainty_uses_lower_is_better_semantics() -> None:
     sensor = np.full((3, 3), 1.0, dtype=np.float32)
     sensor[1, 1] = 0.0
@@ -265,8 +295,41 @@ def test_default_registry_exposes_enhance_depth_tool() -> None:
 
     assert spec.category == "perception"
     assert spec.effect.value == "read_only"
-    assert "prior_depth" in spec.parameters
-    assert "sensor_confidence" in spec.parameters
+    assert set(spec.parameters) == {"source_packet_id", "camera_frame_id", "config"}
+
+    prior_spec = build_default_tool_registry().get("estimate_depth_prior")
+    assert set(prior_spec.parameters) == {
+        "source_packet_id",
+        "camera_frame_id",
+        "resolution_level",
+    }
+
+
+def test_depth_tools_require_short_packet_references_from_planner() -> None:
+    assert _validate_tool_parameters(
+        "estimate_depth_prior",
+        {
+            "source_packet_id": "obs-0002",
+            "camera_frame_id": "wrist",
+            "resolution_level": 4,
+        },
+    ) == []
+    assert _validate_tool_parameters(
+        "enhance_depth",
+        {"source_packet_id": "obs-0002", "camera_frame_id": "wrist"},
+    ) == []
+    assert _validate_tool_parameters(
+        "estimate_depth_prior",
+        {"rgb": "/tmp/rgb.png", "intrinsics": _intrinsics()},
+    )
+    assert _validate_tool_parameters(
+        "enhance_depth",
+        {
+            "rgb": "/tmp/rgb.png",
+            "depth": "/tmp/depth.png",
+            "intrinsics": _intrinsics(),
+        },
+    )
 
 
 def test_runtime_enhance_depth_tool_materializes_report(tmp_path: Path) -> None:
@@ -311,6 +374,46 @@ def test_runtime_enhance_depth_tool_materializes_report(tmp_path: Path) -> None:
     assert "fused_depth_m" not in json.dumps(result.details)
 
 
+def test_runtime_sensor_only_depth_fallback_is_semantic_and_actionable(
+    tmp_path: Path,
+) -> None:
+    rgb_path = tmp_path / "rgb.png"
+    depth_path = tmp_path / "depth.png"
+    prior_path = tmp_path / "prior.npy"
+    Image.fromarray(_rgb()).save(rgb_path)
+    Image.fromarray(np.full((3, 3), 1000, dtype=np.uint16)).save(depth_path)
+    np.save(prior_path, np.full((3, 3), 4.0, dtype=np.float32))
+
+    result = OpenEtaAgentRuntime().tools.call(
+        "enhance_depth",
+        {
+            "rgb": str(rgb_path),
+            "depth": str(depth_path),
+            "prior_depth": str(prior_path),
+            "intrinsics": _intrinsics(),
+            "camera_id": "agentview",
+            "bundle_id": "depth-scale-mismatch",
+            "config": {"min_alignment_pixels": 4, "edge_guard_pixels": 0},
+        },
+        metadata={"session_id": "session-depth-scale-mismatch"},
+    )
+
+    assert result.success is True
+    assert result.details["operational_success"] is True
+    assert result.details["semantic_outcome"] == "requires_depth_alignment_repair"
+    assert result.details["outputs"]["enabled"] is False
+    assert result.details["outputs"]["reason"] == "alignment_scale_out_of_bounds"
+    assert [item["code"] for item in result.details["diagnostics"]] == [
+        "alignment_scale_out_of_bounds"
+    ]
+    assert {
+        item["action"] for item in result.details["recovery_options"]
+    } == {
+        "inspect_depth_prior_units_and_source_match",
+        "continue_with_sensor_depth_only",
+    }
+
+
 def test_depth_prior_handler_materializes_metric_prior(tmp_path: Path) -> None:
     rgb_path = tmp_path / "rgb.png"
     Image.fromarray(_rgb()).save(rgb_path)
@@ -328,18 +431,21 @@ def test_depth_prior_handler_materializes_metric_prior(tmp_path: Path) -> None:
             },
         }
 
-    spec = build_default_tool_registry().get("estimate_depth_prior")
-    result = build_depth_prior_handler(estimate, output_root=tmp_path / "depth_prior")(
-        ToolExecutionContext(
-            name="estimate_depth_prior",
-            spec=spec,
-            parameters={
-                "rgb": str(rgb_path),
-                "intrinsics": _intrinsics(),
-                "camera_id": "wrist",
-            },
-            metadata={"session_id": "session-depth-prior"},
-        )
+    registry = build_default_tool_registry()
+    registry.bind_handler(
+        "estimate_depth_prior",
+        build_depth_prior_handler(estimate, output_root=tmp_path / "depth_prior"),
+    )
+    result = registry.call(
+        "estimate_depth_prior",
+        {
+            "rgb": str(rgb_path),
+            "intrinsics": _intrinsics(),
+            "camera_id": "wrist",
+            "source_packet_id": "obs-0000",
+            "camera_frame_id": "wrist",
+        },
+        metadata={"session_id": "session-depth-prior"},
     )
 
     outputs = result.details["outputs"]
@@ -353,6 +459,39 @@ def test_depth_prior_handler_materializes_metric_prior(tmp_path: Path) -> None:
     assert np.load(outputs["prior_depth"]).shape == (2, 2)
     assert "enhance_depth" in outputs["next_tool_hint"]
     assert "base64" not in json.dumps(result.details)
+    contract = build_default_tool_contract_catalog(
+        registry.list()
+    ).get("estimate_depth_prior")
+    assert check_tool_result_conformance(contract, result.details) == ()
+
+
+def test_depth_prior_handler_failure_conforms_to_declared_recovery_outcome(
+    tmp_path: Path,
+) -> None:
+    rgb_path = tmp_path / "rgb.png"
+    Image.fromarray(_rgb()).save(rgb_path)
+
+    def estimate(_request):
+        raise TimeoutError("depth backend timed out")
+
+    registry = build_default_tool_registry()
+    registry.bind_handler(
+        "estimate_depth_prior",
+        build_depth_prior_handler(estimate, output_root=tmp_path / "prior"),
+    )
+    result = registry.call(
+        "estimate_depth_prior",
+        {"rgb": str(rgb_path), "intrinsics": _intrinsics()},
+    )
+    contract = build_default_tool_contract_catalog(registry.list()).get(
+        "estimate_depth_prior"
+    )
+
+    assert result.success is False
+    assert result.details["semantic_outcome"] == "operational_failure"
+    assert result.details["diagnostics"][0]["code"] == "mcp_call_failed"
+    assert result.details["recovery_options"]
+    assert check_tool_result_conformance(contract, result.details) == ()
 
 
 def test_depth_prior_handler_keeps_uncertainty_direction(tmp_path: Path) -> None:
@@ -400,19 +539,23 @@ def test_memory_derives_depth_prior_packet_from_tool_result(tmp_path: Path) -> N
             },
         }
 
-    spec = build_default_tool_registry().get("estimate_depth_prior")
-    result = build_depth_prior_handler(estimate, output_root=tmp_path / "depth_prior")(
-        ToolExecutionContext(
-            name="estimate_depth_prior",
-            spec=spec,
-            parameters={
-                "rgb": str(rgb_path),
-                "intrinsics": _intrinsics(),
-                "camera_id": "wrist",
-            },
-            metadata={"session_id": runtime.memory.session_id or ""},
-        )
+    # Exercise the real registry normalization boundary before memory consumes
+    # the result. This catches legacy handlers accidentally becoming
+    # details.outputs.outputs.<field> after canonical wrapping.
+    runtime.tools.bind_handler(
+        "estimate_depth_prior",
+        build_depth_prior_handler(estimate, output_root=tmp_path / "depth_prior"),
     )
+    result = runtime.tools.call(
+        "estimate_depth_prior",
+        {
+            "rgb": str(rgb_path),
+            "intrinsics": _intrinsics(),
+            "camera_id": "wrist",
+        },
+        metadata={"session_id": runtime.memory.session_id or ""},
+    )
+    assert "outputs" not in result.details["outputs"]
     runtime.memory.add_action(
         EnvAction(
             action_type="tool_call",

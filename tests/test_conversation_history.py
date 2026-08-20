@@ -200,6 +200,57 @@ def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> N
     assert projected["candidates"][1]["width"] == 0.079
 
 
+def test_planner_retry_receipt_survives_into_next_turn_host_feedback() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="repair a tool request")
+    action = _action("estimate_depth_prior")
+    action.command["metadata"] = {
+        "planner_metadata": {
+            "validation_attempts": 2,
+            "validation_attempt_history": [
+                {
+                    "attempt": 1,
+                    "decision": {
+                        "kind": "tool_call",
+                        "name": "estimate_depth_prior",
+                    },
+                    "validation_errors": ["source_packet_id is required"],
+                },
+                {
+                    "attempt": 2,
+                    "decision": {
+                        "kind": "tool_call",
+                        "name": "estimate_depth_prior",
+                    },
+                    "validation_errors": [],
+                },
+            ],
+        }
+    }
+
+    memory.add_action(action)
+
+    feedback = json.loads(
+        memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1]
+    )["openeta_host_result"]
+    receipt = feedback["planner_validation_receipt"]
+    assert receipt["schema_version"] == "openeta.planner_validation_receipt.v1"
+    assert receipt["attempt_count"] == 2
+    assert receipt["accepted_attempt"] == 2
+    assert receipt["rejected_attempts"] == [
+        {
+            "attempt": 1,
+            "candidate": {
+                "kind": "tool_call",
+                "name": "estimate_depth_prior",
+            },
+            "accepted": False,
+            "validation_errors": ["source_packet_id is required"],
+        }
+    ]
+    assert "not executed" in receipt["interpretation"]
+
+
 def test_every_tool_projects_bounded_outputs_and_artifact_paths() -> None:
     memory = AgentMemory()
     memory.start_session(task="inspect segmentation")
@@ -312,6 +363,50 @@ def test_large_tool_result_is_bounded_and_keeps_structured_artifact_path() -> No
     assert len(result_message) <= 8_500
     assert artifact_path in result_message
     assert payload["projection"]["bounded"] is True
+
+
+def test_blocked_tool_feedback_keeps_reason_and_structured_repair_bundle() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach a safe pose")
+    reason = "clearance execution did not reach the requested target"
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "blocked",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+                },
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "skipped",
+                        "reason": reason,
+                    }
+                ],
+                "metadata": {
+                    "repair_bundle": {
+                        "schema_version": "openeta.gate_repair.v1",
+                        "code": "clearance_not_reached",
+                        "violated_invariant": reason,
+                        "evidence_ids": ["receipt:move-1"],
+                        "allowed_next_calls": [
+                            {"tool": "observe", "parameters": {}}
+                        ],
+                    }
+                },
+            },
+        )
+    )
+
+    feedback = json.loads(
+        memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1]
+    )["openeta_host_result"]
+    assert feedback["tool_calls"][0]["reason"] == reason
+    assert feedback["repair_bundle"]["code"] == "clearance_not_reached"
+    assert feedback["repair_bundle"]["allowed_next_calls"][0]["tool"] == "observe"
 
 
 def test_environment_assigned_task_survives_many_tool_calls() -> None:

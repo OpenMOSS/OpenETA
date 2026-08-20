@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from PIL import Image
 
 from agent.tools.handlers import build_grasp_pose_estimate_handler
@@ -44,6 +45,10 @@ def _parameters(tmp_path: Path, *, mode: str = "targeted") -> dict[str, Any]:
             "source_image": str(rgb),
             "result_id": "sam3-result",
             "detection_id": "detection_000",
+            "quality": {
+                "status": "usable",
+                "area_fraction": 0.008,
+            },
         }
     return parameters
 
@@ -104,6 +109,7 @@ def test_tool_spec_exposes_only_backend_neutral_inputs() -> None:
     assert spec.effect == ToolEffect.PLANNING
     assert set(spec.parameters) == {
         "bundle_id",
+        "backend_preference",
         "mode",
         "rgb",
         "depth",
@@ -114,8 +120,8 @@ def test_tool_spec_exposes_only_backend_neutral_inputs() -> None:
         "hints",
     }
     assert "AnyGrasp" in spec.description
-    assert "Contact-GraspNet" in spec.description
     assert "GraspGenX" in spec.description
+    assert "Contact-GraspNet" not in spec.description
 
 
 def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
@@ -125,7 +131,7 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
         calls.append((context.name, dict(context.parameters)))
         return _failure("no_grasp_candidates")
 
-    def contact(context: ToolExecutionContext) -> ToolResult:
+    def graspgenx(context: ToolExecutionContext) -> ToolResult:
         calls.append((context.name, dict(context.parameters)))
         return _success(
             _candidate("contact-native-1", score=0.7),
@@ -133,18 +139,18 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
         )
 
     handler = build_grasp_pose_estimate_handler(
-        {"anygrasp": anygrasp, "contact_graspnet": contact}
+        {"anygrasp": anygrasp, "graspgenx": graspgenx}
     )
 
     result = handler(_context(_parameters(tmp_path)))
 
     assert result.success is True
-    assert [name for name, _ in calls] == ["anygrasp", "contact_graspnet"]
+    assert [name for name, _ in calls] == ["anygrasp", "graspgenx"]
     assert calls[0][1]["target_mask"].endswith("mask.png")
     assert calls[0][1]["dense_grasp"] is True
     assert calls[0][1]["depth_cutoff_factor"] == 1.25
     assert calls[1][1]["object_mask"]["source_image"].endswith("rgb.png")
-    assert result.details["selected_backend"] == "contact_graspnet"
+    assert result.details["selected_backend"] == "graspgenx"
     assert [attempt["status"] for attempt in result.details["backend_attempts"]] == [
         "failed",
         "success",
@@ -156,9 +162,11 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
         "contact-native-1",
     ]
     assert candidates[0]["source_tool"] == "grasp_pose_estimate"
-    assert candidates[0]["source_backend"] == "contact_graspnet"
+    assert candidates[0]["source_backend"] == "graspgenx"
     assert result.details["source"]["scene_epoch"] == 4
     assert result.details["source"]["camera_frame_id"] == "agentview"
+    assert result.details["target_mask_quality"]["area_fraction"] == 0.008
+    assert result.details["source"]["target_mask_quality"]["status"] == "usable"
 
 
 def test_graspgenx_receives_depth_cutoff_factor_from_unified_hints(
@@ -249,18 +257,83 @@ def test_host_excluded_backend_is_skipped(tmp_path: Path) -> None:
     parameters = _parameters(tmp_path)
     parameters["hints"]["excluded_backends"] = ["anygrasp"]
     result = build_grasp_pose_estimate_handler(
-        {"anygrasp": backend, "contact_graspnet": backend}
+        {"anygrasp": backend, "graspgenx": backend}
     )(_context(parameters))
 
     assert result.success is True
-    assert calls == ["contact_graspnet"]
-    assert result.details["selected_backend"] == "contact_graspnet"
+    assert calls == ["graspgenx"]
+    assert result.details["selected_backend"] == "graspgenx"
     assert result.details["backend_attempts"][0] == {
         "backend": "anygrasp",
         "status": "skipped",
         "reason": "excluded_by_host_fallback",
         "candidate_count": 0,
     }
+
+
+def test_agent_backend_preference_reorders_facade_and_keeps_fallback(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def backend(context: ToolExecutionContext) -> ToolResult:
+        calls.append(context.name)
+        if context.name == "graspgenx":
+            return _failure("no_grasp_candidates")
+        return _success(_candidate(f"{context.name}-0", score=0.8))
+
+    parameters = _parameters(tmp_path)
+    parameters["backend_preference"] = ["graspgenx"]
+    result = build_grasp_pose_estimate_handler(
+        {
+            "anygrasp": backend,
+            "graspgenx": backend,
+        }
+    )(_context(parameters))
+
+    assert result.success is True
+    assert calls == ["graspgenx", "anygrasp"]
+    assert result.details["selected_backend"] == "anygrasp"
+    assert result.details["backend_policy"] == {
+        "schema_version": "openeta.grasp_backend_policy.v1",
+        "agent_control_scope": "attempt_order_only",
+        "requested_preference": ["graspgenx"],
+        "configured_order": ["anygrasp", "graspgenx"],
+        "effective_order": ["graspgenx", "anygrasp"],
+        "unconfigured_requested_backends": [],
+        "remaining_configured_backends_retained": True,
+        "fallback_policy": "existing_structured_failure_policy",
+        "selected_backend": "anygrasp",
+    }
+    assert "remaining configured backends stayed available" in result.content
+
+
+@pytest.mark.parametrize(
+    "preference",
+    [[], ["unknown"], ["anygrasp", "anygrasp"], "graspgenx"],
+)
+def test_invalid_agent_backend_preference_fails_before_backend_call(
+    tmp_path: Path,
+    preference: object,
+) -> None:
+    called = False
+
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        nonlocal called
+        called = True
+        return _success(_candidate("candidate-0", score=0.8))
+
+    parameters = _parameters(tmp_path)
+    parameters["backend_preference"] = preference
+    result = build_grasp_pose_estimate_handler({"anygrasp": backend})(
+        _context(parameters)
+    )
+
+    assert result.success is False
+    assert result.details["reason"] == "invalid_backend_preference"
+    assert result.details["backend_attempts"] == []
+    assert called is False
+    assert "Invalid backend_preference" in result.content
 
 
 def test_scene_mode_uses_only_scene_compatible_backend(tmp_path: Path) -> None:
@@ -273,10 +346,9 @@ def test_scene_mode_uses_only_scene_compatible_backend(tmp_path: Path) -> None:
     handler = build_grasp_pose_estimate_handler(
         {
             "anygrasp": backend,
-            "contact_graspnet": backend,
             "graspgenx": backend,
         },
-        backend_order=("contact_graspnet", "graspgenx", "anygrasp"),
+        backend_order=("graspgenx", "anygrasp"),
     )
 
     result = handler(_context(_parameters(tmp_path, mode="scene")))
@@ -284,7 +356,6 @@ def test_scene_mode_uses_only_scene_compatible_backend(tmp_path: Path) -> None:
     assert result.success is True
     assert called == ["anygrasp"]
     assert [attempt["status"] for attempt in result.details["backend_attempts"]] == [
-        "ineligible",
         "ineligible",
         "success",
     ]
@@ -307,16 +378,14 @@ def test_enhanced_candidate_depth_uses_anygrasp_without_collision_filter(
     }
     result = build_grasp_pose_estimate_handler(
         {
-            "contact_graspnet": backend,
             "graspgenx": backend,
             "anygrasp": backend,
         },
-        backend_order=("contact_graspnet", "graspgenx", "anygrasp"),
+        backend_order=("graspgenx", "anygrasp"),
     )(_context(parameters))
 
     assert result.success is True
     assert [attempt["status"] for attempt in result.details["backend_attempts"]] == [
-        "ineligible",
         "ineligible",
         "success",
     ]
@@ -359,7 +428,7 @@ def test_non_fallback_backend_error_stops_dispatch(tmp_path: Path) -> None:
         return _success(_candidate("unused", score=1.0))
 
     handler = build_grasp_pose_estimate_handler(
-        {"anygrasp": invalid, "contact_graspnet": unused}
+        {"anygrasp": invalid, "graspgenx": unused}
     )
 
     result = handler(_context(_parameters(tmp_path)))
@@ -486,17 +555,17 @@ def test_anygrasp_width_mismatch_falls_back_to_compatible_backend(
             },
         )
 
-    def contact(_context: ToolExecutionContext) -> ToolResult:
-        return _success(_candidate("contact-0", score=0.7))
+    def graspgenx(_context: ToolExecutionContext) -> ToolResult:
+        return _success(_candidate("graspgenx-0", score=0.7))
 
     parameters = _parameters(tmp_path)
     parameters["hints"]["max_gripper_width_m"] = 0.08
     result = build_grasp_pose_estimate_handler(
-        {"anygrasp": anygrasp, "contact_graspnet": contact}
+        {"anygrasp": anygrasp, "graspgenx": graspgenx}
     )(_context(parameters))
 
     assert result.success is True
-    assert result.details["selected_backend"] == "contact_graspnet"
+    assert result.details["selected_backend"] == "graspgenx"
     assert result.details["backend_attempts"][0]["reason"] == (
         "backend_gripper_width_mismatch"
     )
@@ -548,15 +617,15 @@ def test_model_load_failure_falls_back_to_next_backend(tmp_path: Path) -> None:
 
     def valid(context: ToolExecutionContext) -> ToolResult:
         calls.append(context.name)
-        return _success(_candidate("contact-0", score=0.8))
+        return _success(_candidate("graspgenx-0", score=0.8))
 
     result = build_grasp_pose_estimate_handler(
-        {"anygrasp": unavailable, "contact_graspnet": valid}
+        {"anygrasp": unavailable, "graspgenx": valid}
     )(_context(_parameters(tmp_path)))
 
     assert result.success is True
-    assert result.details["selected_backend"] == "contact_graspnet"
-    assert calls == ["anygrasp", "contact_graspnet"]
+    assert result.details["selected_backend"] == "graspgenx"
+    assert calls == ["anygrasp", "graspgenx"]
 
 
 def test_malformed_success_falls_back_to_next_backend(tmp_path: Path) -> None:
@@ -571,12 +640,12 @@ def test_malformed_success_falls_back_to_next_backend(tmp_path: Path) -> None:
         return _success(_candidate("valid-0", score=0.8))
 
     result = build_grasp_pose_estimate_handler(
-        {"anygrasp": malformed, "contact_graspnet": valid}
+        {"anygrasp": malformed, "graspgenx": valid}
     )(_context(_parameters(tmp_path)))
 
     assert result.success is True
-    assert result.details["selected_backend"] == "contact_graspnet"
-    assert calls == ["anygrasp", "contact_graspnet"]
+    assert result.details["selected_backend"] == "graspgenx"
+    assert calls == ["anygrasp", "graspgenx"]
     assert result.details["backend_attempts"][0]["reason"] == (
         "inconsistent_grasp_outputs"
     )

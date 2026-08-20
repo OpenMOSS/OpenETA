@@ -10,6 +10,7 @@ from PIL import Image
 
 from agent.tools.grasp_geometry import (
     DEFAULT_GRASP_PROFILE,
+    assess_target_mask_quality,
     build_compile_grasp_seed_handler,
     build_wrist_alignment_handler,
     camera_optical_forward_world,
@@ -17,6 +18,9 @@ from agent.tools.grasp_geometry import (
     compile_grasp_seed,
     compute_wrist_alignment,
     grasp_refinement_hover_pose,
+    propose_wrist_viewpoints,
+    rebase_camera_direction,
+    rebase_camera_grasp_candidate,
 )
 from agent.tools.registry import ToolExecutionContext, build_default_tool_registry
 
@@ -53,6 +57,56 @@ def _compile_parameters() -> dict:
     }
 
 
+def test_rebase_camera_grasp_candidate_preserves_world_geometry() -> None:
+    candidate = {
+        **_candidate(),
+        "gripper_tip_position_xyz": [2.1, 0.0, 0.0],
+        "translation_xyz": [2.0, 0.0, 0.0],
+    }
+    source_extrinsics = {
+        "camera_frame": "opencv",
+        "pos": [0.0, 0.0, 0.0],
+        "mat": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    }
+    target_extrinsics = {
+        "camera_frame": "opencv",
+        "pos": [1.0, 0.0, 0.0],
+        "mat": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    }
+
+    rebased = rebase_camera_grasp_candidate(
+        candidate,
+        source_camera_extrinsics=source_extrinsics,
+        target_camera_extrinsics=target_extrinsics,
+    )
+
+    assert rebased["translation_xyz"] == pytest.approx([1.0, 0.0, 0.0])
+    assert rebased["gripper_tip_position_xyz"] == pytest.approx([1.1, 0.0, 0.0])
+    assert rebased["rotation_matrix"] == candidate["rotation_matrix"]
+    assert candidate["translation_xyz"] == [2.0, 0.0, 0.0]
+
+
+def test_rebase_camera_direction_preserves_world_direction() -> None:
+    source_extrinsics = {
+        "camera_frame": "opencv",
+        "pos": [0.0, 0.0, 0.0],
+        "mat": [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+    }
+    target_extrinsics = {
+        "camera_frame": "opencv",
+        "pos": [0.0, 0.0, 0.0],
+        "mat": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    }
+
+    rebased = rebase_camera_direction(
+        [1.0, 0.0, 0.0],
+        source_camera_extrinsics=source_extrinsics,
+        target_camera_extrinsics=target_extrinsics,
+    )
+
+    assert rebased == pytest.approx([0.0, 1.0, 0.0])
+
+
 def test_compile_grasp_seed_applies_camera_and_eef_transforms() -> None:
     result = compile_grasp_seed(
         _compile_parameters(),
@@ -81,6 +135,40 @@ def test_compile_grasp_seed_applies_camera_and_eef_transforms() -> None:
     assert result["strategy_id"] is None
     assert result["strategy_selection"] == "generic_fallback"
     assert result["scene_epoch"] == 0
+    guidance = result["execution_guidance"]
+    assert guidance["contact"]["recommended_position_tolerance_m"] == 0.005
+    assert guidance["contact"]["recommended_orientation_tolerance_rad"] == 0.10
+    assert guidance["contact"]["verify_fresh_wrist_contact_before_close"] is True
+    assert guidance["near_field_refinement"]["recommended"] is False
+
+
+def test_compile_recommends_optional_wrist_refinement_for_small_scene_target() -> None:
+    parameters = {
+        **_compile_parameters(),
+        "target_mask_quality": {
+            "status": "usable",
+            "area_fraction": 0.00873184,
+        },
+        "grasp_candidate_count": 1,
+        "grasp_selection_advice": {"status": "skipped_single_candidate"},
+    }
+
+    result = compile_grasp_seed(
+        parameters,
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+
+    refinement = result["execution_guidance"]["near_field_refinement"]
+    assert refinement["recommended"] is True
+    assert refinement["agent_discretion"] is True
+    assert refinement["target_mask_area_fraction"] == pytest.approx(0.00873184)
+    assert refinement["grasp_candidate_count"] == 1
+    assert len(refinement["reasons"]) == 2
+    assert {item["tool"] for item in refinement["suggested_actions"]} == {
+        "compute_wrist_alignment",
+        "grasp_pose_estimate",
+    }
 
 
 def test_normalized_opencv_and_legacy_opengl_extrinsics_are_equivalent() -> None:
@@ -162,6 +250,94 @@ def test_refinement_hover_accepts_camera_to_world_matrix() -> None:
     assert pose["scene_epoch"] == 3
     assert pose["waypoint_role"] == "grasp_refinement_clearance"
     assert "grasp_stage" not in pose
+
+
+def test_target_mask_quality_rejects_clipped_mask_and_reports_depth(tmp_path: Path) -> None:
+    mask_path = tmp_path / "mask.png"
+    depth_path = tmp_path / "depth.png"
+    mask = Image.new("L", (8, 8), 0)
+    for y in range(2, 6):
+        for x in range(0, 3):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+    Image.new("I;16", (8, 8), 1000).save(depth_path)
+
+    quality = assess_target_mask_quality(mask_path, depth_path=depth_path)
+
+    assert quality["schema_version"] == "openeta.target_mask_quality.v1"
+    assert quality["status"] == "clipped_mask"
+    assert quality["usable_for_targeted_geometry"] is False
+    assert quality["touches_image_boundary"] is True
+    assert quality["bbox_xyxy"] == [0, 2, 3, 6]
+    assert quality["depth_coverage"] == 1.0
+    assert quality["failed_checks"] == ["mask_not_clipped"]
+
+
+def test_wrist_viewpoint_proposals_point_camera_at_compiled_target() -> None:
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+    result = propose_wrist_viewpoints(
+        {
+            "compiled_grasp": compiled,
+            "source_packet_id": "packet-current",
+            "camera_frame_id": "robot0_eye_in_hand",
+            "camera_extrinsics": {
+                "camera_frame": "opencv",
+                "frame_transform": "camera_to_world",
+                "camera_to_world": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+            "current_eef_pose": {
+                "xyz": [0.0, 0.0, 0.0],
+                "rotation_matrix": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+            },
+            "object_scene_epoch": 0,
+            "robot_motion_epoch": 4,
+            "standoff_m": 0.18,
+        }
+    )
+
+    assert result["schema_version"] == "openeta.wrist_viewpoint_proposal.v1"
+    assert result["proposal_id"].startswith("wrist_viewpoint:")
+    assert result["validity"]["reusable_across_observation_packet_refresh"] is True
+    assert result["next_action_contract"]["recommended_tool"] == "ik_preview_check"
+    post_reach = result["post_reach_evidence_contract"]
+    assert post_reach["viewpoint_reached_is_not_contact_refined"] is True
+    assert post_reach["fresh_packet_source"] == (
+        "current_observation.source_packet_id_after_move"
+    )
+    assert [item["tool"] for item in post_reach["recommended_sequence"]] == [
+        "sam3",
+        "select_sam3_detection",
+        "compute_wrist_alignment_or_grasp_pose_estimate",
+    ]
+    assert len(result["candidates"]) == 3
+    for candidate in result["candidates"]:
+        pose = candidate["target_pose"]
+        camera = candidate["camera_goal"]
+        delta = [
+            result["target_anchor_world_xyz"][index] - camera["xyz"][index]
+            for index in range(3)
+        ]
+        norm = sum(value * value for value in delta) ** 0.5
+        assert camera["optical_forward_world_xyz"] == pytest.approx(
+            [value / norm for value in delta], abs=1e-6
+        )
+        assert pose["waypoint_role"] == "wrist_observation_viewpoint"
+        assert pose["viewpoint_candidate_id"] == candidate["candidate_id"]
+        assert pose["camera_frame_id"] == "robot0_eye_in_hand"
+        assert candidate["requires_ik_preview"] is True
 
 
 def test_compile_grasp_seed_uses_generic_fallback_for_unlisted_object() -> None:
@@ -278,6 +454,16 @@ def test_approach_mode_changes_compiled_id_and_rejects_incompatible_geometry() -
         profile_sha256="profile-sha",
     )
     assert top_result["compiled_grasp_id"] != front_result["compiled_grasp_id"]
+
+    nested = deepcopy(front)
+    nested.pop("approach_mode")
+    nested["articulated_handle_options"] = {"approach_mode": "front"}
+    nested_result = compile_grasp_seed(
+        nested,
+        profile=_profile(),
+        profile_sha256="profile-sha",
+    )
+    assert nested_result["approach_mode"] == "front"
 
     forged = _compile_parameters()
     forged.update(
@@ -423,7 +609,9 @@ def test_compile_grasp_seed_keeps_legacy_v1_object_allowlist() -> None:
         )
 
 
-def test_wrist_alignment_uses_full_frame_mask_and_clamps_correction(tmp_path: Path) -> None:
+def test_wrist_alignment_with_clipped_mask_and_clamped_correction_emits_no_pose(
+    tmp_path: Path,
+) -> None:
     mask_path = tmp_path / "mask.png"
     depth_path = tmp_path / "depth.png"
     mask = Image.new("L", (8, 8), 0)
@@ -472,7 +660,16 @@ def test_wrist_alignment_uses_full_frame_mask_and_clamps_correction(tmp_path: Pa
     assert sum(value * value for value in result["correction_world_xyz"]) ** 0.5 == pytest.approx(
         0.02, abs=1e-6
     )
-    assert result["aligned_hover_pose"]["frame"] == "world"
+    assert result["status"] == "requires_better_view"
+    assert result["executable_reference"] is False
+    assert result["aligned_hover_pose"] is None
+    assert result["adjusted_contact_pose"] is None
+    failed_codes = {
+        check["code"] for check in result["operating_region"]["failed_checks"]
+    }
+    assert "target_mask_not_clipped" in failed_codes
+    assert "eef_near_compiled_clearance" in failed_codes
+    assert "correction_within_limit" in failed_codes
     assert result["desired_pixel_xy"] == [4.0, 4.0]
     assert result["gripper_center_projection"]["calibration_id"] == (
         "graspnet-eef-panda-p8"
@@ -505,6 +702,7 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
         profile=_profile(),
         profile_sha256="profile-sha",
     )
+    compiled["hover_pose"]["xyz"] = [0.0, 0.0, 0.6]
 
     result = compute_wrist_alignment(
         {
@@ -538,6 +736,8 @@ def test_bowl_wrist_alignment_targets_nearest_shallow_rim_pixel(tmp_path: Path) 
     assert result["target_pixel_xy"] == [4, 2]
     assert result["target_depth_m"] == 1.0
     assert compiled["precontact_pose"]["waypoint_role"] == "grasp_precontact"
+    assert result["status"] == "aligned_reference_ready"
+    assert result["executable_reference"] is True
     assert result["adjusted_precontact_pose"]["waypoint_role"] == "grasp_precontact"
     assert result["adjusted_precontact_pose"]["alignment_id"] == result["alignment_id"]
 
@@ -715,6 +915,7 @@ def test_wrist_alignment_handler_loads_session_profile_automatically(
     mask.save(mask_path)
     Image.new("I;16", (10, 10), 1000).save(depth_path)
     spec = build_default_tool_registry().get("compute_wrist_alignment")
+    assert set(spec.parameters) == {"bundle_id", "max_correction_m"}
 
     result = build_wrist_alignment_handler(profile_path)(
         ToolExecutionContext(
@@ -753,3 +954,61 @@ def test_wrist_alignment_handler_loads_session_profile_automatically(
     outputs = result.details["outputs"]
     assert outputs["desired_pixel_xy"] == [5.0, 4.0]
     assert outputs["gripper_center_projection"]["profile_sha256"] == profile_sha256
+
+
+def test_wrist_alignment_handler_reports_requires_better_view_without_poses(
+    tmp_path: Path,
+) -> None:
+    profile_path = tmp_path / "grasp_profile.json"
+    profile_path.write_text(json.dumps(_profile()), encoding="utf-8")
+    profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+    compiled = compile_grasp_seed(
+        _compile_parameters(),
+        profile=_profile(),
+        profile_sha256=profile_sha256,
+    )
+    mask_path = tmp_path / "mask.png"
+    depth_path = tmp_path / "depth.png"
+    mask = Image.new("L", (8, 8), 0)
+    for y in range(3, 6):
+        for x in range(3, 6):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+    Image.new("I;16", (8, 8), 1000).save(depth_path)
+    spec = build_default_tool_registry().get("compute_wrist_alignment")
+
+    result = build_wrist_alignment_handler(profile_path)(
+        ToolExecutionContext(
+            name="compute_wrist_alignment",
+            spec=spec,
+            parameters={
+                "compiled_grasp": compiled,
+                "target_mask": str(mask_path),
+                "depth": str(depth_path),
+                "intrinsics": {
+                    "fx": 100.0,
+                    "fy": 100.0,
+                    "cx": 4.0,
+                    "cy": 4.0,
+                    "width": 8,
+                    "height": 8,
+                    "scale": 1000.0,
+                },
+                "camera_extrinsics": {
+                    **_compile_parameters()["camera_extrinsics"],
+                    "camera_frame": "opencv",
+                },
+                "current_eef_pose": {
+                    "xyz": [0.0, 0.0, 0.6],
+                    "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+                },
+                "scene_epoch": 0,
+            },
+        )
+    )
+
+    assert result.success is True
+    assert result.details["semantic_outcome"] == "requires_better_view"
+    assert result.details["outputs"]["executable_reference"] is False
+    assert result.details["outputs"]["aligned_hover_pose"] is None
+    assert result.details["recovery_options"]

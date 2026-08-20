@@ -299,12 +299,633 @@ def test_robot_motion_and_object_scene_epochs_are_independent() -> None:
 
     memory.add_action(successful_action("gripper_control", {"position": 0}))
     assert memory.robot_motion_epoch() == 2
-    assert memory.object_scene_epoch() == 1
+    assert memory.object_scene_epoch() == 0
 
     memory.add_action(successful_action("gripper_control", {"position": 1}))
     assert memory.robot_motion_epoch() == 3
-    assert memory.object_scene_epoch() == 2
+    assert memory.object_scene_epoch() == 0
 
+    changed = _observation()
+    changed.metadata["object_scene_change"] = {
+        "changed": True,
+        "change_id": "cube-displaced-1",
+        "reason": "fresh dual-view evidence shows object displacement",
+    }
+    memory.add_observation(changed)
+    assert memory.robot_motion_epoch() == 3
+    assert memory.object_scene_epoch() == 1
+
+    # Re-materializing the same observation evidence is idempotent.
+    memory.add_observation(changed)
+    assert memory.object_scene_epoch() == 1
+
+
+def test_zero_step_motion_does_not_advance_robot_motion_epoch() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+
+    def move_action(*, steps: int, start: list[float], end: list[float]) -> EnvAction:
+        parameters = {"target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]}}
+        return EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": parameters,
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": parameters,
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "motion_summary": {
+                                        "steps_executed": steps,
+                                        "start": {"xyz": start},
+                                        "end": {"xyz": end},
+                                        "reached_target": True,
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+
+    memory.add_action(
+        move_action(
+            steps=0,
+            start=[0.09, 0.2, 0.3],
+            end=[0.09, 0.2, 0.3],
+        )
+    )
+    assert memory.robot_motion_epoch() == 0
+    assert any(event.event_type == "world_mutation_noop" for event in memory.events)
+
+    memory.add_action(
+        move_action(
+            steps=1,
+            start=[0.09, 0.2, 0.3],
+            end=[0.1, 0.2, 0.3],
+        )
+    )
+    assert memory.robot_motion_epoch() == 1
+
+
+def test_failed_motion_with_partial_execution_advances_robot_motion_epoch() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+    parameters = {"target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]}}
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": parameters,
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": parameters,
+                        "result": {
+                            "success": False,
+                            "details": {
+                                "operational_success": False,
+                                "semantic_outcome": "target_not_reached",
+                                "outputs": {
+                                    "motion_summary": {
+                                        "steps_executed": 11,
+                                        "start": {"xyz": [0.0, 0.2, 0.3]},
+                                        "end": {"xyz": [0.09, 0.2, 0.3]},
+                                        "reached_target": False,
+                                        "stop_reason": "control_step_failed",
+                                    }
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert memory.robot_motion_epoch() == 1
+    advanced = [
+        event
+        for event in memory.events
+        if event.event_type == "world_epochs_advanced"
+    ]
+    assert advanced[-1].payload["robot_motion_epoch"] == 1
+
+
+def test_failed_motion_without_execution_receipt_does_not_advance_epoch() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {"kind": "tool_call", "name": "move_to"},
+                "status": "blocked",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "skipped",
+                        "result": {
+                            "success": False,
+                            "details": {"operational_success": False},
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert memory.robot_motion_epoch() == 0
+
+
+def test_move_requires_exact_current_feasible_ik_receipt() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.8, 0.0, 0.1],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": target_pose},
+                },
+                "status": "failed",
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "failed",
+                        "parameters": {"target_pose": target_pose},
+                        "result": {
+                            "success": False,
+                            "details": {
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": "ik-hard-1",
+                                        "classification": "hard_infeasible",
+                                        "reason_code": "target_outside_workspace",
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    pipeline = ActionPipeline()
+    tools = build_default_tool_registry()
+    skills = build_default_skill_registry()
+    exact = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="move_to",
+            parameters={"ik_receipt_id": "ik-hard-1"},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=skills,
+        memory=memory,
+    )
+    assert exact.status == PipelineStatus.BLOCKED
+    repair = exact.metadata["repair_bundle"]
+    assert repair["code"] == "ik_target_hard_infeasible"
+    assert repair["latest_ik_preview"]["receipt_id"] == "ik-hard-1"
+    assert any(call["tool"] == "observe" for call in repair["allowed_next_calls"])
+
+    adjusted_pose = {**target_pose, "xyz": [0.78, 0.0, 0.1]}
+    adjusted = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="move_to",
+            parameters={"target_pose": adjusted_pose},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=skills,
+        memory=memory,
+    )
+    assert adjusted.status == PipelineStatus.BLOCKED
+    assert adjusted.metadata["repair_bundle"]["code"] == (
+        "invalid_ik_receipt_reference"
+    )
+    assert "ik_receipt_id" in adjusted.tool_calls[0].reason
+
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": adjusted_pose},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "parameters": {"target_pose": adjusted_pose},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": "ik-feasible-adjusted",
+                                        "classification": "feasible",
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    authorized = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="move_to",
+            parameters={"ik_receipt_id": "ik-feasible-adjusted"},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=skills,
+        memory=memory,
+    )
+    assert authorized.status != PipelineStatus.BLOCKED
+
+
+def test_partial_failed_motion_invalidates_preexisting_ik_receipt() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.2, 0.1, 0.3],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": target_pose},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "parameters": {"target_pose": target_pose},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": "ik-before-partial-failure",
+                                        "classification": "feasible",
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": {"target_pose": target_pose},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": {"target_pose": target_pose},
+                        "result": {
+                            "success": False,
+                            "details": {
+                                "operational_success": False,
+                                "outputs": {
+                                    "motion_summary": {
+                                        "steps_executed": 3,
+                                        "start": {"xyz": [0.0, 0.0, 0.3]},
+                                        "end": {"xyz": [0.03, 0.0, 0.3]},
+                                        "reached_target": False,
+                                    }
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    blocked = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="move_to",
+            parameters={"ik_receipt_id": "ik-before-partial-failure"},
+        ),
+        observation=_observation(),
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert blocked.status is PipelineStatus.BLOCKED
+    assert blocked.metadata["repair_bundle"]["code"] == "invalid_ik_receipt_reference"
+    assert "stale" in blocked.tool_calls[0].reason
+
+
+def test_repairable_ik_pose_remains_available_as_adjustment_anchor() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach the target")
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.4, 0.0, 0.2],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": target_pose},
+                },
+                "status": "failed",
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "failed",
+                        "parameters": {"target_pose": target_pose},
+                        "result": {
+                            "success": False,
+                            "details": {
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": "ik-repairable-1",
+                                        "classification": "repairable",
+                                        "reason_code": "full_pose_infeasible",
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    error = memory.ik_execution_gate_error(
+        tool_name="move_to", parameters={"target_pose": target_pose}
+    )
+    assert error is not None
+    assert error.startswith("ik_preview_not_feasible:")
+    assert "useful repair evidence" in error
+
+
+def test_wrist_alignment_bundle_hides_host_paths_from_planner_call() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    memory.save_fact(
+        "selected_sam3_detection",
+        {
+            "result_id": "sam-wrist",
+            "id": "detection_000",
+            "evidence_role": "target_object",
+            "source_packet_id": "packet-wrist",
+            "frame_id": "robot0_eye_in_hand",
+            "camera_role": "wrist",
+            "mask_ref": "/session/wrist-mask.png",
+            "scene_epoch": 0,
+                "source_observation": {
+                "packet_id": "packet-wrist",
+                "frame_id": "robot0_eye_in_hand",
+                    "role": "wrist",
+                    "object_scene_epoch": 0,
+                    "robot_motion_epoch": 0,
+                "depth": "/session/wrist-depth.png",
+                "intrinsics": {
+                    "fx": 100.0,
+                    "fy": 100.0,
+                    "cx": 32.0,
+                    "cy": 32.0,
+                    "scale": 1000.0,
+                    "width": 64,
+                    "height": 64,
+                },
+                "extrinsics": {"type": "T_gripper_cam", "frame": "eef"},
+                "current_eef_pose": {
+                    "xyz": [0.1, 0.2, 0.3],
+                    "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+                },
+            },
+        },
+        source="test",
+    )
+    memory.save_artifact(
+        "compiled-wrist",
+        {
+            "type": "compiled_grasp",
+            "schema_version": "openeta.compiled_grasp_seed.v1",
+            "compiled_grasp_id": "compiled-wrist",
+        },
+        source="test",
+    )
+    memory.save_fact(
+        "grasp_provenance",
+        {"compiled_grasp_id": "compiled-wrist", "object_scene_epoch": 0},
+        source="test",
+    )
+
+    assert memory._refresh_wrist_alignment_bundle() is True
+    public = memory.wrist_alignment_bundle()
+    assert public["status"] == "ready"
+    assert public["call_parameters"] == {"bundle_id": public["bundle_id"]}
+    resolved = memory.resolve_wrist_alignment_bundle(public["bundle_id"])
+    assert resolved["parameters"]["target_mask"] == "/session/wrist-mask.png"
+    assert resolved["parameters"]["current_eef_pose"]["xyz"] == [0.1, 0.2, 0.3]
+    assert resolved["parameters"]["source_robot_motion_epoch"] == 0
+
+    memory._advance_runtime_epochs(
+        tool="move_to",
+        object_scene_changed=False,
+        source="test_robot_motion",
+    )
+    stale = memory.wrist_alignment_bundle()
+    assert stale["status"] == "stale_robot_motion"
+    assert stale["bundle_id"] is None
+    with pytest.raises(ValueError, match="stale robot-motion epoch"):
+        memory.resolve_wrist_alignment_bundle(public["bundle_id"])
+
+
+def test_exact_instance_mismatch_cannot_be_overridden_by_sam_selection() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the green bottle")
+    memory.save_fact(
+        "pending_sam3_selection",
+        {
+            "result_id": "sam-wrong-bottle",
+            "evidence_role": "target_object",
+            "target_prompt": "bottle",
+            "candidates": [{"id": "detection_000", "mask_ref": "orange.png"}],
+            "identity_conflict": {
+                "decision": "mismatch",
+                "confidence": 0.97,
+                "reason": "reference is green; candidate is orange",
+            },
+        },
+        source="asset_reference",
+    )
+
+    with pytest.raises(ValueError, match="target_identity_conflict"):
+        memory.resolve_sam3_selection(
+            result_id="sam-wrong-bottle",
+            detection_id="detection_000",
+            selection_source="main_agent_vlm",
+            reason="generic bottle semantics",
+        )
+
+    assert memory.pending_sam3_selection() is not None
+    assert memory.selected_sam3_detection() is None
+
+
+def test_new_target_detection_requires_explicit_identity_relation() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the salad dressing")
+    memory.save_fact(
+        "pending_sam3_selection",
+        {
+            "result_id": "sam-initial",
+            "evidence_role": "target_object",
+            "target_prompt": "salad dressing bottle",
+            "source_packet_id": "packet-1",
+            "candidates": [{"id": "detection_000", "mask_ref": "green.png"}],
+        },
+        source="test",
+    )
+    initial = memory.resolve_sam3_selection(
+        result_id="sam-initial",
+        detection_id="detection_000",
+        selection_source="main_agent_vlm",
+        reason="green bottle appears to be the target",
+    )
+    anchor_id = initial["identity_anchor_id"]
+
+    memory.save_fact(
+        "pending_sam3_selection",
+        {
+            "result_id": "sam-new-view",
+            "evidence_role": "target_object",
+            "target_prompt": "salad dressing bottle",
+            "source_packet_id": "packet-2",
+            "candidates": [{"id": "detection_001", "mask_ref": "orange.png"}],
+        },
+        source="test",
+    )
+    with pytest.raises(ValueError, match="target_identity_confirmation_required"):
+        memory.resolve_sam3_selection(
+            result_id="sam-new-view",
+            detection_id="detection_001",
+            selection_source="main_agent_vlm",
+            reason="new camera view",
+        )
+    assert memory.pending_sam3_selection() is not None
+
+    continued = memory.resolve_sam3_selection(
+        result_id="sam-new-view",
+        detection_id="detection_001",
+        selection_source="main_agent_vlm",
+        reason="same bottle confirmed by color, shape, and relative location",
+        identity_anchor_id=anchor_id,
+        identity_relation="same_instance",
+    )
+    assert continued["identity_anchor_id"] == anchor_id
+    assert continued["identity_continuity"] == "agent_confirmed_same_instance"
+
+
+def test_agent_can_explicitly_replace_a_misidentified_target_anchor() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the salad dressing")
+    memory.save_fact(
+        "pending_sam3_selection",
+        {
+            "result_id": "sam-wrong",
+            "evidence_role": "target_object",
+            "target_prompt": "salad dressing bottle",
+            "source_packet_id": "packet-1",
+            "candidates": [{"id": "detection_000", "mask_ref": "green.png"}],
+        },
+        source="test",
+    )
+    wrong = memory.resolve_sam3_selection(
+        result_id="sam-wrong",
+        detection_id="detection_000",
+        selection_source="main_agent_vlm",
+        reason="initial distant-view guess",
+    )
+    old_anchor_id = wrong["identity_anchor_id"]
+    memory.save_fact(
+        "pending_sam3_selection",
+        {
+            "result_id": "sam-corrected",
+            "evidence_role": "target_object",
+            "target_prompt": "salad dressing bottle",
+            "source_packet_id": "packet-2",
+            "candidates": [{"id": "detection_001", "mask_ref": "orange.png"}],
+        },
+        source="test",
+    )
+
+    corrected = memory.resolve_sam3_selection(
+        result_id="sam-corrected",
+        detection_id="detection_001",
+        selection_source="main_agent_vlm",
+        reason="fresh close view shows orange bottle is salad dressing; green is another item",
+        identity_anchor_id=old_anchor_id,
+        identity_relation="replace_misidentified_anchor",
+    )
+
+    assert corrected["identity_anchor_id"] != old_anchor_id
+    assert corrected["replaced_identity_anchor_id"] == old_anchor_id
+    assert corrected["identity_continuity"] == "anchor_replaced_after_misidentification"
 
 def test_fresh_observation_and_motion_reconciliation_remain_host_invariants() -> None:
     memory = AgentMemory()
@@ -340,3 +961,218 @@ def test_fresh_observation_and_motion_reconciliation_remain_host_invariants() ->
     assert blocked.status == PipelineStatus.BLOCKED
     assert "transport-unknown" in blocked.tool_calls[0].reason
     assert observe.status != PipelineStatus.BLOCKED
+
+
+def test_agent_context_warns_on_packet_churn_without_forcing_next_tool() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    for packet_id in ("packet-1", "packet-2"):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "propose_wrist_viewpoints",
+                        "parameters": {
+                            "compiled_grasp_id": "compiled-1",
+                            "camera_frame_id": "wrist",
+                            "source_packet_id": packet_id,
+                        },
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "propose_wrist_viewpoints",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "content": "proposal ready",
+                                "details": {
+                                    "schema_version": "openeta.tool_result.v1",
+                                    "effect": "read_only",
+                                    "operational_success": True,
+                                    "semantic_outcome": "completed",
+                                    "outputs": {
+                                        "proposal_id": "wrist_viewpoint:stable",
+                                        "candidates": [{"candidate_id": "wrist_view_00"}],
+                                    },
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    warning = context["agent_context"]["decision_state"]["no_progress_tool_loop"]
+    assert warning["tool"] == "propose_wrist_viewpoints"
+    assert warning["equivalent_call_count"] == 2
+    assert warning["packet_ids_changed"] is True
+    assert warning["host_policy"].startswith("reflection_warning_only")
+    latest_outputs = context["agent_context"]["decision_state"]["last_action_effect"][
+        "outputs"
+    ]
+    assert latest_outputs["proposal_id"] == "wrist_viewpoint:stable"
+    assert latest_outputs["candidates"][0]["candidate_id"] == "wrist_view_00"
+
+
+def test_agent_context_warns_on_interleaved_sam3_selection_cycle_and_exposes_bundle() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+
+    def record(name: str, parameters: dict[str, object]) -> None:
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": name,
+                        "parameters": parameters,
+                    },
+                    "tool_calls": [
+                        {
+                            "name": name,
+                            "status": "executed",
+                            "parameters": parameters,
+                            "result": {
+                                "success": True,
+                                "details": {
+                                    "operational_success": True,
+                                    "semantic_outcome": "completed",
+                                    "outputs": {},
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    for index, packet_id in enumerate(("packet-1", "packet-2"), start=1):
+        record(
+            "sam3",
+            {
+                "source_packet_id": packet_id,
+                "camera_frame_id": "agentview",
+                "mode": "text",
+                "prompt": "cube",
+                "evidence_role": "target_object",
+            },
+        )
+        record(
+            "select_sam3_detection",
+            {
+                "sam3_result_id": f"result-{index}",
+                "detection_id": "detection_000",
+                "evidence_role": "target_object",
+                "identity_anchor_id": "target:cube",
+                "identity_relation": "same_instance",
+                "reason": f"same cube on packet {packet_id}",
+            },
+        )
+    memory.save_fact(
+        "grasp_input_bundles",
+        {
+            "schema_version": "openeta.grasp_input_bundle_store.v1",
+            "active_bundle_id": "grasp:ready",
+            "public": {
+                "status": "ready",
+                "bundle_id": "grasp:ready",
+                "target_evidence_id": "sam3:result-2:detection_000",
+                "object_scene_epoch": 0,
+            },
+            "bundles": {},
+        },
+        source="host_provenance_bundle_resolver",
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    warning = context["agent_context"]["decision_state"]["no_progress_tool_loop"]
+    assert warning["trigger_type"] == "interleaved_equivalent_read_only_cycle"
+    assert warning["tool"] == "select_sam3_detection"
+    assert warning["equivalent_call_count"] == 2
+    assert warning["intervening_tools"] == ["sam3"]
+    assert warning["reusable_bundles"]["grasp_pose_estimate"]["bundle_id"] == (
+        "grasp:ready"
+    )
+    assert warning["host_policy"].startswith("reflection_warning_only")
+
+
+def test_context_warns_when_motion_retries_converge_to_same_wrong_pose() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    target = {
+        "frame": "world",
+        "xyz": [0.04, -0.10, 0.16],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    for actual in (
+        [-0.0071, -0.1613, 0.1285],
+        [-0.0076, -0.1610, 0.1279],
+    ):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "move_to",
+                        "parameters": {"target_pose": target},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "move_to",
+                            "status": "executed",
+                            "parameters": {"target_pose": target},
+                            "result": {
+                                "success": True,
+                                "details": {
+                                    "operational_success": False,
+                                    "semantic_outcome": "target_not_reached",
+                                    "outputs": {
+                                        "motion_summary": {
+                                            "reached_target": False,
+                                            "steps_executed": 150,
+                                            "position_error_m": 0.083,
+                                            "stop_reason": "iteration_limit",
+                                            "end": {"xyz": actual},
+                                        }
+                                    },
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    warning = context["agent_context"]["decision_state"]["no_progress_tool_loop"]
+    assert warning["trigger_type"] == "repeated_failed_motion_attractor"
+    assert warning["tool"] == "move_to"
+    assert warning["attempt_count"] == 2
+    assert "same wrong EEF pose" in warning["interpretation"]
+    assert warning["host_policy"].startswith("reflection_warning_only")

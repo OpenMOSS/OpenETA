@@ -15,7 +15,7 @@ from agent.cli.batch_eval import (
     load_parallel_episode_manifest,
     main,
 )
-from agent.runtime.episode import EpisodeResult, EpisodeStep
+from agent.runtime.episode import EpisodeResult, EpisodeStep, summarize_action
 from agent.runtime.parallel import (
     MAX_PARALLEL_EPISODES,
     ParallelEpisodeHarness,
@@ -24,6 +24,34 @@ from agent.runtime.parallel import (
     classify_episode_result,
 )
 from agent.tools.registry import ToolResult
+
+
+def test_response_action_summary_keeps_bounded_provider_failure_evidence() -> None:
+    action = EnvAction(
+        action_type="response",
+        command={
+            "request": {
+                "kind": "response",
+                "name": "ask_human",
+                "parameters": {
+                    "message": "Planner provider request failed.",
+                    "error_type": "TimeoutError",
+                    "provider_attempts": 3,
+                    "large_private_detail": "not durable",
+                },
+            },
+            "status": "pending",
+            "tool_calls": [],
+        },
+    )
+
+    summary = summarize_action(action)
+
+    assert summary["request_parameters"] == {
+        "message": "Planner provider request failed.",
+        "error_type": "TimeoutError",
+        "provider_attempts": 3,
+    }
 
 
 class FakeRunner:
@@ -243,7 +271,7 @@ def test_batch_worker_factory_binds_configured_anyplace(
     monkeypatch.setattr(
         runtime_assembly,
         "build_sse_anyplace_mcp_placer",
-        lambda *, url: seen_urls.append(url) or (lambda _request: {}),
+        lambda *, url, **_kwargs: seen_urls.append(url) or (lambda _request: {}),
     )
     spec = ParallelEpisodeSpec(
         episode_id="episode-anyplace",
@@ -289,7 +317,7 @@ def test_batch_worker_factory_binds_configured_molmopoint(
     monkeypatch.setattr(
         runtime_assembly,
         "build_sse_molmopoint_mcp_pointer",
-        lambda *, url: seen_urls.append(url) or pointer,
+        lambda *, url, **_kwargs: seen_urls.append(url) or pointer,
     )
     monkeypatch.setattr(
         runtime_assembly,
@@ -393,7 +421,7 @@ def test_batch_worker_factory_binds_graspgenx_behind_unified_tool(
     monkeypatch.setattr(
         runtime_assembly,
         "build_sse_graspgenx_mcp_predictor",
-        lambda *, url: (
+        lambda *, url, **_kwargs: (
             predictor
             if url == "http://graspgenx.example/sse"
             else pytest.fail("unexpected GraspGenX URL")
@@ -402,7 +430,7 @@ def test_batch_worker_factory_binds_graspgenx_behind_unified_tool(
     monkeypatch.setattr(
         runtime_assembly,
         "build_sse_graspgenx_mcp_gripper_lister",
-        lambda *, url: (
+        lambda *, url, **_kwargs: (
             lister
             if url == "http://graspgenx.example/sse"
             else pytest.fail("unexpected GraspGenX URL")

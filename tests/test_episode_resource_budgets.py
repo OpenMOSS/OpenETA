@@ -35,8 +35,8 @@ class UsageBackend(PlannerBackend):
         return PlannerBackendResult(
             payload={
                 "kind": "tool_call",
-                "name": "scene_detector",
-                "parameters": {"image": "front"},
+                "name": "get_memory",
+                "parameters": {},
             },
             status=PipelineStatus.PLANNED,
             details={"usage": {"total_tokens": usage}},
@@ -50,7 +50,7 @@ class RetryUsageBackend(PlannerBackend):
     def decide(self, request: PlannerBackendRequest) -> PlannerBackendResult:
         del request
         self.index += 1
-        name = "not_a_registered_tool" if self.index == 1 else "scene_detector"
+        name = "not_a_registered_tool" if self.index == 1 else "get_memory"
         return PlannerBackendResult(
             payload={"kind": "tool_call", "name": name, "parameters": {}},
             status=PipelineStatus.PLANNED,
@@ -105,7 +105,7 @@ class LateHandleResetEnvironment(DummyEpisodeEnvironment):
 def _runtime(backend: PlannerBackend, *, handler=None) -> OpenEtaAgentRuntime:
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "get_memory",
         handler or (lambda context: ToolResult(True, content="objects detected")),
     )
     return OpenEtaAgentRuntime(
@@ -119,8 +119,8 @@ def test_episode_fails_when_tool_calls_exceed_budget() -> None:
         StaticPlannerBackend(
             {
                 "kind": "tool_call",
-                "name": "scene_detector",
-                "parameters": {"image": "front"},
+                "name": "get_memory",
+                "parameters": {},
             }
         )
     )
@@ -154,11 +154,11 @@ def test_episode_extends_turns_only_for_distinct_confirmed_recovery_branches() -
         )
         return ToolResult(True, content="recovery branch compiled")
 
-    tools.bind_handler("scene_detector", record_recovery)
+    tools.bind_handler("get_memory", record_recovery)
     runtime = OpenEtaAgentRuntime(
         planner=ToolCallingPlanner(
             StaticPlannerBackend(
-                {"kind": "tool_call", "name": "scene_detector", "parameters": {}}
+                {"kind": "tool_call", "name": "get_memory", "parameters": {}}
             )
         ),
         tools=tools,
@@ -211,7 +211,7 @@ def test_episode_fails_when_wall_clock_deadline_is_reached() -> None:
     runner = OpenEtaEpisodeRunner(
         runtime=_runtime(
             StaticPlannerBackend(
-                {"kind": "tool_call", "name": "scene_detector", "parameters": {}}
+                {"kind": "tool_call", "name": "get_memory", "parameters": {}}
             ),
             handler=advance_clock,
         ),
@@ -244,7 +244,7 @@ def test_runner_actively_interrupts_blocked_turn_and_closes_environment() -> Non
     runner = OpenEtaEpisodeRunner(
         runtime=_runtime(
             StaticPlannerBackend(
-                {"kind": "tool_call", "name": "scene_detector", "parameters": {}}
+                {"kind": "tool_call", "name": "get_memory", "parameters": {}}
             ),
             handler=blocking_handler,
         ),
@@ -280,7 +280,7 @@ def test_cancelled_tool_result_is_fenced_before_next_command() -> None:
         release.wait(timeout=1.0)
         return ToolResult(True, content="late result")
 
-    tools.bind_handler("scene_detector", blocking_handler)
+    tools.bind_handler("get_memory", blocking_handler)
     tools.bind_handler("observe", lambda context: ToolResult(True, content="fresh result"))
     tools.add_listener(events.append)
     old_result = {}
@@ -289,7 +289,7 @@ def test_cancelled_tool_result_is_fenced_before_next_command() -> None:
         with tools.execution_scope(
             {"execution_id": "old-execution", "_cancel_event": cancel}
         ):
-            old_result["value"] = tools.call("scene_detector", {})
+            old_result["value"] = tools.call("get_memory", {})
 
     worker = threading.Thread(target=run_old_execution)
     worker.start()
@@ -309,7 +309,7 @@ def test_cancelled_tool_result_is_fenced_before_next_command() -> None:
     old_ends = [
         event
         for event in events
-        if event.get("phase") == "end" and event.get("name") == "scene_detector"
+        if event.get("phase") == "end" and event.get("name") == "get_memory"
     ]
     assert len(old_ends) == 1
     assert old_ends[0]["metadata"]["execution_id"] == "old-execution"
@@ -368,7 +368,7 @@ def test_parallel_outcome_exposes_structured_resource_failure() -> None:
                     StaticPlannerBackend(
                         {
                             "kind": "tool_call",
-                            "name": "scene_detector",
+                            "name": "get_memory",
                             "parameters": {},
                         }
                     )

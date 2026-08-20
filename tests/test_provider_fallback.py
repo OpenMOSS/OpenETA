@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from agent.backends.planner import (
@@ -7,8 +8,10 @@ from agent.backends.planner import (
     OpenAICompatiblePlannerBackendConfig,
     PlannerBackendRequest,
     ProviderHttpError,
+    _planner_user_prompt,
 )
 from agent.backends.provider_config import (
+    DEFAULT_PLANNER_PROVIDER_TIMEOUT_S,
     PlannerProviderConfig,
     ProviderEndpointConfig,
     load_planner_provider_config,
@@ -40,6 +43,57 @@ def _fallback() -> ProviderEndpointConfig:
         api_key="fallback-key",
         timeout_s=9.0,
     )
+
+
+def test_planner_retry_prompt_marks_previous_candidate_rejected_and_requires_change() -> None:
+    prompt = _planner_user_prompt(
+        PlannerBackendRequest(
+            tool_context={
+                "decision_state": {
+                    "current_observation_packet": {"source_packet_id": "obs-0000"}
+                }
+            },
+            system_prompt="json",
+            attempt=2,
+            validation_errors=["source_packet_id is required"],
+        )
+    )
+
+    payload = json.loads(prompt)
+    assert payload["attempt"] == 2
+    assert payload["validation_feedback"] == {
+        "status": "previous_attempt_rejected",
+        "rejected_attempt": 1,
+        "must_change_rejected_action": True,
+        "errors": ["source_packet_id is required"],
+    }
+    assert "requested first attempt is now complete" in payload["instruction"]
+    assert "do not repeat the same rejected" in payload["instruction"]
+
+
+def test_provider_timeout_defaults_allow_reasoning_provider_latency(
+    tmp_path: Path,
+) -> None:
+    loaded = load_planner_provider_config(
+        env={
+            "OPENETA_LLM_PROVIDER": "primary-compatible",
+            "OPENETA_LLM_MODEL": "primary-model",
+            "OPENETA_LLM_API_BASE": "https://primary.example.test",
+            "OPENETA_LLM_API_KEY": "primary-key",
+            "OPENETA_LLM_FALLBACK_PROVIDER": "fallback-compatible",
+            "OPENETA_LLM_FALLBACK_MODEL": "fallback-model",
+            "OPENETA_LLM_FALLBACK_API_BASE": "https://fallback.example.test",
+            "OPENETA_LLM_FALLBACK_API_KEY": "fallback-key",
+        },
+        dotenv_path=tmp_path / "missing.env",
+        apikey_path=tmp_path / "missing.md",
+    )
+
+    assert DEFAULT_PLANNER_PROVIDER_TIMEOUT_S == 180.0
+    assert loaded.timeout_s == DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
+    assert loaded.fallback is not None
+    assert loaded.fallback.timeout_s == DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
+    assert OpenAICompatiblePlannerBackendConfig().timeout_s == 180.0
 
 
 def test_provider_config_roundtrips_fallback_endpoint(tmp_path: Path) -> None:

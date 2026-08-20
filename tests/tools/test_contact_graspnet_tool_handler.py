@@ -13,11 +13,12 @@ from agent.tools.handlers import (
     build_contact_graspnet_handler,
     build_sse_contact_graspnet_mcp_predictor,
     build_stdio_contact_graspnet_mcp_predictor,
-    bind_dummy_tool_handlers,
 )
+from agent.tools.grasp_backend_specs import build_retired_contact_graspnet_spec
 from agent.tools.registry import (
     ToolEffect,
     ToolExecutionContext,
+    ToolRegistry,
     build_default_tool_registry,
 )
 
@@ -103,7 +104,7 @@ def _context(
     *,
     session_id: str = "",
 ) -> ToolExecutionContext:
-    spec = build_default_tool_registry().get("contact_graspnet")
+    spec = build_retired_contact_graspnet_spec()
     return ToolExecutionContext(
         name="contact_graspnet",
         spec=spec,
@@ -112,14 +113,14 @@ def _context(
     )
 
 
-def test_contact_graspnet_spec_is_visible_without_dummy_handler() -> None:
-    tools = bind_dummy_tool_handlers(build_default_tool_registry())
-    spec = tools.get("contact_graspnet")
+def test_contact_graspnet_is_retired_and_absent_from_agent_registry() -> None:
+    spec = build_retired_contact_graspnet_spec()
+    public_names = {item.name for item in build_default_tool_registry().list()}
 
-    assert spec.category == "manipulation"
+    assert spec.category == "retired_grasp_backend"
     assert spec.effect == ToolEffect.PLANNING
     assert set(spec.parameters) == {"rgb", "depth", "object_mask", "intrinsics"}
-    assert tools.can_execute("contact_graspnet") is False
+    assert "contact_graspnet" not in public_names
 
 
 def test_contact_graspnet_default_root_uses_repo_tmp_layout() -> None:
@@ -323,7 +324,8 @@ def test_handler_rejects_any_inconsistent_candidate_atomically(
 
 
 def test_runtime_wraps_contact_source_under_outputs(tmp_path: Path) -> None:
-    tools = build_default_tool_registry()
+    tools = ToolRegistry()
+    tools.register(build_retired_contact_graspnet_spec())
     tools.bind_handler(
         "contact_graspnet",
         build_contact_graspnet_handler(

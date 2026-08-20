@@ -51,6 +51,7 @@ from agent.tools.registry import (
     ToolExecutionContext,
     ToolRegistry,
     ToolResult,
+    ToolSpec,
     build_default_tool_registry,
 )
 
@@ -85,6 +86,19 @@ def _observation() -> EnvObservation:
             ],
         },
     )
+
+
+def _observation_with_packet_files(tmp_path: Path) -> EnvObservation:
+    """Return the common fixture with production-valid immutable RGB-D files."""
+
+    rgb_path = tmp_path / "front-rgb.png"
+    depth_path = tmp_path / "front-depth.png"
+    Image.new("RGB", (2, 2), color=(0, 0, 0)).save(rgb_path)
+    Image.new("I;16", (2, 2), color=1000).save(depth_path)
+    observation = _observation()
+    observation.metadata["image_artifacts"][0]["path"] = str(rgb_path)
+    observation.metadata["image_artifacts"][1]["path"] = str(depth_path)
+    return observation
 
 
 def _rgbd_observation(
@@ -144,6 +158,15 @@ def _rgbd_observation(
 def _tools_with_handlers(*names: str) -> ToolRegistry:
     tools = build_default_tool_registry()
     for name in names:
+        if name not in {spec.name for spec in tools.list()}:
+            tools.register(
+                ToolSpec(
+                    name=name,
+                    category="test_fixture",
+                    description="Test-only non-default tool.",
+                    parameters={},
+                )
+            )
         tools.bind_handler(name, lambda context: ToolResult(True, content="ok"))
     return tools
 
@@ -416,7 +439,7 @@ def _record_overwidth_grasp_policy(
     )
 
 
-def test_static_planner_backend_executes_registered_tool_handler() -> None:
+def test_static_planner_backend_executes_registered_tool_handler(tmp_path: Path) -> None:
     tools = build_default_tool_registry()
 
     def sam3_handler(context: ToolExecutionContext) -> ToolResult:
@@ -444,7 +467,7 @@ def test_static_planner_backend_executes_registered_tool_handler() -> None:
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
     runtime.start_session(task="find the cube")
 
-    action = runtime.act(_observation())
+    action = runtime.act(_observation_with_packet_files(tmp_path))
 
     command = action.command
     assert action.action_type == "tool_call"
@@ -462,14 +485,14 @@ def test_tool_registry_emits_realtime_start_and_end_events() -> None:
     tools = build_default_tool_registry()
     events = []
     tools.add_listener(events.append)
-    tools.bind_handler("scene_detector", lambda context: ToolResult(True, content="objects"))
+    tools.bind_handler("observe", lambda context: ToolResult(True, content="objects"))
 
-    result = tools.call("scene_detector", {"image": "front"}, observation=_observation())
+    result = tools.call("observe", {"reason": "event test"}, observation=_observation())
 
     assert result.success is True
     assert [event["phase"] for event in events] == ["start", "end"]
-    assert [event["name"] for event in events] == ["scene_detector", "scene_detector"]
-    assert events[0]["parameters"] == {"image": "front"}
+    assert [event["name"] for event in events] == ["observe", "observe"]
+    assert events[0]["parameters"] == {"reason": "event test"}
     assert events[1]["success"] is True
     assert events[1]["content"] == "objects"
 
@@ -505,7 +528,6 @@ def test_planner_backend_validation_retries_until_valid_payload() -> None:
 
     assert decision.action_type == "response"
     assert decision.action == "talk"
-    assert decision.metadata["validation_attempts"] == 2
     assert [
         item["decision"]["name"] for item in decision.metadata["validation_attempt_history"]
     ] == ["missing_tool", "talk"]
@@ -828,6 +850,56 @@ def test_code_policy_validation_feedback_points_to_simulator_creation_tool() -> 
     assert "tool_call::create_simulator_env" in validation_error
 
 
+def test_grasp_bundle_accepts_valid_backend_preference_and_rejects_unknown() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler("grasp_pose_estimate", lambda _context: ToolResult(True))
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+
+    accepted = ToolCallingPlanner(
+        StaticPlannerBackend(
+            {
+                "kind": "tool_call",
+                "name": "grasp_pose_estimate",
+                "parameters": {
+                    "bundle_id": "grasp:host-issued",
+                    "backend_preference": ["graspgenx", "anygrasp"],
+                },
+            }
+        ),
+        max_validation_retries=0,
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=tools,
+        skills=build_default_skill_registry(),
+    )
+    rejected = ToolCallingPlanner(
+        StaticPlannerBackend(
+            {
+                "kind": "tool_call",
+                "name": "grasp_pose_estimate",
+                "parameters": {
+                    "bundle_id": "grasp:host-issued",
+                    "backend_preference": ["mystery_estimator"],
+                },
+            }
+        ),
+        max_validation_retries=0,
+    ).plan(
+        _observation(),
+        memory=memory,
+        tools=tools,
+        skills=build_default_skill_registry(),
+    )
+
+    assert accepted.action == "grasp_pose_estimate"
+    assert accepted.parameters["backend_preference"] == ["graspgenx", "anygrasp"]
+    assert rejected.action == "talk"
+    assert rejected.parameters["code"] == "planner_validation_failed"
+    assert "mystery_estimator" in rejected.parameters["validation_errors"][0]
+
+
 def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> None:
     planner = ToolCallingPlanner(
         StaticPlannerBackend(
@@ -974,53 +1046,12 @@ def test_anygrasp_validation_feedback_mentions_concrete_mask_path() -> None:
     assert "fx/fy/cx/cy/scale" in errors
 
 
-def test_contact_graspnet_validation_requires_concrete_sam3_artifact() -> None:
-    intrinsics = {"fx": 1.0, "fy": 1.0, "cx": 0.5, "cy": 0.5, "scale": 1000.0}
-    valid_parameters = {
-        "rgb": "tmp/rgb.png",
-        "depth": "tmp/depth.png",
-        "object_mask": {
-            "mask_ref": "tmp/object-mask.png",
-            "source_image": "tmp/rgb.png",
-            "label": "bottle",
-        },
-        "intrinsics": intrinsics,
-    }
-    planner = ToolCallingPlanner(
-        StaticPlannerBackend(
-            [
-                {
-                    "kind": "tool_call",
-                    "name": "contact_graspnet",
-                    "parameters": {
-                        "rgb": "latest_rgb",
-                        "depth": "latest_depth",
-                        "object_mask": "latest_mask",
-                        "intrinsics": {},
-                    },
-                },
-                {
-                    "kind": "tool_call",
-                    "name": "contact_graspnet",
-                    "parameters": valid_parameters,
-                },
-            ]
-        ),
-        max_validation_retries=1,
-    )
-    memory = AgentMemory()
-    memory.start_session(task="predict targeted Panda grasps")
+def test_contact_graspnet_is_not_an_agent_tool_or_facade_backend() -> None:
+    from agent.tools.registry import GRASP_POSE_BACKENDS
 
-    decision = planner.plan(
-        _observation(),
-        memory=memory,
-        tools=_tools_with_handlers("contact_graspnet"),
-        skills=build_default_skill_registry(),
-    )
-
-    assert decision.action == "contact_graspnet"
-    assert decision.parameters == valid_parameters
-    assert decision.metadata["validation_attempts"] == 2
+    public_names = {item.name for item in build_default_tool_registry().list()}
+    assert "contact_graspnet" not in public_names
+    assert "contact_graspnet" not in GRASP_POSE_BACKENDS
 
 
 def test_graspgenx_validation_requires_complete_targeted_inputs() -> None:
@@ -1115,6 +1146,48 @@ def test_anyplace_validation_rejects_placeholders_then_accepts_structured_handof
 
     assert decision.action == "anyplace"
     assert decision.parameters == valid_parameters
+    assert decision.metadata["validation_attempts"] == 2
+
+
+def test_camera_pose_to_world_validation_rejects_mixed_placement_handoff() -> None:
+    planner = ToolCallingPlanner(
+        StaticPlannerBackend(
+            [
+                {
+                    "kind": "tool_call",
+                    "name": "camera_pose_to_world",
+                    "parameters": {
+                        "placement_result_id": "anyplace-result:abc",
+                        "candidate_id": "placement_000",
+                        "camera_extrinsics": {"invented": True},
+                    },
+                },
+                {
+                    "kind": "tool_call",
+                    "name": "camera_pose_to_world",
+                    "parameters": {
+                        "placement_result_id": "anyplace-result:abc",
+                        "candidate_id": "placement_000",
+                    },
+                },
+            ]
+        ),
+        max_validation_retries=1,
+    )
+    memory = AgentMemory()
+    memory.start_session(task="place object")
+
+    decision = planner.plan(
+        _observation(),
+        memory=memory,
+        tools=_tools_with_handlers("camera_pose_to_world"),
+        skills=build_default_skill_registry(),
+    )
+
+    assert decision.parameters == {
+        "placement_result_id": "anyplace-result:abc",
+        "candidate_id": "placement_000",
+    }
     assert decision.metadata["validation_attempts"] == 2
 
 
@@ -1231,17 +1304,14 @@ def test_callable_planner_backend_accepts_json_string_payload() -> None:
         assert "tool_references" in request.tool_context
         return """
         ```json
-        {"kind": "tool_call", "name": "hand_pose_database",
-         "parameters": {"object": "cube", "task": "pick"},
+        {"kind": "tool_call", "name": "get_memory",
+         "parameters": {"namespace": "all"},
          "reasoning": "Need a reference pose."}
         ```
         """
 
     tools = build_default_tool_registry()
-    tools.bind_handler(
-        "hand_pose_database",
-        lambda context: {"content": "pose found", "details": {"object": "cube"}},
-    )
+    tools.bind_handler("get_memory", lambda context: {"content": "memory read"})
     planner = ToolCallingPlanner(
         CallablePlannerBackend(model_wrapper, provider="unit", model="json-string")
     )
@@ -1251,8 +1321,8 @@ def test_callable_planner_backend_accepts_json_string_payload() -> None:
     action = runtime.act(_observation())
 
     assert action.command["status"] == "executed"
-    assert action.command["tool_calls"][0]["name"] == "hand_pose_database"
-    assert action.command["tool_calls"][0]["result"]["content"] == "pose found"
+    assert action.command["tool_calls"][0]["name"] == "get_memory"
+    assert action.command["tool_calls"][0]["result"]["content"] == "memory read"
 
 
 def test_skill_call_returns_guidance_without_hidden_tool_expansion() -> None:
@@ -1280,7 +1350,59 @@ def test_skill_call_returns_guidance_without_hidden_tool_expansion() -> None:
     assert command["safety_checks"] == []
     assert command["skill_call"]["name"] == "pick"
     assert "macro" in command["skill_call"]["result"]["content"]
+    skill_parameters = command["skill_call"]["parameters"]
+    available = set(skill_parameters["available_allowed_tools"])
+    unavailable = set(skill_parameters["unavailable_allowed_tools"])
+    assert available.isdisjoint(unavailable)
+    assert available | unavailable == set(skill_parameters["allowed_tools"])
+    assert "python_exec" in available
+    assert "sam3" in unavailable
+    assert "never retry an unbound tool" in skill_parameters["tool_availability_rule"]
     assert command["metadata"]["execution_rule"]["mode"] == "skill_guidance_only"
+
+
+def test_agent_visible_tools_use_contract_schema_and_keep_host_only_audit() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick cube")
+    tools = _tools_with_handlers(
+        "grasp_pose_estimate",
+        "camera_pose_to_world",
+        "gripper_control",
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=tools,
+        skills=build_default_skill_registry(),
+    )
+
+    available = {
+        item["name"]: item for item in context["agent_context"]["available_tools"]
+    }
+    gripper = available["gripper_control"]
+    assert context["agent_context"]["available_tools_schema_version"] == (
+        "openeta.agent_tool_contract.v1"
+    )
+    assert gripper["parameters"]["required"] == ["position"]
+    assert gripper["parameters"]["properties"]["position"]["enum"] == [
+        0,
+        1,
+        False,
+        True,
+    ]
+    assert "position" not in gripper["parameters"]
+
+    audit = context["tool_contract_projection_audit"]
+    assert audit["authoritative_projection"] == "tool_contract"
+    assert audit["runtime_authority"] == "tool_registry_handler_binding"
+    assert audit["tool_count"] == 3
+    assert audit["matching_tool_count"] == 1
+    assert {item["tool"] for item in audit["mismatches"]} == {
+        "camera_pose_to_world",
+        "grasp_pose_estimate",
+    }
+    assert "tool_contract_projection_audit" not in context["agent_context"]
 
 
 def test_skill_references_are_text_guidance_not_required_tool_macros() -> None:
@@ -1308,11 +1430,40 @@ def test_skill_references_are_text_guidance_not_required_tool_macros() -> None:
     assert "safety_checks" not in pick
     assert "move_to" in pick["allowed_tools"]
     assert selected_pick["allowed_tools"] == pick["allowed_tools"]
+    assert selected_pick["available_allowed_tools"] == []
+    assert set(selected_pick["unavailable_allowed_tools"]) == set(
+        selected_pick["allowed_tools"]
+    )
+    assert pick["available_allowed_tools"] == []
+    assert "availability receipt" in pick["tool_availability_rule"]
     assert {skill["name"] for skill in context["skill_references"]} == {
         skill["name"] for skill in context["selected_skill_guidance"]
     }
     assert context["skill_usage"]["inspection_recommended"][0] == "pick"
     assert context["skill_usage"]["inspection_required"] == []
+
+
+def test_skill_guidance_distinguishes_declared_from_executable_tools() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick cube")
+    tools = build_default_tool_registry()
+    tools.bind_handler("observe", lambda _context: ToolResult(True))
+    tools.bind_handler("move_to", lambda _context: ToolResult(True))
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=tools,
+        skills=build_default_skill_registry(),
+        config=PlannerContextConfig(max_skill_content_chars=8000),
+    )
+
+    pick = next(
+        skill for skill in context["selected_skill_guidance"] if skill["name"] == "pick"
+    )
+    assert pick["available_allowed_tools"] == ["observe", "move_to"]
+    assert "sam3" in pick["unavailable_allowed_tools"]
+    assert "sam3" in pick["allowed_tools"]
 
 
 def test_planner_context_attaches_primary_current_rgb_artifact() -> None:
@@ -1667,19 +1818,28 @@ def test_planner_context_only_exposes_tools_with_executable_handlers() -> None:
         "slam",
     }.isdisjoint(visible)
 
-    tools.bind_handler("slam", lambda context: ToolResult(True, content="map ready"))
+    tools.register(
+        ToolSpec(
+            name="test_map_query",
+            category="test_fixture",
+            description="Test-only dynamically registered map query.",
+        ),
+        lambda context: ToolResult(True, content="map ready"),
+    )
     rebound_context = build_tool_context(
         observation=_observation(),
         memory=memory,
         tools=tools,
         skills=build_default_skill_registry(),
     )
-    assert "slam" in {reference["name"] for reference in rebound_context["tool_references"]}
+    assert "test_map_query" in {
+        reference["name"] for reference in rebound_context["tool_references"]
+    }
 
 
 def test_planner_rejects_registered_tool_without_handler() -> None:
     planner = ToolCallingPlanner(
-        StaticPlannerBackend({"kind": "tool_call", "name": "slam", "parameters": {}}),
+        StaticPlannerBackend({"kind": "tool_call", "name": "observe", "parameters": {}}),
         max_validation_retries=0,
     )
     memory = AgentMemory()
@@ -1695,7 +1855,7 @@ def test_planner_rejects_registered_tool_without_handler() -> None:
     assert decision.action == "talk"
     assert decision.parameters["code"] == "planner_validation_failed"
     assert decision.parameters["validation_errors"] == [
-        "Tool requested by planner is not executable: slam."
+        "Tool requested by planner is not executable: observe."
     ]
 
 
@@ -1943,7 +2103,7 @@ def test_default_tools_are_atomic_and_do_not_include_pick_place_macros() -> None
 
     assert "pick" not in tool_names
     assert "place" not in tool_names
-    assert {"scene_detector", "move_to", "gripper_control"}.issubset(tool_names)
+    assert {"observe", "move_to", "gripper_control"}.issubset(tool_names)
 
 
 def test_agent_memory_tracks_working_facts_artifacts_skill_notes_and_compaction() -> None:
@@ -3071,7 +3231,7 @@ def test_planner_context_preserves_anyplace_candidates_for_post_pick_motion() ->
 
 
 
-def test_asset_reference_canonicalizes_current_scene_image_path() -> None:
+def test_asset_reference_strips_agent_scene_image_path() -> None:
     exact_path = "/tmp/session/hash/agentview.rgb.png"
     observation = _observation()
     observation.metadata["image_artifacts"] = [
@@ -3086,6 +3246,7 @@ def test_asset_reference_canonicalizes_current_scene_image_path() -> None:
                     "parameters": {
                         "environment": "libero",
                         "target_object": "alphabet soup",
+                        "source_packet_id": "obs-0001",
                         "scene_image": "/tmp/session/agentview.rgb.png",
                     },
                 },
@@ -3095,6 +3256,7 @@ def test_asset_reference_canonicalizes_current_scene_image_path() -> None:
                     "parameters": {
                         "environment": "libero",
                         "target_object": "alphabet soup",
+                        "source_packet_id": "obs-0001",
                         "scene_image": exact_path,
                     },
                 },
@@ -3111,10 +3273,13 @@ def test_asset_reference_canonicalizes_current_scene_image_path() -> None:
     )
 
     assert decision.action == "retrieve_asset_reference"
-    assert decision.parameters["scene_image"] == exact_path
-    assert decision.metadata["validation_attempts"] == 1
+    assert decision.parameters == {
+        "environment": "libero",
+        "target_object": "alphabet soup",
+        "source_packet_id": "obs-0001",
+    }
     canonicalizations = decision.metadata["host_parameter_canonicalizations"]
-    assert canonicalizations[0]["reason"] == ("bind_reference_localizer_to_current_camera_rgb")
+    assert canonicalizations[0]["reason"] == "strip_agent_visual_transport_path"
 
 
 def test_asset_reference_accepts_byte_identical_scene_rematerialization(
@@ -3138,6 +3303,7 @@ def test_asset_reference_accepts_byte_identical_scene_rematerialization(
                 "parameters": {
                     "environment": "libero",
                     "target_object": "alphabet soup",
+                    "source_packet_id": "obs-0001",
                     "scene_image": str(previous_path),
                 },
             }
@@ -3152,6 +3318,8 @@ def test_asset_reference_accepts_byte_identical_scene_rematerialization(
     )
 
     assert decision.action == "retrieve_asset_reference"
+    assert "scene_image" not in decision.parameters
+    assert decision.parameters["source_packet_id"] == "obs-0001"
     assert decision.metadata["validation_attempt_history"][0]["validation_errors"] == []
 
 
@@ -3467,6 +3635,50 @@ def test_select_sam3_detection_rejects_role_mismatch() -> None:
     assert runtime.memory.selected_sam3_detection("placement_region") is None
 
 
+def test_wrist_target_selection_exposes_alignment_consumer_handoff() -> None:
+    runtime = OpenEtaAgentRuntime(
+        tools=bind_dummy_tool_handlers(build_default_tool_registry())
+    )
+    runtime.start_session(task="pick the milk")
+    _record_pending_sam3_selection(
+        runtime.memory,
+        result_id="sam3-wrist-target",
+        source_observation={
+            "packet_id": "obs-0011",
+            "frame_id": "wrist",
+            "role": "wrist",
+        },
+        evidence_role="target_object",
+        prompt="milk carton",
+    )
+
+    action = runtime.pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="select_sam3_detection",
+            parameters={
+                "sam3_result_id": "sam3-wrist-target",
+                "detection_id": "detection_000",
+                "evidence_role": "target_object",
+                "reason": "The wrist mask covers the same milk carton.",
+            },
+        ),
+        observation=_observation(),
+        tools=runtime.tools,
+        skills=runtime.skills,
+        memory=runtime.memory,
+    )
+
+    assert action.status.value == "executed"
+    result = action.tool_calls[0].result
+    assert result is not None
+    handoff = result["details"]["outputs"]["downstream_consumer_handoff"]
+    assert handoff["inspect"] == "host_resolved_inputs.wrist_alignment"
+    assert handoff["primary_consumer"] == "compute_wrist_alignment"
+    assert handoff["source_packet_id"] == "obs-0011"
+    assert "materializes its downstream input" in result["content"]
+
+
 def test_rejected_placement_selection_does_not_invalidate_target() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick alphabet soup and place it in the basket")
@@ -3527,89 +3739,11 @@ def test_runtime_can_reject_all_pending_sam3_detections() -> None:
     ]
 
 
-def test_runtime_selection_gate_applies_to_graspgenx_mask_artifact() -> None:
-    tools = bind_dummy_tool_handlers(build_default_tool_registry())
-    tools.bind_handler(
-        "graspgenx",
-        lambda context: ToolResult(
-            True,
-            content="grasp candidates generated",
-            details={"grasp_candidates": [{"id": "graspgenx_000", "score": 0.9}]},
-        ),
-    )
-    runtime = OpenEtaAgentRuntime(tools=tools)
-    runtime.start_session(task="pick alphabet soup with GraspGenX")
-    _record_pending_sam3_selection(runtime.memory)
-    base_parameters = {
-        "rgb": "rgb.png",
-        "depth": "depth.png",
-        "intrinsics": {"fx": 1, "fy": 1, "cx": 1, "cy": 1, "scale": 1},
-        "gripper_name": "franka_panda",
-        "up_direction_camera": [0.0, 0.0, -1.0],
-    }
+def test_direct_grasp_backends_are_not_registered_agent_tools() -> None:
+    names = {tool.name for tool in build_default_tool_registry().list()}
 
-    blocked = runtime.pipeline.compile(
-        PlannerDecision(
-            action_type="tool_call",
-            action="graspgenx",
-            parameters={
-                **base_parameters,
-                "object_mask": {
-                    "mask_ref": "tmp/mask_001.png",
-                    "source_image": "rgb.png",
-                },
-            },
-        ),
-        observation=_observation(),
-        tools=runtime.tools,
-        skills=runtime.skills,
-        memory=runtime.memory,
-    )
-    assert blocked.status.value == "blocked"
-
-    runtime.memory.resolve_sam3_selection(
-        result_id="sam3-run-selection",
-        detection_id="detection_001",
-        selection_source="main_agent_vlm",
-        confidence=0.9,
-    )
-    wrong = runtime.pipeline.compile(
-        PlannerDecision(
-            action_type="tool_call",
-            action="graspgenx",
-            parameters={
-                **base_parameters,
-                "object_mask": {
-                    "mask_ref": "tmp/mask_000.png",
-                    "source_image": "rgb.png",
-                },
-            },
-        ),
-        observation=_observation(),
-        tools=runtime.tools,
-        skills=runtime.skills,
-        memory=runtime.memory,
-    )
-    assert wrong.status.value == "blocked"
-
-    allowed = runtime.pipeline.compile(
-        PlannerDecision(
-            action_type="tool_call",
-            action="graspgenx",
-            parameters={
-                **base_parameters,
-                "object_mask": {
-                    "mask_ref": "tmp/mask_001.png",
-                    "source_image": "rgb.png",
-                },
-            },
-        ),
-        observation=_observation(),
-        tools=runtime.tools,
-        skills=runtime.skills,
-        memory=runtime.memory,
-    )
-    assert allowed.status.value == "executed"
+    assert "grasp_pose_estimate" in names
+    assert {"anygrasp", "graspgenx", "list_graspgenx_grippers"}.isdisjoint(names)
 
 
 def test_memory_requires_semantic_selection_for_single_sam3_detection() -> None:
@@ -3728,6 +3862,19 @@ def test_planner_context_preserves_camera_pose_transform_for_move_to() -> None:
 
 def test_dummy_tool_handlers_return_standard_result_envelopes() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    tools.register(
+        ToolSpec(
+            name="test_planning",
+            category="manipulation",
+            description="Test-only planning result fixture.",
+            effect="planning",
+        ),
+        lambda context: ToolResult(
+            True,
+            content="plan ready",
+            details={"grasp_candidates": [{"id": "grasp-1"}]},
+        ),
+    )
     packet_observation = _rgbd_observation(
         task="find the cube",
         views=[
@@ -3745,13 +3892,8 @@ def test_dummy_tool_handlers_return_standard_result_envelopes() -> None:
         observation=packet_observation,
     )
     planning = tools.call(
-        "anygrasp",
-        {
-            "rgb": "front-rgb.png",
-            "depth": "front-depth.png",
-            "target_mask": "cube-mask.png",
-            "intrinsics": {"fx": 1.0, "fy": 1.0, "cx": 0.0, "cy": 0.0, "scale": 1000.0},
-        },
+        "test_planning",
+        {},
         observation=_observation(),
     )
     safety = tools.call(
@@ -3814,6 +3956,144 @@ def test_registry_promotes_legacy_tool_artifacts_into_standard_envelope() -> Non
     assert result.details["schema_version"] == TOOL_RESULT_SCHEMA_VERSION
     assert result.details["outputs"]["detections"][0]["mask_ref"] == "cube-mask.png"
     assert result.details["artifacts"][0]["path"] == "cube-mask.png"
+
+
+def test_registry_flattens_legacy_explicit_outputs_instead_of_double_nesting() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "estimate_depth_prior",
+        lambda _context: ToolResult(
+            True,
+            content="prior ready",
+            details={
+                "tool": "estimate_depth_prior",
+                "backend": "depth_prior_mcp",
+                "outputs": {
+                    "source_packet_id": "obs-0000",
+                    "prior_depth": "prior.npy",
+                },
+                "artifacts": [{"type": "depth_prior", "path": "prior.npy"}],
+            },
+        ),
+    )
+
+    result = tools.call(
+        "estimate_depth_prior",
+        {"source_packet_id": "obs-0000", "camera_frame_id": "agentview"},
+    )
+
+    assert result.details["outputs"]["source_packet_id"] == "obs-0000"
+    assert result.details["outputs"]["prior_depth"] == "prior.npy"
+    assert result.details["outputs"]["backend"] == "depth_prior_mcp"
+    assert "outputs" not in result.details["outputs"]
+    assert result.details["artifacts"][0]["path"] == "prior.npy"
+
+
+def test_registry_preserves_legacy_domain_schema_version_as_output() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "compile_grasp_seed",
+        lambda _context: ToolResult(
+            True,
+            details={
+                "schema_version": "openeta.compiled_grasp_seed.v1",
+                "compiled_grasp_id": "compiled-1",
+                "candidate_id": "candidate-1",
+            },
+        ),
+    )
+
+    result = tools.call("compile_grasp_seed", {})
+
+    assert result.details["schema_version"] == TOOL_RESULT_SCHEMA_VERSION
+    assert result.details["outputs"]["schema_version"] == (
+        "openeta.compiled_grasp_seed.v1"
+    )
+    assert result.details["outputs"]["compiled_grasp_id"] == "compiled-1"
+
+
+def test_registry_promotes_legacy_diagnostics_and_recovery_contract() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "grasp_pose_estimate",
+        lambda context: ToolResult(
+            False,
+            content="all candidates collide",
+            details={
+                "reason": "all_grasps_colliding",
+                "diagnostics": [
+                    {"code": "grasp_pose_estimate_failed", "retryable": False}
+                ],
+                "recovery_options": [
+                    {
+                        "action": "acquire_materially_different_view_or_backend",
+                        "reason": "the unchanged request cannot produce a new result",
+                    }
+                ],
+            },
+        ),
+    )
+
+    result = tools.call("grasp_pose_estimate", {"bundle_id": "grasp:test"})
+
+    assert result.details["diagnostics"][0]["code"] == "grasp_pose_estimate_failed"
+    assert result.details["recovery_options"][0]["action"] == (
+        "acquire_materially_different_view_or_backend"
+    )
+    assert result.details["outputs"]["reason"] == "all_grasps_colliding"
+
+
+def test_registry_projects_actionable_recovery_from_standard_failure() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "sam3",
+        lambda context: ToolResult(
+            False,
+            content="missing image",
+            details={
+                "schema_version": TOOL_RESULT_SCHEMA_VERSION,
+                "diagnostics": [{"code": "missing_image"}],
+                "outputs": {"reason": "missing_image"},
+            },
+        ),
+    )
+
+    result = tools.call("sam3", {"source_packet_id": "obs-0001", "prompt": "cube"})
+
+    assert result.details["recovery_options"] == [
+        {
+            "action": "correct_parameters_from_diagnostic_and_tool_schema",
+            "reason": (
+                "Repair sam3 inputs using the reported code and current host-resolved "
+                "values; do not invent missing geometry or provenance."
+            ),
+        }
+    ]
+
+
+def test_registry_synthesizes_diagnostic_for_opaque_handler_failure() -> None:
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "sam3",
+        lambda context: ToolResult(
+            False,
+            content="backend returned no usable response",
+            details={"reason": "invalid_mcp_response"},
+        ),
+    )
+
+    result = tools.call("sam3", {"source_packet_id": "obs-0001", "prompt": "cube"})
+
+    assert result.details["diagnostics"] == [
+        {
+            "code": "invalid_mcp_response",
+            "message": "backend returned no usable response",
+            "reason": "invalid_mcp_response",
+        }
+    ]
+    assert result.details["recovery_options"][0]["action"] == (
+        "stop_repeating_and_report_backend_contract_mismatch"
+    )
 
 
 def test_pipeline_allows_planner_requested_safe_check_tool_call() -> None:
@@ -3909,9 +4189,28 @@ def test_pipeline_blocks_tool_call_when_pre_safety_checker_fails() -> None:
     assert command["safety_checks"][0]["result"]["details"]["outputs"]["feasible"] is False
     assert command["tool_calls"][0]["name"] == "move_to"
     assert command["tool_calls"][0]["status"] == "skipped"
+    assert "IK target is infeasible" in command["tool_calls"][0]["reason"]
+    repair = command["metadata"]["repair_bundle"]
+    assert repair["schema_version"] == "openeta.gate_repair.v1"
+    assert repair["code"] == "ik_preview_not_feasible"
+    assert repair["checker_evidence"][0]["name"] == "ik_preview_check"
+    assert any(call["tool"] == "observe" for call in repair["allowed_next_calls"])
+    shadow = repair["contract_shadow_validation"]
+    assert shadow["evaluated"] is True
+    assert shadow["enforcing"] is False
+    assert shadow["authoritative_gate"] == "legacy_runtime"
+    assert shadow["conformant"] is True
+    assert {
+        item["check_id"] for item in shadow["matched_gate_bindings"]
+    } == {
+        "runtime.ik_execution_authorization",
+        "runtime.pre_safety_checker",
+    }
 
 
-def test_pipeline_runs_post_failure_checker_after_configured_tool_call() -> None:
+def test_pipeline_runs_post_failure_checker_after_configured_tool_call(
+    tmp_path: Path,
+) -> None:
     tools = build_default_tool_registry()
     tools.bind_handler(
         "sam3",
@@ -3936,7 +4235,7 @@ def test_pipeline_runs_post_failure_checker_after_configured_tool_call() -> None
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools, pipeline=pipeline)
     runtime.start_session(task="segment cube")
 
-    action = runtime.act(_observation())
+    action = runtime.act(_observation_with_packet_files(tmp_path))
 
     command = action.command
     post_checks = command["metadata"]["checker_results"]["post_failure_checks"]
@@ -3957,7 +4256,9 @@ def test_pipeline_runs_post_failure_checker_after_configured_tool_call() -> None
     assert recovery_summary["payload"]["command"]["request"]["name"] == "sam3"
 
 
-def test_pipeline_does_not_run_post_failure_checker_after_success() -> None:
+def test_pipeline_does_not_run_post_failure_checker_after_success(
+    tmp_path: Path,
+) -> None:
     tools = build_default_tool_registry()
     tools.bind_handler("sam3", lambda context: ToolResult(True, content="mask generated"))
     pipeline = ActionPipeline(
@@ -3975,7 +4276,7 @@ def test_pipeline_does_not_run_post_failure_checker_after_success() -> None:
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools, pipeline=pipeline)
     runtime.start_session(task="segment cube")
 
-    action = runtime.act(_observation())
+    action = runtime.act(_observation_with_packet_files(tmp_path))
 
     assert action.command["status"] == "executed"
     assert action.command["metadata"]["checker_results"]["post_failure_checks"] == []
@@ -3985,7 +4286,7 @@ def test_pipeline_does_not_run_post_failure_checker_after_success() -> None:
 def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "observe",
         lambda context: ToolResult(
             True,
             content="objects detected",
@@ -4001,13 +4302,13 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
         ),
     )
     tools.bind_handler(
-        "anygrasp",
+        "get_memory",
         lambda context: ToolResult(
             True,
             content="grasp candidates generated",
             details={
                 "grasp_candidates": [{"id": "grasp-1"}],
-                "target_mask": context.parameters["target_mask"],
+                "namespace": context.parameters["namespace"],
             },
         ),
     )
@@ -4016,8 +4317,8 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
             [
                 {
                     "kind": "tool_call",
-                    "name": "scene_detector",
-                    "parameters": {"image": "front"},
+                    "name": "observe",
+                    "parameters": {"reason": "inspect scene"},
                     "reasoning": "List objects before segmentation.",
                 },
                 {
@@ -4031,20 +4332,9 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
                 },
                 {
                     "kind": "tool_call",
-                    "name": "anygrasp",
-                    "parameters": {
-                        "rgb": "front-rgb.png",
-                        "depth": "front-depth.png",
-                        "target_mask": "cube-mask.png",
-                        "intrinsics": {
-                            "fx": 1.0,
-                            "fy": 1.0,
-                            "cx": 0.0,
-                            "cy": 0.0,
-                            "scale": 1000.0,
-                        },
-                    },
-                    "reasoning": "Generate grasp candidates from RGBD inputs.",
+                    "name": "get_memory",
+                    "parameters": {"namespace": "all"},
+                    "reasoning": "Inspect accumulated working memory.",
                 },
             ]
         )
@@ -4060,15 +4350,15 @@ def test_episode_runner_executes_three_closed_loop_tool_turns() -> None:
     assert len(result.steps) == 3
     assert [step.turn_index for step in result.steps] == [1, 2, 3]
     assert [step.action.command["request"]["name"] for step in result.steps] == [
-        "scene_detector",
+        "observe",
         "sam3",
-        "anygrasp",
+        "get_memory",
     ]
     assert [step.observation.metadata["step_idx"] for step in result.steps] == [0, 1, 2]
     assert result.steps[0].action.command["tool_calls"][0]["result"]["content"] == (
         "objects detected"
     )
-    assert result.steps[2].step_result.info["previous_action"]["request_name"] == "anygrasp"
+    assert result.steps[2].step_result.info["previous_action"]["request_name"] == "get_memory"
     assert runtime.memory.session_id == result.session_id
     event_types = [event.event_type for event in runtime.memory.events]
     assert event_types.count("episode_step") == 3
@@ -4082,8 +4372,8 @@ def test_episode_runner_stops_when_agent_reports_task_complete() -> None:
             [
                 {
                     "kind": "tool_call",
-                    "name": "scene_detector",
-                    "parameters": {"image": "front"},
+                    "name": "observe",
+                    "parameters": {"reason": "locate cube"},
                 },
                 {
                     "kind": "response",
@@ -4104,7 +4394,7 @@ def test_episode_runner_stops_when_agent_reports_task_complete() -> None:
     )
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "observe",
         lambda context: ToolResult(True, content="objects detected"),
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
@@ -4164,15 +4454,15 @@ def test_episode_runner_pauses_when_agent_asks_human() -> None:
                 },
                 {
                     "kind": "tool_call",
-                    "name": "scene_detector",
-                    "parameters": {"image": "front"},
+                    "name": "observe",
+                    "parameters": {"reason": "continue after answer"},
                 },
             ]
         )
     )
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "observe",
         lambda context: ToolResult(True, content="objects detected"),
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
@@ -4192,7 +4482,7 @@ def test_episode_runner_pauses_when_agent_asks_human() -> None:
     continued = runner.continue_run(max_turns=1)
 
     assert len(continued.steps) == 1
-    assert continued.steps[0].action.command["request"]["name"] == "scene_detector"
+    assert continued.steps[0].action.command["request"]["name"] == "observe"
 
 
 def test_episode_runner_excludes_human_wait_from_timeout_budget() -> None:
@@ -4247,14 +4537,14 @@ def test_episode_runner_truncates_at_safety_turn_limit() -> None:
         StaticPlannerBackend(
             {
                 "kind": "tool_call",
-                "name": "scene_detector",
-                "parameters": {"image": "front"},
+                "name": "observe",
+                "parameters": {"reason": "inspect scene"},
             }
         )
     )
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "observe",
         lambda context: ToolResult(True, content="objects detected"),
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
@@ -4608,6 +4898,95 @@ def test_openai_compatible_backend_labels_reviewer_vision_evidence(tmp_path: Pat
     assert [item["role"] for item in result.details["vision_attachments"]] == [
         "current_scene",
         "target_source_before_grasp",
+    ]
+
+
+def test_main_agent_prompt_hides_visual_paths_but_still_attaches_images(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+
+    current = tmp_path / "current-wrist.png"
+    Image.new("RGB", (8, 8), "white").save(current)
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": (
+                            '{"kind":"response","name":"talk",'
+                            '"parameters":{"message":"observed"}}'
+                        )
+                    },
+                }
+            ],
+            "usage": {"total_tokens": 10},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="vision-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+        ),
+        transport=fake_transport,
+    )
+    result = backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "vision_image_paths": [str(current)],
+                "vision_evidence": [
+                    {
+                        "role": "current_scene",
+                        "frame_id": "wrist",
+                        "packet_id": "obs-0009",
+                        "path": str(current),
+                    }
+                ],
+                "current_observation": {
+                    "visual_evidence": [
+                        {
+                            "frame_id": "wrist",
+                            "packet_id": "obs-0009",
+                            "path": str(current),
+                        }
+                    ]
+                },
+                "decision_state": {
+                    "current_observation_packet": {
+                        "packet_ids": ["obs-0009"],
+                        "camera_artifacts": [
+                            {
+                                "frame_id": "wrist",
+                                "packet_id": "obs-0009",
+                                "path": str(current),
+                            }
+                        ],
+                    }
+                },
+            },
+            system_prompt="return json",
+        )
+    )
+
+    user_message = next(
+        item
+        for item in reversed(captured["body"]["messages"])
+        if item["role"] == "user"
+    )
+    assert isinstance(user_message["content"], list)
+    prompt_text = user_message["content"][-1]["text"]
+    assert str(current) not in prompt_text
+    assert "vision_image_paths" not in prompt_text
+    assert "obs-0009" in prompt_text
+    assert [item["path"] for item in result.details["vision_attachments"]] == [
+        str(current)
     ]
 
 

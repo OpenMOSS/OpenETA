@@ -162,11 +162,23 @@ def test_action_reviewer_prioritizes_current_observation_rgb() -> None:
         "current-agentview.png",
         "synthetic-overlay.png",
     ]
-    assert requests[0].tool_context["tool_contract"] == {
-        "description": tools.get("move_to").description,
-        "effect": "world_mutating",
-        "parameters": tools.get("move_to").parameters,
+    reviewer_contract = requests[0].tool_context["tool_contract"]
+    assert reviewer_contract["name"] == "move_to"
+    assert reviewer_contract["description"] == tools.get("move_to").description
+    assert reviewer_contract["effect"] == "world_mutating"
+    assert reviewer_contract["parameters"]["required"] == ["ik_receipt_id"]
+    assert set(reviewer_contract["parameters"]["properties"]) == {
+        "enable_collision_check",
+        "ik_receipt_id",
+        "num_steps",
+        "ori_tolerance",
+        "tolerance",
     }
+    assert reviewer_contract["host_resolution"]["mode"] == "execution_receipt_lookup"
+    assert "runtime.ik_execution_authorization" in reviewer_contract["gate_check_ids"]
+    assert requests[0].tool_context["parameter_authority"] == (
+        "host_resolved_execution_input"
+    )
 
 
 

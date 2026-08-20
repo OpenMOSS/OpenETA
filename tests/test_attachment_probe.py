@@ -112,12 +112,28 @@ def test_prepare_linear_probe_freezes_exact_five_centimetres() -> None:
     )
 
     assert result["motion_type"] == "linear"
-    assert result["frozen_action"]["name"] == "move_to"
-    endpoint = result["frozen_action"]["parameters"]["target_pose"]["xyz"]
+    assert result["frozen_motion"]["name"] == "move_to"
+    endpoint = result["frozen_motion"]["parameters"]["target_pose"]["xyz"]
     assert endpoint == pytest.approx([0.15, 0.2, 0.3])
     assert result["distance_m"] == ARTICULATED_ATTACHMENT_PROBE_DISTANCE_M
     assert result["pre_probe_image_paths"] == ["before-agent.png", "before-wrist.png"]
-    assert result["frozen_action"]["parameters"]["enable_collision_check"] is True
+    assert result["frozen_motion"]["parameters"]["enable_collision_check"] is True
+    assert result["ik_preview_requests"] == [
+        {
+            "tool": "ik_preview_check",
+            "parameters": {
+                "target_pose": result["frozen_motion"]["parameters"]["target_pose"],
+                "position_tolerance_m": 0.01,
+                "orientation_tolerance_rad": 0.10,
+                "check_endpoint_collision": True,
+            },
+        }
+    ]
+    assert result["execution_handoff"]["tool"] == "move_to"
+    assert set(result["execution_handoff"]["parameters"]) == {
+        "ik_receipt_id",
+        "enable_collision_check",
+    }
     assert result["probe_id"] == f"probe:{result['path_sha256']}"
 
 
@@ -133,7 +149,7 @@ def test_prepare_linear_probe_preserves_quaternion_orientation() -> None:
         observation=observation,
     )
 
-    assert result["frozen_action"]["parameters"]["target_pose"]["quat_xyzw"] == [
+    assert result["frozen_motion"]["parameters"]["target_pose"]["quat_xyzw"] == [
         0.0,
         0.0,
         0.0,
@@ -163,11 +179,17 @@ def test_prepare_arc_probe_preserves_waypoints_and_bounds() -> None:
         }
     )
 
-    assert result["frozen_action"]["name"] == "follow_eef_trajectory"
-    trajectory = result["frozen_action"]["parameters"]["trajectory"]
+    assert result["frozen_motion"]["name"] == "follow_eef_trajectory"
+    trajectory = result["frozen_motion"]["parameters"]["trajectory"]
     assert len(trajectory) == 4
     assert trajectory[-1]["xyz"] == pytest.approx([0.15, 0.2, 0.3])
     assert all(pose["probe_path_sha256"] == result["path_sha256"] for pose in trajectory)
+    assert [
+        request["parameters"]["target_pose"]
+        for request in result["ik_preview_requests"]
+    ] == trajectory
+    assert result["execution_handoff"]["tool"] == "follow_eef_trajectory"
+    assert len(result["execution_handoff"]["parameters"]["ik_receipt_ids"]) == 4
 
 
 @pytest.mark.parametrize(
@@ -221,7 +243,7 @@ def test_prepare_probe_accepts_same_lineage_after_gripper_close_epoch_change() -
     )
 
     assert result["compiled_grasp_id"] == "compiled-1"
-    assert result["frozen_action"]["name"] == "move_to"
+    assert result["frozen_motion"]["name"] == "move_to"
 
 
 def test_prepare_probe_requires_scene_and_wrist_rgb() -> None:

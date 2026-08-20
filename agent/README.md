@@ -151,17 +151,25 @@ Current runtime pieces:
   connection failure, or timeout switches the next attempt to the other endpoint;
   consecutive switch-eligible failures alternate primary and fallback.
 - SAM3 multi-candidate selection is explicit: runtime memory persists a
-  `selection_obligation`, the main VLM calls `select_sam3_detection`, and the
+  `pending_target_selection` evidence, the main VLM calls `select_sam3_detection`, and the
   pipeline blocks targeted `grasp_pose_estimate` or world-mutating tools until
-  the selected mask is recorded.
+  the selected mask is recorded. Selections are retained by semantic
+  `evidence_role`: `target_object` remains the backward-compatible default,
+  while receptacles use `placement_region`, so selecting a basket cannot replace
+  the pickup target or its RGB-D provenance.
 - Grasp estimation is exposed as one normalized façade over AnyGrasp,
   Contact-GraspNet, and GraspGenX. Compatible backend failures fall through in
   host-owned order; backend-local scores are never compared across estimators.
-  Multi-candidate handling is greedy and stateful: memory
-  exposes rank 0 as `grasp_candidate_policy.active_candidate`; a later grasp
-  inference replaces the active policy, candidate-linked safety or motion
-  rejection advances to the next score-ranked pose, and successful `move_to`
-  accepts the queue and releases its downstream gate.
+  Multi-candidate outputs are immutable evidence. The Agent selects a proposal
+  using current views, calibration, geometry, and recorded outcomes; memory does
+  not activate rank 0, advance a queue, or choose a fallback.
+- `python_exec` is a general session-local analysis tool, not a simulator
+  control path. Restricted code can read the current session's rollout, working
+  memory, and artifact files, and can write derived outputs only to its sandbox.
+  Full grasp and placement candidate lists are stored as immutable JSON
+  artifacts; planner memory keeps a bounded preview plus an explicit query
+  reference. Simulator side effects remain behind stable AgentTools, so
+  `python_exec` is classified as `planning` and does not request a scene refresh.
 - Public web access is exposed through host-owned `web_search` and `web_fetch`
   tools, never through `python_exec`. `web_search` reuses the configured planner
   provider's `/v1/responses` hosted `web_search` capability, tries the configured
@@ -187,6 +195,11 @@ Current runtime pieces:
   env/checker feedback can force `terminated`/`truncated`. Each turn runs in a
   daemon worker behind the remaining episode deadline; timeout abandons the
   turn, prevents late step commit, and requests environment cleanup.
+  Evaluation manifests may additionally grant a bounded
+  `recovery_turns_per_branch` allowance, capped by `max_recovery_turns`. The
+  runner extends the effective turn limit only after a distinct post-close
+  `compile_grasp_seed` switches to a new grasp evidence branch; repeated
+  perception or duplicate evidence cannot extend the episode.
 - `agent.runtime.parallel.ParallelEpisodeHarness`: bounded thread-pool harness
   for independent simulator episodes. It defaults to 10 concurrent workers,
   preserves a serial closed loop inside each worker, isolates failures, keeps
@@ -253,19 +266,20 @@ gitignored `.openeta_memory/` directory.
 
 ## Object Memory Bank
 
-`retrieve_asset_reference` uses a host-owned Object Memory Bank service. Set
-both variables together in the process environment or a local ignored `.env`:
+`retrieve_asset_reference` uses the Object Memory Bank at
+`http://10.11.18.197:8080` by default. No configuration is needed for this
+anonymous internal endpoint. To override it, set the URL and API key together
+in the process environment or a local ignored `.env`:
 
 ```dotenv
 OPENETA_OBJECT_MEMORY_BANK_URL=http://127.0.0.1:8080
 OPENETA_OBJECT_MEMORY_BANK_API_KEY=<service-api-key>
 ```
 
-The URL is the service base URL without `/search` or `/bundle`. Download and
-deploy the service from
-<https://github.com/Huaizz-shawen/object-memory-bank>. If the tool is needed
-while the service is unconfigured, it fails closed and returns a visible setup
-warning instead of attempting an invalid placeholder URL.
+The URL is the service base URL without `/search` or `/bundle`. API keys stay in
+the environment and are never stored in `.mcp.json`. Download and deploy the
+service from <https://github.com/Huaizz-shawen/object-memory-bank>. Custom
+endpoints fail closed when either required setting is missing.
 
 ## Provider Smoke Test
 
@@ -298,6 +312,20 @@ or unsupported guidance answer. Reports use `openeta.subagent_eval.v1`, include
 provider usage when available, and contain only redacted provider configuration.
 Skill Author receives a 4096-token output budget in both the TUI and parallel
 harness; bounded decision reviewers retain the 512-token default.
+
+Visual state grounding and counterfactual sensitivity can be evaluated separately
+from the production task-policy context:
+
+```bash
+uv run --extra dev openeta-visual-state-eval \
+  --manifest tests/fixtures/visual_state/scene_counterfactuals.json \
+  --list-cases
+```
+
+Remove `--list-cases` to call the configured VLM provider. Live mode sends the
+manifest images and minimal probe context to that provider, so the inputs require
+explicit approval for external transmission. See
+`docs/agent-context-memory-refactor.md` for the context and memory boundaries.
 
 ## Local Provider GUI
 

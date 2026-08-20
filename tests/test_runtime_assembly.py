@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import agent.cli.batch_eval as batch_eval
 import agent.cli.openeta_cli as cli_module
-from agent.backends.planner import StaticPlannerBackend
+import agent.runtime.runtime_assembly as runtime_assembly
+import pytest
+from agent.backends.planner import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+    StaticPlannerBackend,
+)
 from agent.backends.provider_config import PlannerProviderConfig
 from agent.cli.batch_eval import build_mcp_episode_worker_factory
 from agent.cli.openeta_cli import OpenEtaCli
 from agent.runtime.parallel import ParallelEpisodeSpec
 from agent.runtime.runtime_assembly import (
     ENVIRONMENT_PLACEHOLDER_TOOLS,
+    MAIN_PLANNER_MAX_OUTPUT_TOKENS,
     REMOTE_PLACEHOLDER_TOOLS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
@@ -28,6 +34,28 @@ class FakeSimulatorTransport:
     def call_tool(self, name, arguments, *, timeout_s=None):
         del name, arguments, timeout_s
         return {"success": True}
+
+
+def _matching_anygrasp_capabilities(**_kwargs):
+    return {
+        "schema_version": "openeta.anygrasp_capabilities.v1",
+        "backend": "anygrasp_mcp",
+        "model": "anygrasp_sdk",
+        "max_gripper_width_m": 0.08,
+        "gripper_height_m": 0.03,
+        "depth_truncation_m": 1.0,
+        "max_candidates": 20,
+        "geometry_change_requires_redeployment": True,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _stub_anygrasp_capability_discovery(monkeypatch):
+    monkeypatch.setattr(
+        runtime_assembly,
+        "query_anygrasp_capabilities",
+        _matching_anygrasp_capabilities,
+    )
 
 
 def _backend_factory(**_kwargs):
@@ -57,6 +85,7 @@ def _contract_snapshot(assembly):
             spec.name for spec in tools.list() if tools.can_execute(spec.name)
         ),
         "max_validation_retries": assembly.runtime.planner.max_validation_retries,
+        "visual_history": assembly.runtime.visual_history.descriptor(),
     }
 
 
@@ -131,6 +160,11 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
     assert batch.runtime.memory.session_id == batch_workspace.session_id
     assert tui.runtime.memory.store.session_path("tui") == tui_workspace.root / "trace.jsonl"
     assert batch.runtime.memory.store.session_path("batch") == batch_workspace.root / "trace.jsonl"
+    assert tui.runtime.visual_history is not batch.runtime.visual_history
+    assert tui.runtime.visual_history.config == batch.runtime.visual_history.config
+    assert tui.runtime.planner.context_config.visual_history == (
+        batch.runtime.planner.context_config.visual_history
+    )
 
 
 def test_shared_runtime_fails_closed_without_remote_backends(
@@ -165,6 +199,56 @@ def test_shared_runtime_fails_closed_without_remote_backends(
 
     assert assembly.runtime.tools.can_execute("prepare_attachment_probe") is True
     assert assembly.runtime.tools.can_execute("assess_attachment_probe") is True
+
+
+def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        "agent.runtime.runtime_assembly.load_configured_object_memory_bank",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "agent.runtime.runtime_assembly.load_configured_asset_reference_catalog",
+        lambda: None,
+    )
+    calls = []
+
+    def backend_factory(**kwargs):
+        calls.append(dict(kwargs))
+        return StaticPlannerBackend(
+            {"kind": "response", "name": "talk", "parameters": {"message": "ok"}}
+        )
+
+    assembly = assemble_runtime(
+        RuntimeAssemblyConfig(
+            workspace=SessionWorkspace.create("visual-history", root=tmp_path),
+            provider=PlannerProviderConfig(
+                model="fixture",
+                api_base="http://provider.example/v1",
+                api_key="test",
+            ),
+            backend_factory=backend_factory,
+            supervision_policy=SupervisionPolicy.for_profile("standard"),
+            web_access_config=WebAccessConfig(),
+        )
+    )
+
+    assert {
+        "max_tokens": MAIN_PLANNER_MAX_OUTPUT_TOKENS,
+        "max_vision_images": 9,
+    } in calls
+    assert {
+        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_vision_images": 2,
+    } in calls
+    assert {
+        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_vision_images": 4,
+    } in calls
+    assert {"max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS} in calls
+    assert assembly.runtime.visual_history.backend is not assembly.runtime.planner.backend
 
 
 def test_shared_endpoint_resolution_owns_names_aliases_and_overrides() -> None:
@@ -211,6 +295,43 @@ def test_contact_graspnet_is_disabled_from_executable_runtime(tmp_path) -> None:
 
     assert assembly.runtime.tools.can_execute("contact_graspnet") is False
     assert assembly.runtime.tools.can_execute("grasp_pose_estimate") is True
+
+
+def test_shared_runtime_disables_anygrasp_when_deployment_width_mismatches(
+    tmp_path,
+) -> None:
+    workspace = SessionWorkspace.create("anygrasp-mismatch", root=tmp_path)
+    assembly = assemble_runtime(
+        RuntimeAssemblyConfig(
+            workspace=workspace,
+            provider=PlannerProviderConfig(
+                model="fixture",
+                api_base="http://provider.example/v1",
+                api_key="test",
+            ),
+            backend_factory=_backend_factory,
+            supervision_policy=SupervisionPolicy.for_profile("standard"),
+            endpoints=RuntimeMcpEndpoints(
+                anygrasp_url="http://anygrasp.example/sse",
+            ),
+            anygrasp_capability_query=lambda **_kwargs: {
+                **_matching_anygrasp_capabilities(),
+                "max_gripper_width_m": 0.1,
+            },
+            web_access_config=WebAccessConfig(),
+        )
+    )
+
+    report = assembly.perception_capabilities["backends"]["anygrasp"]
+    assert report["reason"] == "gripper_width_mismatch"
+    assert report["available"] is False
+    assert assembly.runtime.tools.can_execute("grasp_pose_estimate") is False
+
+    assembly.runtime.start_session(task="pick the milk")
+    context = assembly.runtime.memory.planning_context()
+    assert context["working_memory"]["facts"]["perception_backend_capabilities"]["value"][
+        "backends"
+    ]["anygrasp"]["reason"] == "gripper_width_mismatch"
 
 
 def test_real_tui_and_batch_entries_have_runtime_parity(monkeypatch, tmp_path) -> None:

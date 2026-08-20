@@ -1,4 +1,4 @@
-"""Pure-CPU contract tests for the distributed BEHAVIOR adapter."""
+"""CPU-only contracts for the optional distributed BEHAVIOR batched-env adapter."""
 
 from __future__ import annotations
 
@@ -8,8 +8,15 @@ from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
-import torch
-from omegaconf import OmegaConf
+
+torch = pytest.importorskip(
+    "torch",
+    reason="BEHAVIOR batched-env contract tests require the optional torch runtime",
+)
+OmegaConf = pytest.importorskip(
+    "omegaconf",
+    reason="BEHAVIOR batched-env contract tests require the optional OmegaConf runtime",
+).OmegaConf
 
 from sim.env_config import build_behavior_cfg
 from sim.envs.behavior.behavior_env import (

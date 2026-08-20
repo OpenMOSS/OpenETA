@@ -80,9 +80,9 @@ def test_reference_point_localizer_uses_clean_four_image_context(tmp_path: Path)
     ]
     assert [entry["role"] for entry in request.tool_context["image_order"]] == [
         "scene",
-        "reference_front",
-        "reference_side",
-        "reference_top",
+        "reference_view_1",
+        "reference_view_2",
+        "reference_view_3",
     ]
     verification = requests[1]
     assert verification.tool_context["role"] == "reference_point_verifier"
@@ -107,7 +107,7 @@ def test_reference_point_localizer_requires_exact_instance_attributes() -> None:
     assert "blue upper label and orange lower label" in (
         REFERENCE_POINT_LOCALIZATION_SYSTEM_PROMPT
     )
-    assert "exact same asset instance" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
+    assert "exact same asset" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
     assert "blue-and-orange" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
     assert "combining the color" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
     assert "Physical package geometry is a hard gate" in (
@@ -122,6 +122,10 @@ def test_reference_point_localizer_requires_exact_instance_attributes() -> None:
     )
     assert "grasp_geometry_family" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
     assert "never relabel an object" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
+    assert "ordinal positions do not imply front, side, or top" in (
+        REFERENCE_POINT_LOCALIZATION_SYSTEM_PROMPT
+    )
+    assert "ordinal positions do not imply" in REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT
 
 
 def test_reference_point_localizer_excludes_rejected_candidate_and_retries(
@@ -176,13 +180,84 @@ def test_reference_point_localizer_excludes_rejected_candidate_and_retries(
     proposals = [
         request for request in requests if request.tool_context["role"] == "reference_point_localizer"
     ]
-    rejected = proposals[1].tool_context["excluded_candidates"][0]
+    rejected = proposals[1].tool_context["examined_candidates"][0]
     assert rejected["x"] == 20.0
     assert rejected["y"] == 30.0
     assert rejected["bbox_xyxy"] == [15.0, 24.0, 25.0, 38.0]
     assert "red and green" in rejected["reason"]
     assert ".excluded-" in rejected["audit_image"]
     assert proposals[1].tool_context["vision_image_paths"][0] == str(scene)
+
+
+def test_reference_point_localizer_excludes_abstention_and_explores_elsewhere(
+    tmp_path: Path,
+) -> None:
+    scene, references = _images(tmp_path)
+    proposals = 0
+    requests = []
+
+    def decide(request):
+        nonlocal proposals
+        requests.append(request)
+        if request.tool_context["role"] == "reference_point_verifier":
+            if request.tool_context["candidate_point"]["x"] == 20:
+                return {
+                    "decision": "abstain",
+                    "confidence": 0.1,
+                    "reference_geometry": "cylindrical can",
+                    "candidate_geometry": "blurred",
+                    "grasp_geometry_family": "unknown",
+                    "geometry_match": False,
+                    "matching_attributes": ["blue upper label", "orange lower label"],
+                    "conflicting_attributes": [],
+                    "reason": "too blurred to confirm",
+                }
+            return {
+                "decision": "match",
+                "confidence": 0.9,
+                "reference_geometry": "cylindrical can",
+                "candidate_geometry": "cylindrical can",
+                "grasp_geometry_family": "upright_can",
+                "geometry_match": True,
+                "matching_attributes": ["blue upper label", "orange lower label"],
+                "conflicting_attributes": [],
+                "reason": "geometry and label layout match",
+            }
+        proposals += 1
+        if proposals == 1:
+            return {
+                "decision": "locate",
+                "point": {"x": 20, "y": 20},
+                "bbox_xyxy": [15, 14, 26, 28],
+                "confidence": 0.88,
+                "reason": "first appearance-supported candidate",
+            }
+        return {
+            "decision": "locate",
+            "point": {"x": 48, "y": 18},
+            "bbox_xyxy": [43, 12, 54, 26],
+            "confidence": 0.82,
+            "reason": "different appearance-supported candidate",
+        }
+
+    result = BackendReferencePointLocalizer(CallablePlannerBackend(decide)).localize(
+        environment="libero",
+        target_object="alphabet soup",
+        scene_image=scene,
+        reference_images=references,
+        image_size=(64, 48),
+    )
+
+    assert result.as_prompt_point() == {"x": 48.0, "y": 18.0, "label": 1}
+    proposal_requests = [
+        request
+        for request in requests
+        if request.tool_context["role"] == "reference_point_localizer"
+    ]
+    examined = proposal_requests[1].tool_context["examined_candidates"]
+    assert examined[0]["disposition"] == "provisional_abstain"
+    assert examined[0]["x"] == 20.0
+    assert result.details["candidate_policy"] == "verified_match"
 
 
 def test_reference_point_localizer_rejects_out_of_bounds_point(tmp_path: Path) -> None:
@@ -252,6 +327,140 @@ def test_reference_point_localizer_rejects_unstructured_match(
         }
 
     with pytest.raises(ValueError, match="structured exact-instance gate"):
+        BackendReferencePointLocalizer(CallablePlannerBackend(decide)).localize(
+            environment="libero",
+            target_object="alphabet soup",
+            scene_image=scene,
+            reference_images=references,
+            image_size=(64, 48),
+        )
+
+
+def test_reference_point_localizer_returns_provisional_seed_after_reviewer_abstains(
+    tmp_path: Path,
+) -> None:
+    scene, references = _images(tmp_path)
+
+    def decide(request):
+        if request.tool_context["role"] == "reference_point_verifier":
+            return {
+                "decision": "abstain",
+                "confidence": 0.0,
+                "reference_geometry": "cylindrical can",
+                "candidate_geometry": "too blurred to verify",
+                "grasp_geometry_family": "unknown",
+                "geometry_match": False,
+                "matching_attributes": ["blue upper label", "orange lower label"],
+                "conflicting_attributes": [],
+                "reason": "the crop is too blurred for exact geometry verification",
+            }
+        return {
+            "decision": "locate",
+            "point": {"x": 20, "y": 20},
+            "bbox_xyxy": [15, 14, 26, 28],
+            "confidence": 0.88,
+            "reason": "blue and orange candidate matching the reference layout",
+        }
+
+    result = BackendReferencePointLocalizer(CallablePlannerBackend(decide)).localize(
+        environment="libero",
+        target_object="alphabet soup",
+        scene_image=scene,
+        reference_images=references,
+        image_size=(64, 48),
+    )
+
+    assert result.as_prompt_point() == {"x": 20.0, "y": 20.0, "label": 1}
+    assert result.confidence == 0.5
+    assert result.details["provisional"] is True
+    assert result.details["requires_downstream_confirmation"] is True
+    assert result.details["verification"]["decision"] == "abstain"
+    assert "only a SAM3 seed" in result.reason
+
+
+def test_reference_point_localizer_ranks_distinct_safe_provisional_candidates(
+    tmp_path: Path,
+) -> None:
+    scene, references = _images(tmp_path)
+    proposal_index = 0
+
+    def decide(request):
+        nonlocal proposal_index
+        if request.tool_context["role"] == "reference_point_verifier":
+            x = request.tool_context["candidate_point"]["x"]
+            if x == 50:
+                return {
+                    "decision": "abstain",
+                    "confidence": 0.0,
+                    "grasp_geometry_family": "boxed_item",
+                    "geometry_match": False,
+                    "matching_attributes": ["blue", "orange"],
+                    "conflicting_attributes": ["rectangular geometry"],
+                    "reason": "geometry conflict",
+                }
+            return {
+                "decision": "abstain",
+                "confidence": 0.2,
+                "grasp_geometry_family": "upright_can" if x == 30 else "unknown",
+                "geometry_match": x == 30,
+                "matching_attributes": ["blue label", "orange label"],
+                "conflicting_attributes": [],
+                "reason": "appearance supported but exact identity is blurred",
+            }
+        proposal_index += 1
+        x = (10, 30, 50)[proposal_index - 1]
+        return {
+            "decision": "locate",
+            "point": {"x": x, "y": 20},
+            "bbox_xyxy": [x - 4, 14, x + 4, 28],
+            "confidence": 0.95 if x == 10 else 0.7,
+            "reason": f"candidate at {x}",
+        }
+
+    result = BackendReferencePointLocalizer(CallablePlannerBackend(decide)).localize(
+        environment="libero",
+        target_object="alphabet soup",
+        scene_image=scene,
+        reference_images=references,
+        image_size=(64, 48),
+    )
+
+    assert result.as_prompt_point() == {"x": 30.0, "y": 20.0, "label": 1}
+    assert result.details["candidate_policy"] == "ranked_provisional"
+    assert [
+        candidate["positive_points"][0]["x"]
+        for candidate in result.details["ranked_candidates"]
+    ] == [30.0, 10.0]
+    assert result.details["examined_candidate_count"] == 3
+
+
+def test_reference_point_localizer_does_not_provision_conflicting_abstention(
+    tmp_path: Path,
+) -> None:
+    scene, references = _images(tmp_path)
+
+    def decide(request):
+        if request.tool_context["role"] == "reference_point_verifier":
+            return {
+                "decision": "abstain",
+                "confidence": 0.0,
+                "reference_geometry": "cylindrical can",
+                "candidate_geometry": "rectangular carton",
+                "grasp_geometry_family": "boxed_item",
+                "geometry_match": False,
+                "matching_attributes": ["blue color", "orange color"],
+                "conflicting_attributes": ["rectangular package geometry"],
+                "reason": "the package geometry conflicts with the reference can",
+            }
+        return {
+            "decision": "locate",
+            "point": {"x": 20, "y": 20},
+            "bbox_xyxy": [15, 14, 26, 28],
+            "confidence": 0.9,
+            "reason": "color-similar candidate",
+        }
+
+    with pytest.raises(ValueError, match="exhausted exact-instance candidates"):
         BackendReferencePointLocalizer(CallablePlannerBackend(decide)).localize(
             environment="libero",
             target_object="alphabet soup",

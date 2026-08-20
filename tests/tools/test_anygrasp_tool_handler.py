@@ -272,7 +272,7 @@ def test_anygrasp_restores_lengths_after_depth_cutoff_compatibility_scale(
     assert result.details["metadata"]["length_scale_correction"] == 1.5
 
 
-def test_anygrasp_repairs_unique_current_depth_basename(tmp_path: Path) -> None:
+def test_anygrasp_rejects_missing_depth_without_basename_rebinding(tmp_path: Path) -> None:
     calls: list[dict[str, Any]] = []
     parameters = _valid_parameters(tmp_path)
     actual_depth = Path(parameters["depth"])
@@ -298,9 +298,9 @@ def test_anygrasp_repairs_unique_current_depth_basename(tmp_path: Path) -> None:
 
     result = handler(_context(parameters, observation=observation))
 
-    assert result.success is True
-    assert calls[0]["depth"]["base64"]
-    assert result.details["source_depth"] == str(actual_depth)
+    assert result.success is False
+    assert result.details["reason"] == "depth_not_found"
+    assert calls == []
 
 
 def test_anygrasp_handler_defensively_ranks_candidates(tmp_path: Path) -> None:

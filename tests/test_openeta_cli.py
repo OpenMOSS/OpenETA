@@ -39,6 +39,20 @@ PNG_1X1 = (
 @pytest.fixture(autouse=True)
 def isolate_cli_memory_store(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        runtime_assembly,
+        "query_anygrasp_capabilities",
+        lambda **_kwargs: {
+            "schema_version": "openeta.anygrasp_capabilities.v1",
+            "backend": "anygrasp_mcp",
+            "model": "anygrasp_sdk",
+            "max_gripper_width_m": 0.08,
+            "gripper_height_m": 0.03,
+            "depth_truncation_m": 1.0,
+            "max_candidates": 20,
+            "geometry_change_requires_redeployment": True,
+        },
+    )
 
 
 def _completion_texts(text: str) -> list[str]:
@@ -594,7 +608,8 @@ def test_cli_binds_graspgenx_behind_unified_grasp_tool(
     monkeypatch.setattr(
         runtime_assembly,
         "build_grasp_pose_estimate_handler",
-        lambda handlers: facade_backends.update(handlers) or prediction_handler,
+        lambda handlers, **_kwargs: facade_backends.update(handlers)
+        or prediction_handler,
     )
 
     tools = build_default_tool_registry()
@@ -826,7 +841,38 @@ def test_cli_binds_perception_mcp_handlers_from_registry(monkeypatch, tmp_path) 
 
     runtime = OpenEtaCli()._require_runtime()
 
-    sam3 = runtime.tools.call("sam3", {"image": str(image), "prompt": "cube"})
+    sam_observation = EnvObservation(
+        task="segment cube",
+        cameras=[
+            CameraFrame(
+                frame_id="agentview",
+                rgb=[],
+                intrinsics={"fx": 1.0, "fy": 1.0, "cx": 0.5, "cy": 0.5, "scale": 1000.0},
+            )
+        ],
+        robot=RobotState(),
+        metadata={
+            "image_artifacts": [
+                {
+                    "kind": "rgb",
+                    "frame_id": "agentview",
+                    "path": str(image),
+                    "packet_id": "cli-packet",
+                },
+                {
+                    "kind": "depth",
+                    "frame_id": "agentview",
+                    "path": str(depth),
+                    "packet_id": "cli-packet",
+                },
+            ]
+        },
+    )
+    sam3 = runtime.tools.call(
+        "sam3",
+        {"source_packet_id": "cli-packet", "prompt": "cube"},
+        observation=sam_observation,
+    )
     grasp = runtime.tools.call(
         "grasp_pose_estimate",
         {

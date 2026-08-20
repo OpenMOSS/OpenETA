@@ -364,6 +364,13 @@ class RobotState:
 
     joint_positions: list[float] = field(default_factory=list)
     joint_velocities: list[float] = field(default_factory=list)
+    # Names labelling ``joint_positions`` positionally.  Optional: single-arm
+    # robots report the arm as a leading in-order slice, so a consumer can index
+    # positionally.  Multi-arm robots cannot -- R1Pro interleaves its two arms --
+    # so a consumer needing a subset (collision checking) must map by name.
+    # Omitting this field would strip that ability at the wire boundary even
+    # though the backend already computed the names.
+    joint_names: list[str] = field(default_factory=list)
     end_effector_pose: JsonDict = field(default_factory=dict)
     gripper_state: JsonDict = field(default_factory=dict)
     base_pose: JsonDict | None = None
@@ -377,6 +384,9 @@ class RobotState:
             "end_effector_pose": self.end_effector_pose,
             "gripper_state": self.gripper_state,
         }
+        # Emitted only when populated, so single-arm payloads are unchanged.
+        if self.joint_names:
+            d["joint_names"] = self.joint_names
         if self.base_pose is not None:
             d["base_pose"] = self.base_pose
         if self.metadata:
@@ -444,9 +454,13 @@ class RobotState:
         # metadata
         meta = _ensure_plain_dict(d.get("metadata", {}))
 
+        jn_raw = d.get("joint_names") or []
+        jn = [str(n) for n in jn_raw] if isinstance(jn_raw, (list, tuple)) else []
+
         return cls(
             joint_positions=jp,
             joint_velocities=jv,
+            joint_names=jn,
             end_effector_pose=ee_dict,
             gripper_state=gs,
             base_pose=bp,

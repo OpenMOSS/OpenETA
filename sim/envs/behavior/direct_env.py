@@ -76,11 +76,16 @@ def _configure_agent_cartesian_control(robot_config: dict[str, Any]) -> None:
             [-_IK_POSITION_SCALE_M] * 3 + [-_IK_ROTATION_SCALE_RAD] * 3,
             [_IK_POSITION_SCALE_M] * 3 + [_IK_ROTATION_SCALE_RAD] * 3,
         ],
-        "kv": 2.0,
         "mode": "pose_delta_ori",
         "smoothing_filter_size": 2,
         "workspace_pose_limiter": None,
-        "joint_range_tolerance": 0.01,
+        # `kv` and `joint_range_tolerance` were passed here but are not in
+        # InverseKinematicsController's signature in OmniGibson 3.9.1, and
+        # create_controller binds kwargs strictly -- so every BEHAVIOR env raised
+        # TypeError before reaching a single step.  Dropped rather than remapped:
+        # the nearest surviving gains (pos_damping_ratio, vel_kp) are not the same
+        # quantity as the old kv, so inventing a value would silently change the
+        # controller's behaviour instead of restoring it.
     }
     robot_config["controller_config"]["arm_left"] = dict(ik_config)
     robot_config["controller_config"]["arm_right"] = dict(ik_config)
@@ -122,6 +127,49 @@ def _require_rgbd_modalities(sensor_config: dict[str, Any]) -> None:
         if required not in modalities:
             modalities.append(required)
     sensor_config["modalities"] = modalities
+
+
+def _require_task_instance(data_root: Path, scene_model: str | None,
+                           activity_name: str, instance_id: int) -> None:
+    """Fail early, and by name, when the requested task instance is absent.
+
+    ``seed`` becomes ``activity_instance_id``, and an activity ships only the
+    instances that were actually sampled -- ``picking_up_trash`` has exactly one
+    (id 0) despite 300+ sibling files, because the rest are ``-tro_state``
+    variants rather than loadable templates.  OmniGibson's
+    ``get_task_instance_path`` returns ``None`` for a missing one instead of
+    raising, so the failure surfaces three frames later as
+    ``os.path.join(None)`` -> "expected str, bytes or os.PathLike object, not
+    NoneType", roughly 12 s into a boot and naming neither the activity nor the
+    id.  That message cost hours to trace back to "seed 1 does not exist", and
+    it looks like a path-configuration bug rather than a bad argument.
+
+    Skipped when the scene is unknown (the caller then relies on the default
+    "best" scene, which does not go through the instance directory at all).
+    """
+    if not scene_model:
+        return
+    json_dir = (data_root / "2026-challenge-task-instances" / "scenes"
+                / scene_model / "json")
+    if not json_dir.is_dir():
+        return  # No instance directory: leave the diagnosis to OmniGibson.
+
+    prefix = f"{scene_model}_task_{activity_name}_0_"
+    wanted = json_dir / f"{prefix}{instance_id}_template.json"
+    if wanted.is_file():
+        return
+
+    available = sorted(
+        int(p.stem[len(prefix):-len("_template")])
+        for p in json_dir.glob(f"{prefix}*_template.json")
+        if p.stem[len(prefix):-len("_template")].isdigit()
+    )
+    raise ValueError(
+        f"BEHAVIOR activity {activity_name!r} has no instance "
+        f"{instance_id} (seed={instance_id}) in scene {scene_model!r}. "
+        f"Available instance ids: {available or 'none'}. "
+        f"Looked for {wanted.name}."
+    )
 
 
 class BehaviorDirectEnv(gym.Env):
@@ -193,6 +241,8 @@ class BehaviorDirectEnv(gym.Env):
             image_height=int(image_height), image_width=int(image_width)
         )
         _require_rgbd_modalities(robot_sensor_config)
+        _require_task_instance(Path(gm.DATA_PATH), scene_model, activity_name,
+                               int(seed))
         cfg["task"].update(
             activity_name=activity_name,
             activity_definition_id=0,
@@ -235,12 +285,59 @@ class BehaviorDirectEnv(gym.Env):
         robot = self._env.robots[0]
         arm_names = tuple(robot.arm_names)
         arm = "right" if "right" in arm_names else robot.default_arm
-        arm_indices = _as_numpy(robot.arm_action_idx[arm]).astype(int).reshape(-1).tolist()
-        gripper_indices = (
-            _as_numpy(robot.gripper_action_idx[arm]).astype(int).reshape(-1).tolist()
-        )
-        return {
+
+        def slots(mapping, key) -> list[int]:
+            try:
+                return _as_numpy(mapping[key]).astype(int).reshape(-1).tolist()
+            except Exception:
+                return []
+
+        arm_indices = slots(robot.arm_action_idx, arm)
+        gripper_indices = slots(robot.gripper_action_idx, arm)
+
+        # Per-arm slots for every arm, not just the default one.  Publishing a
+        # single arm left the other one unreachable through the MCP surface even
+        # though the robot is bimanual.
+        per_arm: dict[str, Any] = {}
+        for name in arm_names:
+            a_idx = slots(robot.arm_action_idx, name)
+            if len(a_idx) != 6:
+                # Not IK-shaped; declaring it Cartesian would drive the wrong
+                # actuators, so omit it and let the codec fail closed.
+                continue
+            per_arm[str(name)] = {
+                "position_indices": a_idx[:3],
+                "rotation_indices": a_idx[3:6],
+                "gripper_indices": slots(robot.gripper_action_idx, name),
+            }
+
+        # Derived defensively: bench_worker reads this property via
+        # getattr(env, "openeta_control_spec", {}), so an AttributeError raised
+        # in here is swallowed into an empty dict -- which silently strips the
+        # whole layout and makes every move_to fail closed.  A robot missing one
+        # optional attribute must degrade to a partial spec, never to no spec.
+        try:
+            group_slots = {str(k): _as_numpy(v).astype(int).reshape(-1).tolist()
+                           for k, v in (robot.controller_action_idx or {}).items()}
+        except Exception:
+            group_slots = {}
+
+        action_dim = getattr(robot, "action_dim", None)
+        if action_dim is None:
+            covered = [i for idxs in group_slots.values() for i in idxs]
+            action_dim = max(covered) + 1 if covered else 0
+
+        spec: dict[str, Any] = {
             "schema_version": "openeta.sim_control.v1",
+            # Morphology, read off the live robot.  The interface tier is picked
+            # from these fields rather than from the backend name, because
+            # R1Pro's action_dim is 21 under these IK overrides but 23 under the
+            # raw r1pro_behavior.yaml joint controllers.
+            "profile": "mobile_manipulation",
+            "arms": [str(a) for a in arm_names],
+            "default_arm": str(robot.default_arm),
+            "arm_required": len(arm_names) > 1,
+            "action_dim": int(action_dim),
             "cartesian_delta": {
                 "supported": len(arm_indices) == 6,
                 "arm": arm,
@@ -249,6 +346,7 @@ class BehaviorDirectEnv(gym.Env):
                 "command_frame": "robot_base",
                 "position_scale_m": _IK_POSITION_SCALE_M,
                 "rotation_scale_rad": _IK_ROTATION_SCALE_RAD,
+                "per_arm": per_arm,
             },
             "gripper": {
                 "supported": bool(gripper_indices),
@@ -258,6 +356,68 @@ class BehaviorDirectEnv(gym.Env):
                 "close_value": -1.0,
             },
         }
+
+        # Base and trunk: DOF a fixed-base Cartesian call has nowhere to put.
+        # Keyed off controller_action_idx (resolved above) so a config lacking
+        # them simply omits them, and no drive_base/set_trunk gets advertised.
+        if group_slots.get("base"):
+            spec["base"] = {
+                "supported": True,
+                "indices": group_slots["base"],
+                "type": "holonomic",
+                # HolonomicBaseJointController is velocity-mode: these are rates,
+                # not positions, so motion stops when commands stop.
+                "command": "velocity",
+                "dims": ["vx", "vy", "wz"],
+            }
+        if group_slots.get("trunk"):
+            spec["trunk"] = {
+                "supported": True,
+                "indices": group_slots["trunk"],
+                "command": "position",
+            }
+            # Names + limits are what make "hold the trunk where it is"
+            # expressible by a caller that only sees the action vector.
+            #
+            # JointController is position-mode with use_delta_commands=False,
+            # and Controller._preprocess_command scales [-1,1] onto the joint
+            # limits.  So a 0.0 in a trunk slot is *not* "no command" -- it
+            # resolves to (lower+upper)/2 and drives the trunk to mid-range.
+            # Holding position therefore means sending the current angle
+            # re-normalised, which needs the same limits the controller used.
+            #
+            # Published here rather than fetched per-step because the alternative
+            # is an extra RPC on every Cartesian substep, and these are constant
+            # for the life of the robot.
+            try:
+                trunk_names = [str(n) for n in robot.trunk_joint_names]
+            except Exception:
+                # Derive from dof_idx when the robot exposes no trunk_joint_names.
+                try:
+                    j_names = list(robot.joints.keys())
+                    ctrl = robot.controllers["trunk"]
+                    trunk_names = [str(j_names[int(i)]) for i in ctrl.dof_idx]
+                except Exception:
+                    trunk_names = []
+            lower: list[float] = []
+            upper: list[float] = []
+            for n in trunk_names:
+                try:
+                    j = robot.joints[n]
+                    lower.append(float(j.lower_limit))
+                    upper.append(float(j.upper_limit))
+                except Exception:
+                    lower, upper = [], []
+                    break
+            # All three must agree in length or a consumer cannot pair them, and
+            # a half-published mapping is worse than none: it would let the
+            # caller believe it can hold position while writing the wrong slot.
+            if trunk_names and len(trunk_names) == len(group_slots["trunk"]) == len(lower):
+                spec["trunk"]["joint_names"] = trunk_names
+                spec["trunk"]["limits_lower"] = lower
+                spec["trunk"]["limits_upper"] = upper
+        spec["groups"] = group_slots
+        return spec
 
     @staticmethod
     def _flatten_sensor_obs(raw: dict[str, Any]) -> dict[str, Any]:
@@ -413,6 +573,14 @@ class BehaviorDirectEnv(gym.Env):
         proprio: dict[str, Any] = {
             "joint_positions": joint_positions,
             "joint_velocities": joint_velocities,
+            # Names in the same order as joint_positions.  R1Pro's vector is
+            # base(0-5), torso(6-9), arms INTERLEAVED left/right (10-23),
+            # fingers(24-27) -- so left_arm_joint2 is at index 12, not 11.
+            # Any consumer that needs a subset (cuRobo wants 4 torso + 7 + 7 in
+            # its own order) must permute by name; a positional slice silently
+            # puts wheel and right-arm angles into left-arm slots and yields a
+            # confident wrong answer.
+            "joint_names": [str(n) for n in (getattr(robot, "joints", None) or {})],
             "base_pose": {
                 "xyz": _as_numpy(base_pos).reshape(-1)[:3].tolist(),
                 "quat_xyzw": _as_numpy(base_quat).reshape(-1)[:4].tolist(),
@@ -437,6 +605,10 @@ class BehaviorDirectEnv(gym.Env):
                 proprio["gripper_open"] = open_fraction
                 proprio["gripper_state"] = {
                     "open": open_fraction > 0.5,
+                    # Canonical Agent-facing continuous aperture. Keep the
+                    # historical open_fraction alias for experiment logs and
+                    # downstream consumers that have not migrated yet.
+                    "openness": open_fraction,
                     "open_fraction": open_fraction,
                 }
         return proprio

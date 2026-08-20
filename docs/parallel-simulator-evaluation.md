@@ -148,10 +148,13 @@ localization uses an isolated four-image request (scene plus three reference
 views); after it returns a validated point, those references are not injected
 into the main planner turn.
 
-SAM3 should receive the exact local RGB path. For compatibility, its handler
-accepts a frame id only when that id resolves to an RGB artifact in the same
-current observation. It never searches another session or a global temporary
-directory. The canonical resolved path is retained as `source_image`; AnyGrasp
+SAM3 accepts only the exact session-scoped `source_packet_id` copied from
+visible observation evidence, plus an optional `camera_frame_id`. The host
+resolves the packet to immutable local RGB-D paths and camera metadata;
+unknown ids, missing artifacts, ambiguous cameras, and duplicate packet ids
+fail closed. Local image paths and basename-based current-frame rebinding are
+not accepted. The canonical resolved path is retained internally as
+`source_image`; AnyGrasp
 continues to consume the original full-frame RGB, depth, and same-size mask.
 When `positive_points` is present, the SAM3 handler sends the original RGB to
 the deployed `segment_points` tool and preserves all three ranked full-frame

@@ -11,6 +11,7 @@ from PIL import Image
 
 from agent.tools import object_memory as object_memory_module
 from agent.tools.object_memory import (
+    DEFAULT_OBJECT_MEMORY_BANK_URL,
     ObjectMemoryBankClient,
     ObjectMemoryBankConfig,
     ObjectMemoryBankConfigurationError,
@@ -142,6 +143,19 @@ def test_object_memory_config_is_absent_when_url_and_key_are_absent() -> None:
     assert ObjectMemoryBankConfig.from_env({}) is None
 
 
+def test_object_memory_loader_uses_anonymous_built_in_default(tmp_path) -> None:
+    config = load_configured_object_memory_bank(
+        environ={},
+        dotenv_path=str(tmp_path / "missing.env"),
+        apikey_path=str(tmp_path / "missing-apikey.md"),
+    )
+
+    assert config is not None
+    assert config.base_url == DEFAULT_OBJECT_MEMORY_BANK_URL
+    assert config.api_key == ""
+    config.validate()
+
+
 @pytest.mark.parametrize(
     ("environ", "missing_field"),
     [
@@ -166,15 +180,16 @@ def test_object_memory_config_rejects_partial_url_key_pair(
     assert missing_field in str(captured.value)
 
 
-def test_object_memory_loader_rejects_partial_url_key_pair(tmp_path) -> None:
-    with pytest.raises(ObjectMemoryBankConfigurationError) as captured:
-        load_configured_object_memory_bank(
-            environ={"OPENETA_OBJECT_MEMORY_BANK_API_KEY": "secret"},
-            dotenv_path=str(tmp_path / "missing.env"),
-            apikey_path=str(tmp_path / "missing-apikey.md"),
-        )
+def test_object_memory_loader_pairs_explicit_key_with_default_url(tmp_path) -> None:
+    config = load_configured_object_memory_bank(
+        environ={"OPENETA_OBJECT_MEMORY_BANK_API_KEY": "secret"},
+        dotenv_path=str(tmp_path / "missing.env"),
+        apikey_path=str(tmp_path / "missing-apikey.md"),
+    )
 
-    assert captured.value.missing_fields == ("OPENETA_OBJECT_MEMORY_BANK_URL",)
+    assert config is not None
+    assert config.base_url == DEFAULT_OBJECT_MEMORY_BANK_URL
+    assert config.api_key == "secret"
 
 
 def test_object_memory_config_allows_private_network_http() -> None:
@@ -182,10 +197,24 @@ def test_object_memory_config_allows_private_network_http() -> None:
         base_url="http://127.0.0.1:8080",
         api_key="secret",
     ).validate()
-    ObjectMemoryBankConfig(
-        base_url="http://127.0.0.1:8080",
-        api_key="secret",
-    ).validate()
+
+
+def test_object_memory_default_client_omits_empty_api_key_header() -> None:
+    calls = []
+
+    def download(url, headers, timeout, max_bytes):
+        calls.append((url, dict(headers), timeout, max_bytes))
+        return _bundle()
+
+    client = ObjectMemoryBankClient(
+        ObjectMemoryBankConfig(),
+        downloader=download,
+    )
+
+    client.retrieve(environment="libero", target_object="alphabet soup")
+
+    assert calls[0][0].startswith(DEFAULT_OBJECT_MEMORY_BANK_URL)
+    assert calls[0][1] == {}
 
 
 @pytest.mark.parametrize(

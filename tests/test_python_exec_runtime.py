@@ -1,51 +1,12 @@
 from __future__ import annotations
 
-import base64
+import json
 import os
 from pathlib import Path
 
-from adapter.protocol import JsonDict
 import agent.tools.coding as coding_module
 from agent.tools.coding import PythonExecConfig, PythonExecRuntime
 from agent.tools.registry import ToolExecutionContext, build_default_tool_registry
-
-
-PNG_1X1 = base64.b64encode(
-    bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-        "0000000d49444154789c6360000002000100ffff03000006000557bfab0d000000"
-        "0049454e44ae426082"
-    )
-).decode("ascii")
-
-
-class FakeMcpTransport:
-    def __init__(
-        self,
-        response: JsonDict | list[JsonDict],
-        *,
-        tools: JsonDict | None = None,
-        url: str = "",
-    ) -> None:
-        self.responses = list(response) if isinstance(response, list) else [response]
-        self.tools = tools or {"tools": [], "tool_count": 0}
-        self.url = url
-        self.calls: list[JsonDict] = []
-
-    def call_tool(
-        self,
-        name: str,
-        arguments: JsonDict,
-        *,
-        timeout_s: float | None = None,
-    ) -> JsonDict:
-        self.calls.append({"name": name, "arguments": dict(arguments), "timeout_s": timeout_s})
-        index = min(len(self.calls) - 1, len(self.responses) - 1)
-        return self.responses[index]
-
-    def list_tools(self, *, timeout_s: float | None = None) -> JsonDict:
-        self.calls.append({"name": "list_tools", "arguments": {}, "timeout_s": timeout_s})
-        return self.tools
 
 
 def _context(
@@ -74,6 +35,35 @@ def test_python_exec_runs_restricted_code_and_returns_result() -> None:
     assert result.details["outputs"]["result"] == {"value": 6}
     assert result.details["outputs"]["stdout"] == "hello\n"
     assert result.details["parameters"]["code"] == "<code omitted>"
+
+
+def test_python_exec_materializes_large_structured_result_with_clear_path(
+    tmp_path: Path,
+) -> None:
+    runtime = PythonExecRuntime(
+        PythonExecConfig(
+            structured_output_root=str(tmp_path / "artifacts"),
+            max_inline_structured_chars=100,
+        )
+    )
+
+    result = runtime.handler(
+        _context(
+            "result = {'placements': "
+            "[{'id': f'p{i}', 'matrix': list(range(16))} for i in range(5)]}"
+        )
+    )
+
+    outputs = result.details["outputs"]
+    artifact = outputs["result_artifact"]
+    assert result.success is True
+    assert outputs["result_inline_complete"] is False
+    assert outputs["result"]["collection_sizes"] == {"placements": 5}
+    assert outputs["result"]["complete_result_path"] == artifact["path"]
+    assert artifact in result.details["artifacts"]
+    assert artifact["path"] in result.content
+    persisted = json.loads(Path(artifact["path"]).read_text(encoding="utf-8"))
+    assert persisted["outputs"]["result"]["placements"][4]["id"] == "p4"
 
 
 def test_python_exec_allows_safe_imports_and_readonly_artifact_open(
@@ -184,323 +174,107 @@ def test_python_exec_workspace_allows_owned_writes_and_blocks_escape(
     assert escaped.details["diagnostics"][0]["error_type"] == "PermissionError"
 
 
-def test_python_exec_exposes_mcp_helper() -> None:
-    transport = FakeMcpTransport({"ok": True, "envs": [{"id": "openeta/demo-v0"}]})
-    runtime = PythonExecRuntime(PythonExecConfig(mcp_transport=transport))
+def test_python_exec_has_no_simulator_mcp_helper() -> None:
+    runtime = PythonExecRuntime()
+
+    result = runtime.handler(_context("result = mcp.list_tools()"))
+
+    assert result.success is False
+    assert result.details["diagnostics"][0]["error_type"] == "NameError"
+
+
+def test_python_exec_reads_full_session_and_writes_only_sandbox(tmp_path: Path) -> None:
+    session = tmp_path / "sessions" / "session-a"
+    artifacts_root = session / "artifacts" / "structured" / "anygrasp" / "result-1"
+    sandbox = session / "sandbox"
+    artifacts_root.mkdir(parents=True)
+    sandbox.mkdir(parents=True)
+    payload_path = artifacts_root / "outputs.json"
+    payload_path.write_text(
+        '{"outputs":{"grasp_candidates":[{"id":"g0"},{"id":"g1"}]}}',
+        encoding="utf-8",
+    )
+    runtime = PythonExecRuntime(
+        PythonExecConfig(session_root=str(session), workspace_root=str(sandbox))
+    )
 
     result = runtime.handler(
         _context(
-            "envs = mcp.call_tool('search_envs', {'query': 'libero panda'})\n"
-            "full_response = artifacts.read_json(envs['response_path'])\n"
+            "from pathlib import Path\n"
+            "payload = artifacts.read_json(parameters['path'])\n"
+            "visible = artifacts.list_files(pattern='*.json')\n"
+            "Path('ranked.json').write_text('selected=' + payload['outputs']['grasp_candidates'][1]['id'])\n"
             "result = {\n"
-            "    'envs_count': envs['envs_count'],\n"
-            "    'has_inline_envs': 'envs' in envs,\n"
-            "    'ids': [item['id'] for item in full_response['envs']],\n"
+            "  'selected': payload['outputs']['grasp_candidates'][1]['id'],\n"
+            "  'visible': [row['path'] for row in visible['files']],\n"
+            "  'derived': Path('ranked.json').read_text(),\n"
+            "  'workspace': workspace,\n"
             "}"
-        )
-    )
-
-    assert result.success is True
-    assert result.details["outputs"]["result"] == {
-        "envs_count": 1,
-        "has_inline_envs": False,
-        "ids": ["openeta/demo-v0"],
-    }
-    assert transport.calls == [
-        {
-            "name": "search_envs",
-            "arguments": {"query": "libero panda"},
-            "timeout_s": 120.0,
-        }
-    ]
-    assert result.details["outputs"]["mcp_calls"][0]["tool"] == "search_envs"
-
-
-def test_python_exec_marks_failed_mcp_call_as_failed() -> None:
-    transport = FakeMcpTransport({"success": False, "content": "render_env failed"})
-    runtime = PythonExecRuntime(PythonExecConfig(mcp_transport=transport))
-
-    result = runtime.handler(
-        _context(
-            "rendered = mcp.call_tool('render_env', {'handle': 'env-1'})\n"
-            "result = {'ok': True, 'response': rendered}"
-        )
-    )
-
-    assert result.success is False
-    assert result.content == "python_exec completed with failed MCP call(s)"
-    assert result.details["diagnostics"][0]["code"] == "python_exec_mcp_call_failed"
-    assert result.details["diagnostics"][0]["failed_tools"] == ["render_env"]
-    assert result.details["outputs"]["mcp_calls"][0]["success"] is False
-
-
-def test_python_exec_rejects_simulator_environment_creation() -> None:
-    transport = FakeMcpTransport({"success": True})
-    runtime = PythonExecRuntime(PythonExecConfig(mcp_transport=transport))
-
-    result = runtime.handler(
-        _context("result = mcp.call_tool('create_env', {'env_id': 'openeta/demo-v0'})")
-    )
-
-    assert result.success is False
-    assert "create_simulator_env agent tool" in result.content
-    assert transport.calls == []
-
-
-def test_python_exec_exposes_mcp_list_tools(tmp_path: Path) -> None:
-    transport = FakeMcpTransport(
-        {"ok": True},
-        tools={
-            "tools": [
-                {
-                    "name": "create_env",
-                    "description": "Create an environment.",
-                    "input_schema": {
-                        "type": "object",
-                        "required": ["env_id"],
-                        "properties": {"env_id": {"type": "string"}},
-                    },
-                }
-            ],
-            "tool_count": 1,
-        },
-    )
-    runtime = PythonExecRuntime(
-        PythonExecConfig(
-            mcp_transport=transport,
-            response_output_root=str(tmp_path),
-        )
-    )
-
-    result = runtime.handler(
-        _context(
-            "catalog = mcp.list_tools()\n"
-            "full = artifacts.read_json(catalog['response_path'])\n"
-            "result = {'tool_count': catalog['tool_count'], 'first': full['tools'][0]['name']}"
-        )
-    )
-
-    assert result.success is True
-    assert result.details["outputs"]["result"] == {"tool_count": 1, "first": "create_env"}
-    assert transport.calls[0] == {"name": "list_tools", "arguments": {}, "timeout_s": 120.0}
-    assert result.details["outputs"]["mcp_calls"][0]["tool"] == "list_tools"
-
-
-def test_python_exec_materializes_long_mcp_text_and_exposes_grep(tmp_path: Path) -> None:
-    long_text = "alpha\n" + ("needle beta\n" * 300)
-    transport = FakeMcpTransport({"ok": True, "content": long_text})
-    runtime = PythonExecRuntime(
-        PythonExecConfig(
-            mcp_transport=transport,
-            response_output_root=str(tmp_path),
-            max_inline_text_chars=100,
-        )
-    )
-
-    result = runtime.handler(
-        _context(
-            "response = mcp.call_tool('describe_env', {})\n"
-            "matches = artifacts.grep_text(\n"
-            "    response['response_path'], 'needle', max_matches=3\n"
-            ")\n"
-            "result = {'path': response['response_path'], 'matches': matches['matches']}"
-        )
-    )
-
-    outputs = result.details["outputs"]
-    path = outputs["result"]["path"]
-    assert result.success is True
-    assert Path(path).exists()
-    assert "needle beta" in Path(path).read_text(encoding="utf-8")
-    assert "needle beta" in outputs["result"]["matches"][0]["text"]
-    assert "needle beta" * 20 not in str(outputs)
-    assert outputs["mcp_calls"][0]["response_path"] == path
-    assert outputs["mcp_calls"][0]["response_artifact"]["type"] == "json"
-
-
-def test_python_exec_mcp_call_materializes_images_before_long_text(tmp_path: Path) -> None:
-    transport = FakeMcpTransport(
-        {
-            "ok": True,
-            "cameras": [
-                {
-                    "frame_id": "front",
-                    "rgb_base64": PNG_1X1,
-                    "content": "camera log\n" + ("needle\n" * 300),
-                }
-            ],
-        }
-    )
-    runtime = PythonExecRuntime(
-        PythonExecConfig(
-            mcp_transport=transport,
-            image_output_root=str(tmp_path / "images"),
-            response_output_root=str(tmp_path / "responses"),
-            max_inline_text_chars=100,
-        )
-    )
-
-    result = runtime.handler(
-        _context(
-            "response = mcp.call_tool('reset_env', {})\n"
-            "images = artifacts.materialize_images(response, bundle_id='again')\n"
-            "camera = images['payload']['cameras'][0]\n"
-            "full_response = artifacts.read_json(response['response_path'])\n"
-            "result = {\n"
-            "    'rgb_path': camera['rgb_path'],\n"
-            "    'response_image_count': len(response.get('image_artifacts', [])),\n"
-            "    'rematerialized_image_count': len(images['images']),\n"
-            "    'response_path': response['response_path'],\n"
-            "    'content': full_response['cameras'][0]['content'],\n"
-            "}\n"
-        )
-    )
-
-    camera = result.details["outputs"]["result"]
-    assert result.success is True
-    assert Path(camera["rgb_path"]).exists()
-    assert camera["response_image_count"] == 1
-    assert camera["rematerialized_image_count"] == 1
-    assert Path(camera["response_path"]).exists()
-    assert "needle" in camera["content"]
-    assert result.details["outputs"]["mcp_calls"][0]["image_artifacts"]
-    assert result.details["outputs"]["mcp_calls"][0]["response_artifact"]["type"] == "json"
-    assert PNG_1X1 not in str(result.details["outputs"])
-    assert "needle" * 20 not in str(result.details["outputs"])
-
-
-def test_python_exec_mcp_call_exposes_anygrasp_intrinsics(tmp_path: Path) -> None:
-    transport = FakeMcpTransport(
-        {
-            "ok": True,
-            "cameras": [
-                {
-                    "frame_id": "agentview",
-                    "rgb_base64": PNG_1X1,
-                    "depth_base64": PNG_1X1,
-                    "width": 512,
-                    "height": 512,
-                    "intrinsics": {
-                        "fx": 618.0386719675123,
-                        "fy": 618.0386719675123,
-                        "cx": 256,
-                        "cy": 256,
-                    },
-                }
-            ],
-        }
-    )
-    runtime = PythonExecRuntime(
-        PythonExecConfig(
-            mcp_transport=transport,
-            image_output_root=str(tmp_path / "images"),
-            response_output_root=str(tmp_path / "responses"),
-        )
-    )
-
-    result = runtime.handler(
-        _context(
-            "response = mcp.call_tool('reset_env', {})\n"
-            "full_response = artifacts.read_json(response['response_path'])\n"
-            "result = {\n"
-            "    'inline_intrinsics': response['cameras'][0]['anygrasp_intrinsics'],\n"
-            "    'stored_intrinsics': full_response['cameras'][0]['anygrasp_intrinsics'],\n"
-            "}\n"
-        )
-    )
-
-    assert result.success is True
-    assert result.details["outputs"]["result"]["inline_intrinsics"]["scale"] == 1000.0
-    assert result.details["outputs"]["result"]["stored_intrinsics"]["scale"] == 1000.0
-
-
-def test_python_exec_lists_materialized_image_paths_without_os_import(tmp_path: Path) -> None:
-    transport = FakeMcpTransport(
-        {
-            "ok": True,
-            "cameras": [
-                {
-                    "frame_id": "front",
-                    "rgb_base64": PNG_1X1,
-                    "width": 1,
-                    "height": 1,
-                }
-            ],
-        }
-    )
-    runtime = PythonExecRuntime(
-        PythonExecConfig(
-            mcp_transport=transport,
-            image_output_root=str(tmp_path / "images"),
-        )
-    )
-
-    result = runtime.handler(
-        _context(
-            "mcp.call_tool('render_env', {})\n"
-            "result = artifacts.list_images(limit=5)\n"
+            ,
+            extra_parameters={"path": str(payload_path)},
         )
     )
 
     output = result.details["outputs"]["result"]
     assert result.success is True
-    assert output["image_count"] == 1
-    assert len(output["paths"]) == 1
-    assert output["latest_image_path"] == output["paths"][0]
-    assert output["images"][0]["kind"] == "rgb"
-    assert Path(output["images"][0]["path"]).exists()
-    assert PNG_1X1 not in str(result.details["outputs"])
-
-
-def test_python_exec_mcp_artifacts_are_isolated_by_agent_session(tmp_path: Path) -> None:
-    config = PythonExecConfig(
-        mcp_transport=FakeMcpTransport(
-            {"ok": True, "frame_id": "front", "rgb_base64": PNG_1X1}
-        ),
-        image_output_root=str(tmp_path / "images"),
-        text_output_root=str(tmp_path / "text"),
-        response_output_root=str(tmp_path / "responses"),
-    )
-    runtime = PythonExecRuntime(config)
-    code = (
-        "response = mcp.call_tool('render_env', {})\n"
-        "result = {'response_path': response['response_path'], "
-        "'image_path': response['image_artifacts'][0]['path'], "
-        "'visible_images': artifacts.list_images()['paths']}"
+    assert output["selected"] == "g1"
+    assert str(payload_path) in output["visible"]
+    assert output["derived"] == "selected=g1"
+    assert output["workspace"]["simulator_mcp_available"] is False
+    assert (sandbox / "ranked.json").read_text(encoding="utf-8") == "selected=g1"
+    assert any(
+        artifact.get("kind") == "derived_artifact"
+        for artifact in result.details["artifacts"]
     )
 
-    first = runtime.handler(_context(code, session_id="session-a"))
-    second = runtime.handler(_context(code, session_id="session-b"))
-    first_again = runtime.handler(_context(code, session_id="session-a"))
-    first_output = first.details["outputs"]["result"]
-    second_output = second.details["outputs"]["result"]
-    first_again_output = first_again.details["outputs"]["result"]
-
-    assert first_output["response_path"] != second_output["response_path"]
-    assert first_output["image_path"] != second_output["image_path"]
-    assert first_output["image_path"] != first_again_output["image_path"]
-    assert first_output["response_path"] != first_again_output["response_path"]
-    assert "/session-a/" in first_output["response_path"]
-    assert "/session-a/" in first_output["image_path"]
-    assert "/session-b/" in second_output["response_path"]
-    assert "/session-b/" in second_output["image_path"]
-    assert first_output["visible_images"] == [first_output["image_path"]]
-    assert second_output["visible_images"] == [second_output["image_path"]]
-    assert set(first_again_output["visible_images"]) == {
-        first_output["image_path"],
-        first_again_output["image_path"],
-    }
-    cross_session_read = runtime.handler(
+    forbidden_write = runtime.handler(
         _context(
-            "result = artifacts.read_json(parameters['path'])",
-            session_id="session-b",
-            extra_parameters={"path": first_output["response_path"]},
+            "from pathlib import Path\n"
+            "result = Path(parameters['path']).write_text('overwrite')",
+            extra_parameters={"path": str(payload_path)},
         )
     )
-    assert cross_session_read.success is False
-    assert cross_session_read.details["diagnostics"][0]["error_type"] == (
-        "PermissionError"
+    assert forbidden_write.success is False
+    assert forbidden_write.details["diagnostics"][0]["error_type"] == "PermissionError"
+
+
+def test_python_exec_cannot_read_another_session(tmp_path: Path) -> None:
+    own_session = tmp_path / "sessions" / "session-a"
+    other_session = tmp_path / "sessions" / "session-b"
+    own_sandbox = own_session / "sandbox"
+    own_sandbox.mkdir(parents=True)
+    other_session.mkdir(parents=True)
+    other_path = other_session / "secret.json"
+    other_path.write_text('{"secret":true}', encoding="utf-8")
+    runtime = PythonExecRuntime(
+        PythonExecConfig(session_root=str(own_session), workspace_root=str(own_sandbox))
     )
+
+    result = runtime.handler(
+        _context(
+            "result = artifacts.read_json(parameters['path'])",
+            extra_parameters={"path": str(other_path)},
+        )
+    )
+
+    assert result.success is False
+    assert result.details["diagnostics"][0]["error_type"] == "PermissionError"
+
+    escaped_glob = runtime.handler(
+        _context("result = artifacts.list_files(pattern='../session-b/*')")
+    )
+    assert escaped_glob.success is False
+    assert escaped_glob.details["diagnostics"][0]["error_type"] == "PermissionError"
+
+
+def test_python_exec_is_planning_and_does_not_require_observation_refresh() -> None:
+    runtime = PythonExecRuntime()
+
+    result = runtime.handler(_context("result = 1"))
+
+    assert result.success is True
+    assert result.details["effect"] == "planning"
+    assert result.details["requires_observation_after_call"] is False
 
 
 def test_python_exec_blocks_outside_sandbox_without_approval() -> None:

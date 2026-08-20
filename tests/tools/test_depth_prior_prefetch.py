@@ -47,6 +47,7 @@ def _observation(rgb_path: Path, *, with_intrinsics: bool = True) -> EnvObservat
                     "kind": "rgb",
                     "frame_id": "wrist",
                     "path": str(rgb_path),
+                    "packet_id": "packet-wrist",
                 }
             ],
         },
@@ -119,7 +120,12 @@ def test_sam3_prefetch_overlaps_and_explicit_depth_call_reuses_result(
     sam_result = sam_handler(
         _context(
             "sam3",
-            {"mode": "text", "image": str(rgb_path), "prompt": "cup"},
+            {
+                "mode": "text",
+                "source_packet_id": "packet-wrist",
+                "camera_frame_id": "wrist",
+                "prompt": "cup",
+            },
             observation=observation,
         )
     )
@@ -228,7 +234,12 @@ def test_sam3_continues_when_depth_prefetch_has_no_intrinsics(
     result = sam_handler(
         _context(
             "sam3",
-            {"mode": "text", "image": str(rgb_path), "prompt": "cup"},
+            {
+                "mode": "text",
+                "source_packet_id": "packet-wrist",
+                "camera_frame_id": "wrist",
+                "prompt": "cup",
+            },
             observation=observation,
         )
     )
@@ -299,7 +310,12 @@ def test_role_aware_mcp_camera_flows_through_sam3_and_depth_prefetch(
     tools.bind_handler("sam3", sam_handler)
     sam_result = tools.call(
         "sam3",
-        {"mode": "text", "image": "zed_head", "prompt": "cup"},
+        {
+            "mode": "text",
+            "source_packet_id": "behavior-observation",
+            "camera_frame_id": "zed_head",
+            "prompt": "cup",
+        },
         observation=observation,
         metadata={"session_id": "behavior-role-chain"},
     )

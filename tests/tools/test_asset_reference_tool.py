@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from adapter.protocol import EnvAction
+from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
 from agent.runtime.memory import AgentMemory
 from agent.runtime.reference_localization import ReferencePointLocalization
 from agent.tools.asset_references import (
@@ -64,6 +64,34 @@ def _context(parameters: dict, *, session_id: str = "asset-session"):
         spec=spec,
         parameters=parameters,
         metadata={"session_id": session_id},
+    )
+
+
+def _index_scene(
+    memory: AgentMemory,
+    scene: str | Path,
+    *,
+    packet_id: str = "packet-scene",
+) -> None:
+    if memory.session_id is None:
+        memory.start_session(task="localize target")
+    scene_path = str(scene)
+    memory.add_observation(
+        EnvObservation(
+            task="localize target",
+            cameras=[CameraFrame(frame_id="agentview", rgb=[])],
+            robot=RobotState(),
+            metadata={
+                "image_artifacts": [
+                    {
+                        "kind": "rgb",
+                        "frame_id": "agentview",
+                        "path": scene_path,
+                        "packet_id": packet_id,
+                    }
+                ]
+            },
+        )
     )
 
 
@@ -170,7 +198,7 @@ def test_object_memory_configuration_warning_links_to_deployment_repository() ->
     assert result.details["diagnostics"] == [warning]
 
 
-def test_asset_reference_result_creates_and_resolves_localization_obligation(
+def test_asset_reference_result_creates_and_resolves_pending_localization_evidence(
     tmp_path: Path,
 ) -> None:
     reference = tmp_path / "reference.png"
@@ -190,6 +218,7 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
         )
     )
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -211,13 +240,13 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
     assert pending is not None
     assert pending["scene_image"] == str(scene)
     assert pending["required_parameter"] == "roi_bbox_xyxy"
-    assert memory.detection_selection_gate_error(
-        tool_name="anygrasp",
-        parameters={},
-    )
-    assert memory.detection_selection_gate_error(
-        tool_name="sam3",
-        parameters={"image": str(scene)},
+    assert memory.detection_selection_gate_error(tool_name="anygrasp", parameters={}) is None
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="sam3",
+            parameters={"source_packet_id": "packet-scene"},
+        )
+        is None
     )
 
     memory.add_action(
@@ -228,7 +257,8 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
                     {
                         "name": "sam3",
                         "parameters": {
-                            "image": str(scene),
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
                             "prompt": "alphabet soup can",
                             "roi_bbox_xyxy": [2, 3, 20, 18],
                         },
@@ -236,7 +266,8 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
                             "success": True,
                             "details": {
                                 "parameters": {
-                                    "image": str(scene),
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
                                     "prompt": "alphabet soup can",
                                     "roi_bbox_xyxy": [2, 3, 20, 18],
                                 },
@@ -255,7 +286,7 @@ def test_asset_reference_result_creates_and_resolves_localization_obligation(
     assert memory.pending_reference_localization() is None
 
 
-def test_object_memory_handler_returns_point_and_creates_point_obligation(
+def test_object_memory_handler_returns_point_and_pending_localization_evidence(
     tmp_path: Path,
 ) -> None:
     scene = tmp_path / "scene.png"
@@ -294,7 +325,19 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
                 reason="matching label",
                 provider="fixture",
                 model="fixture-vlm",
-                details={"isolated_context": True},
+                details={
+                    "isolated_context": True,
+                    "candidate_policy": "ranked_provisional",
+                    "requires_downstream_confirmation": True,
+                    "ranked_candidates": [
+                        {
+                            "rank": 1,
+                            "positive_points": [{"x": 22.0, "y": 31.0, "label": 1}],
+                            "bbox_xyxy": [16.0, 22.0, 28.0, 40.0],
+                            "provisional": True,
+                        }
+                    ],
+                },
             )
 
     result = build_object_memory_reference_handler(
@@ -318,11 +361,15 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
     assert outputs["bbox_xyxy"] == [16.0, 22.0, 28.0, 40.0]
     assert outputs["resolved_asset_key"] == "libero/alphabet_soup"
     assert outputs["localization_bundle"]["bbox_xyxy"] == outputs["bbox_xyxy"]
+    assert outputs["localization_bundle"]["candidate_policy"] == "ranked_provisional"
+    assert outputs["localization_bundle"]["requires_downstream_confirmation"] is True
+    assert outputs["localization_bundle"]["ranked_candidates"][0]["rank"] == 1
     assert Path(outputs["marked_scene_image"]).is_file()
     assert "point-session" in Path(outputs["marked_scene_image"]).parts
     assert len(outputs["reference_images"]) == 3
 
     memory = AgentMemory()
+    _index_scene(memory, scene)
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -341,28 +388,40 @@ def test_object_memory_handler_returns_point_and_creates_point_obligation(
     assert pending["required_parameter"] == "positive_points"
     assert pending["positive_points"] == outputs["positive_points"]
     assert pending["bbox_xyxy"] == outputs["bbox_xyxy"]
+    assert pending["candidate_policy"] == "ranked_provisional"
+    assert pending["ranked_candidates"][0]["positive_points"] == outputs["positive_points"]
     assert memory.target_asset_reference()["bbox_xyxy"] == outputs["bbox_xyxy"]
     assert (
         memory.target_asset_reference()["resolved_asset_key"]
         == "libero/alphabet_soup"
     )
-    assert memory.detection_selection_gate_error(
-        tool_name="sam3",
-        parameters={"image": str(scene), "positive_points": [{"x": 23, "y": 31, "label": 1}]},
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="sam3",
+            parameters={
+                "source_packet_id": "packet-scene",
+                "positive_points": [{"x": 23, "y": 31, "label": 1}],
+            },
+        )
+        is None
     )
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": str(scene), "positive_points": outputs["positive_points"]},
+            parameters={
+                "source_packet_id": "packet-scene",
+                "positive_points": outputs["positive_points"],
+            },
         )
         is None
     )
 
 
-def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
+def test_molmopoint_result_creates_pending_sam3_point_evidence() -> None:
     scene = "/tmp/current-scene.png"
     memory = AgentMemory()
     memory.start_session(task="pick alphabet soup")
+    _index_scene(memory, scene)
     memory.save_fact(
         "sam3_no_detection",
         {
@@ -393,12 +452,15 @@ def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
             },
         )
     )
-    assert memory.detection_selection_gate_error(
-        tool_name="retrieve_asset_reference",
-        parameters={
-            "target_object": "alphabet soup",
-            "scene_image": "/tmp/previous-scene.png",
-        },
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="retrieve_asset_reference",
+            parameters={
+                "target_object": "alphabet soup",
+                "scene_image": "/tmp/previous-scene.png",
+            },
+        )
+        is None
     )
     memory.add_action(
         EnvAction(
@@ -434,17 +496,70 @@ def test_molmopoint_result_creates_exact_sam3_point_obligation() -> None:
     assert pending["scene_image"] == scene
     assert pending["positive_points"] == points
     assert pending["localization_bundle"]["source"] == "molmopoint"
-    assert memory.detection_selection_gate_error(
-        tool_name="retrieve_asset_reference",
-        parameters={},
+    assert (
+        memory.detection_selection_gate_error(
+            tool_name="retrieve_asset_reference",
+            parameters={},
+        )
+        is None
     )
     assert (
         memory.detection_selection_gate_error(
             tool_name="sam3",
-            parameters={"image": scene, "positive_points": points},
+            parameters={"source_packet_id": "packet-scene", "positive_points": points},
         )
         is None
     )
+
+    # The public SAM3 contract uses ``mode=points`` + ``points``.  The
+    # reference-localization evidence retains the historical
+    # ``positive_points`` spelling internally; a successful real-shaped call
+    # must still consume the obligation so select does not trigger another
+    # sam3 call on the following turn.
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "tool_calls": [
+                    {
+                        "name": "sam3",
+                        "parameters": {
+                            "mode": "points",
+                            "source_packet_id": "packet-scene",
+                            "camera_frame_id": "agentview",
+                            "points": points,
+                        },
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "parameters": {
+                                    "mode": "points",
+                                    "source_packet_id": "packet-scene",
+                                    "camera_frame_id": "agentview",
+                                    "points": points,
+                                },
+                                "outputs": {
+                                    "result_id": "sam3-point-1",
+                                    "source_image": scene,
+                                    "detections": [
+                                        {
+                                            "id": "detection_000",
+                                            "mask_ref": "/tmp/mask.png",
+                                            "bbox_xyxy": [250, 320, 300, 390],
+                                            "score": 0.9,
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    assert memory.pending_reference_localization() is None
+    assert memory.pending_sam3_selection()["result_id"] == "sam3-point-1"
 
 
 def test_object_memory_handler_returns_structured_search_ambiguity(tmp_path: Path) -> None:
@@ -505,3 +620,72 @@ def test_object_memory_handler_returns_structured_search_ambiguity(tmp_path: Pat
         "libero/akita_black_bowl",
         "libero/stone_black_bowl",
     ]
+
+
+def test_object_memory_handler_distinguishes_retrieval_failure(tmp_path: Path) -> None:
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (64, 48), "gray").save(scene)
+
+    class Client:
+        def resolve(self, **_kwargs):
+            raise TimeoutError("memory service timed out")
+
+    class Localizer:
+        def localize(self, **_kwargs):
+            raise AssertionError("retrieval failure must not invoke localization")
+
+    result = build_object_memory_reference_handler(
+        Client(),
+        Localizer(),
+        output_root=tmp_path / "outputs",
+    )(
+        _context(
+            {
+                "environment": "libero",
+                "target_object": "alphabet soup",
+                "scene_image": str(scene),
+            }
+        )
+    )
+
+    assert result.success is False
+    assert result.details["outputs"]["reason"] == "object_memory_retrieval_failed"
+    assert result.details["diagnostics"][0]["error_type"] == "TimeoutError"
+
+
+def test_object_memory_handler_distinguishes_localization_failure(tmp_path: Path) -> None:
+    scene = tmp_path / "scene.png"
+    Image.new("RGB", (64, 48), "gray").save(scene)
+
+    class Client:
+        def resolve(self, **_kwargs):
+            return ObjectMemoryBundle(
+                query_key="libero/alphabet_soup",
+                namespace="libero",
+                asset_id="alphabet_soup",
+                label="alphabet soup",
+                references=(),
+                manifest={"key": "libero/alphabet_soup"},
+            )
+
+    class Localizer:
+        def localize(self, **_kwargs):
+            raise ValueError("scene crop is ambiguous")
+
+    result = build_object_memory_reference_handler(
+        Client(),
+        Localizer(),
+        output_root=tmp_path / "outputs",
+    )(
+        _context(
+            {
+                "environment": "libero",
+                "target_object": "alphabet soup",
+                "scene_image": str(scene),
+            }
+        )
+    )
+
+    assert result.success is False
+    assert result.details["outputs"]["reason"] == "reference_localization_failed"
+    assert result.details["diagnostics"][0]["error_type"] == "ValueError"

@@ -22,6 +22,7 @@ allowed_tools:
   - observe
   - compile_grasp_seed
   - compute_wrist_alignment
+  - prepare_attachment_probe
   - camera_pose_to_world
   - move_to
   - gripper_control
@@ -45,10 +46,10 @@ the currently bound handle and clears runtime state atomically. Do not route
 `close_env` through `python_exec` or ask the planner to rediscover the handle.
 
 The MCP server's live catalog, tool docstrings, and input schemas are
-authoritative for simulator operations that do not have a stable AgentTool.
-Use `python_exec` to inspect `mcp.list_tools()` and read the saved full catalog
-with `artifacts.read_json(...)` when exact fields matter. If this skill
-conflicts with the MCP catalog/docstring/schema, follow the MCP documentation.
+authoritative, but Simulator MCP access is host-owned and exposed to the planner
+only through stable AgentTools. `python_exec` does not expose an MCP client. If
+this skill conflicts with the MCP catalog/docstring/schema, follow the MCP
+documentation and update the corresponding stable AgentTool adapter.
 If a simulator MCP call fails, first inspect the saved error response and the
 relevant MCP catalog/docstring/schema before changing parameters or retrying.
 `remote_capability_missing` means the configured server does not expose the
@@ -56,31 +57,30 @@ required MCP tool. It is not a grasp-candidate rejection: do not retry the
 same action or advance to another grasp candidate. Stop the workflow until a
 compatible simulator MCP deployment is available.
 
-Use `python_exec` for simulator MCP operations that are not exposed as stable
-OpenETA atom tools. The coding tool exposes:
-
 When `observe`, `move_to`, or `gripper_control` has a
 registered handler, call that stable atom tool directly. Do not route those
 operations through `python_exec`; direct atom tools preserve structured
 observation, motion, collision, and memory artifacts for the next planner turn.
 
+Use `python_exec` as a session-local analysis tool. It can read all files in the
+current Agent session, including complete structured tool outputs, and can write
+derived files only below the session sandbox. It has no Simulator MCP or network
+capability. The restricted coding globals include:
+
 ```python
-mcp.list_tools()
-mcp.call_tool(name, arguments)
-artifacts.materialize_images(payload, bundle_id="optional-id")
+artifacts.describe()
+artifacts.list_files(pattern="*.json", limit=100)
 artifacts.list_images(limit=20)
 artifacts.read_json(path)
+artifacts.read_text(path, max_chars=200000)
 artifacts.grep_text(path, pattern, max_matches=20)
 ```
 
 Set a JSON-serializable `result` variable before the code exits. Use sandboxed
 execution by default. `outside_sandbox` is a general-purpose, separately
-approved host subprocess and is not needed for configured MCP helpers.
-
-`mcp.call_tool` returns a lightweight reference. It automatically materializes
-MCP image payloads into local files and saves full JSON responses under
-`response_path`. Do not pass base64 images through planner context. Use returned
-paths, response artifacts, or `artifacts.list_images(...)` instead.
+approved host subprocess; it does not receive in-process AgentTool or artifact
+helpers. Do not pass base64 images through planner context. Use materialized
+paths and artifact references instead.
 
 The current simulator MCP camera calibration contract for MuJoCo-backed
 MetaWorld/LIBERO observations is `pos + mat`:
@@ -112,16 +112,27 @@ grasp pose directly to `camera_pose_to_world` or simulator control tools.
 Simulator control tools should accept world-frame targets. If a `move_to`
 argument carries `target_pose.frame`, it must be `world`.
 
-For normalized grasps, `grasp_execution` has two condition-bearing control states:
-hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed world
-`+Z`), and binary latched close (`gripper_control position=0`). Alignment, contact,
-probe, and attachment verdict are ordered one-shot obligations/evidence gates.
-Portable objects use the fixed vertical lift probe and full lift. Host-classified
-articulated handles use `prepare_attachment_probe` to freeze a 5 cm linear or arc
-path, retain its endpoint on PASS, and never receive vertical full lift. Each edge
-remains one ordinary control call. Compiled/aligned poses are references;
-fresh visual feedback may justify a bounded world-frame pose adjustment accepted by
-the runtime envelope. Frozen attachment probes and gripper commands remain exact.
+For normalized grasps, the Agent owns the execution sequence. It should normally
+use a hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed
+world `+Z`) and binary latched close (`gripper_control position=0`). Alignment,
+contact, probe, and attachment verification are separate observed steps, not a
+host-authored required-next-action state machine.
+For portable objects, the Agent proposes a small lift and uses fresh dual-view
+co-motion evidence to decide whether to continue. Articulated handles use
+`prepare_attachment_probe(compiled_grasp_id=...)` to freeze a 5 cm linear or arc
+path; execute its `frozen_action` exactly and assess it by `probe_id`. Each edge
+remains one ordinary control call. Compiled poses are anchors. Fresh dual-view
+evidence may justify xyz adjustment with the same `move_to`; preserve provenance.
+The host caps derived residual changes at 2 cm/call and 10 cm total. Frozen
+attachment-probe paths and gripper parameters remain exact. The 2 cm cap measures
+offset from the compiled anchor, not EEF travel to it: call an exact compiled pose
+directly instead of dividing the approach into 2 cm steps. A separate far transit
+waypoint must omit compiled provenance fields and remain outside contact.
+For goal-directed `move_to`, normally omit `num_steps` so the server can use its
+closed-loop default budget. A small explicit `num_steps` intentionally caps the
+controller early; the raw-action “3-5 steps for visible motion” hint belongs to
+`step_env` and does not promise target attainment. Never advance a manipulation
+edge when the receipt reports `reached_target=false`.
 A close acknowledgement or numeric openness cannot replace post-probe co-motion
 evidence. Close stays latched until binary `position=1`.
 A transport timeout requires observation on the same handle before retry.
@@ -143,8 +154,9 @@ the episode turn budget repeatedly calling an unchanged failing backend.
 When creating a simulator environment, call `create_simulator_env` with an
 explicit `env_id`. It defaults camera renders to 512x512 and seed 0, then resets
 the new handle and returns `initial_observation`. Use that result as the first
-observation frame. Only call `reset_env` explicitly when a new episode reset is
-intentionally requested.
+observation frame. If a genuinely new episode is required, use the stable
+environment lifecycle tools to close the current environment and create the
+requested episode; do not bypass them with a raw reset operation.
 
 If the user asks for local execution result image paths, inspect the latest MCP
 tool result or list materialized images:

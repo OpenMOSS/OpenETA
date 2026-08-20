@@ -22,6 +22,38 @@ _BACKEND: AnyGraspBackend | None = None
 
 
 @mcp.tool()
+def get_capabilities() -> dict[str, Any]:
+    """Report the deployment-bound gripper geometry used by AnyGrasp.
+
+    Clients must compare ``max_gripper_width_m`` with the physical gripper
+    capability used by their execution gate before enabling this backend.
+    Geometry is fixed when the detector is created and cannot be changed by a
+    planner-facing grasp request; a mismatch requires service redeployment.
+    """
+
+    if _BACKEND is None:
+        return {
+            "success": False,
+            "content": "AnyGrasp capability discovery failed: backend not configured.",
+            "details": {
+                "tool": "get_capabilities",
+                "backend": "anygrasp_mcp",
+                "reason": "backend_not_configured",
+                "capabilities": {},
+            },
+        }
+    return {
+        "success": True,
+        "content": "AnyGrasp deployment capabilities retrieved.",
+        "details": {
+            "tool": "get_capabilities",
+            "backend": "anygrasp_mcp",
+            "capabilities": _BACKEND.capabilities(),
+        },
+    }
+
+
+@mcp.tool()
 def detect_grasps(
     rgb: dict[str, Any],
     depth: dict[str, Any],

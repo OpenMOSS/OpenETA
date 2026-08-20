@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
   "gymnasium>=1.0",
   "imageio[ffmpeg]>=2.34",
-  "mcp>=1.0",
+  "mcp>=1.0,<2",
   "numpy>=1.26",
   "Pillow>=10",
   "prompt_toolkit>=3.0",
@@ -17,7 +17,11 @@ dependencies = [
 openeta = "agent.cli.openeta_cli:main"
 openeta-robocasa-benchmark = "scripts.robocasa_benchmark:main"
 openeta-batch = "agent.cli.batch_eval:main"
+openeta-eval = "agent.cli.eval:main"
 openeta-subagent-eval = "agent.cli.subagent_eval:main"
+openeta-visual-state-eval = "agent.cli.visual_state_eval:main"
+openeta-visual-history-eval = "agent.cli.visual_history_eval:main"
+openeta-visual-history-rollout-extract = "agent.cli.visual_history_rollout_extract:main"
 openeta-replay = "logger.replay:main"
 
 [project.optional-dependencies]

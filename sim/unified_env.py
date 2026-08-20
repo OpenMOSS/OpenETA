@@ -727,6 +727,13 @@ class UnifiedEnv(gym.Env):
         jv = raw.get("robot_joint_velocities")
         if jv is not None:
             proprio["joint_velocities"] = self._np(jv)
+        # Names stay a list of str, not self._np: they label joint_positions
+        # positionally and a consumer that must select a subset by name (the
+        # collision checker, on a robot whose arms are interleaved) cannot
+        # recover them from the numeric vector.
+        jn = raw.get("robot_joint_names")
+        if jn:
+            proprio["joint_names"] = [str(n) for n in jn]
         ee = raw.get("end_effector_pose")
         if ee and isinstance(ee, dict):
             xyz = ee.get("xyz")
@@ -1002,17 +1009,123 @@ class UnifiedEnv(gym.Env):
                     qpos_addr = model.jnt_qposadr[jnt_id]
                     pos = qpos[qpos_addr:qpos_addr + 3].tolist()
                     quat = qpos[qpos_addr + 3:qpos_addr + 7].tolist()
+                    bounds = self._mujoco_object_world_bounds(model, data, body_id)
                 except Exception:
-                    pos, quat = None, None
-                objects.append({
+                    pos, quat, bounds = None, None, {}
+                object_state = {
                     "name": getattr(obj, "name", root_body),
                     "category": getattr(obj, "category_name", ""),
                     "position": pos,
                     "orientation": quat,
-                })
+                }
+                object_state.update(bounds)
+                objects.append(object_state)
             return objects
         except Exception:
             return []
+
+    @staticmethod
+    def _mujoco_object_world_bounds(model: Any, data: Any, root_body_id: int) -> dict[str, Any]:
+        """Return a world AABB for one MuJoCo object subtree.
+
+        Uses each geom's true type and half-extents rather than ``geom_rbound``
+        (the bounding *sphere* radius, which over-reports a cube's extent by
+        ~1.73x).  An inflated ``dims`` propagates into the carried-object
+        collision box and the receptacle placement corridor, so tight bounds
+        matter for both.  Mesh/heightfield/plane geoms have no cheap analytic
+        box and still fall back to ``geom_rbound``.
+        """
+
+        body_parent = np.asarray(model.body_parentid).reshape(-1)
+
+        def belongs_to_root(body_id: int) -> bool:
+            current = int(body_id)
+            while current > 0 and current != root_body_id:
+                current = int(body_parent[current])
+            return current == root_body_id
+
+        minimum = np.full(3, np.inf, dtype=np.float64)
+        maximum = np.full(3, -np.inf, dtype=np.float64)
+        found = False
+        geom_body = np.asarray(model.geom_bodyid).reshape(-1)
+        geom_rbound = np.asarray(model.geom_rbound).reshape(-1)
+        geom_xpos = np.asarray(data.geom_xpos)
+        geom_type = np.asarray(model.geom_type).reshape(-1)
+        geom_size = np.asarray(model.geom_size)
+        geom_xmat = np.asarray(data.geom_xmat)
+        for geom_id, body_id in enumerate(geom_body):
+            if not belongs_to_root(int(body_id)):
+                continue
+            half = UnifiedEnv._mujoco_geom_world_half_extent(
+                int(geom_type[geom_id]),
+                np.asarray(geom_size[geom_id], dtype=np.float64).reshape(-1),
+                np.asarray(geom_xmat[geom_id], dtype=np.float64).reshape(3, 3),
+                float(geom_rbound[geom_id]),
+            )
+            if half is None:
+                continue
+            center = np.asarray(geom_xpos[geom_id], dtype=np.float64).reshape(-1)[:3]
+            minimum = np.minimum(minimum, center - half)
+            maximum = np.maximum(maximum, center + half)
+            found = True
+        if not found:
+            return {}
+        return {
+            "aabb_min": minimum.tolist(),
+            "aabb_max": maximum.tolist(),
+            "dims": (maximum - minimum).tolist(),
+        }
+
+    @staticmethod
+    def _mujoco_geom_world_half_extent(
+        geom_type: int,
+        size: "np.ndarray",
+        rot: "np.ndarray",
+        rbound: float,
+    ) -> "np.ndarray | None":
+        """World-axis half-extent of one geom, or ``None`` to skip it.
+
+        ``geom_size`` semantics are per-type: box stores half-sizes, sphere
+        uses only ``size[0]`` as its radius, and capsule/cylinder store
+        (radius, half-length) with the length along local +z.  ``abs(rot) @ h``
+        is the exact world-axis half-extent of a rotated box.
+        """
+        try:
+            import mujoco
+        except Exception:
+            mujoco = None
+
+        def sphere_fallback() -> "np.ndarray | None":
+            if not np.isfinite(rbound) or rbound <= 0:
+                return None
+            return np.full(3, rbound, dtype=np.float64)
+
+        if mujoco is None:
+            return sphere_fallback()
+
+        gt = mujoco.mjtGeom
+        local: "np.ndarray | None" = None
+        if geom_type == gt.mjGEOM_SPHERE and size.size >= 1:
+            radius = float(size[0])
+            if radius > 0:
+                # Rotation-invariant: return directly, no need to project.
+                return np.full(3, radius, dtype=np.float64)
+        elif geom_type == gt.mjGEOM_BOX and size.size >= 3:
+            local = size[:3].astype(np.float64)
+        elif geom_type in (gt.mjGEOM_CAPSULE, gt.mjGEOM_CYLINDER) and size.size >= 2:
+            radius, half_len = float(size[0]), float(size[1])
+            # Capsule end caps add one radius past each flat cylinder face.
+            axial = half_len + (radius if geom_type == gt.mjGEOM_CAPSULE else 0.0)
+            local = np.array([radius, radius, axial], dtype=np.float64)
+        elif geom_type == gt.mjGEOM_ELLIPSOID and size.size >= 3:
+            local = size[:3].astype(np.float64)
+
+        if local is None or not np.all(np.isfinite(local)) or not np.any(local > 0):
+            return sphere_fallback()
+        half = np.abs(rot) @ local
+        if not np.all(np.isfinite(half)) or not np.any(half > 0):
+            return sphere_fallback()
+        return half
 
     def _normalise_metaworld(self, raw: dict) -> dict:
         """MetaWorld direct env returns numpy state array, not a dict."""

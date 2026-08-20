@@ -110,6 +110,9 @@ def make_tool_result_details(
     state_delta: JsonDict | None = None,
     environment_receipt: JsonDict | None = None,
     diagnostics: list[JsonDict] | None = None,
+    semantic_outcome: str | None = None,
+    facts_produced: list[str] | None = None,
+    recovery_options: list[JsonDict] | None = None,
 ) -> JsonDict:
     """Build the standard `ToolResult.details` envelope.
 
@@ -126,11 +129,17 @@ def make_tool_result_details(
         "effect": spec.effect.value,
         "result_type": tool_result_type(spec),
         "success": success,
+        "operational_success": success,
         "parameters": dict(parameters or {}),
         "outputs": dict(outputs or {}),
         "artifacts": list(artifacts or []),
         "state_delta": dict(state_delta or {}),
         "diagnostics": list(diagnostics or []),
+        "semantic_outcome": semantic_outcome or (
+            "completed" if success else "operational_failure"
+        ),
+        "facts_produced": list(facts_produced or []),
+        "recovery_options": list(recovery_options or []),
         "requires_observation_after_call": spec.requires_observation_after_call,
     }
     if environment_receipt is not None:
@@ -148,6 +157,9 @@ def make_tool_result(
     state_delta: JsonDict | None = None,
     environment_receipt: JsonDict | None = None,
     diagnostics: list[JsonDict] | None = None,
+    semantic_outcome: str | None = None,
+    facts_produced: list[str] | None = None,
+    recovery_options: list[JsonDict] | None = None,
 ) -> ToolResult:
     """Create a `ToolResult` that already follows the standard envelope."""
 
@@ -163,6 +175,9 @@ def make_tool_result(
             state_delta=state_delta,
             environment_receipt=environment_receipt,
             diagnostics=diagnostics,
+            semantic_outcome=semantic_outcome,
+            facts_produced=facts_produced,
+            recovery_options=recovery_options,
         ),
     )
 
@@ -545,6 +560,7 @@ def _normalize_tool_result(
         details.setdefault("effect", spec.effect.value)
         details.setdefault("result_type", tool_result_type(spec))
         details.setdefault("success", result.success)
+        details.setdefault("operational_success", result.success)
         details.setdefault("parameters", dict(parameters))
         details.setdefault("outputs", {})
         details.setdefault("artifacts", [])
@@ -564,11 +580,118 @@ def _normalize_tool_result(
             outputs=details,
             artifacts=[artifact for artifact in artifacts if isinstance(artifact, dict)],
         )
+    semantic_projection = _semantic_result_projection(
+        spec=spec,
+        success=result.success,
+        details=details,
+    )
+    if not details.get("semantic_outcome") or details.get("semantic_outcome") == "completed":
+        details["semantic_outcome"] = semantic_projection["semantic_outcome"]
+    details.setdefault("operational_success", result.success)
+    if not details.get("facts_produced"):
+        details["facts_produced"] = semantic_projection["facts_produced"]
+    if not details.get("recovery_options"):
+        details["recovery_options"] = semantic_projection["recovery_options"]
     return ToolResult(
         success=result.success,
         content=result.content,
         details=details,
     )
+
+
+def _semantic_result_projection(
+    *,
+    spec: ToolSpec,
+    success: bool,
+    details: JsonDict,
+) -> JsonDict:
+    """Separate handler execution from what the result establishes for planning."""
+
+    outputs = details.get("outputs")
+    outputs = outputs if isinstance(outputs, dict) else {}
+    artifacts = details.get("artifacts")
+    artifacts = artifacts if isinstance(artifacts, list) else []
+    state_delta = details.get("state_delta")
+    state_delta = state_delta if isinstance(state_delta, dict) else {}
+    facts = [
+        f"outputs.{key}"
+        for key, value in outputs.items()
+        if value not in (None, "", [], {})
+    ][:24]
+    facts.extend(
+        f"artifacts[{index}]"
+        for index, artifact in enumerate(artifacts[:8])
+        if isinstance(artifact, dict)
+    )
+    facts.extend(f"state_delta.{key}" for key in list(state_delta)[:8])
+    recovery: list[JsonDict] = []
+    if not success:
+        outcome = "operational_failure"
+        recovery.append(
+            {
+                "action": "inspect_diagnostics",
+                "reason": "the tool call did not complete operationally",
+            }
+        )
+    elif spec.name == "sam3" or "detections" in outputs or "detection_count" in outputs:
+        detections = outputs.get("detections")
+        count = outputs.get("detection_count")
+        if isinstance(detections, list):
+            count = len(detections)
+        try:
+            detection_count = int(count)
+        except (TypeError, ValueError):
+            detection_count = -1
+        if detection_count == 0:
+            outcome = "no_detection"
+            recovery.extend(
+                [
+                    {
+                        "action": "refine_grounding",
+                        "reason": "the requested target was not segmented",
+                    },
+                    {
+                        "action": "use_reference_or_point_prompt",
+                        "reason": "add visual identity evidence without treating call success as detection",
+                    },
+                ]
+            )
+        else:
+            outcome = "detections_available"
+    elif "grasp_candidates" in outputs or "candidate_count" in outputs:
+        candidates = outputs.get("grasp_candidates")
+        count = outputs.get("candidate_count")
+        if isinstance(candidates, list):
+            count = len(candidates)
+        try:
+            candidate_count = int(count)
+        except (TypeError, ValueError):
+            candidate_count = -1
+        if candidate_count == 0:
+            outcome = "no_candidate"
+            recovery.append(
+                {
+                    "action": "inspect_recovery_options",
+                    "reason": "estimation completed but produced no executable candidate",
+                }
+            )
+        else:
+            outcome = "candidates_available"
+    elif spec.effect == ToolEffect.WORLD_MUTATING:
+        outcome = "mutation_acknowledged"
+        recovery.append(
+            {
+                "action": "observe",
+                "reason": "verify the world effect from a fresh observation",
+            }
+        )
+    else:
+        outcome = "completed"
+    return {
+        "semantic_outcome": outcome,
+        "facts_produced": list(dict.fromkeys(facts)),
+        "recovery_options": recovery,
+    }
 
 
 def _stamp_tool_result_provenance(
@@ -848,9 +971,10 @@ def build_default_tool_registry() -> ToolRegistry:
             name="python_exec",
             category="coding",
             description=(
-                "Execute a small restricted Python snippet with OpenETA helper APIs. "
-                "Use this for one-off API/MCP orchestration that does not deserve a "
-                "dedicated agent tool."
+                "Execute a restricted Python snippet for session-local data inspection, "
+                "filtering, computation, and derived artifacts. The sandbox can read the "
+                "current Agent session and write only its sandbox; it has no Simulator MCP "
+                "or network capability. Use stable Agent tools for external side effects."
             ),
             parameters={
                 "code": "Python code. Set a JSON-serializable `result` variable.",
@@ -860,7 +984,8 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 "timeout_s": "optional execution timeout; outside_sandbox is capped at 600s",
             },
-            effect=ToolEffect.WORLD_MUTATING,
+            safe_by_default=True,
+            effect=ToolEffect.PLANNING,
             batchable=False,
         ),
         ToolSpec(
@@ -922,14 +1047,20 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Segment objects or regions from RGB observations using text, one to "
                 "64 foreground/background pixel points, or an optional full-frame "
                 "pixel ROI. Rank detections and provide candidate visuals for explicit "
-                "VLM selection while preserving original camera coordinates."
+                "VLM selection while preserving original camera coordinates. The host "
+                "resolves the session-owned observation packet; local image paths are "
+                "not accepted from the Agent."
             ),
             parameters={
-                "mode": "text | points; defaults to text for backward compatibility",
-                "image": (
-                    "exact local RGB image path (preferred), or a frame id present in the "
-                    "current observation's image_artifacts"
+                "source_packet_id": (
+                    "required exact packet_id copied from visible observation evidence; "
+                    "the host resolves its local RGB-D artifacts and camera metadata"
                 ),
+                "camera_frame_id": (
+                    "optional exact camera frame within the packet; omit to prefer "
+                    "agentview, then the unique scene_primary or sole RGB camera"
+                ),
+                "mode": "text | points; defaults to text",
                 "prompt": (
                     "required only for mode=text: concise visual object phrase, preferably English"
                 ),
@@ -948,6 +1079,12 @@ def build_default_tool_registry() -> ToolRegistry:
                     "{x, y, label}; label=1 is foreground and label=0 is background; "
                     "use the exact points returned by retrieve_asset_reference"
                 ),
+                "evidence_role": (
+                    "semantic memory slot for this segmentation: target_object or "
+                    "placement_region. Use placement_region for a basket, bin, "
+                    "receptacle, or other destination; legacy omission defaults to "
+                    "target_object"
+                ),
             },
             effect=ToolEffect.READ_ONLY,
         ),
@@ -958,8 +1095,10 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Resolve an object-only asset phrase (identity/appearance, not a "
                 "scene relation) through ranked "
                 "object-memory search, fetch the selected canonical asset's reference "
-                "views, and use an isolated visual localizer to return a foreground "
-                "pixel point. Low-confidence or ambiguous search fails structurally "
+                "views, and use an isolated visual localizer to return a bounded, "
+                "ranked foreground seed plus candidate audit. The highest-ranked seed "
+                "is passed to SAM3 one candidate at a time for main-Agent confirmation. "
+                "Low-confidence or ambiguous search fails structurally "
                 "instead of silently choosing rank 1. A static environment-scoped "
                 "catalog remains a compatibility fallback. The planner never supplies "
                 "a URL. Example: for 'pick up the black bowl on the cookie box', "
@@ -1011,6 +1150,10 @@ def build_default_tool_registry() -> ToolRegistry:
                 "detection_id": "stable candidate id such as detection_001",
                 "selection_confidence": "optional VLM confidence in the semantic selection",
                 "reason": "short visual or task-semantic justification",
+                "evidence_role": (
+                    "optional exact semantic role from the pending SAM3 result: "
+                    "target_object or placement_region; omission inherits the pending role"
+                ),
                 "target_geometry_family": (
                     "optional truthful gross-geometry hint: upright_can, "
                     "upright_bottle, boxed_item, bowl, apple, articulated_handle, "
@@ -1038,26 +1181,12 @@ def build_default_tool_registry() -> ToolRegistry:
             batchable=False,
         ),
         ToolSpec(
-            name="activate_final_grasp_candidate",
-            category="manipulation",
-            description=(
-                "Activate the highest-scoring perception-refinable grasp only after "
-                "all bounded camera and estimator fallbacks are exhausted."
-            ),
-            parameters={
-                "recovery_id": "exact active grasp_estimation_recovery recovery_id",
-            },
-            safe_by_default=True,
-            effect=ToolEffect.BOOKKEEPING,
-            batchable=False,
-        ),
-        ToolSpec(
             name="anygrasp",
             category="manipulation",
             description=(
                 "Generate score-descending parallel-jaw grasp candidates from RGBD "
-                "observations. Rank 0 is the greedy active candidate; linked safety "
-                "or motion rejection activates the next ranked candidate."
+                "observations. Scores are evidence, not a host selection: the Agent "
+                "chooses a candidate after inspecting the complete result."
             ),
             parameters={
                 "mode": "targeted or scene; defaults to targeted",
@@ -1093,9 +1222,16 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Generate one normalized score-descending camera-frame grasp "
                 "candidate queue from aligned RGB-D and an optional target mask. "
                 "The host selects compatible AnyGrasp, Contact-GraspNet, or "
-                "GraspGenX backends and performs structured fallback."
+                "GraspGenX backends and performs structured fallback. After final "
+                "host filtering, an isolated read-only visual advisor may return a "
+                "ranked recommendation with reasons; it never activates a candidate."
             ),
             parameters={
+                "bundle_id": (
+                    "preferred opaque id from host_resolved_inputs.grasp_pose_estimate; "
+                    "when supplied, the host resolves the aligned RGB-D packet, selected "
+                    "mask, intrinsics, frame id, and object-scene epoch atomically"
+                ),
                 "mode": "targeted or scene; defaults to targeted",
                 "rgb": "local RGB image path from the current observation",
                 "depth": "aligned local raw-depth image path from the same camera",
@@ -1112,8 +1248,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "hints": (
                     "optional semantic hints: approach_direction_camera, "
                     "approach_threshold_rad, collision_check, dense_sampling, "
-                    "depth_cutoff_factor, and host-owned excluded_backends used "
-                    "only after physical gripper-width exhaustion"
+                    "depth_cutoff_factor, max_gripper_width_m, and host-owned "
+                    "excluded_backends used only after physical gripper-width "
+                    "exhaustion"
                 ),
             },
             effect=ToolEffect.PLANNING,
@@ -1146,6 +1283,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "up_direction_camera": (
                     "required nonzero gravity-opposing direction [x, y, z] in the "
                     "OpenCV camera frame"
+                ),
+                "depth_cutoff_factor": (
+                    "optional finite factor in [1, 4], default 1; multiplies the "
+                    "GraspGenX service depth cutoff while preserving raw depth, "
+                    "camera intrinsics, and returned metric grasp geometry"
                 ),
             },
             safe_by_default=False,
@@ -1193,20 +1335,12 @@ def build_default_tool_registry() -> ToolRegistry:
             category="manipulation",
             description=(
                 "Predict five camera-frame object placement transforms and the "
-                "corresponding placed grasp poses from one RGBD observation."
+                "corresponding placed grasp poses from one host-resolved RGBD evidence bundle."
             ),
             parameters={
-                "rgb": "local RGB image file path from the selected grasp observation",
-                "depth": "aligned local depth image file path from the same observation",
-                "object_mask": "local object mask path used by the selected grasp call",
-                "placement_region_mask": (
-                    "SAM3 segmentation artifact containing mask_ref and source_image; "
-                    "additional SAM3 detection metadata is allowed"
-                ),
-                "intrinsics": "pinhole intrinsics with finite fx, fy, cx, cy, and scale",
-                "selected_grasp": (
-                    "object with one complete normalized grasp candidate and the "
-                    "successful targeted grasp tool's details.source object"
+                "bundle_id": (
+                    "exact opaque id from host_resolved_inputs.anyplace; the host resolves "
+                    "RGB-D, masks, intrinsics, and selected grasp provenance atomically"
                 ),
             },
             safe_by_default=False,
@@ -1340,8 +1474,9 @@ def build_default_tool_registry() -> ToolRegistry:
             name="compile_grasp_seed",
             category="geometry",
             description=(
-                "Compile one active normalized camera-frame grasp seed into staged "
-                "world-frame Panda EEF hover/contact poses with the host-owned "
+                "Compile one normalized camera-frame grasp seed into world-frame "
+                "Panda EEF contact geometry plus an ordinary clearance waypoint, using "
+                "the host-owned "
                 "read-only embodiment calibration and an optional task-family "
                 "strategy. Unknown geometry families use the generic calibrated "
                 "transform instead of being rejected."
@@ -1362,14 +1497,9 @@ def build_default_tool_registry() -> ToolRegistry:
                     "automatic matching or generic fallback"
                 ),
                 "approach_mode": (
-                    "host-owned articulated-handle mode: top_down, front, or side; "
-                    "the agent must not invent or override it"
+                    "optional Agent-selected articulated-handle geometric approach: "
+                    "top_down, front, or side; it must match the selected strategy"
                 ),
-                "candidate_fallback": (
-                    "host-owned true only for the one global score fallback after all "
-                    "articulated-handle modes fail"
-                ),
-                "fallback_reason": "host-owned structured fallback provenance",
                 "scene_epoch": "current host-owned non-negative scene epoch",
                 "pregrasp_distance_m": (
                     "optional requested approach standoff in [0.04, 0.16] m; "
@@ -1383,8 +1513,12 @@ def build_default_tool_registry() -> ToolRegistry:
             name="compute_wrist_alignment",
             category="geometry",
             description=(
-                "Compute one bounded world-frame hover correction from a fresh wrist "
-                "mask, aligned depth and camera calibration. It does not move the robot."
+                "Near a compiled clearance/hover reference, compute one bounded "
+                "world-frame lateral translation correction from a fresh wrist mask, "
+                "aligned depth, and the configured calibrated gripper-center projection. "
+                "Use it when approach orientation and contact depth remain credible; it "
+                "does not move the robot or re-estimate orientation/axial contact depth. "
+                "For those uncertainties, run a full fresh wrist-view grasp estimate."
             ),
             parameters={
                 "compiled_grasp": "complete compile_grasp_seed output",
@@ -1392,9 +1526,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "depth": "fresh aligned wrist depth PNG path",
                 "intrinsics": "matching wrist fx/fy/cx/cy/scale",
                 "camera_extrinsics": "matching wrist camera-to-world calibration",
-                "current_eef_pose": "current measured EEF pose containing xyz",
+                "current_eef_pose": (
+                    "current measured EEF pose from the same wrist observation, "
+                    "including xyz and rotation_matrix, quat_xyzw, or rotvec"
+                ),
                 "scene_epoch": "current host-owned non-negative scene epoch",
-                "desired_pixel_xy": "optional gripper-corridor pixel; defaults to cx/cy",
                 "max_correction_m": "optional correction clamp in [0.005, 0.05] m",
             },
             effect=ToolEffect.READ_ONLY,
@@ -1404,13 +1540,15 @@ def build_default_tool_registry() -> ToolRegistry:
             name="prepare_attachment_probe",
             category="geometry",
             description=(
-                "Validate and freeze one articulated-handle attachment probe after "
-                "gripper close. Linear proposals provide a world direction; arc "
-                "proposals provide short world-frame waypoint offsets. The host binds "
-                "the result to the active candidate, current scene epoch, closed-gripper "
-                "EEF pose, a fixed 5 cm path, and an immutable path hash."
+                "Validate and freeze one Agent-proposed articulated-handle probe. "
+                "The caller names a current compiled grasp from the provenance graph; "
+                "the host checks evidence freshness and bounded geometry without "
+                "tracking a grasp phase or prescribing when the probe must run."
             ),
             parameters={
+                "compiled_grasp_id": (
+                    "required current compiled grasp id from provenance_evidence_graph"
+                ),
                 "motion_type": "linear or arc",
                 "direction_world_xyz": (
                     "required for linear: proposed non-zero world-frame direction"
@@ -1431,7 +1569,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 "agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is "
                 "read-only and cannot move the robot or use privileged joint state."
             ),
-            parameters={},
+            parameters={"probe_id": "completed probe id returned by prepare_attachment_probe"},
             effect=ToolEffect.READ_ONLY,
             batchable=False,
         ),
@@ -1453,14 +1591,27 @@ def build_default_tool_registry() -> ToolRegistry:
             name="move_to",
             category="control",
             description=(
-                "Move the end effector to one world-frame target pose through the controller."
+                "Move the end effector to one Agent-authored world-frame target pose. "
+                "A compiled grasp pose is a reference anchor, not an exact execution "
+                "authorization: after fresh visual review the Agent may adjust its xyz "
+                "while preserving compiled_grasp_id and waypoint_role. The "
+                "host derives the residual and enforces at most 0.02 m change per call "
+                "and 0.10 m cumulative residual travel per compiled grasp. For a "
+                "goal-directed reach, normally omit num_steps and inspect the returned "
+                "reached_target value before advancing the manipulation."
             ),
             parameters={
                 "target_pose": (
-                    "desired world-frame end-effector pose with xyz and optional "
-                    "rotation_matrix, quat_xyzw, euler_xyz_deg, or roll/pitch/yaw"
+                    "final Agent-authored world-frame end-effector pose with xyz and "
+                    "optional rotation_matrix, quat_xyzw, euler_xyz_deg, or roll/pitch/yaw; "
+                    "for a compiled grasp, copy its provenance fields unchanged even when "
+                    "visually adjusting xyz"
                 ),
-                "num_steps": "optional controller step limit",
+                "num_steps": (
+                    "optional maximum closed-loop controller iterations; omit to use "
+                    "the server default reach budget. This is not a speed or distance "
+                    "parameter, and a small value may deliberately stop short"
+                ),
                 "tolerance": "optional position tolerance in metres",
                 "ori_tolerance": "optional orientation tolerance in radians",
                 "enable_collision_check": "optional simulator collision-check toggle",
@@ -1492,7 +1643,12 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Transition the simulator's latched gripper command state. The command "
                 "remains active during later motion until the opposite state is requested."
             ),
-            parameters={"position": "binary integer: 0 closed, 1 open"},
+            parameters={
+                "position": (
+                    "required binary command: exactly 0=closed or 1=open; this is not "
+                    "the continuous measured aperture"
+                )
+            },
             effect=ToolEffect.WORLD_MUTATING,
             batchable=False,
         ),
@@ -1514,12 +1670,26 @@ def build_default_tool_registry() -> ToolRegistry:
         ToolSpec(
             name="ik_preview_check",
             category="safety",
-            description="Preview inverse-kinematics feasibility before execution.",
+            description=(
+                "Read-only endpoint reachability preview before execution. Returns "
+                "reachable, unreachable, or unknown with joint-limit, residual, and "
+                "optional endpoint-collision diagnostics; it does not check a path."
+            ),
             parameters={
                 "target_pose": (
-                    "desired end-effector pose; preserve the active grasp candidate id "
-                    "from camera_pose_to_world when checking a grasp pose"
-                )
+                    "required desired world-frame end-effector pose; preserve the active "
+                    "grasp candidate id from camera_pose_to_world when checking a grasp pose"
+                ),
+                "position_tolerance_m": "optional maximum per-axis position residual",
+                "orientation_tolerance_rad": "optional orientation residual tolerance",
+                "preserve_current_orientation": (
+                    "optional, default true when target_pose omits orientation so the "
+                    "preview matches move_to's position-only wrist behavior"
+                ),
+                "check_endpoint_collision": (
+                    "optional self/endpoint collision check; path feasibility remains "
+                    "the responsibility of obstacle_avoidance"
+                ),
             },
             safe_by_default=True,
             effect=ToolEffect.READ_ONLY,

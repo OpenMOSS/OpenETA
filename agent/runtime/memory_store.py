@@ -104,6 +104,7 @@ class JsonMemoryStore:
             return _empty_working_memory()
         return {
             "facts": self._read_json_object("facts.json"),
+            "agent_working_state": self._read_json_object("agent_working_state.json"),
             "artifacts": self._read_json_object("artifacts.json"),
             "skill_notes": self._read_json_object("skill_notes.json"),
             "compact_summary": self._read_compact_summary(),
@@ -114,6 +115,10 @@ class JsonMemoryStore:
             return
         self.working_dir.mkdir(parents=True, exist_ok=True)
         self._write_json("facts.json", dict(getattr(memory, "facts", {})))
+        self._write_json(
+            "agent_working_state.json",
+            dict(getattr(memory, "agent_working_state", {})),
+        )
         self._write_json("artifacts.json", dict(getattr(memory, "artifacts", {})))
         self._write_json("skill_notes.json", dict(getattr(memory, "skill_notes", {})))
         self._write_json(
@@ -393,6 +398,7 @@ class JsonMemoryStore:
 def _empty_working_memory() -> JsonDict:
     return {
         "facts": {},
+        "agent_working_state": {},
         "artifacts": {},
         "skill_notes": {},
         "compact_summary": "",

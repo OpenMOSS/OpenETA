@@ -1,0 +1,38 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "agent-first-milk-canary-v1",
+  "description": "Single clear-target canary for Agent-first result, artifact, skill, gate, and bounded-VDM contracts.",
+  "episode_manifest": "manifests/libero_object_task7_agent_first_canary.json",
+  "variants": [
+    {
+      "variant_id": "agent_first_bounded_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260814
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "agent-first-clear-target-canary",
+    "purpose": "separate harness/framework behavior from tiny-target localization difficulty"
+  }
+}

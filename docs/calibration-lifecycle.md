@@ -40,6 +40,16 @@ compatibility. Object-family pose policy, task-specific width bounds, and
 exploration heuristics belong in `agent/strategies/grasp`, not in calibration.
 This prevents a robot transform from becoming a global task allowlist.
 
+Version 2 also carries the structured wrist-alignment reference
+`wrist_alignment.eef_to_gripper_center_xyz`. It is the gripper contact-centre
+point expressed in the profile's `eef_frame`; it is not an image pixel and is
+never supplied by the Planner. `compute_wrist_alignment` loads the same staged
+profile as `compile_grasp_seed`, verifies its calibration ID and SHA-256, then
+projects this point using the current EEF pose and exact wrist intrinsics and
+extrinsics. Live `camera_to_world` and calibrated eye-in-hand
+`T_gripper_cam` are supported. Missing or mismatched calibration fails closed;
+the camera principal point `cx/cy` is not a fallback for the gripper centre.
+
 ## Session Ownership
 
 Proposals and generated profiles are stored beneath the current session

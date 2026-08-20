@@ -13,7 +13,7 @@ from agent.tools.grasp_strategies import (
 )
 
 
-def test_default_strategy_matches_only_truthful_geometry_family() -> None:
+def test_candidate_strategies_require_explicit_selection() -> None:
     strategies = load_grasp_strategies()
 
     strategy, selection = select_grasp_strategy(
@@ -21,35 +21,29 @@ def test_default_strategy_matches_only_truthful_geometry_family() -> None:
         calibration_id="graspnet-eef-panda-p8",
         target_geometry_family="upright_can",
     )
-    assert strategy is not None
-    assert strategy["strategy_id"] == "top-down-vertical-panda-p8"
-    assert selection == "automatic_geometry_family"
+    assert strategy is None
+    assert selection == "generic_fallback"
 
-    bowl, bowl_selection = select_grasp_strategy(
+    explicit, explicit_selection = select_grasp_strategy(
         strategies,
         calibration_id="graspnet-eef-panda-p8",
-        target_geometry_family="bowl",
+        target_geometry_family="upright_can",
+        strategy_id="top-down-vertical-panda-p8",
     )
-    assert bowl is not None
-    assert bowl["strategy_id"] == "top-down-bowl-panda-p8"
-    assert bowl_selection == "automatic_geometry_family"
+    assert explicit is not None
+    assert explicit["strategy_id"] == "top-down-vertical-panda-p8"
+    assert explicit_selection == "explicit"
 
-    generic, generic_selection = select_grasp_strategy(
-        strategies,
+    validated = dict(explicit)
+    validated["status"] = "validated"
+    automatic, automatic_selection = select_grasp_strategy(
+        [validated],
         calibration_id="graspnet-eef-panda-p8",
-        target_geometry_family="apple",
+        target_geometry_family="upright_can",
     )
-    assert generic is None
-    assert generic_selection == "generic_fallback"
-
-    handle, handle_selection = select_grasp_strategy(
-        strategies,
-        calibration_id="graspnet-eef-panda-p8",
-        target_geometry_family="articulated_handle",
-    )
-    assert handle is not None
-    assert handle["strategy_id"] == "top-down-drawer-handle-panda-p8"
-    assert handle_selection == "automatic_geometry_family"
+    assert automatic is not None
+    assert automatic["strategy_id"] == "top-down-vertical-panda-p8"
+    assert automatic_selection == "automatic_geometry_family"
 
 
 def test_explicit_incompatible_strategy_fails_closed() -> None:

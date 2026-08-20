@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from agent.tools.handlers import build_grasp_pose_estimate_handler
 from agent.tools.registry import (
     ToolEffect,
@@ -101,6 +103,7 @@ def test_tool_spec_exposes_only_backend_neutral_inputs() -> None:
 
     assert spec.effect == ToolEffect.PLANNING
     assert set(spec.parameters) == {
+        "bundle_id",
         "mode",
         "rgb",
         "depth",
@@ -139,6 +142,7 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
     assert [name for name, _ in calls] == ["anygrasp", "contact_graspnet"]
     assert calls[0][1]["target_mask"].endswith("mask.png")
     assert calls[0][1]["dense_grasp"] is True
+    assert calls[0][1]["depth_cutoff_factor"] == 1.25
     assert calls[1][1]["object_mask"]["source_image"].endswith("rgb.png")
     assert result.details["selected_backend"] == "contact_graspnet"
     assert [attempt["status"] for attempt in result.details["backend_attempts"]] == [
@@ -155,6 +159,84 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
     assert candidates[0]["source_backend"] == "contact_graspnet"
     assert result.details["source"]["scene_epoch"] == 4
     assert result.details["source"]["camera_frame_id"] == "agentview"
+
+
+def test_graspgenx_receives_depth_cutoff_factor_from_unified_hints(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def graspgenx(context: ToolExecutionContext) -> ToolResult:
+        calls.append(dict(context.parameters))
+        return _success(_candidate("graspgenx-native-0", score=0.8))
+
+    result = build_grasp_pose_estimate_handler(
+        {"graspgenx": graspgenx},
+        backend_order=("graspgenx",),
+        graspgenx_gripper_name="franka_panda",
+        graspgenx_up_direction_camera=(0.0, 0.0, -1.0),
+    )(_context(_parameters(tmp_path)))
+
+    assert result.success is True
+    assert calls[0]["depth_cutoff_factor"] == 1.25
+    assert calls[0]["intrinsics"] == INTRINSICS
+
+
+def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> None:
+    parameters = _parameters(tmp_path)
+    Image.new("RGB", (16, 16), (50, 60, 70)).save(parameters["rgb"])
+    Image.new("I;16", (16, 16), 500).save(parameters["depth"])
+    Image.new("L", (16, 16), 255).save(parameters["object_mask"]["mask_ref"])
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    seen = []
+
+    class Advisor:
+        def advise(self, selection_bundle, *, task):
+            seen.append((selection_bundle, task))
+            ids = [item["candidate_id"] for item in selection_bundle["candidates"]]
+            return {
+                "schema_version": "openeta.grasp_selection_advice.v1",
+                "status": "completed",
+                "decision": "recommend",
+                "recommended_candidate_id": ids[1],
+                "alternatives": [ids[0]],
+                "confidence": 0.75,
+                "reasons": ["candidate two is visually centered"],
+                "rejected": {},
+                "uncertainties": [],
+                "bundle_id": selection_bundle["bundle_id"],
+                "advisor_role": "read_only_grasp_pose_advisor",
+            }
+
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        too_wide = _candidate("wide", score=1.0)
+        too_wide["width"] = 0.1
+        return _success(
+            too_wide,
+            _candidate("lower", score=0.5),
+            _candidate("higher", score=0.8),
+        )
+
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": backend},
+        backend_order=("anygrasp",),
+        advisor=Advisor(),
+        selection_output_root=tmp_path / "selection",
+    )(_context(parameters))
+
+    assert result.success is True
+    assert len(seen) == 1
+    bundle = seen[0][0]
+    assert seen[0][1] == ""
+    assert [item["backend_candidate_id"] for item in bundle["candidates"]] == [
+        "higher",
+        "lower",
+    ]
+    assert result.details["grasp_selection_advice"]["recommended_candidate_id"].endswith(
+        "-001"
+    )
+    assert Path(result.details["grasp_selection_bundle"]["overview_ref"]).is_file()
+    assert "must still choose" in result.content
 
 
 def test_host_excluded_backend_is_skipped(tmp_path: Path) -> None:
@@ -286,6 +368,175 @@ def test_non_fallback_backend_error_stops_dispatch(tmp_path: Path) -> None:
     assert result.details["reason"] == "invalid_backend_request"
     assert result.details["retryable"] is False
     assert called == ["anygrasp"]
+
+
+def test_backend_depth_failure_keeps_actionable_diagnostics(tmp_path: Path) -> None:
+    def outside_depth_range(_context: ToolExecutionContext) -> ToolResult:
+        return ToolResult(
+            False,
+            content="target mask is beyond the service cutoff",
+            details={
+                "reason": "target_mask_outside_depth_range",
+                "metadata": {
+                    "depth_truncation": 1.0,
+                    "target_mask_pixel_count": 2265,
+                    "target_depth_min_m": 1.126,
+                    "target_depth_max_m": 1.22,
+                    "suggested_depth_cutoff_factor": 1.356,
+                },
+            },
+        )
+
+    result = build_grasp_pose_estimate_handler({"anygrasp": outside_depth_range})(
+        _context(_parameters(tmp_path))
+    )
+
+    assert result.success is False
+    attempt = result.details["backend_attempts"][0]
+    assert attempt["reason"] == "target_mask_outside_depth_range"
+    assert attempt["diagnostics"] == {
+        "depth_truncation": 1.0,
+        "target_mask_pixel_count": 2265,
+        "target_depth_min_m": 1.126,
+        "target_depth_max_m": 1.22,
+        "suggested_depth_cutoff_factor": 1.356,
+    }
+
+
+def test_host_width_limit_removes_infeasible_candidates_from_main_queue(
+    tmp_path: Path,
+) -> None:
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        too_wide = _candidate("wide", score=0.99)
+        too_wide["width"] = 0.094
+        feasible = _candidate("feasible", score=0.7)
+        feasible["width"] = 0.06
+        return _success(too_wide, feasible)
+
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    result = build_grasp_pose_estimate_handler({"anygrasp": backend})(
+        _context(parameters)
+    )
+
+    assert result.success is True
+    assert result.details["raw_candidate_count"] == 2
+    assert result.details["candidate_count"] == 1
+    assert result.details["grasp_candidates"][0]["backend_candidate_id"] == "feasible"
+    assert result.details["rejected_candidates"] == [
+        {
+            "backend_candidate_id": "wide",
+            "backend_index": 0,
+            "score": 0.99,
+            "width_m": 0.094,
+            "reason": "exceeds_physical_gripper_width",
+            "max_gripper_width_m": 0.08,
+        }
+    ]
+
+
+def test_host_reports_backend_gripper_geometry_mismatch(tmp_path: Path) -> None:
+    def backend(_context: ToolExecutionContext) -> ToolResult:
+        too_wide = _candidate("wide", score=0.99)
+        too_wide["width"] = 0.094
+        feasible = _candidate("feasible", score=0.7)
+        return ToolResult(
+            True,
+            details={
+                "candidate_count": 2,
+                "grasp_candidates": [too_wide, feasible],
+                "metadata": {"max_gripper_width": 0.1},
+                "artifacts": [],
+            },
+        )
+
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    result = build_grasp_pose_estimate_handler({"anygrasp": backend})(
+        _context(parameters)
+    )
+
+    assert result.success is False
+    assert result.details["reason"] == "no_compatible_backend"
+    attempt = result.details["backend_attempts"][0]
+    assert attempt["reason"] == "backend_gripper_width_mismatch"
+    assert attempt["diagnostics"]["backend_diagnostics"][0] == {
+        "code": "grasp_pose_estimate_failed",
+        "reason": "backend_gripper_width_mismatch",
+        "retryable": False,
+        "backend": "anygrasp",
+        "backend_max_gripper_width_m": 0.1,
+        "physical_max_gripper_width_m": 0.08,
+        "requires_redeployment": True,
+    }
+    assert "Redeploy AnyGrasp" in result.content
+
+
+def test_anygrasp_width_mismatch_falls_back_to_compatible_backend(
+    tmp_path: Path,
+) -> None:
+    def anygrasp(_context: ToolExecutionContext) -> ToolResult:
+        return ToolResult(
+            True,
+            details={
+                "candidate_count": 1,
+                "grasp_candidates": [_candidate("anygrasp-0", score=0.9)],
+                "metadata": {"max_gripper_width": 0.1},
+                "artifacts": [],
+            },
+        )
+
+    def contact(_context: ToolExecutionContext) -> ToolResult:
+        return _success(_candidate("contact-0", score=0.7))
+
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["max_gripper_width_m"] = 0.08
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": anygrasp, "contact_graspnet": contact}
+    )(_context(parameters))
+
+    assert result.success is True
+    assert result.details["selected_backend"] == "contact_graspnet"
+    assert result.details["backend_attempts"][0]["reason"] == (
+        "backend_gripper_width_mismatch"
+    )
+
+
+def test_target_mask_projection_exposes_edge_geometry_without_selecting(
+    tmp_path: Path,
+) -> None:
+    parameters = _parameters(tmp_path)
+    mask_path = Path(parameters["object_mask"]["mask_ref"])
+    mask = Image.new("L", (16, 16), 0)
+    for y in range(4, 13):
+        for x in range(4, 13):
+            mask.putpixel((x, y), 255)
+    mask.save(mask_path)
+
+    edge = _candidate("edge", score=0.8)
+    edge["translation_xyz"] = [0.0, -0.02, 0.5]
+    edge["gripper_tip_position_xyz"] = [0.0, 0.0, 0.5]
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": lambda _context: _success(edge)}
+    )(_context(parameters))
+
+    assert result.success is True
+    diagnostic = result.details["diagnostics"][0]
+    assert diagnostic["code"] == "target_mask_candidate_projection"
+    assert diagnostic["mask_bbox_xyxy"] == [4, 4, 12, 12]
+    assert diagnostic["mask_centroid_xy"] == [8.0, 8.0]
+    assert diagnostic["candidates"][0]["candidate_id"].endswith("-000")
+    assert diagnostic["candidates"][0]["translation"] == {
+        "pixel_xy": [8.0, 4.0],
+        "inside_target_mask": True,
+        "bbox_fraction_xy": [0.5, 0.0],
+    }
+    assert diagnostic["candidates"][0]["gripper_tip"] == {
+        "pixel_xy": [8.0, 8.0],
+        "inside_target_mask": True,
+        "bbox_fraction_xy": [0.5, 0.5],
+    }
+    assert result.details["active_grasp_candidate"]["backend_candidate_id"] == "edge"
 
 
 def test_model_load_failure_falls_back_to_next_backend(tmp_path: Path) -> None:

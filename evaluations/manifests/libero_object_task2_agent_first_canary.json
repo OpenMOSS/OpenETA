@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-agent-first-canary",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "pick up the salad dressing and place it in the basket",
+      "seed": 2,
+      "max_turns": 60,
+      "recovery_turns_per_branch": 12,
+      "max_recovery_turns": 36,
+      "max_tool_calls": 120,
+      "timeout_s": 5400,
+      "max_total_tokens": 7500000
+    }
+  ]
+}

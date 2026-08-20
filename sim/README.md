@@ -226,7 +226,7 @@ python -m sim.mcp_server --port 9000    # 自定义端口
 | `GET` | `/session/{sid}` | Session 实时 Dashboard |
 | `GET` | `/session/{sid}/stream[/{handle}]` | SSE 实时画面流 |
 
-### MCP 工具 (14 个)
+### MCP 工具 (15 个)
 
 Claude Code / Claude Desktop 通过 SSE 连接后自动发现：
 
@@ -239,7 +239,8 @@ Claude Code / Claude Desktop 通过 SSE 连接后自动发现：
 | `create_env` | `env_id, render_mode, seed, task, image_width/height, include_objects` | 创建环境 → handle + session_id |
 | `reset_env` | `handle, seed` | 重置并返回初始观测 |
 | `step_env` | `handle, action, num_steps` | 执行动作并返回观测 |
-| `move_to` | `handle, x, y, z, roll/pitch/yaw, enable_collision_check` | 闭环移动末端到绝对位姿 (含 cuRobo 碰撞检测) |
+| `ik_preview_check` | `handle, x, y, z, roll/pitch/yaw, tolerances` | 只读的末端 IK 可达性预检，返回 reachable / unreachable / unknown 及残差诊断 |
+| `move_to` | `handle, x, y, z, roll/pitch/yaw, enable_collision_check` | 闭环移动末端到绝对位姿（可做 cuRobo 配置碰撞检查） |
 | `gripper_open` | `handle` | 打开夹爪 |
 | `gripper_close` | `handle` | 关闭夹爪 |
 | `observe_env` | `handle` | 返回最近观测 (不 step) |
@@ -251,10 +252,21 @@ Claude Code / Claude Desktop 通过 SSE 连接后自动发现：
 > `intrinsics`/`extrinsics` 语义见上文「深度」「相机内参 / 外参」。
 > `move_to` / gripper 使用 `sim/mcp_server/action_codecs.py` 的显式 backend
 > codec；未知 backend 或未声明的动作布局会返回结构化错误，不会猜测动作槽位。
+> `ik_preview_check` 当前的真实运动学后端仅支持 LIBERO Panda；
+> 其他 backend 返回 `unknown/backend_unsupported`，不会用 dummy
+> `feasible=true` 代替真实检查。路径可行性仍由 `obstacle_avoidance` 负责。
 > BEHAVIOR DirectEnv 默认把双臂切换为有界 delta-pose IK，并在创建环境时
 > 返回实际 arm/gripper action indices。`enable_collision_check` 当前只在已接入
 > checker 的 LIBERO / ManiSkill 上执行；其他后端会明确标记 unavailable。
 > `close_env` 幂等，显式关闭和 TTL cleanup 都会释放 worker 引用。
+
+> 注意：当前 cuRobo 接入是对 OSC 执行后的离散关节配置做 self/world
+> penetration check，并不生成、跟踪或预验证一条 cuRobo 轨迹。默认
+> `include_objects=false` 时通用检查只有 self-collision 覆盖；这是为了避免把
+> 即将抓取的目标本身无条件当成障碍物。已确认夹持后的物体另走预测 AABB
+> 安全检查。`move_to` 的 `collision` receipt 会明确返回 `trajectory_checked`、
+> `self_checked`、`world_checked` 与 `world_object_count`，不得把
+> `detected=false` 解读为整条轨迹已通过全场景碰撞规划。
 
 Claude Code 配置 (`.mcp.json`，项目根目录已有)：
 

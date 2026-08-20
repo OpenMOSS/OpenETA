@@ -224,7 +224,7 @@ def test_world_mutation_without_snapshot_hides_old_frame_and_host_observes(
     )
     assert decision.action_type == "tool_call"
     assert decision.action == "observe"
-    assert decision.metadata["execution_model"] == "host_obligation_dispatch"
+    assert decision.metadata["execution_model"] == "host_invariant_dispatch"
 
     with tools.execution_scope(
         {"execution_id": "episode-1", "session_id": "agent-1"}
@@ -480,7 +480,7 @@ def test_runner_auto_observes_after_world_mutation_without_snapshot(
         episode.steps[1].action.command["metadata"]["planner_metadata"][
             "execution_model"
         ]
-        == "host_obligation_dispatch"
+        == "host_invariant_dispatch"
     )
     assert episode.steps[1].step_result.reward == 1.0
     assert episode.terminated is True

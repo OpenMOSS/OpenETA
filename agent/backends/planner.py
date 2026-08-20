@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import mimetypes
 import threading
@@ -18,6 +19,16 @@ from adapter.protocol import JsonDict
 from agent.runtime.actions import PipelineStatus
 from agent.backends.provider_config import PlannerProviderConfig, ProviderEndpointConfig
 from agent.runtime.token_counting import estimate_json_tokens, estimate_text_tokens
+
+
+PLANNER_STATIC_CONTEXT_SCHEMA_VERSION = "openeta.planner_static_context.v1"
+_MAIN_AGENT_CONTEXT_SCHEMA_VERSION = "openeta.agent_context.v2"
+_CACHE_STABLE_AGENT_CONTEXT_KEYS = (
+    "available_tools",
+    "tool_references",
+    "relevant_skills",
+    "skill_usage",
+)
 
 
 @dataclass(slots=True)
@@ -299,6 +310,9 @@ class CommercialApiPlannerBackend(PlannerBackend):
 OpenAICompatibleTransport = Callable[[str, JsonDict, dict[str, str], float], JsonDict]
 
 
+REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 2048
+
+
 @dataclass(slots=True)
 class OpenAICompatiblePlannerBackendConfig:
     """Config for an OpenAI-compatible `/v1/chat/completions` planner backend."""
@@ -311,7 +325,9 @@ class OpenAICompatiblePlannerBackendConfig:
     max_attempts: int = 3
     retry_backoff_s: float = 0.5
     temperature: float = 0.0
-    max_tokens: int = 512
+    # Isolated model clients usually return short JSON, but reasoning-capable
+    # providers may count hidden reasoning against this same completion budget.
+    max_tokens: int = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     context_window_tokens: int | None = None
     use_json_response_format: bool = True
     enable_vision: bool = True
@@ -425,10 +441,30 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 details={"missing_fields": missing},
             )
 
-        user_content, vision_attachments = _planner_user_content(request, self.config)
+        stable_context, dynamic_context = _partition_planner_tool_context(request)
+        stable_context_prompt = (
+            _stable_planner_context_prompt(stable_context) if stable_context else ""
+        )
+        prompt_layout = _planner_prompt_layout_summary(
+            stable_context=stable_context,
+            stable_context_prompt=stable_context_prompt,
+            dynamic_context=dynamic_context,
+        )
+        user_content, vision_attachments = _planner_user_content(
+            request,
+            self.config,
+            prompt_tool_context=dynamic_context,
+        )
         messages: list[JsonDict] = [
             {"role": "system", "content": request.system_prompt},
         ]
+        if stable_context_prompt:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": stable_context_prompt,
+                }
+            )
         if request.conversation_summary.strip():
             messages.append(
                 {
@@ -487,6 +523,7 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     "provider_role": provider_role,
                     "provider_failover": provider_switch_count > 0,
                     "provider_switch_count": provider_switch_count,
+                    "prompt_layout": prompt_layout,
                 },
                 rollout_exchange={"attempts": provider_exchanges},
             )
@@ -518,6 +555,7 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 "provider_role": provider_role,
                 "provider_failover": provider_switch_count > 0,
                 "provider_switch_count": provider_switch_count,
+                "prompt_layout": prompt_layout,
             },
             rollout_exchange={"attempts": provider_exchanges},
         )
@@ -566,6 +604,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     headers,
                     active_endpoint.timeout_s,
                 )
+                # A syntactically successful HTTP response can still be unusable
+                # provider output. Validate it inside the retry/failover boundary
+                # so an empty or malformed chat message does not abort the whole
+                # episode before the configured fallback attempts are consumed.
+                _extract_chat_content(response)
                 completed_at_s = time.time()
                 provider_exchanges.append(
                     {
@@ -594,6 +637,9 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 )
             except Exception as exc:  # noqa: BLE001 - provider failures stay structured.
                 completed_at_s = time.time()
+                protocol_details = (
+                    dict(exc.details) if isinstance(exc, ProviderProtocolError) else None
+                )
                 switch_provider_next = (
                     self.config.fallback is not None and _is_provider_failover_error(exc)
                 )
@@ -616,6 +662,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "error": {
                             "type": type(exc).__name__,
                             "message": str(exc),
+                            **(
+                                {"provider_response": protocol_details}
+                                if protocol_details is not None
+                                else {}
+                            ),
                         },
                     }
                 )
@@ -638,6 +689,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "model": active_endpoint.model,
                         "error_type": type(exc).__name__,
                         "error": str(exc),
+                        **(
+                            {"provider_response": protocol_details}
+                            if protocol_details is not None
+                            else {}
+                        ),
                         "retry_delay_s": delay_s,
                         "failover_next": next_provider_role == "fallback",
                         "switch_provider_next": switch_provider_next,
@@ -757,7 +813,11 @@ def extract_context_window_tokens(model_payload: JsonDict) -> int | None:
     return None
 
 
-def _planner_user_prompt(request: PlannerBackendRequest) -> str:
+def _planner_user_prompt(
+    request: PlannerBackendRequest,
+    *,
+    tool_context: JsonDict | None = None,
+) -> str:
     instruction = (
         "Follow the system prompt for this isolated role. Return only the exact "
         "JSON object requested by that prompt, without markdown."
@@ -769,18 +829,105 @@ def _planner_user_prompt(request: PlannerBackendRequest) -> str:
     )
     payload = {
         "instruction": instruction,
-        "tool_context": request.tool_context,
+        "tool_context": request.tool_context if tool_context is None else tool_context,
         "attempt": request.attempt,
         "validation_errors": request.validation_errors,
     }
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _partition_planner_tool_context(
+    request: PlannerBackendRequest,
+) -> tuple[JsonDict, JsonDict]:
+    """Move cache-stable main-agent references ahead of growing chat history.
+
+    The canonical request retains the complete ``tool_context`` for recorders and
+    deterministic backends.  This partition only changes the OpenAI-compatible
+    wire layout.  Isolated sub-agents and non-main context schemas keep their
+    existing single-user-message representation.
+    """
+
+    context = request.tool_context
+    if (
+        request.metadata.get("isolated_context") is True
+        or context.get("schema_version") != _MAIN_AGENT_CONTEXT_SCHEMA_VERSION
+    ):
+        return {}, dict(context)
+
+    dynamic = dict(context)
+    stable: JsonDict = {
+        "schema_version": PLANNER_STATIC_CONTEXT_SCHEMA_VERSION,
+        "agent_context_schema_version": dynamic.pop("schema_version"),
+    }
+    for key in _CACHE_STABLE_AGENT_CONTEXT_KEYS:
+        if key in dynamic:
+            stable[key] = dynamic.pop(key)
+
+    constraints = dynamic.get("operational_constraints")
+    if isinstance(constraints, dict) and "rules" in constraints:
+        stable["operational_constraints"] = {"rules": constraints.get("rules")}
+        dynamic_constraints = {
+            key: value for key, value in constraints.items() if key != "rules"
+        }
+        if dynamic_constraints:
+            dynamic["operational_constraints"] = dynamic_constraints
+        else:
+            dynamic.pop("operational_constraints", None)
+    return stable, dynamic
+
+
+def _stable_planner_context_prompt(stable_context: JsonDict) -> str:
+    """Serialize the stable planner prefix deterministically for radix caching."""
+
+    payload = json.dumps(
+        stable_context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "Stable OpenETA tool and skill context for this session. Treat these "
+        "schemas, guidance documents, and execution rules as authoritative. "
+        "The final user message supplies the current turn state.\n" + payload
+    )
+
+
+def _planner_prompt_layout_summary(
+    *,
+    stable_context: JsonDict,
+    stable_context_prompt: str,
+    dynamic_context: JsonDict,
+) -> JsonDict:
+    """Return compact cache-layout diagnostics without copying prompt content."""
+
+    dynamic_payload = json.dumps(
+        dynamic_context,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return {
+        "schema_version": "openeta.planner_prompt_layout.v1",
+        "cache_stable_prefix_enabled": bool(stable_context_prompt),
+        "static_before_conversation": bool(stable_context_prompt),
+        "stable_context_chars": len(stable_context_prompt),
+        "stable_context_sha256": (
+            hashlib.sha256(stable_context_prompt.encode("utf-8")).hexdigest()
+            if stable_context_prompt
+            else ""
+        ),
+        "stable_context_keys": list(stable_context),
+        "dynamic_context_chars": len(dynamic_payload),
+        "dynamic_context_keys": list(dynamic_context),
+    }
+
+
 def _planner_user_content(
     request: PlannerBackendRequest,
     config: OpenAICompatiblePlannerBackendConfig,
+    *,
+    prompt_tool_context: JsonDict | None = None,
 ) -> tuple[str | list[JsonDict], list[JsonDict]]:
-    text = _planner_user_prompt(request)
+    text = _planner_user_prompt(request, tool_context=prompt_tool_context)
     if not config.enable_vision:
         return text, []
     explicit_paths = request.tool_context.get("vision_image_paths")
@@ -789,7 +936,7 @@ def _planner_user_content(
         if isinstance(explicit_paths, list)
         else []
     )
-    localization = request.tool_context.get("reference_localization_obligation")
+    localization = request.tool_context.get("pending_reference_localization")
     if isinstance(localization, dict):
         if localization.get("required_parameter") != "positive_points":
             scene_image = localization.get("scene_image")
@@ -803,7 +950,7 @@ def _planner_user_content(
                     if len(paths) >= config.max_vision_images:
                         break
     else:
-        obligation = request.tool_context.get("selection_obligation")
+        obligation = request.tool_context.get("pending_target_selection")
         if isinstance(obligation, dict):
             bundle = obligation.get("selection_bundle")
             if not isinstance(bundle, dict):
@@ -830,18 +977,25 @@ def _planner_user_content(
     if not paths:
         return text, []
 
-    content: list[JsonDict] = [{"type": "text", "text": text}]
+    content: list[JsonDict] = [
+        {
+            "type": "text",
+            "text": (
+                "Inspect the labelled visual evidence first. Current-scene images are "
+                "the latest observable state; historical images are context only."
+            ),
+        }
+    ]
     attachments: list[JsonDict] = []
-    evidence_roles: dict[str, str] = {}
+    evidence_by_path: dict[str, JsonDict] = {}
     raw_evidence = request.tool_context.get("vision_evidence")
     if isinstance(raw_evidence, list):
         for item in raw_evidence:
             if not isinstance(item, dict):
                 continue
             evidence_path = item.get("path")
-            evidence_role = item.get("role")
-            if isinstance(evidence_path, str) and isinstance(evidence_role, str):
-                evidence_roles[evidence_path] = evidence_role
+            if isinstance(evidence_path, str):
+                evidence_by_path[evidence_path] = item
     for image_index, path_value in enumerate(paths[: config.max_vision_images], start=1):
         path = Path(path_value)
         try:
@@ -890,9 +1044,23 @@ def _planner_user_content(
             )
             continue
         encoded = base64.b64encode(raw_image).decode("ascii")
-        evidence_role = evidence_roles.get(path_value)
+        evidence = evidence_by_path.get(path_value, {})
+        evidence_role = evidence.get("role")
         if evidence_role:
-            role_note = f"Image #{image_index} role: {evidence_role}."
+            qualifiers = []
+            for field in (
+                "evidence_id",
+                "frame_id",
+                "camera_role",
+                "freshness",
+                "observation_step",
+                "timestamp_s",
+            ):
+                value = evidence.get(field)
+                if value is not None and value != "":
+                    qualifiers.append(f"{field}={value}")
+            suffix = f" ({', '.join(qualifiers)})" if qualifiers else ""
+            role_note = f"Image #{image_index} role: {evidence_role}{suffix}."
             if evidence_role == "current_scene":
                 role_note += " This is the current state used for action review."
             elif evidence_role == "target_source_before_grasp":
@@ -916,7 +1084,8 @@ def _planner_user_content(
                 **({"role": evidence_role} if evidence_role else {}),
             }
         )
-    if len(content) == 1:
+    content.append({"type": "text", "text": text})
+    if not any(item.get("attached") is True for item in attachments):
         return text, attachments
     return content, attachments
 
@@ -966,7 +1135,17 @@ class ProviderHttpError(RuntimeError):
         self.status_code = status_code
 
 
+class ProviderProtocolError(RuntimeError):
+    """Provider returned a successful HTTP response without usable chat content."""
+
+    def __init__(self, message: str, *, details: JsonDict | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details or {})
+
+
 def _is_transient_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, ProviderProtocolError):
+        return True
     if isinstance(exc, ProviderHttpError):
         return exc.status_code in {408, 429, 500, 502, 503, 504} or (520 <= exc.status_code <= 527)
     if isinstance(exc, urllib.error.HTTPError):
@@ -977,6 +1156,8 @@ def _is_transient_provider_error(exc: Exception) -> bool:
 def _is_provider_failover_error(exc: Exception) -> bool:
     """Return whether a primary-provider failure should activate fallback."""
 
+    if isinstance(exc, ProviderProtocolError):
+        return True
     if isinstance(exc, ProviderHttpError):
         if exc.status_code == 500 and _provider_error_reports_capacity(exc):
             return True
@@ -997,8 +1178,11 @@ def _provider_error_reports_capacity(exc: Exception) -> bool:
             "overloaded",
             "capacity",
             "concurrency",
+            "temporarily unavailable",
+            "temporary unavailable",
             "负载",
             "并发",
+            "暂时不可用",
         )
     )
 
@@ -1048,19 +1232,60 @@ def _coerce_positive_int(value: object) -> int | None:
 
 
 def _extract_chat_content(response: JsonDict) -> str:
+    response_diagnostic = _provider_chat_response_diagnostic(response)
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise RuntimeError("Provider response did not include choices.")
+        raise ProviderProtocolError(
+            "Provider response did not include choices.", details=response_diagnostic
+        )
     first = choices[0]
     if not isinstance(first, dict):
-        raise RuntimeError("Provider response choice is not an object.")
+        raise ProviderProtocolError(
+            "Provider response choice is not an object.", details=response_diagnostic
+        )
     message = first.get("message", {})
     if not isinstance(message, dict):
-        raise RuntimeError("Provider response choice did not include message.")
+        raise ProviderProtocolError(
+            "Provider response choice did not include message.", details=response_diagnostic
+        )
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Provider response message content is empty.")
+        raise ProviderProtocolError(
+            "Provider response message content is empty.", details=response_diagnostic
+        )
     return content
+
+
+def _provider_chat_response_diagnostic(response: JsonDict) -> JsonDict:
+    """Return compact non-content diagnostics for malformed chat responses."""
+
+    diagnostic: JsonDict = {}
+    choices = response.get("choices")
+    if isinstance(choices, list):
+        diagnostic["choice_count"] = len(choices)
+        first = choices[0] if choices else None
+        if isinstance(first, dict):
+            finish_reason = first.get("finish_reason")
+            if isinstance(finish_reason, str):
+                diagnostic["finish_reason"] = finish_reason
+            message = first.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                diagnostic["content_type"] = type(content).__name__
+                diagnostic["content_chars"] = len(content) if isinstance(content, str) else 0
+                diagnostic["refusal_present"] = bool(message.get("refusal"))
+    usage = response.get("usage")
+    if isinstance(usage, dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                diagnostic[key] = value
+        completion_details = usage.get("completion_tokens_details")
+        if isinstance(completion_details, dict):
+            reasoning_tokens = completion_details.get("reasoning_tokens")
+            if isinstance(reasoning_tokens, int):
+                diagnostic["reasoning_tokens"] = reasoning_tokens
+    return diagnostic
 
 
 def _extract_finish_reason(response: JsonDict) -> str | None:

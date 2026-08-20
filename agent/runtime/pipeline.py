@@ -58,36 +58,6 @@ class ActionPipeline:
                 )
             if _is_safety_check_request(request):
                 safe_name = _named_tool_target(request)
-                grasp_gate_error = (
-                    memory.grasp_candidate_gate_error(
-                        tool_name=safe_name,
-                        parameters=request.parameters,
-                    )
-                    if memory is not None
-                    else None
-                )
-                if grasp_gate_error:
-                    safe_call = _skipped_tool_call(
-                        safe_name,
-                        request.parameters,
-                        reason=grasp_gate_error,
-                    )
-                    return CommandPipelinePlan(
-                        request=request,
-                        status=PipelineStatus.BLOCKED,
-                        safety_checks=[safe_call],
-                        metadata={
-                            "interface": self.interfaces.descriptor(
-                                request.kind,
-                                request.name,
-                            ),
-                            "planner_metadata": decision.metadata,
-                            "grasp_candidate_gate": {
-                                "blocked": True,
-                                "reason": grasp_gate_error,
-                            },
-                        },
-                    )
                 safe_call = self._compile_safety_check(
                     safe_name,
                     request.parameters,
@@ -130,9 +100,63 @@ class ActionPipeline:
                     planner_metadata=decision.metadata,
                 )
 
+            resolved_parameters = request.parameters
+            bundle_resolution: JsonDict | None = None
+            bundle_kind = ""
+            if request.name == "anyplace" or (
+                request.name == "grasp_pose_estimate"
+                and isinstance(request.parameters.get("bundle_id"), str)
+            ):
+                bundle_id = str(request.parameters.get("bundle_id") or "").strip()
+                bundle_kind = (
+                    "anyplace" if request.name == "anyplace" else "grasp_pose_estimate"
+                )
+                try:
+                    if memory is None:
+                        raise ValueError("runtime memory is unavailable")
+                    bundle_resolution = (
+                        memory.resolve_anyplace_input_bundle(bundle_id)
+                        if bundle_kind == "anyplace"
+                        else memory.resolve_grasp_input_bundle(bundle_id)
+                    )
+                except ValueError as exc:
+                    reason = f"{request.name} provenance bundle resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "provenance_bundle_gate": {
+                                "blocked": True,
+                                "bundle_kind": bundle_kind,
+                                "bundle_id": bundle_id or None,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": _gate_repair_bundle(
+                                memory,
+                                code="invalid_provenance_bundle",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+                resolved = bundle_resolution.get("parameters")
+                if not isinstance(resolved, dict):
+                    raise RuntimeError("AnyPlace bundle resolver returned invalid parameters")
+                resolved_parameters = resolved
+
             selection_gate_error = _detection_selection_gate_error(
                 request,
-                tools=tools,
                 memory=memory,
             )
             if selection_gate_error:
@@ -153,22 +177,28 @@ class ActionPipeline:
                             "blocked": True,
                             "reason": selection_gate_error,
                         },
+                        "repair_bundle": _gate_repair_bundle(
+                            memory,
+                            code="perception_provenance_integrity",
+                            reason=selection_gate_error,
+                            request=request,
+                        ),
                     },
                 )
 
-            grasp_gate_error = (
-                memory.grasp_candidate_gate_error(
+            provenance_gate_error = (
+                memory.compiled_grasp_target_gate_error(
                     tool_name=request.name,
-                    parameters=request.parameters,
+                    parameters=resolved_parameters,
                 )
                 if memory is not None
                 else None
             )
-            if grasp_gate_error:
+            if provenance_gate_error:
                 tool_call = _skipped_tool_call(
                     request.name,
-                    request.parameters,
-                    reason=grasp_gate_error,
+                    resolved_parameters,
+                    reason=provenance_gate_error,
                 )
                 return CommandPipelinePlan(
                     request=request,
@@ -178,25 +208,63 @@ class ActionPipeline:
                         "interface": self.interfaces.descriptor(request.kind, request.name),
                         "planner_metadata": decision.metadata,
                         "execution_rule": _tool_execution_rule(tool_call, tools),
-                        "grasp_candidate_gate": {
+                        "provenance_integrity_gate": {
                             "blocked": True,
-                            "reason": grasp_gate_error,
+                            "reason": provenance_gate_error,
                         },
+                        "repair_bundle": _gate_repair_bundle(
+                            memory,
+                            code=_compiled_grasp_gate_code(provenance_gate_error),
+                            reason=provenance_gate_error,
+                            request=request,
+                        ),
+                    },
+                )
+
+            probe_gate_error = (
+                memory.articulated_probe_action_gate_error(
+                    tool_name=request.name,
+                    parameters=resolved_parameters,
+                )
+                if memory is not None
+                else None
+            )
+            if probe_gate_error:
+                tool_call = _skipped_tool_call(
+                    request.name,
+                    resolved_parameters,
+                    reason=probe_gate_error,
+                )
+                return CommandPipelinePlan(
+                    request=request,
+                    status=PipelineStatus.BLOCKED,
+                    tool_calls=[tool_call],
+                    metadata={
+                        "interface": self.interfaces.descriptor(request.kind, request.name),
+                        "planner_metadata": decision.metadata,
+                        "execution_rule": _tool_execution_rule(tool_call, tools),
+                        "articulated_probe_gate": {
+                            "blocked": True,
+                            "reason": probe_gate_error,
+                        },
+                        "repair_bundle": _gate_repair_bundle(
+                            memory,
+                            code="articulated_probe_integrity",
+                            reason=probe_gate_error,
+                            request=request,
+                        ),
                     },
                 )
 
             execution_gate_error = (
-                memory.grasp_execution_gate_error(
-                    tool_name=request.name,
-                    parameters=request.parameters,
-                )
+                memory.motion_reconciliation_gate_error(tool_name=request.name)
                 if memory is not None
                 else None
             )
             if execution_gate_error:
                 tool_call = _skipped_tool_call(
                     request.name,
-                    request.parameters,
+                    resolved_parameters,
                     reason=execution_gate_error,
                 )
                 return CommandPipelinePlan(
@@ -207,23 +275,29 @@ class ActionPipeline:
                         "interface": self.interfaces.descriptor(request.kind, request.name),
                         "planner_metadata": decision.metadata,
                         "execution_rule": _tool_execution_rule(tool_call, tools),
-                        "grasp_execution_gate": {
+                        "motion_reconciliation_gate": {
                             "blocked": True,
                             "reason": execution_gate_error,
                         },
+                        "repair_bundle": _gate_repair_bundle(
+                            memory,
+                            code="motion_reconciliation_required",
+                            reason=execution_gate_error,
+                            request=request,
+                        ),
                     },
                 )
 
             safety_checks = self._compile_pre_safety_checks(
                 request.name,
-                request.parameters,
+                resolved_parameters,
                 tools=tools,
                 observation=observation,
             )
             if safety_checks and not _checks_allow_tool_execution(safety_checks):
                 tool_call = _skipped_tool_call(
                     request.name,
-                    request.parameters,
+                    resolved_parameters,
                     reason="Tool call skipped because a pre-tool safety checker did not pass.",
                 )
                 return CommandPipelinePlan(
@@ -244,7 +318,7 @@ class ActionPipeline:
 
             tool_call = self._compile_tool_call(
                 request.name,
-                request.parameters,
+                resolved_parameters,
                 tools=tools,
                 observation=observation,
                 reason="Direct planner-requested tool call.",
@@ -263,6 +337,22 @@ class ActionPipeline:
                         "pre_safety_checks": [call.to_dict() for call in safety_checks],
                         "post_failure_checks": [call.to_dict() for call in post_failure_checks],
                     },
+                    **(
+                        {
+                            "provenance_bundle_resolution": {
+                                key: bundle_resolution.get(key)
+                                for key in (
+                                    "schema_version",
+                                    "bundle_id",
+                                    "target_evidence_id",
+                                    "grasp_evidence_id",
+                                    "placement_evidence_id",
+                                )
+                            }
+                        }
+                        if isinstance(bundle_resolution, dict)
+                        else {}
+                    ),
                 },
             )
 
@@ -487,11 +577,26 @@ class ActionPipeline:
                 blocked = True
                 continue
 
+            if name == "anyplace":
+                compiled_calls.append(
+                    PipelineCall(
+                        kind=CommandKind.TOOL_CALL,
+                        name=name,
+                        parameters=parameters,
+                        status=PipelineStatus.BLOCKED,
+                        reason=(
+                            "AnyPlace must be a direct atomic tool call so the host can "
+                            "resolve and audit its provenance bundle."
+                        ),
+                    )
+                )
+                blocked = True
+                continue
+
             selection_gate_error = (
                 memory.detection_selection_gate_error(
                     tool_name=name,
                     parameters=parameters,
-                    world_mutating=spec.effect.value == "world_mutating",
                 )
                 if memory is not None
                 else None
@@ -509,32 +614,50 @@ class ActionPipeline:
                 blocked = True
                 continue
 
-            grasp_gate_error = (
-                memory.grasp_candidate_gate_error(
+            provenance_gate_error = (
+                memory.compiled_grasp_target_gate_error(
                     tool_name=name,
                     parameters=parameters,
                 )
                 if memory is not None
                 else None
             )
-            if grasp_gate_error:
+            if provenance_gate_error:
                 compiled_calls.append(
                     PipelineCall(
                         kind=CommandKind.TOOL_CALL,
                         name=name,
                         parameters=parameters,
                         status=PipelineStatus.BLOCKED,
-                        reason=grasp_gate_error,
+                        reason=provenance_gate_error,
+                    )
+                )
+                blocked = True
+                continue
+
+            probe_gate_error = (
+                memory.articulated_probe_action_gate_error(
+                    tool_name=name,
+                    parameters=parameters,
+                )
+                if memory is not None
+                else None
+            )
+            if probe_gate_error:
+                compiled_calls.append(
+                    PipelineCall(
+                        kind=CommandKind.TOOL_CALL,
+                        name=name,
+                        parameters=parameters,
+                        status=PipelineStatus.BLOCKED,
+                        reason=probe_gate_error,
                     )
                 )
                 blocked = True
                 continue
 
             execution_gate_error = (
-                memory.grasp_execution_gate_error(
-                    tool_name=name,
-                    parameters=parameters,
-                )
+                memory.motion_reconciliation_gate_error(tool_name=name)
                 if memory is not None
                 else None
             )
@@ -692,20 +815,48 @@ def _checks_allow_tool_execution(calls: list[PipelineCall]) -> bool:
 def _detection_selection_gate_error(
     request: CommandRequest,
     *,
-    tools: ToolRegistry,
     memory: AgentMemory | None,
 ) -> str | None:
     if memory is None:
         return None
-    try:
-        spec = tools.get(request.name)
-    except KeyError:
-        return None
     return memory.detection_selection_gate_error(
         tool_name=request.name,
         parameters=request.parameters,
-        world_mutating=spec.effect.value == "world_mutating",
     )
+
+
+def _gate_repair_bundle(
+    memory: AgentMemory | None,
+    *,
+    code: str,
+    reason: str,
+    request: CommandRequest,
+) -> JsonDict:
+    if memory is None:
+        return {
+            "schema_version": "openeta.gate_repair.v1",
+            "code": code,
+            "violated_invariant": reason,
+            "requested_call": {
+                "tool": request.name,
+                "parameters": dict(request.parameters),
+            },
+            "evidence_ids": [],
+            "allowed_next_calls": [],
+            "stale_evidence": [],
+        }
+    return memory.gate_repair_bundle(
+        code=code,
+        reason=reason,
+        requested_tool=request.name,
+        requested_parameters=request.parameters,
+    )
+
+
+def _compiled_grasp_gate_code(reason: str) -> str:
+    if reason.startswith("compiled_grasp_adjustment_"):
+        return reason.split(":", 1)[0]
+    return "compiled_grasp_target_superseded"
 
 
 def _skipped_tool_call(name: str, parameters: JsonDict, *, reason: str) -> PipelineCall:

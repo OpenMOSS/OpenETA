@@ -11,6 +11,7 @@ The heavy lifting is delegated to sibling modules:
 from __future__ import annotations
 
 import functools
+import math
 import os
 import sys
 import threading
@@ -38,11 +39,17 @@ from sim.mcp_server.session import (
 from sim.mcp_server.worker_mgr import (
     _forget_obs_dirty,
     _proxy_observe,
+    _proxy_reachability,
     _proxy_render,
     _proxy_reset,
     _proxy_step,
 )
-from sim.mcp_server.collision import get_checker, remove_checker
+from sim.mcp_server.collision import (
+    RECEPTACLE_CATEGORIES,
+    check_attached_object_collision,
+    get_checker,
+    remove_checker,
+)
 from sim.mcp_server.action_codecs import (
     ControlCodecError,
     cartesian_command_frame,
@@ -50,6 +57,8 @@ from sim.mcp_server.action_codecs import (
     codec_error_result,
     make_cartesian_action,
     make_gripper_action,
+    trunk_hold_values,
+    trunk_layout,
 )
 from sim.mcp_server.rest_api import (
     session_dashboard,
@@ -215,7 +224,9 @@ def create_env(env_id: str, *, render_mode: str = "rgb_array", seed: int = 0,
         body["image_width"] = image_width
     if image_height is not None:
         body["image_height"] = image_height
-    body["include_objects"] = include_objects
+    # Safety always receives privileged geometry internally.  The worker proxy
+    # redacts it from public observations unless include_objects was requested.
+    body["include_objects"] = True
     if robot:
         body["robot"] = robot
     # Acquire one pool worker, create the env on it, and pin the handle to
@@ -234,6 +245,8 @@ def create_env(env_id: str, *, render_mode: str = "rgb_array", seed: int = 0,
         "action_dim": result.get("action_dim"),
         "robot": result.get("robot") or robot,
         "control_spec": result.get("control_spec", {}),
+        "_expose_objects": bool(include_objects),
+        "_collision_objects": [],
         "_sid": sid,
     }
     _session_envs.setdefault(sid, {})[h] = meta
@@ -379,6 +392,7 @@ def reset_env(handle: str, *, seed: int | None = None, session_id: str = "") -> 
     # latched gripper command: subsequent motion steps go back to not forcing
     # the gripper dim until the user explicitly calls gripper_open/close again.
     meta.pop("_gripper_cmd", None)
+    meta.pop("_attachment_proxy", None)
     reset_obs = _proxy_reset(meta, seed=seed)
     # Let physics settle before returning — objects can spawn hovering /
     # jittering right after reset; a few hold steps bring them to rest.
@@ -419,7 +433,9 @@ def step_env(handle: str, action: list | None = None, *, num_steps: int = 1, ses
     meta = _session_envs.get(sid, {}).get(handle)
     if not meta:
         return {"error": f"Unknown: {handle}"}
-    return _proxy_step(meta, action, num_steps=num_steps)
+    result = _proxy_step(meta, action, num_steps=num_steps)
+    _refresh_attachment_proxy(meta, result)
+    return result
 
 
 def _extract_ee_xyz_from_result(result: dict) -> list[float]:
@@ -495,6 +511,24 @@ def _extract_joint_positions_from_result(result: dict) -> list[float]:
     return jp if isinstance(jp, list) else []
 
 
+def _extract_joint_names_from_result(result: dict) -> list[str]:
+    """Extract ``joint_names`` (positional labels for ``joint_positions``).
+
+    Needed by the collision checker for multi-arm robots, where the joints
+    cuRobo wants are not a leading slice of the observation vector.  Absent for
+    single-arm backends, which is fine — the checker only requires names when
+    slicing would be wrong.
+    """
+    obs = result.get("observation", result) if isinstance(result, dict) else {}
+    if not isinstance(obs, dict):
+        return []
+    robot = obs.get("robot", {})
+    if not isinstance(robot, dict):
+        return []
+    names = robot.get("joint_names", [])
+    return [str(n) for n in names] if isinstance(names, list) else []
+
+
 def _extract_objects_from_result(result: dict) -> list[dict]:
     """Extract ``objects`` list from a step result or observe result."""
     obs = result.get("observation", result) if isinstance(result, dict) else {}
@@ -502,6 +536,272 @@ def _extract_objects_from_result(result: dict) -> list[dict]:
         return []
     objects = obs.get("objects", [])
     return objects if isinstance(objects, list) else []
+
+
+def _extract_gripper_state_from_result(result: dict) -> dict:
+    obs = result.get("observation", result) if isinstance(result, dict) else {}
+    robot = obs.get("robot", {}) if isinstance(obs, dict) else {}
+    state = robot.get("gripper_state", {}) if isinstance(robot, dict) else {}
+    return state if isinstance(state, dict) else {}
+
+
+def _arm_attachment_proxy(meta: dict, result: dict) -> None:
+    """Create a tentative held-object proxy after a close command.
+
+    Aperture is recorded as a hint, not used as a gate.  An object thinner than
+    the old 0.08 cutoff would silently get no proxy and therefore no carry
+    collision checking at all; co-motion confirmation is what actually
+    adjudicates whether something is held, so let it do that job.  When no
+    proxy can be armed a diagnostic is left behind so the miss is visible.
+    """
+
+    state = _extract_gripper_state_from_result(result)
+    openness = state.get("openness")
+    aperture = (
+        float(openness)
+        if isinstance(openness, (int, float)) and not isinstance(openness, bool)
+        else None
+    )
+    eef = _extract_ee_xyz_from_result(result)
+    if len(eef) < 3:
+        meta.pop("_attachment_proxy", None)
+        meta["_attachment_probe"] = {"armed": False, "reason": "eef_pose_unavailable"}
+        return
+    nearest: tuple[float, dict] | None = None
+    for obj in meta.get("_collision_objects", []):
+        if not isinstance(obj, dict):
+            continue
+        category = str(obj.get("category") or "").strip().lower()
+        if category in RECEPTACLE_CATEGORIES:
+            continue
+        position = obj.get("position")
+        if not isinstance(position, list) or len(position) < 3:
+            continue
+        distance = math.dist(
+            [float(value) for value in eef[:3]],
+            [float(value) for value in position[:3]],
+        )
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance, obj)
+    if nearest is None or nearest[0] > 0.12:
+        meta.pop("_attachment_proxy", None)
+        meta["_attachment_probe"] = {
+            "armed": False,
+            "reason": "no_object_within_grasp_radius",
+            "nearest_distance_m": round(nearest[0], 4) if nearest else None,
+            "measured_aperture": aperture,
+        }
+        return
+    obj = nearest[1]
+    position = [float(value) for value in obj.get("position", [])[:3]]
+    dims = obj.get("dims")
+    if not isinstance(dims, list) or len(dims) < 3:
+        dims = [0.06, 0.06, 0.10]
+    meta["_attachment_proxy"] = {
+        "status": "tentative",
+        "object_name": str(obj.get("name") or ""),
+        "category": str(obj.get("category") or ""),
+        "relative_xyz": [position[i] - float(eef[i]) for i in range(3)],
+        "dims": [max(0.01, float(value)) for value in dims[:3]],
+        "anchor_eef_xyz": [float(value) for value in eef[:3]],
+        # Compatibility data only — never attachment proof.
+        "measured_aperture": aperture,
+    }
+    meta["_attachment_probe"] = {
+        "armed": True,
+        "object_name": str(obj.get("name") or ""),
+        "nearest_distance_m": round(nearest[0], 4),
+        "measured_aperture": aperture,
+    }
+
+
+def _refresh_attachment_proxy(meta: dict, result: dict) -> None:
+    """Confirm co-motion or retire a lost tentative/confirmed proxy."""
+
+    proxy = meta.get("_attachment_proxy")
+    if not isinstance(proxy, dict):
+        return
+    state = _extract_gripper_state_from_result(result)
+    openness = state.get("openness")
+    if isinstance(openness, (int, float)) and not isinstance(openness, bool):
+        # Recorded, never acted on.  Retiring on a collapsed aperture alone
+        # would drop the proxy for any object thinner than the threshold
+        # immediately after arming, which is the whole failure this replaces.
+        # Loss of co-motion below is the only retirement evidence, and it errs
+        # toward a spurious abort rather than an unguarded carry.
+        proxy["measured_aperture"] = float(openness)
+    eef = _extract_ee_xyz_from_result(result)
+    obj = next(
+        (
+            item
+            for item in meta.get("_collision_objects", [])
+            if isinstance(item, dict) and str(item.get("name") or "") == proxy.get("object_name")
+        ),
+        None,
+    )
+    position = obj.get("position") if isinstance(obj, dict) else None
+    if len(eef) < 3 or not isinstance(position, list) or len(position) < 3:
+        return
+    relative = [float(position[i]) - float(eef[i]) for i in range(3)]
+    prior_relative = proxy.get("relative_xyz")
+    if not isinstance(prior_relative, list) or len(prior_relative) < 3:
+        return
+    relative_error = math.dist(relative, [float(value) for value in prior_relative[:3]])
+    anchor = proxy.get("anchor_eef_xyz")
+    displacement = (
+        math.dist([float(value) for value in eef[:3]], [float(value) for value in anchor[:3]])
+        if isinstance(anchor, list) and len(anchor) >= 3
+        else 0.0
+    )
+    if proxy.get("status") == "tentative":
+        if displacement >= 0.015 and relative_error <= 0.025:
+            proxy["status"] = "confirmed"
+            proxy["relative_xyz"] = relative
+        elif relative_error > 0.05:
+            meta.pop("_attachment_proxy", None)
+    elif relative_error > 0.05:
+        meta.pop("_attachment_proxy", None)
+    else:
+        proxy["relative_xyz"] = relative
+
+
+def _collision_objects_without_attached(meta: dict) -> list[dict]:
+    proxy = meta.get("_attachment_proxy")
+    attached_name = str(proxy.get("object_name") or "") if isinstance(proxy, dict) else ""
+    return [
+        item
+        for item in meta.get("_collision_objects", [])
+        if isinstance(item, dict) and str(item.get("name") or "") != attached_name
+    ]
+
+
+# Radius around the commanded pose within which an object is read as the
+# intended manipulation target rather than an obstacle.
+_APPROACH_TARGET_RADIUS_M = 0.08
+
+
+def _safety_obstacles(
+    meta: dict,
+    *,
+    approach_target_xyz: tuple[float, float, float] | list[float] | None = None,
+    target_radius_m: float = _APPROACH_TARGET_RADIUS_M,
+) -> list[dict]:
+    """Private safety geometry, minus the held object and the approach target.
+
+    The safety adapter always uses privileged geometry; ``_expose_objects``
+    governs only what the public observation reveals.  Keeping the two coupled
+    meant the arm-vs-world check ran against an empty world by default.
+
+    The single object nearest the *commanded* pose is dropped, because
+    "something sits where I am reaching" is what an intended grasp target looks
+    like — treating it as an obstacle would abort every reach before contact.
+    Everything else in the scene stays an obstacle.  Inferring the target from
+    the commanded pose keeps this server-side and opens no new information
+    channel to the Agent.
+    """
+    obstacles = _collision_objects_without_attached(meta)
+    if approach_target_xyz is None or len(approach_target_xyz) < 3:
+        return obstacles
+    try:
+        target = [float(value) for value in approach_target_xyz[:3]]
+    except (TypeError, ValueError):
+        return obstacles
+
+    nearest_name: str | None = None
+    best = float(target_radius_m)
+    for obj in obstacles:
+        position = obj.get("position")
+        if not isinstance(position, list) or len(position) < 3:
+            continue
+        try:
+            distance = math.dist(target, [float(value) for value in position[:3]])
+        except (TypeError, ValueError):
+            continue
+        if distance < best:
+            nearest_name, best = str(obj.get("name") or ""), distance
+    if nearest_name is None:
+        return obstacles
+    return [obj for obj in obstacles if str(obj.get("name") or "") != nearest_name]
+
+
+# Ceiling on carry-sweep samples.  Sized so the density guarantee holds across a
+# Franka's full reach (~0.855 m) for the 1 cm floor that _object_aabb clamps
+# dims to: 0.855 / (0.01 / 2) + 1 = 172.  At 15.7 us per sample this is ~4 ms
+# worst case, so the headroom is nearly free.
+_MAX_SWEEP_SAMPLES = 256
+
+
+def _check_attached_object_sweep(
+    attachment: dict,
+    obstacles: list[dict],
+    start_xyz: list[float],
+    end_xyz: list[float],
+) -> tuple[bool, dict]:
+    """Sample the carry segment instead of testing only its endpoint.
+
+    Testing the batch endpoint alone lets the carried object tunnel straight
+    through an obstacle whenever one batch advances further than the object's
+    own thickness.  Sample density is set by the smallest held dimension so no
+    sample can skip past a body thinner than the object itself.  This is pure
+    AABB arithmetic — no GPU work — so the extra samples are cheap.
+
+    The sample ceiling bounds pathological spans; it should not silently trade
+    away the density guarantee.  At 24 it did: past a ~0.72 m span the step
+    outgrew what a 1 cm held object covers and a wall between two samples was
+    missed.  That span is *not* reachable through move_to -- one batch moves at
+    most ``scale * batch_steps * sqrt(3)``, i.e. 4.7 cm on LIBERO and 26 cm on
+    RoboCasa -- so this was defence in depth, not a live bug.  The ceiling did
+    bind on RoboCasa-scale spans (26 samples wanted) without ever approaching
+    the tunnelling threshold.  Raised anyway because the cost is trivial:
+    15.7 us per sample against ten obstacles, so 256 samples is 4 ms.
+
+    When the ceiling does bind, ``swept_density_capped`` and ``swept_step_m``
+    report it rather than letting a weaker check pass as an equal one.
+    """
+    if len(start_xyz) < 3 or len(end_xyz) < 3:
+        return check_attached_object_collision(attachment, obstacles, end_xyz)
+
+    dims = attachment.get("dims")
+    smallest = 0.06
+    if isinstance(dims, list) and len(dims) >= 3:
+        finite = [float(v) for v in dims[:3] if isinstance(v, (int, float))]
+        if finite and min(finite) > 0:
+            smallest = min(finite)
+
+    try:
+        span = math.dist(
+            [float(v) for v in start_xyz[:3]], [float(v) for v in end_xyz[:3]]
+        )
+    except (TypeError, ValueError):
+        return check_attached_object_collision(attachment, obstacles, end_xyz)
+
+    step_limit = max(0.01, smallest / 2.0)
+    wanted = int(span / step_limit) + 1
+    samples = max(1, min(_MAX_SWEEP_SAMPLES, wanted))
+    capped = wanted > _MAX_SWEEP_SAMPLES
+
+    last_info: dict = {"available": True, "attached_object_world_collision": False}
+    for index in range(1, samples + 1):
+        ratio = index / samples
+        sample = [
+            float(start_xyz[axis]) + (float(end_xyz[axis]) - float(start_xyz[axis])) * ratio
+            for axis in range(3)
+        ]
+        detected, info = check_attached_object_collision(attachment, obstacles, sample)
+        last_info = info
+        if detected:
+            info["swept_samples"] = samples
+            info["swept_hit_fraction"] = ratio
+            return True, info
+
+    last_info["swept_samples"] = samples
+    # Surface the achieved density so a capped sweep is never mistaken for a
+    # sweep that met the guarantee.
+    last_info["swept_step_m"] = span / samples if samples else 0.0
+    if capped:
+        last_info["swept_density_capped"] = True
+        last_info["swept_samples_wanted"] = wanted
+    return False, last_info
 
 
 # ── Quaternion helpers (no scipy dependency) ────────────────────────────
@@ -561,6 +861,149 @@ def _quat_angular_distance(a: list[float], b: list[float]) -> float:
 
 @_blocking_tool
 @_serialized_env_control
+def ik_preview_check(
+    handle: str,
+    x: float,
+    y: float,
+    z: float,
+    *,
+    roll: float | None = None,
+    pitch: float | None = None,
+    yaw: float | None = None,
+    position_tolerance_m: float = 0.002,
+    orientation_tolerance_rad: float = 0.05,
+    max_attempts: int = 24,
+    max_nfev_per_attempt: int = 300,
+    timeout_s: float = 10.0,
+    preserve_current_orientation: bool = True,
+    check_endpoint_collision: bool = False,
+    include_scene_objects: bool = False,
+    session_id: str = "",
+) -> dict:
+    """Preview endpoint IK feasibility without moving the robot.
+
+    The result is deliberately tri-state. ``unreachable`` is a structured
+    rejection, while ``unknown`` means the numerical/backend budget could not
+    certify either outcome and must not be presented as a safe approval.
+    Path feasibility is not checked here; use ``obstacle_avoidance`` for that
+    separate question.
+    """
+
+    sid = session_id or _current_session.get() or ""
+    _touch_session(sid)
+    meta = _session_envs.get(sid, {}).get(handle)
+    if not meta:
+        return {"ok": False, "success": False, "error": f"Unknown: {handle}"}
+    orientation_values = (roll, pitch, yaw)
+    if any(value is not None for value in orientation_values) and not all(
+        value is not None for value in orientation_values
+    ):
+        return {
+            "ok": False,
+            "success": False,
+            "error": "roll, pitch, and yaw must be provided together",
+            "reason_code": "invalid_target_pose",
+        }
+
+    body: dict = {
+        "target_xyz": [float(x), float(y), float(z)],
+        "position_tolerance_m": float(position_tolerance_m),
+        "orientation_tolerance_rad": float(orientation_tolerance_rad),
+        "max_attempts": int(max_attempts),
+        "max_nfev_per_attempt": int(max_nfev_per_attempt),
+        "timeout_s": float(timeout_s),
+        "preserve_current_orientation": bool(preserve_current_orientation),
+    }
+    if all(value is not None for value in orientation_values):
+        body["target_euler_xyz_deg"] = [float(roll), float(pitch), float(yaw)]
+
+    result = _proxy_reachability(meta, body)
+    if not isinstance(result, dict):
+        result = {
+            "status": "unknown",
+            "kinematic_status": "unknown",
+            "feasible": None,
+            "reason_code": "invalid_worker_response",
+            "message": "Reachability worker returned an invalid response.",
+        }
+    if result.get("error"):
+        return {
+            "ok": False,
+            "success": False,
+            "error": str(result.get("error")),
+            "reason_code": str(result.get("reason_code") or "reachability_backend_error"),
+        }
+
+    result = dict(result)
+    result.setdefault("collision", {"checked": False})
+    result["path"] = {
+        "checked": False,
+        "reason": "path feasibility is owned by obstacle_avoidance",
+    }
+    if check_endpoint_collision and result.get("kinematic_status") == "reachable":
+        candidate = result.get("best_candidate")
+        joints = candidate.get("joint_positions") if isinstance(candidate, dict) else None
+        objects = list(meta.get("_collision_objects") or []) if include_scene_objects else []
+        if isinstance(joints, list):
+            try:
+                checker = get_checker(handle, str(meta.get("backend") or ""))
+                in_collision, collision_info = checker.check(joints, objects)
+            except Exception as exc:  # noqa: BLE001 - uncertainty must stay structured.
+                in_collision = False
+                collision_info = {
+                    "available": False,
+                    "reason": f"endpoint collision checker failed: {type(exc).__name__}: {exc}",
+                }
+            result["collision"] = {
+                "checked": bool(collision_info.get("available")),
+                "scene_objects_included": bool(include_scene_objects),
+                "detected": bool(in_collision),
+                **{key: value for key, value in collision_info.items() if key != "available"},
+            }
+            if in_collision:
+                result.update(
+                    {
+                        "status": "unreachable",
+                        "feasible": False,
+                        "reason_code": "endpoint_collision",
+                        "message": (
+                            "A kinematic solution exists, but the requested endpoint "
+                            "configuration is in collision."
+                        ),
+                    }
+                )
+                result.setdefault("suggestions", []).append("select_collision_free_target")
+            elif not collision_info.get("available"):
+                result.update(
+                    {
+                        "status": "unknown",
+                        "feasible": None,
+                        "reason_code": "endpoint_collision_check_unavailable",
+                        "message": (
+                            "IK succeeded, but the requested endpoint collision check "
+                            "was unavailable; overall feasibility is unknown."
+                        ),
+                    }
+                )
+        else:
+            result.update(
+                {
+                    "status": "unknown",
+                    "feasible": None,
+                    "reason_code": "ik_candidate_missing",
+                    "message": "IK result did not contain a joint candidate for collision checking.",
+                }
+            )
+
+    status = str(result.get("status") or "unknown")
+    result["ok"] = status != "unreachable"
+    result["success"] = status != "unreachable"
+    result["content"] = str(result.get("message") or f"IK preview status: {status}")
+    return result
+
+
+@_blocking_tool
+@_serialized_env_control
 def move_to(handle: str, x: float, y: float, z: float, *,
             roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
             num_steps: int = 100, tolerance: float = 0.002, ori_tolerance: float = 0.05,
@@ -568,9 +1011,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             enable_collision_check: bool = True) -> dict:
     """Move the end-effector to an absolute pose using closed-loop interpolation.
 
-    Re-observes the EE pose from the step result every 10 steps for
-    closed-loop correction.  Supports both position-only and position +
-    orientation control.
+    Re-observes the EE pose from step results for closed-loop correction:
+    every step for position-only reaches and every three steps for full-pose
+    reaches. Supports both position-only and position + orientation control.
 
     If the environment has not been reset yet, the first call implicitly
     resets it — no separate ``reset_env`` call is needed.
@@ -628,9 +1071,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
     # dashboard feedback) plus a guaranteed final render at the end — the rest
     # of the steps skip the render and run at physics speed (~20 ms).
     _RENDER_EVERY = 15
-    recheck_every = 3  # re-observe every N steps — small because EE is read
-                        # from step results (zero extra cost), and a shorter
-                        # window prevents overshoot from inaccurate action scale
+    # Every proxy step already returns EE state at no additional render cost.
+    # Position-only reaches benefit from recomputing every step: reusing one
+    # nominal OSC delta for three physics steps produced a centimetre-scale
+    # near-target limit cycle.  Full-pose reaches retain the smaller historical
+    # three-step interpolation increments; one-step full-pose commands were
+    # measured to amplify translation/rotation coupling.  The explicit receipt
+    # below reports when the coupled controller still cannot attain the pose.
+    recheck_every = 3 if use_ori else 1
 
     # ── target orientation in quaternion ───────────────────────────
     target_quat: list[float] = []
@@ -671,9 +1119,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     start_xyz = current_xyz[:3]
     start_quat = current_quat[:4] if use_ori else []
+    # Latch the pre-motion trunk pose so every Cartesian substep re-sends it.
+    # pose_result is whichever source above produced a usable EE pose, so it is
+    # the freshest observation available before the arm starts moving.
+    _capture_trunk_hold(meta, pose_result if isinstance(pose_result, dict) else {})
     final_result: dict = {}
     final_reward = 0.0
     final_terminated = False
+    control_error = ""
     total_steps = 0
 
     # ── collision state (initialized before loop) ──────────────────
@@ -721,6 +1174,30 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
         batch_steps = min(recheck_every, num_steps - batch_start)
 
+        attachment = meta.get("_attachment_proxy")
+        # A tentative proxy is checked too: its relative_xyz was measured from
+        # the real object pose when armed, so it is no less accurate than a
+        # confirmed one.  Waiting for confirmation left the first ~1.5 cm of
+        # every post-grasp carry — the lift — entirely unguarded.
+        if (
+            enable_collision_check
+            and isinstance(attachment, dict)
+            and attachment.get("status") in {"tentative", "confirmed"}
+        ):
+            predicted_eef = [
+                current_xyz[0] + ax * scale * batch_steps,
+                current_xyz[1] + ay * scale * batch_steps,
+                current_xyz[2] + az * scale * batch_steps,
+            ]
+            collision_detected, collision_info = _check_attached_object_sweep(
+                attachment,
+                _safety_obstacles(meta),
+                current_xyz,
+                predicted_eef,
+            )
+            if collision_detected:
+                break
+
         # RoboCasa's PandaOmron OSC consumes deltas in its moving base frame,
         # while the public OpenETA move_to contract is world-frame.  Rotate
         # both translational and rotational error vectors before encoding.
@@ -762,12 +1239,25 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             final_result = _proxy_step(meta, act, num_steps=1, render=do_render)
             total_steps += 1
             final_reward = final_result.get("reward", 0.0)
+            if final_result.get("error"):
+                # A worker-side control failure is not a motion sample.  Stop
+                # immediately instead of issuing the same action for the rest
+                # of num_steps and eventually returning an empty end pose.
+                # Keep current_xyz below as the last trustworthy pose so the
+                # caller can reconcile or reset from explicit feedback.
+                control_error = str(final_result.get("error"))
+                final_terminated = bool(
+                    final_result.get("terminated") or final_result.get("truncated")
+                )
+                break
             if final_result.get("terminated") or final_result.get("truncated"):
                 final_terminated = True
                 break
 
-        if final_terminated:
+        if final_terminated or control_error:
             break
+
+        _refresh_attachment_proxy(meta, final_result)
 
         # Re-read pose from last step result (no extra HTTP call)
         new_xyz = _extract_ee_xyz_from_result(final_result)
@@ -782,15 +1272,31 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         # ── collision check (post-batch) ──────────────────────────
         collision_detected = False
         collision_info = {"available": False}
-        if enable_collision_check and backend in ("libero", "maniskill"):
+        # BEHAVIOR is listed here even though its checker reports unavailable:
+        # routing it through means move_to returns cuRobo's stated reason
+        # ("no model for R1Pro") instead of a bare available:False that reads
+        # identically to "scene is clear".
+        if enable_collision_check and backend in ("libero", "maniskill", "behavior"):
             jp = _extract_joint_positions_from_result(final_result)
-            objects = _extract_objects_from_result(final_result)
-            if jp:
-                try:
-                    checker = get_checker(handle, backend)
-                    collision_detected, collision_info = checker.check(jp, objects)
-                except Exception:
-                    pass  # best-effort; don't crash move_to
+            # The arm-vs-world check always uses privileged geometry.  Gating it
+            # on the public include_objects flag meant cuRobo's world was never
+            # populated in the default path, so max_world_penetration was
+            # structurally 0.0 and only self-collision was ever evaluated.
+            # Excluding just the approach target preserves the original intent
+            # (a grasp target must not read as an obstacle pre-contact) without
+            # discarding the rest of the scene.
+            objects = _safety_obstacles(meta, approach_target_xyz=(x, y, z))
+            try:
+                checker = get_checker(handle, backend)
+                # Ask the checker even with no joint positions: an unsupported
+                # robot must still report why, and gating that on jp would drop
+                # the reason for any backend whose observation omits them.
+                collision_detected, collision_info = checker.check(
+                    jp or [], objects,
+                    joint_names=_extract_joint_names_from_result(final_result),
+                )
+            except Exception:
+                pass  # best-effort; don't crash move_to
 
         if collision_detected:
             break
@@ -810,7 +1316,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     # ── final pose ─────────────────────────────────────────────────
     final_xyz = _extract_ee_xyz_from_result(final_result) if total_steps > 0 else start_xyz
+    if len(final_xyz) < 3:
+        final_xyz = current_xyz
     final_quat = _extract_ee_quat_from_result(final_result) if (use_ori and total_steps > 0) else []
+    if use_ori and len(final_quat) < 4:
+        final_quat = current_quat
 
     result: dict = {
         "target": {"x": x, "y": y, "z": z},
@@ -820,6 +1330,62 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         "terminated": final_terminated,
         "reward": final_reward,
     }
+    final_position_error = (
+        _math.sqrt(
+            (x - final_xyz[0]) ** 2
+            + (y - final_xyz[1]) ** 2
+            + (z - final_xyz[2]) ** 2
+        )
+        if len(final_xyz) >= 3
+        else None
+    )
+    max_axis_position_error = (
+        max(abs(x - final_xyz[0]), abs(y - final_xyz[1]), abs(z - final_xyz[2]))
+        if len(final_xyz) >= 3
+        else None
+    )
+    final_orientation_error = (
+        _quat_angular_distance(final_quat, target_quat)
+        if use_ori and len(final_quat) >= 4
+        else None
+    )
+    reached_target = bool(
+        max_axis_position_error is not None
+        and max_axis_position_error < tolerance
+        and (
+            not use_ori
+            or (
+                final_orientation_error is not None
+                and final_orientation_error < ori_tolerance
+            )
+        )
+        and not final_terminated
+        and not control_error
+        and not collision_detected
+    )
+    result["reached_target"] = reached_target
+    if final_position_error is not None:
+        result["position_error_m"] = final_position_error
+        result["max_axis_position_error_m"] = max_axis_position_error
+    if final_orientation_error is not None:
+        result["orientation_error_rad"] = final_orientation_error
+        result["orientation_error_deg"] = _math.degrees(final_orientation_error)
+    if reached_target:
+        result["stop_reason"] = "target_reached"
+    elif collision_detected:
+        result["stop_reason"] = "collision_detected"
+    elif control_error:
+        result["stop_reason"] = "control_step_failed"
+    elif final_terminated:
+        result["stop_reason"] = "episode_terminated"
+    elif total_steps >= num_steps:
+        result["stop_reason"] = "iteration_limit"
+    else:
+        result["stop_reason"] = "controller_stopped"
+    if control_error:
+        result["ok"] = False
+        result["code"] = "control_step_failed"
+        result["error"] = control_error
     if use_ori:
         result["target"]["roll"] = roll
         result["target"]["pitch"] = pitch
@@ -829,9 +1395,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
 
     # ── collision summary ──────────────────────────────────────────
     if enable_collision_check and collision_detected:
+        collision_message = str(collision_info.get("message") or "").strip()
         result["collision"] = {
             "detected": True,
-            "message": (
+            "message": collision_message
+            or (
                 f"Collision detected at step {total_steps}: "
                 f"world_penetration={collision_info.get('max_world_penetration', 0.0):.4f}m, "
                 f"self_penetration={collision_info.get('max_self_penetration', 0.0):.4f}m"
@@ -839,7 +1407,34 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             **{k: v for k, v in collision_info.items() if k != "available"},
         }
     elif enable_collision_check and collision_info.get("available"):
-        result["collision"] = {"detected": False}
+        # Report which sub-checks actually ran.  A bare ``detected: False`` reads
+        # as a safety guarantee even when the world was never populated or the
+        # carried object was never tracked, which is the more dangerous of the
+        # two failure modes because it is silent.
+        #
+        # The splat comes first so keys this branch does not name are still
+        # forwarded; the explicit entries below then take precedence, since they
+        # are the ones callers treat as the coverage contract.
+        attachment_state = meta.get("_attachment_proxy")
+        result["collision"] = {
+            "detected": False,
+            **{k: v for k, v in collision_info.items() if k != "available"},
+            "world_checked": bool(collision_info.get("world_checked", False)),
+            "self_checked": bool(collision_info.get("self_checked", False)),
+            "obstacle_count": int(collision_info.get("obstacle_count", 0)),
+            "attached_object_checked": isinstance(attachment_state, dict)
+            and attachment_state.get("status") in {"tentative", "confirmed"},
+        }
+        if collision_info.get("world_update_error"):
+            result["collision"]["world_update_error"] = collision_info["world_update_error"]
+        # Carry the reason when a sub-check was skipped.  Without this a skipped
+        # check reports world_checked/self_checked False with no explanation --
+        # the caller can tell nothing was verified but not why, which makes the
+        # difference between "clear" and "never looked" undiagnosable.
+        if collision_info.get("reason") and not (
+            result["collision"]["world_checked"] and result["collision"]["self_checked"]
+        ):
+            result["collision"]["reason"] = collision_info["reason"]
     elif enable_collision_check:
         result["collision"] = {
             "detected": False,
@@ -1076,6 +1671,7 @@ def gripper_open(handle: str, *, session_id: str = "") -> dict:
         return {"error": f"Unknown: {handle}"}
     backend = meta.get("backend", "")
     meta["_gripper_cmd"] = -1.0  # latch OPEN — held on every subsequent step
+    meta.pop("_attachment_proxy", None)
     try:
         act = make_gripper_action(meta, open_gripper=True, backend=backend)
     except ControlCodecError as exc:
@@ -1107,7 +1703,9 @@ def gripper_close(handle: str, *, session_id: str = "") -> dict:
         act = make_gripper_action(meta, open_gripper=False, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    return _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    result = _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    _arm_attachment_proxy(meta, result)
+    return result
 
 
 def _gripper_cmd(meta: dict) -> float:
@@ -1145,16 +1743,28 @@ def base_control(
     lateral: float = 0.0,
     yaw: float = 0.0,
     torso: float = 0.0,
+    trunk: float | list[float] | None = None,
     command: str = "",
     num_steps: int = 10,
     session_id: str = "",
 ) -> dict:
-    """Control RoboCasa's PandaOmron mobile base and torso.
+    """Drive a mobile base, and command or hold the trunk.
 
-    The four normalized controls are torso height, forward velocity, lateral
-    velocity, and counter-clockwise yaw velocity.  A named command can be used
-    instead of the three base velocities.  This tool is intentionally rejected
-    for fixed-base or non-RoboCasa environments.
+    The base controls are normalized rates: forward, lateral, and
+    counter-clockwise yaw velocity.  A named command can be used instead.
+    Motion stops when the commands stop, so omitting a base control means
+    "no motion on that axis".
+
+    Trunk control differs in kind and so differs in default.  It is a
+    **position** target, not a rate: on RoboCasa a single normalized height, on
+    BEHAVIOR R1Pro a 4-joint torso chain.  ``0.0`` in a position slot is not
+    neutral -- it scales onto the middle of the joint range -- so ``trunk`` left
+    unset means *hold the current pose*, reading the trunk back from the
+    observation.  Passing ``trunk`` explicitly commands it; passing ``torso``
+    keeps the original RoboCasa spelling.
+
+    Supported where the environment declares a base: RoboCasa PandaOmron and
+    BEHAVIOR R1Pro.  Fixed-base environments are rejected.
     """
 
     sid = session_id or _current_session.get() or ""
@@ -1163,10 +1773,38 @@ def base_control(
     if not meta:
         return {"error": f"Unknown: {handle}"}
     backend = meta.get("backend", "")
-    if backend != "robocasa" or int(meta.get("action_dim") or 0) != 12:
-        return {
-            "error": "base_control is only available for RoboCasa PandaOmron environments"
-        }
+    if backend == "robocasa":
+        if int(meta.get("action_dim") or 0) != 12:
+            return {
+                "error": "base_control requires the 12-dim RoboCasa PandaOmron action layout"
+            }
+        return _base_control_robocasa(
+            meta, forward=forward, lateral=lateral, yaw=yaw,
+            torso=torso, trunk=trunk, command=command, num_steps=num_steps,
+        )
+    if backend == "behavior":
+        return _base_control_behavior(
+            meta, forward=forward, lateral=lateral, yaw=yaw,
+            trunk=trunk, torso=torso, command=command, num_steps=num_steps,
+        )
+    return {
+        "error": f"base_control is not available for backend {backend!r}",
+        "code": "unsupported_base_control",
+    }
+
+
+def _base_control_robocasa(
+    meta: dict,
+    *,
+    forward: float,
+    lateral: float,
+    yaw: float,
+    torso: float,
+    trunk: float | list[float] | None,
+    command: str,
+    num_steps: int,
+) -> dict:
+    """RoboCasa PandaOmron: 3 base velocities plus a 1-dim torso position."""
     if command:
         normalized = command.strip().lower().replace("-", "_").replace(" ", "_")
         if normalized not in _BASE_COMMANDS:
@@ -1187,6 +1825,11 @@ def base_control(
     action[7] = clipped(forward)
     action[8] = clipped(lateral)
     action[9] = clipped(yaw)
+    # `trunk` is the cross-backend spelling; `torso` is kept for compatibility.
+    # A scalar or a 1-element list both name RoboCasa's single torso dim.
+    if trunk is not None:
+        torso = float(trunk[0]) if isinstance(trunk, (list, tuple)) and trunk else float(
+            trunk if not isinstance(trunk, (list, tuple)) else 0.0)
     action[10] = clipped(torso)
     action[11] = 1.0
     result = _proxy_step(meta, action, num_steps=max(1, int(num_steps)))
@@ -1198,6 +1841,152 @@ def base_control(
         "num_steps": max(1, int(num_steps)),
     }
     return result
+
+
+def _base_control_behavior(
+    meta: dict,
+    *,
+    forward: float,
+    lateral: float,
+    yaw: float,
+    trunk: float | list[float] | None,
+    torso: float,
+    command: str,
+    num_steps: int,
+) -> dict:
+    """BEHAVIOR R1Pro: 3 holonomic base rates plus a 4-joint trunk chain.
+
+    Slots come from the declared control_spec, never from constants: R1Pro's
+    action_dim is 21 under our IK overrides but 23 under the raw
+    r1pro_behavior.yaml joint controllers, so hard-coded indices would drive the
+    wrong actuators in one of the two configurations.
+    """
+    spec = meta.get("control_spec")
+    base = spec.get("base") if isinstance(spec, dict) else None
+    if not isinstance(base, dict) or not base.get("supported"):
+        return {
+            "error": "this BEHAVIOR robot declares no mobile base",
+            "code": "unsupported_base_control",
+        }
+    base_slots = [int(i) for i in (base.get("indices") or [])]
+    if len(base_slots) != 3:
+        return {
+            "error": f"expected 3 holonomic base slots, got {len(base_slots)}",
+            "code": "unsupported_base_control",
+        }
+
+    if command:
+        normalized = command.strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized not in _BASE_COMMANDS:
+            return {
+                "error": f"Unknown base command: {command}",
+                "available_commands": sorted(_BASE_COMMANDS),
+            }
+        forward, lateral, yaw = _BASE_COMMANDS[normalized]
+
+    def clipped(value: float) -> float:
+        return max(-1.0, min(1.0, float(value)))
+
+    try:
+        dim = int(meta.get("action_dim") or 0) or len(
+            make_cartesian_action(meta, (0.0, 0.0, 0.0), "behavior"))
+    except ControlCodecError as exc:
+        return codec_error_result(exc)
+    action = [0.0] * dim
+    for slot, value in zip(base_slots, (forward, lateral, yaw)):
+        if 0 <= slot < dim:
+            action[slot] = clipped(value)
+
+    # Trunk: explicit target, or hold.  These are position commands, so an
+    # unset trunk cannot be left at 0.0 -- that scales to the middle of each
+    # joint's range and would move the torso on a pure base command.
+    tl = trunk_layout(meta)
+    trunk_report: Any = None
+    trunk_slots = [int(i) for i in (tl.get("indices") or [])] if tl else []
+    if tl and trunk_slots:
+        explicit = trunk if trunk is not None else (torso if torso else None)
+        if explicit is not None:
+            values = ([float(v) for v in explicit]
+                      if isinstance(explicit, (list, tuple))
+                      else [float(explicit)] * len(trunk_slots))
+            if len(values) != len(trunk_slots):
+                return {
+                    "error": (f"trunk expects {len(trunk_slots)} values "
+                              f"(joints {tl.get('joint_names') or trunk_slots}), "
+                              f"got {len(values)}"),
+                    "code": "invalid_trunk_command",
+                }
+            for slot, value in zip(trunk_slots, values):
+                if 0 <= slot < dim:
+                    action[slot] = clipped(value)
+            trunk_report = {"mode": "commanded",
+                            "values": [action[s] for s in trunk_slots]}
+        else:
+            obs = _proxy_observe(meta)
+            robot = (obs.get("observation") or {}).get("robot") or {}
+            slots, held = trunk_hold_values(
+                meta,
+                [float(v) for v in (robot.get("joint_positions") or [])],
+                [str(n) for n in (robot.get("joint_names") or [])],
+            )
+            if slots:
+                for slot, value in zip(slots, held):
+                    if 0 <= slot < dim:
+                        action[slot] = float(value)
+                trunk_report = {"mode": "held", "values": held}
+            else:
+                # Say so rather than silently sending the mid-range default:
+                # the caller asked for base motion and would otherwise get an
+                # unexplained torso move.
+                trunk_report = {
+                    "mode": "unknown",
+                    "reason": ("trunk pose unavailable (needs joint_names and "
+                               "declared trunk limits); slots left at their "
+                               "mid-range default and the torso may move"),
+                }
+
+    result = _proxy_step(meta, action, num_steps=max(1, int(num_steps)))
+    result["control"] = {
+        "forward": action[base_slots[0]],
+        "lateral": action[base_slots[1]],
+        "yaw": action[base_slots[2]],
+        "command_type": "velocity",
+        "num_steps": max(1, int(num_steps)),
+    }
+    if trunk_report is not None:
+        result["control"]["trunk"] = trunk_report
+    return result
+
+
+def _capture_trunk_hold(meta: dict, result: dict) -> None:
+    """Latch the trunk pose from *result* so motion steps can hold it.
+
+    Captured once before a motion rather than re-read per step: the trunk is a
+    position-mode target, so re-reading a still-settling angle each step would
+    chase it and drift.  "Hold" means the pose the trunk had when the motion
+    started.
+    """
+    robot = (result.get("observation") or {}).get("robot") or {}
+    jp = [float(v) for v in (robot.get("joint_positions") or [])]
+    jn = [str(n) for n in (robot.get("joint_names") or [])]
+    slots, values = trunk_hold_values(meta, jp, jn)
+    if slots:
+        meta["_trunk_hold"] = (slots, values)
+
+
+def _overlay_trunk_hold(meta: dict, act: list[float]) -> None:
+    """Write the latched trunk hold into *act*, if one was captured.
+
+    Without this the trunk slots stay 0.0, which position-mode scaling turns
+    into a mid-range target -- so a Cartesian arm motion would drag the torso.
+    """
+    held = meta.get("_trunk_hold")
+    if not held:
+        return
+    slots, values = held
+    for slot, value in zip(slots, values):
+        if 0 <= int(slot) < len(act):
+            act[int(slot)] = float(value)
 
 
 def _make_action_for_step(meta: dict, delta_xyz: tuple[float, float, float], backend: str,
@@ -1219,6 +2008,7 @@ def _make_action_for_step(meta: dict, delta_xyz: tuple[float, float, float], bac
     the held gripper vector.
     """
     act = make_cartesian_action(meta, delta_xyz, backend, delta_rot=delta_rot)
+    _overlay_trunk_hold(meta, act)
     if "_gripper_cmd" not in meta:
         return act  # no explicit gripper command yet — don't force the dim
     try:
@@ -1418,13 +2208,16 @@ def _build_dashboard_app() -> Starlette:
 
 def main() -> None:
     import argparse
+    import atexit as _atexit
     import uvicorn
     from mcp.server.sse import SseServerTransport
 
     p = argparse.ArgumentParser(description="OpenETA MCP + Web Dashboard")
     p.add_argument("--transport", default="sse", choices=["sse", "stdio"])
+    p.add_argument("--host", default=os.environ.get("MCP_HOST", "0.0.0.0"))
     p.add_argument("--port", type=int, default=0)
     args = p.parse_args()
+    host = args.host
     port = args.port or int(os.environ.get("MCP_PORT", os.environ.get("PORT", "8765")))
     _init()
 
@@ -1517,10 +2310,27 @@ def main() -> None:
             _sweeper_flag[0] = True
             _asyncio.create_task(_stale_session_sweeper())
 
-    print(f"\n  OpenETA Dashboard:      http://0.0.0.0:{port}/")
-    print(f"  MCP (Streamable HTTP):  http://0.0.0.0:{port}/mcp")
-    print(f"  MCP (legacy SSE):       http://0.0.0.0:{port}/sse\n")
-    uvicorn.run(combined, host="0.0.0.0", port=port, log_level="warning")
+    print(f"\n  OpenETA Dashboard:      http://{host}:{port}/")
+    print(f"  MCP (Streamable HTTP):  http://{host}:{port}/mcp")
+    print(f"  MCP (legacy SSE):       http://{host}:{port}/sse\n")
+
+    # Reap workers on server exit.  Without this every worker outlives the
+    # server that spawned it -- for BEHAVIOR that is a ~6.5 GB VRAM process per
+    # env with no owner left to close it.  uvicorn installs its own
+    # SIGINT/SIGTERM handling and returns from run(), so ``finally`` covers the
+    # ordinary paths and atexit covers exits that bypass it.  A SIGKILLed
+    # server can run neither, which is why workers also carry PR_SET_PDEATHSIG.
+    def _reap_workers() -> None:
+        try:
+            _get_mgr().stop_all()
+        except Exception:
+            pass
+
+    _atexit.register(_reap_workers)
+    try:
+        uvicorn.run(combined, host=host, port=port, log_level="warning")
+    finally:
+        _reap_workers()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from agent.runtime.response_artifacts import (
     build_motion_summary,
     build_observation_snapshot,
     build_observation_summary,
+    build_reachability_summary,
     build_response_reference,
     materialize_json_response,
 )
@@ -50,6 +51,7 @@ DEFAULT_SIMULATOR_MCP_TOOL_NAMES = (
     "create_simulator_env",
     "close_simulator_env",
     "observe",
+    "ik_preview_check",
     "move_to",
     "follow_eef_trajectory",
     "gripper_control",
@@ -71,6 +73,7 @@ DEFAULT_SIMULATOR_MCP_TOOL_MAP = {
     "create_simulator_env": "create_env",
     "close_simulator_env": "close_env",
     "observe": "render_env",
+    "ik_preview_check": "ik_preview_check",
     "move_to": "move_to",
 }
 
@@ -533,6 +536,10 @@ class SimulatorMcpToolProxy:
             artifact_session_id=artifact_session_id(context.metadata),
             execution_metadata=context.metadata,
         )
+        if agent_tool in {"move_to", "follow_eef_trajectory"}:
+            pose_feedback = _pose_feedback(context.parameters, raw_response)
+            if pose_feedback:
+                normalized["outputs"]["pose_feedback"] = pose_feedback
         if agent_tool == "move_to" and _is_anyplace_pose(context.parameters):
             normalized["outputs"]["mcp"]["target_orientation_mode"] = "preserve_current"
         elif agent_tool == "move_to" and _is_ranked_grasp_candidate_pose(context.parameters):
@@ -545,6 +552,11 @@ class SimulatorMcpToolProxy:
             not success
             and context.spec.effect.value == "world_mutating"
             and _response_lost_action_receipt(raw_response)
+        )
+        motion_target_not_reached = (
+            success
+            and agent_tool in {"move_to", "follow_eef_trajectory"}
+            and build_motion_summary(raw_response).get("reached_target") is False
         )
         if response_unknown:
             normalized["outputs"].update(
@@ -566,7 +578,32 @@ class SimulatorMcpToolProxy:
                 }
             ]
         else:
-            diagnostics = _response_diagnostics(raw_response) if not success else []
+            diagnostics = (
+                _response_diagnostics(raw_response)
+                if not success or motion_target_not_reached
+                else []
+            )
+        semantic_outcome = "target_not_reached" if motion_target_not_reached else None
+        recovery_options = (
+            [
+                {
+                    "action": "inspect_fresh_observation",
+                    "reason": (
+                        "the controller executed but did not reach the requested pose; "
+                        "use the reported end pose and fresh images before deciding whether "
+                        "to retry, replan, or continue"
+                    ),
+                },
+                {
+                    "action": "replan_from_actual_pose",
+                    "reason": (
+                        "do not treat the requested target pose as the robot's current pose"
+                    ),
+                },
+            ]
+            if motion_target_not_reached
+            else None
+        )
         return ToolResult(
             success,
             content=_response_content(
@@ -583,6 +620,8 @@ class SimulatorMcpToolProxy:
                 state_delta=normalized["state_delta"],
                 environment_receipt=normalized["environment_receipt"],
                 diagnostics=diagnostics,
+                semantic_outcome=semantic_outcome,
+                recovery_options=recovery_options,
             ),
         )
 
@@ -605,6 +644,10 @@ class SimulatorMcpToolProxy:
             )
         if agent_tool == "observe":
             return self._mcp_tool_name(agent_tool), self._with_session({})
+        if agent_tool == "ik_preview_check":
+            return self._mcp_tool_name(agent_tool), self._ik_preview_arguments(
+                context.parameters
+            )
         if agent_tool == "move_to":
             return self._mcp_tool_name(agent_tool), self._move_to_arguments(context.parameters)
         if agent_tool == "follow_eef_trajectory":
@@ -653,6 +696,40 @@ class SimulatorMcpToolProxy:
             if key in parameters:
                 arguments[key] = parameters[key]
         for key in ("num_steps", "tolerance", "ori_tolerance", "enable_collision_check"):
+            if key in parameters:
+                arguments[key] = parameters[key]
+        return self._with_session(arguments)
+
+    def _ik_preview_arguments(self, parameters: JsonDict) -> JsonDict:
+        x, y, z = _extract_xyz(parameters, tool_name="ik_preview_check")
+        arguments: JsonDict = {"x": x, "y": y, "z": z}
+        is_anyplace_pose = _is_anyplace_pose(parameters)
+        is_grasp_candidate = _is_ranked_grasp_candidate_pose(parameters)
+        if is_anyplace_pose:
+            pass
+        elif is_grasp_candidate and self.config.forward_grasp_candidate_orientation:
+            arguments.update(
+                _extract_graspnet_panda_orientation_arguments(
+                    parameters,
+                    tool_name="ik_preview_check",
+                )
+            )
+        elif not is_grasp_candidate:
+            arguments.update(
+                _extract_orientation_arguments(parameters, tool_name="ik_preview_check")
+            )
+        for key in (
+            "position_tolerance_m",
+            "orientation_tolerance_rad",
+            "max_attempts",
+            "max_nfev_per_attempt",
+            "timeout_s",
+            "preserve_current_orientation",
+            "check_endpoint_collision",
+            "include_scene_objects",
+            "handle",
+            "session_id",
+        ):
             if key in parameters:
                 arguments[key] = parameters[key]
         return self._with_session(arguments)
@@ -739,6 +816,12 @@ class SimulatorMcpToolProxy:
             summary = response_ref.get(key)
             if isinstance(summary, dict):
                 outputs[key] = summary
+        reachability_summary = build_reachability_summary(payload)
+        if reachability_summary:
+            outputs["reachability"] = reachability_summary
+            outputs["feasible"] = reachability_summary.get("feasible")
+            outputs["status"] = reachability_summary.get("status")
+            outputs["reason_code"] = reachability_summary.get("reason_code")
         return {
             "outputs": outputs,
             "artifacts": artifacts,
@@ -1790,13 +1873,127 @@ def _context_execution_cancelled(context: ToolExecutionContext) -> bool:
 def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> str:
     content = response.get("content")
     if isinstance(content, str) and content.strip():
-        return content if len(content) <= 500 else content[:500].rstrip()
+        # Preserve enough semantic feedback for the Agent to diagnose and
+        # reflect.  Complete bulky responses still live in response_path;
+        # planner-level total token projection, not a 500-character slice,
+        # governs how much historical feedback remains model-visible.
+        return content if len(content) <= 4_000 else content[:4_000].rstrip()
+    reachability = response.get("reachability_summary")
+    if isinstance(reachability, dict):
+        status = str(reachability.get("status") or "unknown")
+        reason = str(reachability.get("reason_code") or "unspecified")
+        message = str(reachability.get("message") or "").strip()
+        return f"IK preview {status} ({reason}). {message}".strip()
     if not success:
-        return str(response.get("error") or f"Simulator MCP tool failed: {mcp_tool}")
+        return str(
+            response.get("message")
+            or response.get("error")
+            or f"Simulator MCP tool failed: {mcp_tool}"
+        )
     response_path = response.get("response_path")
+    collision = response.get("collision")
+    if _collision_rejects_motion(collision):
+        message = str(
+            collision.get("message")
+            or "Simulator collision check stopped motion before the requested target."
+        )
+        suffix = f" Full response saved to {response_path}" if response_path else ""
+        return f"Simulator MCP tool stopped for collision: {message}{suffix}"
+    compact_motion = response.get("motion_summary")
+    motion = (
+        dict(compact_motion)
+        if isinstance(compact_motion, dict)
+        else build_motion_summary(response)
+    )
+    if motion.get("reached_target") is False:
+        target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
+        end = motion.get("end") if isinstance(motion.get("end"), dict) else {}
+        target_xyz = _motion_xyz(target)
+        end_xyz = _motion_xyz(end)
+        error_m = _position_error_m(target_xyz, end_xyz)
+        facts = [
+            f"requested_target_xyz={target_xyz}" if target_xyz else "",
+            f"actual_end_xyz={end_xyz}" if end_xyz else "",
+            f"position_error_m={error_m:.4f}" if error_m is not None else "",
+        ]
+        summary = "; ".join(item for item in facts if item)
+        suffix = f" Full response saved to {response_path}" if response_path else ""
+        return (
+            f"Simulator MCP tool executed: {mcp_tool}, but the requested target was NOT "
+            f"reached. {summary}. Do not assume the requested pose was achieved; inspect "
+            f"the fresh observation and replan from the actual end pose.{suffix}"
+        )
+    if motion:
+        target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
+        end = motion.get("end") if isinstance(motion.get("end"), dict) else {}
+        target_xyz = _motion_xyz(target)
+        end_xyz = _motion_xyz(end)
+        error_m = _position_error_m(target_xyz, end_xyz)
+        facts = [
+            f"requested_target_xyz={target_xyz}" if target_xyz else "",
+            f"actual_end_xyz={end_xyz}" if end_xyz else "",
+            f"position_error_m={error_m:.4f}" if error_m is not None else "",
+        ]
+        summary = "; ".join(item for item in facts if item)
+        suffix = f" Full response saved to {response_path}" if response_path else ""
+        if summary:
+            return f"Simulator MCP tool executed: {mcp_tool}; {summary}.{suffix}"
     if isinstance(response_path, str) and response_path:
         return f"Simulator MCP tool executed: {mcp_tool}; response saved to {response_path}"
     return f"Simulator MCP tool executed: {mcp_tool}"
+
+
+def _pose_feedback(parameters: JsonDict, response: JsonDict) -> JsonDict:
+    """Return compact requested/actual EEF feedback without inferring task success."""
+
+    requested = parameters.get("target_pose")
+    if not isinstance(requested, dict):
+        requested = None
+    motion = build_motion_summary(response)
+    actual = motion.get("end") if isinstance(motion.get("end"), dict) else None
+    remote_target = motion.get("target") if isinstance(motion.get("target"), dict) else None
+    requested_xyz = _motion_xyz(requested or remote_target)
+    actual_xyz = _motion_xyz(actual)
+    if requested is None and remote_target is None and actual is None:
+        return {}
+    return {
+        "schema_version": "openeta.eef_pose_feedback.v1",
+        "requested_eef_pose": dict(requested or remote_target or {}),
+        "actual_eef_pose": dict(actual or {}),
+        "requested_xyz": requested_xyz or None,
+        "actual_xyz": actual_xyz or None,
+        "position_error_m": _position_error_m(requested_xyz, actual_xyz),
+        "reached_target": motion.get("reached_target"),
+        "interpretation": (
+            "EEF kinematic feedback only; use fresh visual evidence to judge "
+            "object-relative contact and task progress."
+        ),
+    }
+
+
+def _motion_xyz(value: object) -> list[float]:
+    if not isinstance(value, dict):
+        return []
+    xyz = value.get("xyz")
+    if isinstance(xyz, list | tuple) and len(xyz) >= 3:
+        try:
+            parsed = [float(component) for component in xyz[:3]]
+        except (TypeError, ValueError):
+            return []
+        if all(math.isfinite(component) for component in parsed):
+            return parsed
+    keys = ("x", "y", "z")
+    try:
+        parsed = [float(value[key]) for key in keys]
+    except (KeyError, TypeError, ValueError):
+        return []
+    return parsed if all(math.isfinite(component) for component in parsed) else []
+
+
+def _position_error_m(target_xyz: list[float], end_xyz: list[float]) -> float | None:
+    if len(target_xyz) != 3 or len(end_xyz) != 3:
+        return None
+    return math.sqrt(sum((target - end) ** 2 for target, end in zip(target_xyz, end_xyz)))
 
 
 def _response_assigned_task(response: JsonDict) -> str:
@@ -1918,26 +2115,51 @@ def _move_response_lacks_completion_receipt(response: JsonDict) -> bool:
 
 
 def _response_diagnostics(response: JsonDict) -> list[JsonDict]:
+    reachability = build_reachability_summary(response)
+    if reachability.get("status") == "unreachable":
+        return [
+            {
+                "code": str(reachability.get("reason_code") or "ik_target_unreachable"),
+                "message": str(
+                    reachability.get("message")
+                    or "The requested endpoint pose is unreachable."
+                ),
+                "reachability": reachability,
+                "candidate_rejection": True,
+                "failure_class": "ik_target_unreachable",
+            }
+        ]
     failure_class = str(response.get("failure_class") or "").strip()
     candidate_rejection = response.get("candidate_rejection") is True
     collision = response.get("collision")
     if _collision_rejects_motion(collision):
+        motion = build_motion_summary(response)
+        target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
+        end = motion.get("end") if isinstance(motion.get("end"), dict) else {}
         return [
             {
                 "code": failure_class or "simulator_mcp_collision",
                 "message": _brief_response_error(response),
                 "collision": dict(collision),
+                "motion_summary": motion,
+                "position_error_m": _position_error_m(
+                    _motion_xyz(target), _motion_xyz(end)
+                ),
                 "candidate_rejection": candidate_rejection,
                 "failure_class": failure_class,
             }
         ]
     motion = build_motion_summary(response)
     if motion.get("reached_target") is False:
+        target = motion.get("target") if isinstance(motion.get("target"), dict) else {}
+        end = motion.get("end") if isinstance(motion.get("end"), dict) else {}
+        position_error_m = _position_error_m(_motion_xyz(target), _motion_xyz(end))
         return [
             {
                 "code": failure_class or "simulator_mcp_target_not_reached",
                 "message": _brief_response_error(response),
                 "motion_summary": motion,
+                "position_error_m": position_error_m,
                 "candidate_rejection": candidate_rejection,
                 "failure_class": failure_class,
             }

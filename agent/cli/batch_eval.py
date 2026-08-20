@@ -37,6 +37,7 @@ from agent.runtime.parallel import (
 )
 from agent.runtime.session_workspace import DEFAULT_MEMORY_ROOT, SessionWorkspace
 from agent.runtime.runtime_assembly import (
+    REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
     assemble_runtime,
@@ -48,6 +49,7 @@ from agent.runtime.supervision import (
     SupervisionPolicy,
     SupervisionProfile,
 )
+from agent.runtime.visual_history import VisualHistoryConfig
 from agent.tools.mcp_registry import load_mcp_server_url
 from agent.tools.sim_mcp import (
     SimulatorMcpEpisodeConfig,
@@ -237,6 +239,27 @@ def build_mcp_episode_worker_factory(
             ),
             tool_proxy_config=proxy_config,
         )
+        evaluation_runtime = spec.metadata.get("evaluation_runtime")
+        evaluation_runtime = (
+            dict(evaluation_runtime) if isinstance(evaluation_runtime, dict) else {}
+        )
+        visual_history_overrides = evaluation_runtime.get("visual_history")
+        if visual_history_overrides is not None and not isinstance(
+            visual_history_overrides, dict
+        ):
+            raise ValueError("evaluation_runtime.visual_history must be an object")
+        visual_history = VisualHistoryConfig.from_mapping(
+            visual_history_overrides,
+            base=VisualHistoryConfig.from_env(),
+        )
+        unsupported_runtime = sorted(
+            str(key) for key in evaluation_runtime if key != "visual_history"
+        )
+        if unsupported_runtime:
+            raise ValueError(
+                "unsupported evaluation runtime section(s): "
+                + ", ".join(unsupported_runtime)
+            )
         assembly = assemble_runtime(
             RuntimeAssemblyConfig(
                 workspace=workspace,
@@ -249,6 +272,7 @@ def build_mcp_episode_worker_factory(
                 web_access_config=web_access_config,
                 allow_outside_sandbox=False,
                 max_validation_retries=2,
+                visual_history=visual_history,
             )
         )
         runtime = assembly.runtime
@@ -314,7 +338,9 @@ def build_mcp_episode_worker_factory(
                 runtime=runtime,
                 environment=environment,
                 interaction_resolver=(
-                    BackendGuidanceResolver(new_backend())
+                    BackendGuidanceResolver(
+                        new_backend(max_tokens=REASONING_SUBAGENT_MAX_OUTPUT_TOKENS)
+                    )
                     if policy.profile == SupervisionProfile.REVIEWED_AUTONOMY
                     else None
                 ),
@@ -329,6 +355,7 @@ def build_mcp_episode_worker_factory(
                 "calibration_profile_id": staged_calibration_id,
                 "calibration_profile_sha256": workspace.grasp_profile_sha256,
                 "grasp_strategy_tree_sha256": workspace.grasp_strategy_tree_sha256,
+                "evaluation_runtime": evaluation_runtime,
             },
         )
 

@@ -54,6 +54,71 @@ def _declared_behavior_layout(meta: dict[str, Any]) -> dict[str, Any]:
     return cartesian
 
 
+def trunk_layout(meta: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the declared trunk layout, or None when the robot has no trunk.
+
+    Absent is a legitimate answer -- fixed-base and trunk-less robots exist --
+    so this returns None rather than raising, unlike the Cartesian layout whose
+    absence means a caller asked for motion that cannot be encoded.
+    """
+    spec = meta.get("control_spec")
+    trunk = spec.get("trunk") if isinstance(spec, dict) else None
+    if not isinstance(trunk, dict) or not trunk.get("supported"):
+        return None
+    return trunk
+
+
+def trunk_hold_values(meta: dict[str, Any], joint_positions: list[float],
+                      joint_names: list[str]) -> tuple[list[int], list[float]]:
+    """Normalized trunk commands that keep the trunk where it currently is.
+
+    Returns ``(slots, values)`` to write into an action, or ``([], [])`` when the
+    trunk cannot be resolved -- caller then leaves the slots untouched.
+
+    A trunk slot left at 0.0 is not neutral.  ``JointController`` runs in
+    position mode with ``use_delta_commands=False``, and
+    ``Controller._preprocess_command`` scales the [-1,1] input onto the joint
+    limits, so 0.0 resolves to ``(lower+upper)/2``.  For R1Pro's torso_joint1
+    (limits -1.1345..1.8326) that is 0.349 rad, not zero: every action built as
+    ``[0.0] * dim`` silently commands the trunk to a mid-range pose.  Holding
+    position means re-normalising the *current* angle through the inverse of
+    that scaling.
+
+    Joints are located **by name**, never by slicing.  R1Pro reports 28 joints
+    with the two arms interleaved, so a positional guess at where the torso sits
+    picks up base DOF instead -- the same failure mode the collision mapping
+    exists to prevent, and just as silent here.
+    """
+    trunk = trunk_layout(meta)
+    if not trunk:
+        return [], []
+    slots = [int(i) for i in (trunk.get("indices") or [])]
+    names = [str(n) for n in (trunk.get("joint_names") or [])]
+    lower = [float(v) for v in (trunk.get("limits_lower") or [])]
+    upper = [float(v) for v in (trunk.get("limits_upper") or [])]
+    # Without names+limits the current angle cannot be re-normalised, so there
+    # is no honest hold value.  Report nothing rather than a plausible guess.
+    if not (slots and names) or not (len(slots) == len(names) == len(lower) == len(upper)):
+        return [], []
+    if not joint_names or len(joint_names) != len(joint_positions):
+        return [], []
+
+    index_of = {str(n): i for i, n in enumerate(joint_names)}
+    values: list[float] = []
+    for k, name in enumerate(names):
+        i = index_of.get(name)
+        if i is None:
+            return [], []  # a trunk joint the observation does not report
+        span = (upper[k] - lower[k]) / 2.0
+        mid = (upper[k] + lower[k]) / 2.0
+        if not (span > 1e-9):
+            return [], []  # zero-width or inverted limit: not invertible
+        # Inverse of Controller._preprocess_command's input->output scaling.
+        v = (float(joint_positions[i]) - mid) / span
+        values.append(max(-1.0, min(1.0, v)))
+    return slots, values
+
+
 def cartesian_scales(meta: dict[str, Any], backend: str) -> tuple[float, float]:
     """Return metres/radians represented by a normalized action of 1.0."""
     if backend == "behavior":
@@ -62,13 +127,19 @@ def cartesian_scales(meta: dict[str, Any], backend: str) -> tuple[float, float]:
             float(layout.get("position_scale_m", 0.05)),
             float(layout.get("rotation_scale_rad", 0.25)),
         )
-    return ({
-        "metaworld": 0.005,
-        "libero": 0.009,
-        "maniskill": 0.003,
-        "robocasa": 0.05,
-        "dummy": 0.005,
-    }.get(backend, 0.0), 0.05)
+    # These are controller command scales, not the empirically observed EEF
+    # displacement after one physics step. LIBERO uses robosuite OSC_POSE;
+    # its shipped controller config maps normalized XYZ to +/-0.05 m and
+    # axis-angle rotation to +/-0.5 rad. The old 0.009/0.05 values were motion
+    # hints accidentally reused as codec scales, overdriving the closed-loop
+    # controller (especially orientation by 10x).
+    return {
+        "metaworld": (0.005, 0.05),
+        "libero": (0.05, 0.5),
+        "maniskill": (0.003, 0.05),
+        "robocasa": (0.05, 0.05),
+        "dummy": (0.005, 0.05),
+    }.get(backend, (0.0, 0.0))
 
 
 def cartesian_command_frame(meta: dict[str, Any], backend: str) -> str:

@@ -29,6 +29,7 @@ from agent.runtime.planner import BasePlanner, ToolCallingPlanner
 from agent.runtime.rollout import RolloutRecorder, build_rollout_provenance
 from agent.runtime.self_improvement import SelfImprovementReviewer
 from agent.runtime.skills import SkillRegistry, build_default_skill_registry
+from agent.runtime.visual_history import VisualHistoryManager
 from agent.tools.coding import PythonExecRuntime
 from agent.tools.registry import (
     ToolExecutionContext,
@@ -66,6 +67,8 @@ class OpenEtaAgentRuntime:
         rollout_recorder: RolloutRecorder | None = None,
         rollout_enabled: bool = True,
         default_session_id: str | None = None,
+        visual_history: VisualHistoryManager | None = None,
+        startup_facts: dict[str, JsonDict] | None = None,
     ) -> None:
         self.planner = planner or ToolCallingPlanner()
         self.memory = memory or AgentMemory(store=memory_store)
@@ -75,6 +78,11 @@ class OpenEtaAgentRuntime:
         self.pipeline = pipeline or ActionPipeline(interfaces=self.interfaces)
         self.self_improvement_reviewer = self_improvement_reviewer or SelfImprovementReviewer()
         self.default_session_id = default_session_id
+        self.visual_history = visual_history
+        self.startup_facts = {
+            str(name): dict(payload)
+            for name, payload in (startup_facts or {}).items()
+        }
         self.rollout_recorder = rollout_recorder
         if self.rollout_recorder is None and rollout_enabled:
             store_root = getattr(self.memory.store, "root", None)
@@ -82,6 +90,8 @@ class OpenEtaAgentRuntime:
                 self.rollout_recorder = RolloutRecorder(store_root)
         if isinstance(self.planner, ToolCallingPlanner):
             self.planner.set_rollout_recorder(self.rollout_recorder)
+        if self.visual_history is not None:
+            self.visual_history.set_rollout_recorder(self.rollout_recorder)
         if self.rollout_recorder is not None:
             self.tools.add_listener(self.rollout_recorder.record_tool_event)
         self._act_lock = threading.Lock()
@@ -99,6 +109,8 @@ class OpenEtaAgentRuntime:
             metadata=metadata,
             session_id=session_id or self.default_session_id,
         )
+        for name, payload in self.startup_facts.items():
+            self.memory.save_fact(name, payload, source="runtime_preflight")
         if self.rollout_recorder is not None and self.memory.session_id is not None:
             self.rollout_recorder.start_session(
                 session_id=self.memory.session_id,
@@ -114,10 +126,15 @@ class OpenEtaAgentRuntime:
                 "interfaces": [interface.descriptor() for interface in self.interfaces.list()],
                 "tools": [tool.name for tool in self.tools.list()],
                 "skills": [skill.name for skill in self.skills.list()],
+                "visual_history": (
+                    self.visual_history.descriptor()
+                    if self.visual_history is not None
+                    else {"enabled": False}
+                ),
             },
         )
 
-    def resume_session(self, session_id: str, *, max_events: int | None = 64) -> None:
+    def resume_session(self, session_id: str, *, max_events: int | None = None) -> None:
         self.memory.resume_session(session_id, max_events=max_events)
         if self.rollout_recorder is not None:
             self.rollout_recorder.start_session(
@@ -146,10 +163,14 @@ class OpenEtaAgentRuntime:
         with self._act_lock:
             _raise_if_execution_cancelled(cancel_event)
             self.memory.add_observation(observation)
+            visual_delta: JsonDict | None = None
+            if self.visual_history is not None:
+                visual_delta = self.visual_history.observe(observation, memory=self.memory)
             execution_metadata: JsonDict = {
                 "execution_id": execution_id,
                 "session_id": self.memory.session_id or "",
                 "task": self.memory.current_user_request or observation.task,
+                "_observation_packet_resolver": self.memory.resolve_observation_packet,
                 "supervision_context": {
                     "memory": self.memory.planning_context(max_events=4),
                 },
@@ -163,6 +184,12 @@ class OpenEtaAgentRuntime:
                     tools=self.tools,
                     skills=self.skills,
                 )
+                if visual_delta is not None:
+                    decision.metadata["visual_delta_usage"] = {
+                        key: visual_delta.get(key)
+                        for key in ("delta_id", "status", "provider", "model", "usage")
+                        if visual_delta.get(key) is not None
+                    }
                 _raise_if_execution_cancelled(cancel_event)
                 plan = self.pipeline.compile(
                     decision,
@@ -208,7 +235,6 @@ class OpenEtaAgentRuntime:
             "enhance_depth": self._enhance_depth_tool,
             "select_sam3_detection": self._select_sam3_detection_tool,
             "reject_sam3_detections": self._reject_sam3_detections_tool,
-            "activate_final_grasp_candidate": self._activate_final_grasp_candidate_tool,
             "python_exec": PythonExecRuntime().handler,
         }
         for name, handler in handlers.items():
@@ -473,6 +499,7 @@ class OpenEtaAgentRuntime:
                 result_id=result_id,
                 detection_id=detection_id,
                 selection_source="main_agent_vlm",
+                evidence_role=str(context.parameters.get("evidence_role") or ""),
                 confidence=confidence,
                 reason=str(context.parameters.get("reason") or ""),
                 target_geometry_family=str(
@@ -508,6 +535,7 @@ class OpenEtaAgentRuntime:
                 "selected_detection": selected,
                 "mask_ref": mask_ref,
                 "selection_source": selected.get("selection_source"),
+                "evidence_role": selected.get("evidence_role"),
                 "target_geometry_family": selected.get("target_geometry_family"),
             },
             artifacts=artifacts,
@@ -535,29 +563,6 @@ class OpenEtaAgentRuntime:
             outputs={"rejection": rejected},
         )
 
-    def _activate_final_grasp_candidate_tool(
-        self,
-        context: ToolExecutionContext,
-    ) -> ToolResult:
-        recovery_id = str(context.parameters.get("recovery_id") or "").strip()
-        try:
-            activated = self.memory.activate_final_grasp_candidate(
-                recovery_id=recovery_id,
-            )
-        except ValueError as exc:
-            return make_tool_result(
-                context,
-                success=False,
-                content=str(exc),
-                diagnostics=[{"code": "invalid_final_grasp_fallback"}],
-            )
-        return make_tool_result(
-            context,
-            success=True,
-            content="Activated the final highest-scoring refinable grasp candidate.",
-            outputs={"activation": activated},
-        )
-
 
 def _read_rgb_image(path: str) -> np.ndarray:
     resolved = _existing_file(path)
@@ -568,10 +573,8 @@ def _read_rgb_image(path: str) -> np.ndarray:
 def _read_depth_array(path: str, *, scale: float) -> np.ndarray:
     resolved = _existing_file(path)
     if resolved.suffix.lower() == ".npy":
-        array = np.load(resolved)
-        return np.asarray(array, dtype=np.float32)
-    image = Image.open(resolved)
-    array = np.asarray(image)
+        return np.asarray(np.load(resolved), dtype=np.float32)
+    array = np.asarray(Image.open(resolved))
     if array.ndim == 3:
         array = array[..., 0]
     if array.dtype.kind in {"u", "i"}:
@@ -583,8 +586,7 @@ def _read_optional_numeric_array(path: str) -> np.ndarray:
     resolved = _existing_file(path)
     if resolved.suffix.lower() == ".npy":
         return np.asarray(np.load(resolved), dtype=np.float32)
-    image = Image.open(resolved)
-    array = np.asarray(image)
+    array = np.asarray(Image.open(resolved))
     if array.ndim == 3:
         array = array[..., 0]
     return array.astype(np.float32)

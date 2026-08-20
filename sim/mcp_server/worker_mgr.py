@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -46,6 +47,39 @@ def _bench_for_env_id(env_id: str) -> str:
     part = env_id.split("/")[1] if "/" in env_id else env_id
     bench = part.split("_")[0]
     return _BENCH_MAP.get(bench, bench)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Orphan protection
+# ══════════════════════════════════════════════════════════════════════
+
+def _die_with_parent() -> None:  # pragma: no cover - runs in the forked child
+    """Ask the kernel to SIGTERM this child when its parent dies (Linux).
+
+    Cleanup driven from the parent (``atexit``, signal handlers, the TTL
+    sweeper) cannot run when the parent is SIGKILLed or dies hard, and Isaac
+    Sim's own shutdown path hard-exits.  A BEHAVIOR worker orphaned that way
+    keeps ~6.5 GB of VRAM with nothing left holding a reference to it.
+    ``PR_SET_PDEATHSIG`` is enforced by the kernel, so it survives cases no
+    userspace hook can cover.
+
+    Best-effort: unavailable on non-Linux, where the parent-side hooks remain
+    the only defence.  Also re-checks that the parent is still alive, closing
+    the race where it exits between fork and prctl.
+    """
+    try:
+        import ctypes
+        import signal as _signal
+
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(PR_SET_PDEATHSIG, _signal.SIGTERM, 0, 0, 0)
+        # If the parent died before prctl was installed, the signal will never
+        # arrive -- getppid()==1 means we are already reparented to init.
+        if os.getppid() == 1:
+            os._exit(1)
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -228,6 +262,33 @@ def _venv_python(bench: str) -> str | None:
     return None
 
 
+def _behavior_env_from_activate() -> dict[str, str]:
+    """Read plain ``export K=V`` lines from ``behavior_activate_extra.sh``.
+
+    The setup script writes the machine's real BEHAVIOR paths there (the 37 GB
+    dataset lives outside the conda env, often on another disk), so it is the
+    only place that knows them.  Parsed rather than sourced: this runs in the
+    server process and shelling out to collect a handful of assignments would add
+    a subprocess to every worker launch.  Anything needing shell evaluation is
+    skipped -- better ignored than half-interpreted.
+    """
+    path = os.path.join(str(_SIM_DIR), "venvs", "behavior_activate_extra.sh")
+    out: dict[str, str] = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("export ") or "=" not in line:
+                    continue
+                key, _, val = line[len("export "):].partition("=")
+                key, val = key.strip(), val.strip().strip('"').strip("'")
+                if key and val and "$" not in val and "`" not in val:
+                    out[key] = val
+    except FileNotFoundError:
+        pass
+    return out
+
+
 def _start_pipe_drainers(proc: "subprocess.Popen") -> None:
     """Continuously drain a worker's stdout/stderr so it can't block on write.
 
@@ -300,18 +361,30 @@ class BenchWorkerHandle:
             return {"error": f"Worker request failed: {exc}"}
 
     def stop(self, *, wait: bool = False) -> None:
-        """Terminate the worker process."""
+        """Terminate the worker process, escalating to SIGKILL if it lingers.
+
+        A BEHAVIOR worker holds ~6.5 GB of VRAM, and Isaac Kit's shutdown can
+        hang, so a worker that ignores SIGTERM must not be left running: the
+        old code only escalated when ``terminate()`` itself raised, which it
+        does not for a live-but-unresponsive child.  Always reap.
+        """
         if self.process is None:
             return
         try:
             self.process.terminate()
-            if wait:
-                self.process.wait(timeout=5)
         except Exception:
-            try:
-                self.process.kill()
-            except Exception:
-                pass
+            pass
+        grace = 5 if wait else 0.5
+        try:
+            self.process.wait(timeout=grace)
+            return
+        except Exception:
+            pass
+        try:
+            self.process.kill()
+            self.process.wait(timeout=5)
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -363,10 +436,25 @@ class BenchWorkerManager:
             child_env["CUDA_VISIBLE_DEVICES"] = visible
             child_env["MUJOCO_EGL_DEVICE_ID"] = str(egl_idx)
         else:
-            # Calibration unavailable (no nvidia-smi / DRM paths): fall back to
-            # the CUDA ordinal.  May mis-target rendering on some hosts, but
-            # keeps single-GPU setups working.
+            # Calibration unavailable (no nvidia-smi / DRM paths, or the bench
+            # venv lacks mujoco/OpenGL so the EGL enumeration cannot run at
+            # all).  Fall back to the CUDA ordinal, which is correct for GPU 0
+            # and a guess elsewhere -- measured on this host the two spaces are
+            # crossed (CUDA0->card2, CUDA1->card1, EGL0->card1), so on GPU 1 the
+            # fallback renders on the *other* card while compute stays on the
+            # pinned one.  That produces plausible frames from the wrong GPU
+            # rather than an error, so say so loudly instead of proceeding
+            # quietly; a silent wrong answer is worse than a noisy one.
             child_env["MUJOCO_EGL_DEVICE_ID"] = str(gpu)
+            if gpu != 0:
+                print(
+                    f"[worker_mgr] WARNING: EGL/CUDA calibration unavailable "
+                    f"for bench {bench!r}; MUJOCO_EGL_DEVICE_ID falls back to "
+                    f"CUDA ordinal {gpu}. Rendering may land on a different "
+                    f"physical GPU than compute. Pin to GPU 0 "
+                    f"(OPENETA_WORKER_GPUS=0) if frames must match compute.",
+                    file=sys.stderr, flush=True,
+                )
         # The worker adds the repo root to sys.path itself (bench_worker sets
         # _REPO), and runs as a *file path* so its own dir (sim/) is on
         # sys.path[0].  A stray PYTHONPATH=<repo> inherited from the parent
@@ -378,11 +466,32 @@ class BenchWorkerManager:
             behavior_root = os.path.join(str(_SIM_DIR), "venvs", "behavior")
             child_env.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
             child_env.setdefault("OMNIGIBSON_HEADLESS", "True")
-            child_env.setdefault("OMNIGIBSON_GPU_ID", "0")
-            child_env.setdefault(
-                "OMNIGIBSON_DATA_PATH",
-                os.path.join(behavior_root, "src", "BEHAVIOR-1K", "datasets"),
-            )
+            # Do NOT pin OMNIGIBSON_GPU_ID.  CUDA_VISIBLE_DEVICES above already
+            # restricts the worker to one card, and OmniGibson forwards this
+            # value to Isaac as active_gpu/physics_gpu -- but only when it is
+            # set at all (simulator.py: gpu_id None => neither key is passed,
+            # so Isaac auto-selects within the visible set).  A hardcoded "0"
+            # was therefore an index into a one-device window for GPU0 and a
+            # wrong absolute ordinal for every other card: worker 2 landed on
+            # GPU1 by round-robin, asked Isaac for a device its window did not
+            # contain, and its renderer came up dead -- the camera annotator
+            # returned no data and creation died on "NoneType - NoneType" deep
+            # in replicator's overscan resize, ~130 s in and far from the cause.
+            # Verified: GPU1 fails with "0" and boots in 79 s with this unset.
+            # An inherited value is dropped for the same reason.
+            child_env.pop("OMNIGIBSON_GPU_ID", None)
+            # Prefer what the setup script recorded next to the venv symlink;
+            # the datasets live outside the env (they are ~37 GB and shared),
+            # so a path built from the venv root only happened to work under an
+            # older layout that installed them into src/.  Falling back to that
+            # stale guess fails at worker boot with "Data path ... does not
+            # exist", which reads like a missing download rather than a wrong
+            # default.
+            for key, val in _behavior_env_from_activate().items():
+                child_env.setdefault(key, val)
+            if "OMNIGIBSON_DATA_PATH" not in child_env:
+                child_env["OMNIGIBSON_DATA_PATH"] = os.path.join(
+                    behavior_root, "src", "BEHAVIOR-1K", "datasets")
 
         worker_script = os.path.join(str(_SIM_DIR), "bench_worker.py")
         proc = subprocess.Popen(
@@ -391,6 +500,7 @@ class BenchWorkerManager:
             stderr=subprocess.PIPE,
             text=True,
             env=child_env,
+            preexec_fn=_die_with_parent,
         )
         # Read the port line from stdout (first non-empty digit-only line)
         port_str = ""
@@ -650,6 +760,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
     if not render:
         body["render"] = False
     result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/step", method="POST", body=body)
+    _capture_internal_objects(meta, result)
     # Cache observation for streaming
     obs = result.get("observation")
     if obs:
@@ -666,7 +777,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
                 prev_cams = prev.get("cameras")
                 if prev_cams:
                     obs = {**obs, "cameras": prev_cams}
-            cache[key] = obs
+            cache[key] = _public_observation_result(meta, obs)
         # Physics advanced.  If this step rendered inline, the cached frame is
         # already current for this generation; otherwise mark dirty so the SSE
         # loop refreshes it.  (render=True here means the worker rendered as
@@ -676,7 +787,7 @@ def _proxy_step(meta: dict, action, num_steps: int = 1, render: bool = True) -> 
             _mark_obs_rendered(key, gen)
         else:
             _mark_obs_dirty(key)
-    return result
+    return _public_observation_result(meta, result)
 
 
 def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
@@ -684,9 +795,12 @@ def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
     mgr = _get_mgr()
     body = {"seed": seed} if seed is not None else {}
     result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/reset", method="POST", body=body)
+    _capture_internal_objects(meta, result)
     key = _obs_key(meta)
     with _session_last_obs_lock:
-        _session_last_obs.setdefault(meta.get("_sid", ""), {})[key] = result
+        _session_last_obs.setdefault(meta.get("_sid", ""), {})[key] = _public_observation_result(
+            meta, result
+        )
     # reset re-initialises physics → cached frame is stale.  If the reset
     # result already carries camera frames it's current for this generation;
     # otherwise mark dirty for the SSE loop to refresh.
@@ -699,19 +813,58 @@ def _proxy_reset(meta: dict, seed: int | None = None) -> dict:
         _mark_obs_rendered(key, gen)
     else:
         _mark_obs_dirty(key)
-    return result
+    return _public_observation_result(meta, result)
 
 
 def _proxy_observe(meta: dict) -> dict:
     """Proxy an observe request to the worker."""
     mgr = _get_mgr()
-    return mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/observe", method="POST")
+    result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/observe", method="POST")
+    _capture_internal_objects(meta, result)
+    return _public_observation_result(meta, result)
+
+
+def _proxy_reachability(meta: dict, body: dict) -> dict:
+    """Proxy a read-only endpoint IK query to the worker that owns the env."""
+
+    mgr = _get_mgr()
+    return mgr.proxy_handle_op(
+        meta,
+        f"/env/{meta['remote_handle']}/reachability",
+        method="POST",
+        body=body,
+    )
 
 
 def _proxy_render(meta: dict) -> dict:
     """Proxy a render request to the worker."""
     mgr = _get_mgr()
-    return mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/render", method="POST")
+    result = mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}/render", method="POST")
+    _capture_internal_objects(meta, result)
+    return _public_observation_result(meta, result)
+
+
+def _capture_internal_objects(meta: dict, result: dict) -> None:
+    """Keep privileged object geometry private but available to safety checks."""
+
+    observation = result.get("observation", result) if isinstance(result, dict) else {}
+    objects = observation.get("objects") if isinstance(observation, dict) else None
+    if isinstance(objects, list):
+        meta["_collision_objects"] = [dict(item) for item in objects if isinstance(item, dict)]
+
+
+def _public_observation_result(meta: dict, result: dict) -> dict:
+    """Redact internally requested object state unless the caller opted in."""
+
+    if meta.get("_expose_objects") is True or not isinstance(result, dict):
+        return result
+    public = dict(result)
+    observation = public.get("observation")
+    if isinstance(observation, dict):
+        public["observation"] = {**observation, "objects": []}
+    elif "objects" in public:
+        public["objects"] = []
+    return public
 
 
 def _proxy_render_all(worker_url: str, remote_handles: list[str]) -> dict:

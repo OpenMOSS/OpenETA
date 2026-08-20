@@ -34,6 +34,8 @@ class ParallelEpisodeSpec:
     env_id: str
     seed: int = 0
     max_turns: int = DEFAULT_MAX_TURNS
+    recovery_turns_per_branch: int = 0
+    max_recovery_turns: int = 0
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
     timeout_s: float = DEFAULT_EPISODE_TIMEOUT_S
     max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS
@@ -51,6 +53,14 @@ class ParallelEpisodeSpec:
         max_turns = int(payload.get("max_turns", DEFAULT_MAX_TURNS))
         if max_turns < 1:
             raise ValueError(f"episodes[{index}].max_turns must be positive")
+        recovery_turns_per_branch = int(payload.get("recovery_turns_per_branch", 0))
+        if recovery_turns_per_branch < 0:
+            raise ValueError(
+                f"episodes[{index}].recovery_turns_per_branch must be non-negative"
+            )
+        max_recovery_turns = int(payload.get("max_recovery_turns", 0))
+        if max_recovery_turns < 0:
+            raise ValueError(f"episodes[{index}].max_recovery_turns must be non-negative")
         max_tool_calls = int(payload.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS))
         if max_tool_calls < 1:
             raise ValueError(f"episodes[{index}].max_tool_calls must be positive")
@@ -67,6 +77,8 @@ class ParallelEpisodeSpec:
             env_id=env_id,
             seed=int(payload.get("seed", 0)),
             max_turns=max_turns,
+            recovery_turns_per_branch=recovery_turns_per_branch,
+            max_recovery_turns=max_recovery_turns,
             max_tool_calls=max_tool_calls,
             timeout_s=timeout_s,
             max_total_tokens=max_total_tokens,
@@ -109,6 +121,8 @@ class ParallelEpisodeOutcome:
             "duration_s": round(self.duration_s, 3),
             "limits": {
                 "max_turns": self.spec.max_turns,
+                "recovery_turns_per_branch": self.spec.recovery_turns_per_branch,
+                "max_recovery_turns": self.spec.max_recovery_turns,
                 "max_tool_calls": self.spec.max_tool_calls,
                 "timeout_s": self.spec.timeout_s,
                 "max_total_tokens": self.spec.max_total_tokens,
@@ -242,6 +256,7 @@ class ParallelEpisodeHarness:
         specs: list[ParallelEpisodeSpec],
         *,
         batch_id: str | None = None,
+        on_outcome: Callable[[ParallelEpisodeOutcome], None] | None = None,
     ) -> ParallelEpisodeBatchResult:
         if not specs:
             raise ValueError("parallel episode batch requires at least one episode")
@@ -260,7 +275,10 @@ class ParallelEpisodeHarness:
                 for index, spec in enumerate(specs)
             }
             for future in as_completed(futures):
-                outcomes.append(future.result())
+                outcome = future.result()
+                outcomes.append(outcome)
+                if on_outcome is not None:
+                    on_outcome(outcome)
         except BaseException:
             self.interrupt()
             for future in futures:
@@ -331,13 +349,13 @@ class ParallelEpisodeHarness:
                 if callable(interrupt):
                     interrupt(code="parallel_batch_interrupted")
                 raise RuntimeError("parallel batch interrupted before episode start")
-            episode = worker.runner.run(
-                task=spec.task,
-                max_turns=spec.max_turns,
-                max_tool_calls=spec.max_tool_calls,
-                timeout_s=spec.timeout_s,
-                max_total_tokens=spec.max_total_tokens,
-                metadata={
+            run_arguments: JsonDict = {
+                "task": spec.task,
+                "max_turns": spec.max_turns,
+                "max_tool_calls": spec.max_tool_calls,
+                "timeout_s": spec.timeout_s,
+                "max_total_tokens": spec.max_total_tokens,
+                "metadata": {
                     "source": type(self).__name__,
                     "batch_id": batch_id,
                     "episode_id": spec.episode_id,
@@ -346,7 +364,17 @@ class ParallelEpisodeHarness:
                     **spec.metadata,
                     **worker.run_metadata,
                 },
-            )
+            }
+            # Preserve compatibility with external/fake runners that implement
+            # the original generic run signature when adaptive recovery is off.
+            if spec.recovery_turns_per_branch or spec.max_recovery_turns:
+                run_arguments.update(
+                    {
+                        "recovery_turns_per_branch": spec.recovery_turns_per_branch,
+                        "max_recovery_turns": spec.max_recovery_turns,
+                    }
+                )
+            episode = worker.runner.run(**run_arguments)
             status = classify_episode_result(
                 episode,
                 env_id=spec.env_id,

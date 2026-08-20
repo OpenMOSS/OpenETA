@@ -21,6 +21,28 @@ def _intrinsics() -> dict[str, float]:
     return {"fx": 2.0, "fy": 2.0, "cx": 0.0, "cy": 0.0, "scale": 1000.0}
 
 
+def test_backend_reports_deployment_bound_capabilities_without_model_load() -> None:
+    backend = AnyGraspBackend(
+        sdk_root=".",
+        checkpoint_path="checkpoint.tar",
+        max_gripper_width=0.08,
+        gripper_height=0.03,
+        depth_truncation=1.2,
+        max_candidates=12,
+    )
+
+    assert backend.capabilities() == {
+        "schema_version": "openeta.anygrasp_capabilities.v1",
+        "backend": "anygrasp_mcp",
+        "model": "anygrasp_sdk",
+        "max_gripper_width_m": 0.08,
+        "gripper_height_m": 0.03,
+        "depth_truncation_m": 1.2,
+        "max_candidates": 12,
+        "geometry_change_requires_redeployment": True,
+    }
+
+
 def test_build_point_cloud_rejects_shape_mismatch() -> None:
     rgb = np.zeros((2, 2, 3), dtype=np.uint8)
     depth = np.ones((3, 2), dtype=np.uint16)
@@ -52,6 +74,33 @@ def test_build_point_cloud_rejects_empty_target_mask() -> None:
             depth_truncation=1.0,
             workspace_limits=None,
         )
+
+
+def test_build_point_cloud_distinguishes_target_beyond_depth_cutoff() -> None:
+    rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+    depth = np.array([[500, 1200], [500, 1200]], dtype=np.uint16)
+    target_mask = np.array([[0, 255], [0, 255]], dtype=np.uint8)
+
+    with pytest.raises(
+        AnyGraspInputError,
+        match="target_mask_outside_depth_range",
+    ) as raised:
+        build_point_cloud_from_rgbd(
+            rgb=rgb,
+            depth=depth,
+            target_mask=target_mask,
+            intrinsics=_intrinsics(),
+            mode="targeted",
+            depth_truncation=1.0,
+            workspace_limits=None,
+        )
+
+    assert raised.value.metadata["target_mask_pixel_count"] == 2
+    assert raised.value.metadata["target_depth_min_m"] == pytest.approx(1.2)
+    assert raised.value.metadata["target_depth_max_m"] == pytest.approx(1.2)
+    assert raised.value.metadata["suggested_depth_cutoff_factor"] == pytest.approx(
+        1.333333
+    )
 
 
 def test_validate_intrinsics_rejects_missing_or_invalid_values() -> None:

@@ -125,6 +125,8 @@ def test_preflight_validates_without_creating_environment(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    assert "ik_preview_check" in experiment_cli._REQUIRED_SIM_MCP_TOOLS
+
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
         '{"episodes":[{"episode_id":"ep-1","task":"inspect",'

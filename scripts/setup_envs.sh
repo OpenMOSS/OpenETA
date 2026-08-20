@@ -125,6 +125,19 @@ gym.make('\$task', obs_mode='state', render_mode='rgb_array', num_envs=1).reset(
         uv pip install -q -e "$LIBERO_DIR" 2>&1 | tail -1
         uv pip install -q -e "$REPO_ROOT" 2>&1 | tail -1
 
+        # cuRobo (optional): powers the arm-vs-world collision check in
+        # sim/mcp_server/collision.py.  Absent it, CollisionChecker reports
+        # available=false and that check does not run.  third_party/ is
+        # gitignored, so the source patches it needs are not version-controlled
+        # -- re-apply them here or the build fails on sm_120 and RobotWorld
+        # construction raises.  Does not build cuRobo; see
+        # CURRENT_WORK_HANDOFF.md for the install command.
+        if [ -d "$REPO_ROOT/third_party/curobo" ]; then
+            echo "   Patching vendored cuRobo..."
+            python3 "$REPO_ROOT/scripts/patch_vendored_curobo.py" || \
+                echo "   WARNING: cuRobo patches failed; collision checking will be unavailable"
+        fi
+
         # Store assets inside the venv (not /tmp)
         LIBERO_ASSETS="${VENV}/assets/datasets"
         mkdir -p "${VENV}/assets/datasets"

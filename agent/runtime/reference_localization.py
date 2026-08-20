@@ -16,14 +16,16 @@ from agent.backends.planner import PlannerBackend, PlannerBackendRequest
 
 
 REFERENCE_POINT_LOCALIZATION_SCHEMA_VERSION = "openeta.reference_point_localization.v1"
-REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS = 512
+REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS = 2048
 REFERENCE_POINT_LOCALIZATION_MAX_ATTEMPTS = 3
+REFERENCE_POINT_LOCALIZATION_PROVISIONAL_MAX_CONFIDENCE = 0.5
 
 REFERENCE_POINT_LOCALIZATION_SYSTEM_PROMPT = """You are an isolated OpenETA visual localizer.
-Image #1 is an RGB observation from an embodied simulation scene. Images #2,
-#3, and #4 are reference views of the same target asset. Find the instance in
-Image #1 that matches the reference views and identify one pixel near the
-interior center of that object.
+Image #1 is an RGB observation from an embodied simulation scene. Images #2
+and later are unordered rendered reference views of the same target asset.
+Their ordinal positions do not imply front, side, or top camera semantics.
+Find the instance in Image #1 that matches the reference views and identify
+one pixel near the interior center of that object.
 
 Instance-matching rules:
 - Match the exact asset instance, not merely its broad category, primitive
@@ -36,9 +38,10 @@ Instance-matching rules:
   match a red-and-green can even though both are upright cylinders.
 - Mention the discriminative attributes used in the reason. Abstain if they
   cannot be verified in Image #1.
-- tool_context.excluded_candidates lists points rejected by an independent
-  exact-instance reviewer and its visual reasons. Never repeat those objects;
-  use the rejection reasons to locate a different candidate or abstain.
+- tool_context.examined_candidates lists regions already reviewed, including
+  rejected and inconclusive candidates, with their visual reasons. Never
+  repeat or substantially overlap those objects; use the review reasons to
+  inspect a different scene region or abstain.
 
 Coordinate rules:
 - Use Image #1's original pixel resolution and a top-left origin.
@@ -71,8 +74,10 @@ For abstain, use point=null, bbox_xyxy=null, and confidence=0.
 REFERENCE_POINT_VERIFICATION_SYSTEM_PROMPT = """You are an isolated OpenETA exact-instance reviewer.
 Image #1 is an enlarged, aspect-ratio-preserving crop of one tightly boxed
 candidate object from a simulation scene. It contains only a small amount of
-padding around the proposed box. Images #2, #3, and #4 are reference views of
-the target asset. Decide if it is the exact same asset instance.
+padding around the proposed box. Images #2 and later are unordered rendered
+reference views of the target asset; their ordinal positions do not imply
+front, side, or top camera semantics. Decide if it is the exact same asset
+instance.
 
 Verification rules:
 - Physical package geometry is a hard gate and must be evaluated before color
@@ -155,8 +160,9 @@ class BackendReferencePointLocalizer:
             raise ValueError("reference localization requires at least one reference image")
         references = [Path(path) for path in reference_images[:3]]
         width, height = image_size
-        excluded: list[JsonDict] = []
+        examined: list[JsonDict] = []
         rejection_reasons: list[str] = []
+        provisional: list[tuple[ReferencePointLocalization, JsonDict, int]] = []
         for attempt in range(1, REFERENCE_POINT_LOCALIZATION_MAX_ATTEMPTS + 1):
             try:
                 proposal = self._propose(
@@ -165,7 +171,7 @@ class BackendReferencePointLocalizer:
                     scene_image=scene_image,
                     reference_images=references,
                     image_size=image_size,
-                    excluded=excluded,
+                    examined=examined,
                 )
             except ValueError as exc:
                 rejection_reasons.append(f"proposal abstained: {exc}")
@@ -178,7 +184,7 @@ class BackendReferencePointLocalizer:
                     bbox=proposal.bbox_xyxy,
                     excluded=candidate,
                 )
-                for candidate in excluded
+                for candidate in examined
             ):
                 verdict: JsonDict = {
                     "decision": "reject",
@@ -205,9 +211,28 @@ class BackendReferencePointLocalizer:
                 details.update(
                     {
                         "attempt_count": attempt,
-                        "rejected_candidate_count": len(excluded),
-                        "rejected_candidates": excluded,
+                        "examined_candidate_count": len(examined),
+                        "examined_candidates": examined,
+                        "rejected_candidate_count": sum(
+                            candidate.get("disposition") == "rejected"
+                            for candidate in examined
+                        ),
+                        "rejected_candidates": [
+                            candidate
+                            for candidate in examined
+                            if candidate.get("disposition") == "rejected"
+                        ],
                         "verification": verdict,
+                        "candidate_policy": "verified_match",
+                        "ranked_candidates": [
+                            _ranked_candidate_record(
+                                proposal,
+                                verdict,
+                                attempt=attempt,
+                                rank=1,
+                                provisional=False,
+                            )
+                        ],
                     }
                 )
                 return ReferencePointLocalization(
@@ -228,6 +253,20 @@ class BackendReferencePointLocalizer:
                     "reviewer abstained: "
                     + str(verdict.get("reason") or "candidate could not be verified")
                 )
+                eligible = _can_use_provisional_verification(proposal, verdict)
+                if eligible:
+                    provisional.append((proposal, verdict, attempt))
+                examined.append(
+                    _examined_candidate_record(
+                        scene_image,
+                        proposal=proposal,
+                        verdict=verdict,
+                        image_size=image_size,
+                        disposition=(
+                            "provisional_abstain" if eligible else "rejected_abstain"
+                        ),
+                    )
+                )
                 if attempt < REFERENCE_POINT_LOCALIZATION_MAX_ATTEMPTS:
                     continue
                 break
@@ -243,7 +282,7 @@ class BackendReferencePointLocalizer:
                 ],
                 image_size=image_size,
             )
-            excluded.append(
+            examined.append(
                 {
                     "x": proposal.x,
                     "y": proposal.y,
@@ -251,9 +290,67 @@ class BackendReferencePointLocalizer:
                     "reason": reason,
                     "candidate_crop": verdict.get("candidate_crop"),
                     "audit_image": str(audit_image),
+                    "disposition": "rejected",
                 }
             )
             rejection_reasons.append(reason)
+        if provisional:
+            ranked = sorted(provisional, key=_provisional_rank_key, reverse=True)
+            proposal, verdict, attempt = ranked[0]
+            ranked_candidates = [
+                _ranked_candidate_record(
+                    candidate,
+                    candidate_verdict,
+                    attempt=candidate_attempt,
+                    rank=rank,
+                    provisional=True,
+                )
+                for rank, (candidate, candidate_verdict, candidate_attempt) in enumerate(
+                    ranked,
+                    start=1,
+                )
+            ]
+            details = dict(proposal.details or {})
+            details.update(
+                {
+                    "attempt_count": REFERENCE_POINT_LOCALIZATION_MAX_ATTEMPTS,
+                    "selected_candidate_attempt": attempt,
+                    "examined_candidate_count": len(examined),
+                    "examined_candidates": examined,
+                    "rejected_candidate_count": sum(
+                        candidate.get("disposition") in {"rejected", "rejected_abstain"}
+                        for candidate in examined
+                    ),
+                    "rejected_candidates": [
+                        candidate
+                        for candidate in examined
+                        if candidate.get("disposition")
+                        in {"rejected", "rejected_abstain"}
+                    ],
+                    "verification": verdict,
+                    "provisional": True,
+                    "requires_downstream_confirmation": True,
+                    "candidate_policy": "ranked_provisional",
+                    "ranked_candidates": ranked_candidates,
+                }
+            )
+            return ReferencePointLocalization(
+                x=proposal.x,
+                y=proposal.y,
+                bbox_xyxy=proposal.bbox_xyxy,
+                confidence=min(
+                    proposal.confidence,
+                    REFERENCE_POINT_LOCALIZATION_PROVISIONAL_MAX_CONFIDENCE,
+                ),
+                reason=(
+                    f"{proposal.reason} Exact-instance verification abstained because "
+                    "the scene crop was insufficient. This provisional point is only a "
+                    "SAM3 seed and requires downstream semantic selection."
+                ).strip(),
+                provider=proposal.provider,
+                model=proposal.model,
+                details=details,
+            )
         raise ValueError(
             "reference point localizer exhausted exact-instance candidates: "
             + "; ".join(rejection_reasons)
@@ -267,7 +364,7 @@ class BackendReferencePointLocalizer:
         scene_image: Path,
         reference_images: Sequence[Path],
         image_size: tuple[int, int],
-        excluded: Sequence[JsonDict],
+        examined: Sequence[JsonDict],
     ) -> ReferencePointLocalization:
         width, height = image_size
         paths = [str(scene_image), *(str(path) for path in reference_images)]
@@ -280,13 +377,11 @@ class BackendReferencePointLocalizer:
                     "environment": environment,
                     "target_object": target_object,
                     "scene_image_size": {"width": width, "height": height},
-                    "excluded_candidates": [dict(candidate) for candidate in excluded],
+                    "examined_candidates": [dict(candidate) for candidate in examined],
                     "image_order": [
                         {"image_number": index + 1, "role": role}
                         for index, role in enumerate(
-                            ["scene", "reference_front", "reference_side", "reference_top"][
-                                : len(paths)
-                            ]
+                            ["scene", "reference_view_1", "reference_view_2", "reference_view_3"][: len(paths)]
                         )
                     ],
                     "vision_image_paths": paths,
@@ -366,9 +461,9 @@ class BackendReferencePointLocalizer:
                         for index, role in enumerate(
                             [
                                 "candidate_crop",
-                                "reference_front",
-                                "reference_side",
-                                "reference_top",
+                                "reference_view_1",
+                                "reference_view_2",
+                                "reference_view_3",
                             ][: len(paths)]
                         )
                     ],
@@ -467,6 +562,107 @@ def _bbox_xyxy(
     if not (left <= x <= right and top <= y <= bottom):
         raise ValueError("reference point is outside bbox_xyxy")
     return left, top, right, bottom
+
+
+def _can_use_provisional_verification(
+    proposal: ReferencePointLocalization,
+    verdict: JsonDict,
+) -> bool:
+    """Allow only non-conflicting, appearance-supported abstentions as SAM3 seeds."""
+
+    matching_attributes = verdict.get("matching_attributes")
+    conflicting_attributes = verdict.get("conflicting_attributes")
+    geometry_family = str(verdict.get("grasp_geometry_family") or "unknown")
+    geometry_is_compatible_or_unresolved = (
+        verdict.get("geometry_match") is True or geometry_family == "unknown"
+    )
+    return (
+        proposal.confidence >= REFERENCE_POINT_LOCALIZATION_PROVISIONAL_MAX_CONFIDENCE
+        and isinstance(matching_attributes, list)
+        and len(matching_attributes) >= 2
+        and isinstance(conflicting_attributes, list)
+        and not conflicting_attributes
+        and geometry_is_compatible_or_unresolved
+    )
+
+
+def _provisional_rank_key(
+    candidate: tuple[ReferencePointLocalization, JsonDict, int],
+) -> tuple[int, int, float, float, int]:
+    """Rank safe-but-inconclusive seeds without turning them into matches."""
+
+    proposal, verdict, attempt = candidate
+    matching_attributes = verdict.get("matching_attributes")
+    attribute_count = len(matching_attributes) if isinstance(matching_attributes, list) else 0
+    return (
+        int(verdict.get("geometry_match") is True),
+        attribute_count,
+        float(proposal.confidence),
+        float(verdict.get("confidence") or 0.0),
+        -attempt,
+    )
+
+
+def _ranked_candidate_record(
+    proposal: ReferencePointLocalization,
+    verdict: JsonDict,
+    *,
+    attempt: int,
+    rank: int,
+    provisional: bool,
+) -> JsonDict:
+    """Serialize one candidate for Agent-visible audit and downstream selection."""
+
+    return {
+        "rank": rank,
+        "attempt": attempt,
+        "positive_points": [proposal.as_prompt_point()],
+        "bbox_xyxy": list(proposal.bbox_xyxy or ()),
+        "confidence": min(
+            proposal.confidence,
+            (
+                REFERENCE_POINT_LOCALIZATION_PROVISIONAL_MAX_CONFIDENCE
+                if provisional
+                else float(verdict.get("confidence") or proposal.confidence)
+            ),
+        ),
+        "proposal_reason": proposal.reason,
+        "verification": dict(verdict),
+        "provisional": provisional,
+        "requires_downstream_confirmation": provisional,
+    }
+
+
+def _examined_candidate_record(
+    scene_image: Path,
+    *,
+    proposal: ReferencePointLocalization,
+    verdict: JsonDict,
+    image_size: tuple[int, int],
+    disposition: str,
+) -> JsonDict:
+    """Build the exclusion record used to force the next proposal elsewhere."""
+
+    audit_image = _write_exclusion_scene(
+        scene_image,
+        excluded=[
+            {
+                "x": proposal.x,
+                "y": proposal.y,
+                "bbox_xyxy": list(proposal.bbox_xyxy or ()),
+            }
+        ],
+        image_size=image_size,
+    )
+    return {
+        "x": proposal.x,
+        "y": proposal.y,
+        "bbox_xyxy": list(proposal.bbox_xyxy or ()),
+        "reason": str(verdict.get("reason") or "candidate could not be verified"),
+        "candidate_crop": verdict.get("candidate_crop"),
+        "audit_image": str(audit_image),
+        "disposition": disposition,
+    }
 
 
 def _candidate_crop_box(

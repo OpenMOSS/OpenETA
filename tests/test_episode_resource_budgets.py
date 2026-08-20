@@ -140,6 +140,47 @@ def test_episode_fails_when_tool_calls_exceed_budget() -> None:
     assert episode_failure_error(result)["code"] == "tool_call_limit_exceeded"
 
 
+def test_episode_extends_turns_only_for_distinct_confirmed_recovery_branches() -> None:
+    tools = build_default_tool_registry()
+    runtime_holder = {}
+
+    def record_recovery(_context):
+        runtime_holder["runtime"].memory.record(
+            "grasp_provenance_switched",
+            {
+                "evidence_id": "grasp:recovery-1",
+                "recovery_branch": True,
+            },
+        )
+        return ToolResult(True, content="recovery branch compiled")
+
+    tools.bind_handler("scene_detector", record_recovery)
+    runtime = OpenEtaAgentRuntime(
+        planner=ToolCallingPlanner(
+            StaticPlannerBackend(
+                {"kind": "tool_call", "name": "scene_detector", "parameters": {}}
+            )
+        ),
+        tools=tools,
+    )
+    runtime_holder["runtime"] = runtime
+    runner = OpenEtaEpisodeRunner(runtime=runtime, environment=DummyEpisodeEnvironment())
+
+    result = runner.run(
+        task="recover grasp",
+        max_turns=2,
+        recovery_turns_per_branch=1,
+        max_recovery_turns=2,
+    )
+
+    assert len(result.steps) == 3
+    assert result.metadata["base_max_turns"] == 2
+    assert result.metadata["max_turns"] == 3
+    assert result.metadata["hard_max_turns"] == 4
+    assert result.metadata["recovery_turns_granted"] == 1
+    assert result.metadata["stop_reason"] == "max_turns"
+
+
 def test_episode_fails_when_cumulative_model_tokens_exceed_budget() -> None:
     runner = OpenEtaEpisodeRunner(
         runtime=_runtime(UsageBackend([3_000_000, 3_000_001])),

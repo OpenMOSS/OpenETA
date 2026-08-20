@@ -376,6 +376,46 @@ class BehaviorDirectEnv(gym.Env):
                 "indices": group_slots["trunk"],
                 "command": "position",
             }
+            # Names + limits are what make "hold the trunk where it is"
+            # expressible by a caller that only sees the action vector.
+            #
+            # JointController is position-mode with use_delta_commands=False,
+            # and Controller._preprocess_command scales [-1,1] onto the joint
+            # limits.  So a 0.0 in a trunk slot is *not* "no command" -- it
+            # resolves to (lower+upper)/2 and drives the trunk to mid-range.
+            # Holding position therefore means sending the current angle
+            # re-normalised, which needs the same limits the controller used.
+            #
+            # Published here rather than fetched per-step because the alternative
+            # is an extra RPC on every Cartesian substep, and these are constant
+            # for the life of the robot.
+            try:
+                trunk_names = [str(n) for n in robot.trunk_joint_names]
+            except Exception:
+                # Derive from dof_idx when the robot exposes no trunk_joint_names.
+                try:
+                    j_names = list(robot.joints.keys())
+                    ctrl = robot.controllers["trunk"]
+                    trunk_names = [str(j_names[int(i)]) for i in ctrl.dof_idx]
+                except Exception:
+                    trunk_names = []
+            lower: list[float] = []
+            upper: list[float] = []
+            for n in trunk_names:
+                try:
+                    j = robot.joints[n]
+                    lower.append(float(j.lower_limit))
+                    upper.append(float(j.upper_limit))
+                except Exception:
+                    lower, upper = [], []
+                    break
+            # All three must agree in length or a consumer cannot pair them, and
+            # a half-published mapping is worse than none: it would let the
+            # caller believe it can hold position while writing the wrong slot.
+            if trunk_names and len(trunk_names) == len(group_slots["trunk"]) == len(lower):
+                spec["trunk"]["joint_names"] = trunk_names
+                spec["trunk"]["limits_lower"] = lower
+                spec["trunk"]["limits_upper"] = upper
         spec["groups"] = group_slots
         return spec
 

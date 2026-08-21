@@ -37,6 +37,27 @@ def test_python_exec_runs_restricted_code_and_returns_result() -> None:
     assert result.details["parameters"]["code"] == "<code omitted>"
 
 
+def test_python_exec_exposes_set_builtin() -> None:
+    runtime = PythonExecRuntime()
+
+    result = runtime.handler(
+        _context(
+            "values = set([3, 1, 3, 2])\n"
+            "values.add(4)\n"
+            "result = {\n"
+            "    'unique': sorted(values),\n"
+            "    'intersection': sorted(values & set([2, 4, 5])),\n"
+            "}\n"
+        )
+    )
+
+    assert result.success is True
+    assert result.details["outputs"]["result"] == {
+        "unique": [1, 2, 3, 4],
+        "intersection": [2, 4],
+    }
+
+
 def test_python_exec_materializes_large_structured_result_with_clear_path(
     tmp_path: Path,
 ) -> None:

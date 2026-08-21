@@ -329,7 +329,18 @@ class OpenAICompatiblePlannerBackendConfig:
     # providers may count hidden reasoning against this same completion budget.
     max_tokens: int = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     context_window_tokens: int | None = None
+    # Master switch for the provider's JSON structured-output mode. It is only
+    # applied to isolated sub-planner requests (reference localization, grasp
+    # strategy, supervision, ...) which still emit JSON. The main embodied
+    # planner emits XML (see planner.py `_parse_xml_decision`) whose multi-line
+    # code travels in CDATA, so json_object mode is never applied to it.
     use_json_response_format: bool = True
+    enable_thinking: bool | None = None
+    # Some chat templates (e.g. Qwen3 served via SGLang/vLLM) accept only a
+    # single leading system message. Upstream emits separate system turns for
+    # radix-cache alignment; collapsing them into one is semantically identical
+    # and keeps the stable prefix byte-identical, so the cache benefit remains.
+    collapse_leading_system_messages: bool = True
     enable_vision: bool = True
     max_vision_images: int = 2
     max_vision_image_bytes: int = 8 * 1024 * 1024
@@ -390,6 +401,8 @@ class OpenAICompatiblePlannerBackendConfig:
             "max_tokens": self.max_tokens,
             "context_window_tokens": self.context_window_tokens,
             "use_json_response_format": self.use_json_response_format,
+            "enable_thinking": self.enable_thinking,
+            "collapse_leading_system_messages": self.collapse_leading_system_messages,
             "enable_vision": self.enable_vision,
             "max_vision_images": self.max_vision_images,
             "max_vision_image_bytes": self.max_vision_image_bytes,
@@ -455,26 +468,23 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             self.config,
             prompt_tool_context=dynamic_context,
         )
-        messages: list[JsonDict] = [
-            {"role": "system", "content": request.system_prompt},
-        ]
+        system_segments: list[str] = [request.system_prompt]
         if stable_context_prompt:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": stable_context_prompt,
-                }
-            )
+            system_segments.append(stable_context_prompt)
         if request.conversation_summary.strip():
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "Earlier OpenETA execution summary from the current session:\n"
-                        + request.conversation_summary.strip()
-                    ),
-                }
+            system_segments.append(
+                "Earlier OpenETA execution summary from the current session:\n"
+                + request.conversation_summary.strip()
             )
+        if self.config.collapse_leading_system_messages:
+            # Chat templates that permit only one leading system turn require the
+            # segments to be joined. Ordering is preserved so the cache-stable
+            # prefix (system_prompt + stable context) stays byte-identical.
+            messages: list[JsonDict] = [
+                {"role": "system", "content": "\n\n".join(system_segments)},
+            ]
+        else:
+            messages = [{"role": "system", "content": segment} for segment in system_segments]
         messages.extend(_validated_conversation_messages(request.conversation_messages))
         messages.append({"role": "user", "content": user_content})
         body: JsonDict = {
@@ -483,8 +493,16 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
-        if self.config.use_json_response_format:
+        # The main embodied planner emits an XML <decision>; only isolated
+        # sub-planner roles still emit JSON, so json_object mode is scoped to
+        # them. Applying it to the XML planner would corrupt CDATA code bodies.
+        isolated_role = request.metadata.get("isolated_context") is True
+        if self.config.use_json_response_format and isolated_role:
             body["response_format"] = {"type": "json_object"}
+        if self.config.enable_thinking is not None:
+            # Qwen3-style toggle: disable the <think> prefix so a small
+            # max_tokens budget is not consumed by reasoning before output.
+            body["chat_template_kwargs"] = {"enable_thinking": self.config.enable_thinking}
 
         (
             response,
@@ -823,8 +841,9 @@ def _planner_user_prompt(
         "JSON object requested by that prompt, without markdown."
         if request.metadata.get("isolated_context") is True
         else (
-            "Choose exactly one next OpenETA action. Return only JSON with "
-            "fields: kind, name, parameters, reasoning. Do not include markdown."
+            "Choose exactly one next OpenETA action. Return only one XML <decision> "
+            "element with child elements kind, name, parameters, reasoning. Wrap code "
+            "or multi-line text in CDATA. Do not include markdown."
         )
     )
     payload = {

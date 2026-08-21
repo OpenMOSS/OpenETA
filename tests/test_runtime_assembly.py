@@ -242,6 +242,7 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
     assert {
         "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
         "max_vision_images": 2,
+        "enable_thinking": False,
     } in calls
     assert {
         "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,

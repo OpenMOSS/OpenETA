@@ -7,6 +7,7 @@ import math
 import re
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from hashlib import sha256
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -571,31 +572,141 @@ def _parse_backend_payload(payload: JsonDict | str) -> tuple[JsonDict, list[str]
         return dict(payload), []
 
     if not isinstance(payload, str):
-        return {}, [f"Planner backend payload must be dict or JSON string, got {type(payload)}."]
+        return {}, [f"Planner backend payload must be dict or XML string, got {type(payload)}."]
 
-    text = _strip_json_code_fence(payload)
+    return _parse_xml_decision(payload)
+
+
+# Leaf element names whose text is always kept verbatim as a string and never
+# number/boolean coerced. This protects free-text and code fields (e.g. a code
+# body that happens to read like "42", or a source_packet_id like "3:agentview").
+_XML_STRING_LEAF_NAMES = frozenset(
+    {
+        "code",
+        "prompt",
+        "message",
+        "reasoning",
+        "source_packet_id",
+        "name",
+        "tool",
+        "kind",
+        "skill",
+        "query",
+        "url",
+        "target_mask",
+        "camera_frame_id",
+    }
+)
+
+# Child element names that mark their parent as a list rather than an object.
+_XML_LIST_ITEM_NAMES = frozenset({"item", "call"})
+
+
+def _parse_xml_decision(payload: str) -> tuple[JsonDict, list[str]]:
+    """Parse one ``<decision>`` XML document into the planner decision dict.
+
+    Emits the same dict shape the previous JSON parser produced
+    (``{kind, name, parameters, reasoning, code?, calls?}``) so the downstream
+    build/validate/record path is unchanged. Parse failures return an error
+    list that flows into the existing validation-retry loop.
+    """
+
+    text = _strip_code_fence(payload)
+    start = text.find("<decision")
+    end = text.rfind("</decision>")
+    if start == -1 or end == -1:
+        return {}, ["Planner backend returned text without a <decision> element."]
+    document = text[start : end + len("</decision>")]
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end <= start:
-            return {}, ["Planner backend returned text without a JSON object."]
+        root = ET.fromstring(document)
+    except ET.ParseError as exc:
+        return {}, [f"Planner backend returned invalid XML: {exc}"]
+    if root.tag != "decision":
+        return {}, [f"Planner backend XML root must be <decision>, got <{root.tag}>."]
+
+    value = _element_to_value(root)
+    if not isinstance(value, dict):
+        return {}, ["Planner backend <decision> must decode to an object."]
+    return value, []
+
+
+def _element_to_value(element: ET.Element) -> object:
+    """Convert an XML element into a JSON-equivalent Python value.
+
+    - ``type="object"``/``type="array"`` force an empty ``{}``/``[]`` container.
+    - Children named ``item``/``call`` make the element a list.
+    - Any other children make the element a dict keyed by child tag.
+    - An empty ``<parameters/>`` is the empty object ``{}``, never ``""``.
+    - Any other childless element is a scalar coerced from its text.
+    """
+
+    declared = (element.get("type") or "").strip().lower()
+    children = list(element)
+    if not children:
+        if declared == "object":
+            return {}
+        if declared == "array":
+            return []
+        if element.tag == "parameters" and (element.text or "").strip() == "":
+            return {}
+        return _coerce_scalar(element)
+
+    child_tags = {child.tag for child in children}
+    if declared == "array" or (child_tags & _XML_LIST_ITEM_NAMES):
+        return [_element_to_value(child) for child in children]
+
+    result: JsonDict = {}
+    for child in children:
+        result[child.tag] = _element_to_value(child)
+    return result
+
+
+def _coerce_scalar(element: ET.Element) -> object:
+    """Coerce a leaf element's text to a typed Python scalar.
+
+    Respects an explicit ``type`` attribute; ``boolean`` and ``null`` require
+    it. Reserved leaf names stay strings. Otherwise infer int-then-float, else
+    string. CDATA is merged by ElementTree into ``.text`` verbatim, so code and
+    other text survive with literal newlines and no escaping.
+    """
+
+    raw = element.text if element.text is not None else ""
+    declared = (element.get("type") or "").strip().lower()
+
+    if declared == "null":
+        return None
+    if declared == "boolean":
+        return raw.strip().lower() in {"true", "1", "yes"}
+    if declared == "string":
+        return raw
+    if declared == "integer":
         try:
-            parsed = json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            return {}, [f"Planner backend returned invalid JSON: {exc}"]
+            return int(raw.strip())
+        except ValueError:
+            return raw
+    if declared == "number":
+        try:
+            return float(raw.strip())
+        except ValueError:
+            return raw
 
-    if not isinstance(parsed, dict):
-        return {}, ["Planner backend JSON must decode to an object."]
-    if isinstance(parsed.get("decision"), dict):
-        return dict(parsed["decision"]), []
-    if isinstance(parsed.get("action"), dict):
-        return dict(parsed["action"]), []
-    return dict(parsed), []
+    if element.tag in _XML_STRING_LEAF_NAMES:
+        return raw
+
+    stripped = raw.strip()
+    if stripped == "":
+        return raw
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        return raw
 
 
-def _strip_json_code_fence(text: str) -> str:
+def _strip_code_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```") and stripped.endswith("```"):
         lines = stripped.splitlines()
@@ -921,7 +1032,9 @@ def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
         errors.append("sam3 points mode must not include a non-empty `parameters.prompt`.")
     if not isinstance(points, list) or not 1 <= len(points) <= 64:
         errors.append(
-            "sam3 points mode requires `parameters.points` as a list of one to 64 points."
+            "sam3 points mode requires `parameters.points` as a JSON list of one to 64 "
+            'point objects, e.g. [{"x": 272, "y": 152, "label": 1}]. Wrap a single point '
+            "in a list; do not pass a bare object or an empty list."
         )
         return errors
     foreground_count = 0
@@ -1302,9 +1415,31 @@ def _agent_owned_tool_planner_system_prompt() -> str:
     """Return the production prompt without host-authored task phases."""
 
     return (
-        "You are the OpenETA closed-loop embodied planner. Return exactly one JSON "
-        "object with fields kind, name, parameters, and reasoning. Valid kinds are "
-        "tool_call and response. For tool_call choose exactly one executable atomic "
+        "You are the OpenETA closed-loop embodied planner. Return exactly one XML "
+        "<decision> element with child elements kind, name, reasoning, and parameters. "
+        "kind must be tool_call or response. name is the tool name (tool_call) or one "
+        "of ask_human, talk, task_complete (response). Put tool arguments inside "
+        "<parameters> as named child elements; use an empty <parameters/> when there "
+        "are none. Encode a list as repeated <item> children, a nested object as named "
+        "child elements, and always wrap code or any multi-line/quoted text in a CDATA "
+        "section so newlines survive verbatim (never escape newlines as backslash-n). "
+        "Numbers may carry type=\"integer\" or type=\"number\"; use type=\"boolean\" or "
+        "type=\"null\" for those values. Example:\n"
+        "<decision>\n"
+        "  <kind>tool_call</kind>\n"
+        "  <name>python_exec</name>\n"
+        "  <reasoning>Inspect the create_env response file.</reasoning>\n"
+        "  <parameters>\n"
+        "    <code><![CDATA[\n"
+        "import os, json\n"
+        "result = {\"exists\": os.path.exists(\"/tmp/x.json\")}\n"
+        "]]></code>\n"
+        "  </parameters>\n"
+        "</decision>\n"
+        "For sam3 points mode, encode <points> as <item> children each with x, y, and "
+        "label (label type=\"integer\" 0 or 1). For a tool_batch, put <call> children "
+        "inside <calls>, each with a <name> and <parameters>. "
+        "For tool_call choose exactly one executable atomic "
         "tool from available_tools; tool_references is only a legacy name index. For "
         "response use ask_human, talk, "
         "or task_complete. create_simulator_env is the only environment-creation path; "

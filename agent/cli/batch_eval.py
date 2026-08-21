@@ -162,11 +162,13 @@ def build_mcp_episode_worker_factory(
         *,
         max_tokens: int | None = None,
         max_vision_images: int | None = None,
+        enable_thinking: bool | None = None,
     ) -> PlannerBackend:
         return _new_batch_backend(
             provider,
             max_tokens=max_tokens,
             max_vision_images=max_vision_images,
+            enable_thinking=enable_thinking,
             provider_limiter=provider_limiter,
         )
 
@@ -368,6 +370,7 @@ def _new_batch_backend(
     *,
     max_tokens: int | None = None,
     max_vision_images: int | None = None,
+    enable_thinking: bool | None = None,
     provider_limiter: ProviderConcurrencyLimiter | None = None,
 ) -> PlannerBackend:
     config = OpenAICompatiblePlannerBackendConfig.from_provider_config(provider)
@@ -375,6 +378,8 @@ def _new_batch_backend(
         config.max_tokens = max_tokens
     if max_vision_images is not None:
         config.max_vision_images = max(config.max_vision_images, max_vision_images)
+    if enable_thinking is not None:
+        config.enable_thinking = enable_thinking
     backend = OpenAICompatiblePlannerBackend(config)
     return provider_limiter.wrap(backend) if provider_limiter is not None else backend
 

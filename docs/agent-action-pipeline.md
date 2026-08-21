@@ -136,6 +136,77 @@ This is valid because both tools are read-only or planning helpers. A batch that
 contains a world-mutating tool such as `lower_body_control_policy` is compiled
 as `blocked`.
 
+The `EnvAction`/`AgentCommand` JSON above is the internal, post-parse logging
+shape. The *wire format* a live model backend emits is XML, described next.
+
+## Planner Decision Wire Format (XML)
+
+The main embodied planner backend prompts the model to return exactly one XML
+`<decision>` element with child elements `kind`, `name`, `reasoning`, and
+`parameters`. `<parameters>` holds tool arguments as named child elements (use
+an empty `<parameters/>` when there are none). Lists are repeated `<item>`
+children; nested objects are named child elements. Scalars may carry
+`type="integer"`, `type="number"`, `type="boolean"`, or `type="null"`; a bare
+numeric leaf is inferred as int-then-float, and reserved text leaves (`code`,
+`prompt`, `message`, `reasoning`, `source_packet_id`, `name`, `tool`, ...) stay
+strings. Multi-line code lives in a `<![CDATA[ ... ]]>` block so newlines
+survive verbatim without escaping.
+
+`ToolCallingPlanner` parses this into the same `{kind, name, parameters,
+reasoning, code?, calls?}` dict the validators and recorder consume, so the
+`EnvAction`/rollout shapes above are unchanged.
+
+sam3 points-mode example:
+
+```xml
+<decision>
+  <kind>tool_call</kind>
+  <name>sam3</name>
+  <reasoning>Text mode returned nothing; point at the target.</reasoning>
+  <parameters>
+    <source_packet_id>env-abc-observation-0001</source_packet_id>
+    <mode>points</mode>
+    <points>
+      <item><x type="integer">272</x><y type="integer">152</y><label type="integer">1</label></item>
+    </points>
+  </parameters>
+</decision>
+```
+
+python_exec with multi-line code:
+
+```xml
+<decision>
+  <kind>tool_call</kind>
+  <name>python_exec</name>
+  <reasoning>Inspect the create_env response file.</reasoning>
+  <parameters>
+    <code><![CDATA[
+import os, json
+result = {"exists": os.path.exists("/tmp/x.json")}
+]]></code>
+  </parameters>
+</decision>
+```
+
+Restricted `tool_batch`:
+
+```xml
+<decision>
+  <kind>tool_call</kind>
+  <name>tool_batch</name>
+  <reasoning>Two independent read-only calls.</reasoning>
+  <calls>
+    <call><name>sam3</name><parameters>
+      <source_packet_id>env-abc-observation-0001</source_packet_id><prompt>cube</prompt>
+    </parameters></call>
+    <call><name>hand_pose_database</name><parameters>
+      <object>cube</object><task>pick</task>
+    </parameters></call>
+  </calls>
+</decision>
+```
+
 ## Pipeline Stages
 
 The default runtime stages are:
@@ -144,13 +215,15 @@ The default runtime stages are:
 2. `ToolCallingPlanner`: builds bounded `tool_context` from the current
    observation, session task, memory summary, tool references, skill metadata,
    selected markdown skill guidance, and execution rules.
-3. `PlannerBackend`: returns one JSON decision payload from a placeholder,
+3. `PlannerBackend`: returns one decision payload from a placeholder,
    deterministic fixture, callable SDK/API wrapper, future commercial API, or
-   local LLM/VLM backend.
-4. Backend validation: `ToolCallingPlanner` parses JSON, validates command
-   kind, tool/skill names, parameters, and bounded code-policy requirements,
-   then retries with validation feedback before falling back to
-   `response::ask_human`.
+   local LLM/VLM backend. Live model backends emit the decision as an XML
+   `<decision>` element (see below); fixture/SDK backends may return the parsed
+   dict directly.
+4. Backend validation: `ToolCallingPlanner` parses the XML `<decision>` into the
+   `{kind, name, parameters, reasoning}` shape, validates command kind,
+   tool/skill names, parameters, and bounded code-policy requirements, then
+   retries with validation feedback before falling back to `response::ask_human`.
 5. `ActionPipeline`: normalizes that decision into a `CommandRequest`.
 6. Compilation: registered tool handlers may execute immediately and return a
    structured `ToolResult`; missing handlers leave calls as `pending`.
@@ -574,8 +647,13 @@ from agent.runtime.planner import ToolCallingPlanner
 
 
 def call_model(request: PlannerBackendRequest) -> str:
-    # Replace this with provider SDK/API code. Return JSON text or a dict.
-    return '{"kind": "response", "name": "talk", "parameters": {"message": "demo"}, "reasoning": "demo"}'
+    # Replace this with provider SDK/API code. Return an XML <decision> string
+    # (live wire format) or the parsed decision dict.
+    return (
+        "<decision><kind>response</kind><name>talk</name>"
+        "<reasoning>demo</reasoning>"
+        "<parameters><message>demo</message></parameters></decision>"
+    )
 
 
 planner = ToolCallingPlanner(CallablePlannerBackend(call_model, provider="local"))

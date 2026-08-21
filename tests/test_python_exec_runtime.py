@@ -37,6 +37,32 @@ def test_python_exec_runs_restricted_code_and_returns_result() -> None:
     assert result.details["parameters"]["code"] == "<code omitted>"
 
 
+def test_python_exec_recovers_over_escaped_newlines() -> None:
+    """Providers sometimes emit literal ``\\n`` (and a trailing ``\\``) instead of
+    real newlines, collapsing the snippet onto one physical line. The runtime
+    repairs that on a compile failure rather than looping on SyntaxError."""
+
+    runtime = PythonExecRuntime()
+
+    # Single physical line: literal backslash-n between statements + trailing "\".
+    code = 'a = 1\\nresult = {"value": a + 2}\\'
+    result = runtime.handler(_context(code))
+
+    assert result.success is True
+    assert result.details["outputs"]["result"] == {"value": 3}
+
+
+def test_python_exec_preserves_intended_string_escapes() -> None:
+    """A snippet whose escapes are legitimate Python must not be rewritten."""
+
+    runtime = PythonExecRuntime()
+
+    result = runtime.handler(_context('result = {"text": "l1\\nl2"}'))
+
+    assert result.success is True
+    assert result.details["outputs"]["result"] == {"text": "l1\nl2"}
+
+
 def test_python_exec_materializes_large_structured_result_with_clear_path(
     tmp_path: Path,
 ) -> None:

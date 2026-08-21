@@ -1226,14 +1226,17 @@ def test_tool_handler_exception_is_structured_result() -> None:
     assert result.details["diagnostics"][0]["error_type"] == "RuntimeError"
 
 
-def test_callable_planner_backend_accepts_json_string_payload() -> None:
+def test_callable_planner_backend_accepts_xml_string_payload() -> None:
     def model_wrapper(request: PlannerBackendRequest) -> str:
         assert "tool_references" in request.tool_context
         return """
-        ```json
-        {"kind": "tool_call", "name": "hand_pose_database",
-         "parameters": {"object": "cube", "task": "pick"},
-         "reasoning": "Need a reference pose."}
+        ```xml
+        <decision>
+          <kind>tool_call</kind>
+          <name>hand_pose_database</name>
+          <reasoning>Need a reference pose.</reasoning>
+          <parameters><object>cube</object><task>pick</task></parameters>
+        </decision>
         ```
         """
 
@@ -1243,7 +1246,7 @@ def test_callable_planner_backend_accepts_json_string_payload() -> None:
         lambda context: {"content": "pose found", "details": {"object": "cube"}},
     )
     planner = ToolCallingPlanner(
-        CallablePlannerBackend(model_wrapper, provider="unit", model="json-string")
+        CallablePlannerBackend(model_wrapper, provider="unit", model="xml-string")
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
     runtime.start_session(task="pick cube")

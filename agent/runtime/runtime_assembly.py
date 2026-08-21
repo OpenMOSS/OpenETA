@@ -132,7 +132,7 @@ MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 # OpenAI-compatible completion limit. A 512-token cap can therefore yield an
 # otherwise valid response with no JSON content. This matches the established
 # experiment entry budget while still allowing normal responses to finish early.
-MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
+MAIN_PLANNER_MAX_OUTPUT_TOKENS = 8192
 VDM_MAX_OUTPUT_TOKENS = 2048
 
 
@@ -405,6 +405,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             backend=config.backend_factory(
                 max_tokens=VDM_MAX_OUTPUT_TOKENS,
                 max_vision_images=2,
+                enable_thinking=False,
             ),
         )
         if config.visual_history.enabled

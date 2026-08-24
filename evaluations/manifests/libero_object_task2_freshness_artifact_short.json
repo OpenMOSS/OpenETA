@@ -1,0 +1,21 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-freshness-artifact-short",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Read-only harness canary; do not move the robot or actuate the gripper. On the initial agentview source packet, run SAM3 for the salad dressing bottle and explicitly select the correct targeted-object detection. Then call observe once to obtain a refreshed packet without robot motion. Do not call SAM3 again. Verify that the earlier selected evidence remains available and consume its host-provided grasp_pose_estimate bundle exactly once. Also inspect one JSON artifact path explicitly returned by a tool using python_exec with sandbox='sandbox'; use only a local read operation and report one top-level key. Never request outside_sandbox. Stop after reporting: the robot and object epochs before/after refresh, whether the selected evidence survived, whether the bundle resolved, and whether sandboxed artifact inspection succeeded. This canary does not claim physical task completion.",
+      "seed": 2,
+      "max_turns": 18,
+      "recovery_turns_per_branch": 3,
+      "max_recovery_turns": 4,
+      "max_tool_calls": 24,
+      "timeout_s": 1800,
+      "max_total_tokens": 2000000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "world_mutation_forbidden": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "episodes": [
+    {
+      "episode_id": "motion-control-fixed-three-point-route",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Strict paired motion-control A/B/C replay; ignore the simulator's manipulation objective. Use exactly these three generic world-frame route endpoints in this order: [-0.14846466056582397, 0.0, 0.40], [0.10, -0.32, 0.40], [0.10, -0.32, 0.12]. Preview each endpoint exactly once with ik_preview_check using position_tolerance_m=0.01, orientation_tolerance_rad=0.30, preserve_current_orientation=true, and check_endpoint_collision=true. If all three authorize execution, call follow_eef_trajectory exactly once with the three ordered ik_receipt_ids, tolerance=0.01, ori_tolerance=0.30, num_steps_per_waypoint=100, and enable_collision_check=true. Do not alter coordinates, add endpoints, or call any other tool. Inspect the trajectory receipt, report reached only if all three endpoints were actually reached, then stop; official LIBERO task reward is outside this motion-only completion contract.",
+      "seed": 2,
+      "max_turns": 12,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 12,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "ablation_pair_id": "fixed_clear_route",
+        "route_method": "agent_waypoints",
+        "target_xyz": [0.10, -0.32, 0.12],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30,
+        "waypoint_count_min": 3,
+        "waypoint_count_max": 3
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "wrist-grasp-short-v1",
+  "description": "Short live grasp-only canary for wrist refinement, close/lift behavior, and visual attachment proof.",
+  "episode_manifest": "manifests/libero_object_task7_wrist_grasp_short.json",
+  "variants": [
+    {
+      "variant_id": "bounded_visual_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260824},
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "wrist-grasp-short",
+    "purpose": "verify one easy-object wrist-refined grasp and source-vacancy/co-motion attachment proof"
+  }
+}

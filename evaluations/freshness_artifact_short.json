@@ -1,0 +1,35 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "freshness-artifact-short-v1",
+  "description": "Short no-motion canary for read-only packet refresh, selected-evidence survival, bundle consumption, and sandboxed artifact inspection.",
+  "episode_manifest": "manifests/libero_object_task2_freshness_artifact_short.json",
+  "variants": [
+    {
+      "variant_id": "bounded_visual_no_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 2,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": false
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260824},
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "freshness-artifact-short",
+    "purpose": "verify read-only freshness semantics and sandbox artifact-query ergonomics"
+  }
+}

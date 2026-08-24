@@ -175,6 +175,82 @@ class ActionPipeline:
                 )
             reference_kind = ""
             if request.name == "ik_preview_check" and isinstance(
+                request.parameters.get("probe_id"), str
+            ):
+                reference_kind = "attachment_probe_waypoint"
+                try:
+                    if memory is None:
+                        raise ValueError("runtime memory is unavailable")
+                    conflicting = sorted(
+                        key
+                        for key in (
+                            "target_pose",
+                            "compiled_grasp_id",
+                            "waypoint_role",
+                            "viewpoint_proposal_id",
+                            "candidate_id",
+                            "preserve_current_orientation",
+                        )
+                        if key in request.parameters
+                    )
+                    if conflicting:
+                        raise ValueError(
+                            "provide probe_id + waypoint_index without other target "
+                            f"source or orientation-policy fields; conflicting={conflicting!r}"
+                        )
+                    resolution = memory.resolve_attachment_probe_waypoint(
+                        probe_id=str(request.parameters.get("probe_id") or ""),
+                        waypoint_index=request.parameters.get("waypoint_index"),
+                    )
+                    resolved = resolution.get("parameters")
+                    if not isinstance(resolved, dict):
+                        raise ValueError(
+                            "attachment probe waypoint resolver returned invalid parameters"
+                        )
+                    resolved_parameters = {
+                        **resolved,
+                        **{
+                            key: request.parameters[key]
+                            for key in (
+                                "position_tolerance_m",
+                                "orientation_tolerance_rad",
+                                "check_endpoint_collision",
+                            )
+                            if key in request.parameters
+                        },
+                    }
+                    bundle_resolution = resolution
+                except (TypeError, ValueError) as exc:
+                    reason = f"ik_preview_check probe reference resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "reference_resolution_gate": {
+                                "blocked": True,
+                                "reference_kind": reference_kind,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code="invalid_attachment_probe_reference",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
+            elif request.name == "ik_preview_check" and isinstance(
                 request.parameters.get("compiled_grasp_id"), str
             ):
                 reference_kind = "compiled_grasp_pose"
@@ -206,11 +282,36 @@ class ActionPipeline:
                             for key in (
                                 "position_tolerance_m",
                                 "orientation_tolerance_rad",
+                                "preserve_current_orientation",
                                 "check_endpoint_collision",
                             )
                             if key in request.parameters
                         },
                     }
+                    if request.parameters.get("preserve_current_orientation") is True:
+                        # A compiled waypoint carries its grasp orientation as part of
+                        # the immutable anchor.  The Agent may deliberately request a
+                        # position-only preview of the same xyz for a non-contact
+                        # observation or retreat.  Preserve the anchor provenance, but
+                        # do not let its embedded rotation silently override that
+                        # explicitly selected orientation policy downstream.
+                        target_pose = resolved_parameters.get("target_pose")
+                        if isinstance(target_pose, dict):
+                            resolved_parameters["target_pose"] = {
+                                key: value
+                                for key, value in target_pose.items()
+                                if key
+                                not in {
+                                    "rotation_matrix",
+                                    "quat_xyzw",
+                                    "quaternion",
+                                    "rotvec",
+                                    "roll",
+                                    "pitch",
+                                    "yaw",
+                                    "euler_xyz_deg",
+                                }
+                            }
                     bundle_resolution = resolution
                 except ValueError as exc:
                     reason = f"ik_preview_check reference resolution failed: {exc}"

@@ -30,6 +30,7 @@ from agent.runtime.planner import (
     PlannerContextConfig,
     ToolCallingPlanner,
     _agent_owned_tool_planner_system_prompt,
+    _validate_official_reward_completion,
     build_tool_context,
 )
 from agent.runtime.promoted_memory import PromotedMemoryStore
@@ -85,6 +86,52 @@ def _observation() -> EnvObservation:
                 },
             ],
         },
+    )
+
+
+def _record_test_ik_receipt(
+    memory: AgentMemory,
+    *,
+    receipt_id: str,
+    target_pose: dict,
+) -> None:
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": dict(target_pose)},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "parameters": {"target_pose": dict(target_pose)},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": receipt_id,
+                                        "classification": "feasible",
+                                        "target_pose": dict(target_pose),
+                                        "orientation_policy": "preserve_current",
+                                        "tolerances": {
+                                            "position_tolerance_m": 0.01,
+                                            "orientation_tolerance_rad": 0.1,
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
     )
 
 
@@ -584,6 +631,54 @@ def test_planner_context_uses_environment_assigned_task_as_active_objective() ->
     assert context["memory"]["current_user_request"] == (
         "Create an environment and complete its assigned task."
     )
+
+
+def test_planner_context_can_keep_session_request_authoritative_for_probe() -> None:
+    probe_task = "Move to the requested endpoint, report the receipt, and stop."
+    assigned_task = "pick up alphabet soup and place it into basket"
+    memory = AgentMemory()
+    memory.start_session(
+        task=probe_task,
+        metadata={"task_authority": "session_user_request"},
+    )
+    memory.save_fact(
+        "active_environment_task",
+        {"task": assigned_task},
+        source="simulator_observation",
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=_tools_with_handlers("observe"),
+        skills=build_default_skill_registry(),
+    )
+
+    assert context["task"] == probe_task
+    assert context["task_authority"] == "session_user_request"
+    assert context["active_environment_task"]["task"] == assigned_task
+    assert context["memory"]["current_user_request"] == probe_task
+
+
+def test_motion_probe_can_disable_official_reward_completion_gate() -> None:
+    errors = _validate_official_reward_completion(
+        PlannerDecision(
+            action_type="response",
+            action="task_complete",
+            parameters={"message": "motion subgoal reached"},
+        ),
+        tool_context={
+            "memory": {
+                "metadata": {
+                    "source": "ParallelEpisodeHarness",
+                    "require_official_reward": False,
+                }
+            },
+            "latest_environment_receipt": {"reward": 0.0, "info": {}},
+        },
+    )
+
+    assert errors == []
 
 
 def test_planner_validation_exhaustion_returns_structured_internal_failure() -> None:
@@ -1629,7 +1724,7 @@ def test_planner_redirects_world_mutation_to_required_skill_inspection() -> None
             {
                 "kind": "tool_call",
                 "name": "move_to",
-                "parameters": {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+                "parameters": {"ik_receipt_id": "ik-skill-redirect"},
             }
         ),
         max_validation_retries=0,
@@ -1735,7 +1830,11 @@ def test_calibration_tools_require_explicit_embodiment_explore_scope() -> None:
     attempted = {
         "kind": "tool_call",
         "name": "propose_calibration_profile",
-        "parameters": {"profile": {}},
+        "parameters": {
+            "profile": {},
+            "profile_fingerprint": {},
+            "rationale": "exercise calibration scope validation",
+        },
     }
     planner = ToolCallingPlanner(
         StaticPlannerBackend(
@@ -3635,6 +3734,43 @@ def test_select_sam3_detection_rejects_role_mismatch() -> None:
     assert runtime.memory.selected_sam3_detection("placement_region") is None
 
 
+def test_select_sam3_detection_reports_exact_pending_id_for_copy_repair() -> None:
+    runtime = OpenEtaAgentRuntime(
+        tools=bind_dummy_tool_handlers(build_default_tool_registry())
+    )
+    runtime.start_session(task="pick the salad dressing")
+    _record_pending_sam3_selection(
+        runtime.memory,
+        result_id="20260820T150027609877Z-5089a74a",
+        evidence_role="target_object",
+        prompt="salad dressing bottle",
+    )
+
+    action = runtime.pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="select_sam3_detection",
+            parameters={
+                "sam3_result_id": "20260820T150027609877Z-5089a74",
+                "detection_id": "detection_000",
+                "evidence_role": "target_object",
+                "reason": "The green bottle is the requested target.",
+            },
+        ),
+        observation=_observation(),
+        tools=runtime.tools,
+        skills=runtime.skills,
+        memory=runtime.memory,
+    )
+
+    assert action.status.value == "failed"
+    content = str(action.tool_calls[0].result["content"])
+    assert "expected='20260820T150027609877Z-5089a74a'" in content
+    assert "received='20260820T150027609877Z-5089a74'" in content
+    assert "available detection_ids=['detection_000', 'detection_001']" in content
+    assert "without rerunning SAM3" in content
+
+
 def test_wrist_target_selection_exposes_alignment_consumer_handoff() -> None:
     runtime = OpenEtaAgentRuntime(
         tools=bind_dummy_tool_handlers(build_default_tool_registry())
@@ -4127,6 +4263,7 @@ def test_pipeline_allows_planner_requested_safe_check_tool_call() -> None:
 
 def test_pipeline_runs_pre_safety_checker_before_configured_tool_call() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    target_pose = {"frame": "world", "xyz": [0.4, 0.0, 0.2]}
     pipeline = ActionPipeline(
         checker_subagents=CheckerSubagentConfig(pre_safety_checks={"move_to": "ik_preview_check"})
     )
@@ -4135,12 +4272,17 @@ def test_pipeline_runs_pre_safety_checker_before_configured_tool_call() -> None:
             {
                 "kind": "tool_call",
                 "name": "move_to",
-                "parameters": {"target_pose": {"xyz": [0.4, 0.0, 0.2]}},
+                "parameters": {"ik_receipt_id": "ik-pre-safety-pass"},
             }
         )
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools, pipeline=pipeline)
     runtime.start_session(task="move to pose")
+    _record_test_ik_receipt(
+        runtime.memory,
+        receipt_id="ik-pre-safety-pass",
+        target_pose=target_pose,
+    )
 
     action = runtime.act(_observation())
 
@@ -4157,6 +4299,7 @@ def test_pipeline_runs_pre_safety_checker_before_configured_tool_call() -> None:
 
 def test_pipeline_blocks_tool_call_when_pre_safety_checker_fails() -> None:
     tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    target_pose = {"frame": "world", "xyz": [9.0, 0.0, 0.2]}
 
     def unsafe_ik(context: ToolExecutionContext) -> ToolResult:
         return ToolResult(
@@ -4174,12 +4317,17 @@ def test_pipeline_blocks_tool_call_when_pre_safety_checker_fails() -> None:
             {
                 "kind": "tool_call",
                 "name": "move_to",
-                "parameters": {"target_pose": {"xyz": [9.0, 0.0, 0.2]}},
+                "parameters": {"ik_receipt_id": "ik-pre-safety-fail"},
             }
         )
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools, pipeline=pipeline)
     runtime.start_session(task="unsafe move")
+    _record_test_ik_receipt(
+        runtime.memory,
+        receipt_id="ik-pre-safety-fail",
+        target_pose=target_pose,
+    )
 
     action = runtime.act(_observation())
 

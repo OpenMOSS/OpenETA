@@ -337,6 +337,15 @@ class ToolRegistry:
                     parameters,
                     success=False,
                     diagnostics=[{"code": "missing_handler"}],
+                    recovery_options=[
+                        {
+                            "action": "choose_executable_alternative",
+                            "reason": (
+                                "The host has no handler bound for this advertised "
+                                "tool in the current runtime."
+                            ),
+                        }
+                    ],
                 ),
             )
             self._emit_tool_result(
@@ -475,6 +484,15 @@ class ToolRegistry:
                             "code": "handler_exception",
                             "error_type": type(exc).__name__,
                             "message": str(exc),
+                        }
+                    ],
+                    recovery_options=[
+                        {
+                            "action": "inspect_diagnostics_then_retry_or_replan",
+                            "reason": (
+                                "The production handler raised before it could produce "
+                                "the advertised semantic fact."
+                            ),
                         }
                     ],
                 ),
@@ -1887,7 +1905,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "ik_receipt_ids; the host resolves exact poses and rejects copied "
                 "trajectory arrays, unknown ids, stale receipts, or unapproved "
                 "waypoints. Path/world collision remains the motion controller's "
-                "responsibility."
+                "responsibility. For an Agent-authored collision detour, preview a "
+                "raised/lateral waypoint and the following clearance waypoint before "
+                "moving, then submit their ordered receipt ids; do not insert the "
+                "arithmetic midpoint of a failed straight segment because it preserves "
+                "the same swept corridor."
             ),
             parameters={
                 "ik_receipt_ids": (
@@ -1927,6 +1949,8 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Read-only endpoint reachability preview before execution. Returns "
                 "reachable, unreachable, or unknown with joint-limit, residual, and "
                 "optional endpoint-collision diagnostics; it does not check a path. "
+                "For a prepared attachment probe, pass only probe_id and the ordered "
+                "zero-based waypoint_index; the host resolves the exact frozen pose. "
                 "A reachable result may still report elevated execution-seed risk; "
                 "compare another grasp candidate/orientation before motion when one "
                 "is available rather than treating reachability as a positive "
@@ -1952,6 +1976,14 @@ def build_default_tool_registry() -> ToolRegistry:
                 "candidate_id": (
                     "with viewpoint_proposal_id, exact wrist_view candidate id; the host "
                     "resolves its full position and orientation without model copying"
+                ),
+                "probe_id": (
+                    "instead of target_pose, exact prepared probe id returned by "
+                    "prepare_attachment_probe"
+                ),
+                "waypoint_index": (
+                    "with probe_id, required zero-based index copied from the ordered "
+                    "ik_preview_requests returned by prepare_attachment_probe"
                 ),
                 "position_tolerance_m": "optional maximum per-axis position residual",
                 "orientation_tolerance_rad": "optional orientation residual tolerance",

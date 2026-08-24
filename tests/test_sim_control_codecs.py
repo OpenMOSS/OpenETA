@@ -318,10 +318,11 @@ def test_move_to_dispatches_mink_goal_to_worker_without_outer_osc_steps(
             "max_steps": 40,
             "position_tolerance_m": 0.003,
             "orientation_tolerance_rad": 0.05,
-            "gripper_command": 0.0,
-            "enable_collision_check": False,
-        }
-    ]
+                "gripper_command": 0.0,
+                "enable_collision_check": False,
+                "motion_execution_condition": "A",
+            }
+        ]
 
 
 def test_move_to_forwards_private_ik_execution_seed_to_worker(monkeypatch) -> None:
@@ -867,6 +868,72 @@ def test_trajectory_pose_arguments_accept_quaternion_and_validate_endpoint() -> 
         arguments,
         tolerance=0.002,
     ) is False
+    assert server._trajectory_waypoint_reached(
+        {
+            "reached_target": False,
+            "stop_reason": "local_convergence_stalled",
+            "end": {"xyz": [0.1, 0.2, 0.3]},
+        },
+        arguments,
+        tolerance=0.002,
+    ) is False
+
+
+def test_condition_c_route_bundle_must_match_host_resolved_trajectory() -> None:
+    trajectory = [{"frame": "world", "xyz": [0.1, 0.2, 0.3]}]
+    bundle = {
+        "schema_version": "openeta.experimental_route_execution_bundle.v1",
+        "condition": "C",
+        "authority": "host_memory_exact_receipt_resolution",
+        "entries": [
+            {
+                "source_ik_receipt_id": "ik-route-1",
+                "target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.31]},
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="does not match"):
+        server._condition_c_route_entries(bundle, trajectory)
+
+
+def test_condition_c_sequential_preview_issues_private_seed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        server,
+        "_proxy_reachability",
+        lambda meta, body: {
+            "status": "reachable",
+            "feasible": True,
+            "target": {
+                "xyz": body["target_xyz"],
+                "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+            "best_candidate": {
+                "joint_positions": [0.1] * 7,
+                "joint_margin_min_rad": 0.2,
+                "joint_travel_l2_rad": 0.4,
+            },
+        },
+    )
+    entry = {
+        "source_ik_receipt_id": "ik-route-1",
+        "execution_arguments": {"x": 0.1, "y": 0.2, "z": 0.3},
+    }
+
+    receipt, seed = server._sequential_route_preview(
+        {"backend": "libero", "remote_handle": "remote"},
+        entry,
+        index=0,
+        tolerance=0.002,
+        ori_tolerance=0.05,
+    )
+
+    assert receipt["feasible"] is True
+    assert receipt["preview_state"] == "actual_preceding_segment_end"
+    assert receipt["path_collision_checked"] is False
+    assert seed is not None
+    assert seed["schema_version"] == "openeta.ik_execution_seed.v1"
+    assert seed["joint_positions"] == [0.1] * 7
 
 
 def test_ttl_cleanup_closes_releases_and_removes_every_handle(monkeypatch) -> None:

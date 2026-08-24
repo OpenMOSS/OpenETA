@@ -120,6 +120,66 @@ def test_convergence_and_joint_margin_diagnostics_survive_compact_projection() -
     assert reachability["execution_seed_quality"] == seed_quality
 
 
+def test_motion_summary_preserves_per_waypoint_and_sequential_preview_evidence() -> None:
+    motion = build_motion_summary(
+        {
+            "reached_target": True,
+            "waypoints_requested": 2,
+            "waypoints_completed": 2,
+            "waypoint_results": [
+                {
+                    "reached_target": True,
+                    "stop_reason": "target_reached",
+                    "steps_executed": 12,
+                    "end": {"xyz": [0.0, 0.0, 0.3]},
+                    "controller_receipt": {
+                        "stable_steps_completed": 3,
+                        "ik_execution_seed_receipt_id": "seed-1",
+                    },
+                },
+                {
+                    "reached_target": True,
+                    "stop_reason": "target_reached",
+                    "steps_executed": 18,
+                    "end": {"xyz": [0.1, 0.0, 0.3]},
+                },
+            ],
+            "sequential_route_preview": {
+                "waypoints_previewed": 2,
+                "waypoints_authorized": 2,
+                "receipts": [
+                    {
+                        "index": 0,
+                        "preview_id": "preview-1",
+                        "status": "reachable",
+                        "feasible": True,
+                        "joint_positions": [0.1] * 7,
+                    }
+                ],
+            },
+        }
+    )
+
+    assert motion["waypoints_requested"] == 2
+    assert motion["waypoints_completed"] == 2
+    assert [item["reached_target"] for item in motion["waypoint_results"]] == [
+        True,
+        True,
+    ]
+    assert motion["waypoint_results"][0]["controller_receipt"] == {
+        "stable_steps_completed": 3,
+        "ik_execution_seed_receipt_id": "seed-1",
+    }
+    preview = motion["sequential_route_preview"]
+    assert preview["waypoints_authorized"] == 2
+    assert preview["receipts"][0] == {
+        "index": 0,
+        "preview_id": "preview-1",
+        "status": "reachable",
+        "feasible": True,
+    }
+
+
 def test_default_response_output_root_uses_repo_tmp_tool_result_tree() -> None:
     assert DEFAULT_RESPONSE_ARTIFACT_OUTPUT_ROOT == Path("tmp") / "tool_result"
 

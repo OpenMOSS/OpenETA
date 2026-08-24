@@ -122,7 +122,8 @@ def test_prepare_linear_probe_freezes_exact_five_centimetres() -> None:
         {
             "tool": "ik_preview_check",
             "parameters": {
-                "target_pose": result["frozen_motion"]["parameters"]["target_pose"],
+                "probe_id": result["probe_id"],
+                "waypoint_index": 0,
                 "position_tolerance_m": 0.01,
                 "orientation_tolerance_rad": 0.10,
                 "check_endpoint_collision": True,
@@ -184,10 +185,13 @@ def test_prepare_arc_probe_preserves_waypoints_and_bounds() -> None:
     assert len(trajectory) == 4
     assert trajectory[-1]["xyz"] == pytest.approx([0.15, 0.2, 0.3])
     assert all(pose["probe_path_sha256"] == result["path_sha256"] for pose in trajectory)
+    assert [request["parameters"]["probe_id"] for request in result["ik_preview_requests"]] == [
+        result["probe_id"]
+    ] * 4
     assert [
-        request["parameters"]["target_pose"]
+        request["parameters"]["waypoint_index"]
         for request in result["ik_preview_requests"]
-    ] == trajectory
+    ] == [0, 1, 2, 3]
     assert result["execution_handoff"]["tool"] == "follow_eef_trajectory"
     assert len(result["execution_handoff"]["parameters"]["ik_receipt_ids"]) == 4
 

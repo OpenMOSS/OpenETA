@@ -556,7 +556,51 @@ def test_cli_binds_molmopoint_only_when_url_is_configured(monkeypatch) -> None:
         artifact_root=Path("artifacts"),
     )
     assert tools.can_execute("molmopoint") is True
-    assert calls == [("http://molmo.example/sse", "point_image", 120.0)]
+    assert calls == [("http://molmo.example/sse", "point_image", 600.0)]
+
+
+def test_cli_keeps_molmopoint_timeout_separate_from_other_perception_tools(
+    monkeypatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        runtime_assembly,
+        "load_configured_object_memory_bank",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_assembly,
+        "load_configured_asset_reference_catalog",
+        lambda: None,
+    )
+
+    def fake_pointer(*, url, tool_name="point_image", timeout_seconds=600.0):
+        calls.append((url, tool_name, timeout_seconds))
+        return lambda _request: {"success": False}
+
+    monkeypatch.setattr(
+        runtime_assembly,
+        "build_sse_molmopoint_mcp_pointer",
+        fake_pointer,
+    )
+    monkeypatch.setattr(
+        runtime_assembly,
+        "build_molmopoint_handler",
+        lambda _pointer, **_kwargs: (lambda _context: None),
+    )
+    tools = build_default_tool_registry()
+    runtime_assembly.bind_runtime_perception_tools(
+        tools,
+        endpoints=runtime_assembly.RuntimeMcpEndpoints(
+            molmopoint_url="http://molmo.example/sse"
+        ),
+        backend_factory=lambda **_kwargs: object(),
+        artifact_root=Path("artifacts"),
+        timeout_s=17.0,
+        molmopoint_timeout_s=321.0,
+    )
+
+    assert calls == [("http://molmo.example/sse", "point_image", 321.0)]
 
 
 def test_cli_binds_graspgenx_behind_unified_grasp_tool(

@@ -583,3 +583,38 @@ The nominal first Sol run is explicitly invalid as a model comparison because
 provider failover executed Luna. Full run-by-run metrics, corrected provider
 identity, and conclusions are in
 [`agent-first-canary-2026-08-14.md`](agent-first-canary-2026-08-14.md).
+
+## Semantic evidence projection and session tool health
+
+Long recovery sessions keep complete receipts, candidates, transition rows, and
+ToolResults in durable memory and rollout artifacts. The planner projection does
+not need to repeat every full structure on every turn. It now exposes:
+
+- the latest full IK receipt plus a compact index of prior receipt ids, pose
+  signatures, epochs, classifications, and target anchors;
+- the grasp advisor recommendation, alternatives, and the corresponding visible
+  candidates, with the complete candidate bank referenced by its artifact;
+- all semantic tool transitions but only the latest repeated zero-reward
+  environment receipt;
+- a compact recovery outcome rather than a second copy of the full ToolResult;
+- semantic structured-tool outputs in conversation history, while preserving
+  direct `python_exec` results for coding-style inspection.
+
+This is a model-facing projection only. It does not mutate durable history and
+does not change gate authority. On the r48 final-turn semantic request, the
+projection reduced Agent-context serialization from 319,175 to 203,670
+characters (36.2%) and reduced `world_evidence` from 119,111 to 28,683
+characters.
+
+Infrastructure failures are tracked separately from task-semantic failures.
+Timeout, transport, connection, or service-unavailable receipts mark a tool
+`degraded` after one consecutive failure and `circuit_open` after two; a later
+successful receipt restores `healthy`. `decision_state.tool_health` is advisory
+evidence, not a gate. It tells the Agent not to repeat an unchanged call until a
+preflight or explicit health change justifies retrying.
+
+A wrist-view segmentation miss is likewise projected as optional refinement
+failure. It does not invalidate a current-epoch scene-view compiled grasp by
+itself. The Agent may inspect the fresh dual view, continue from the retained
+anchor, apply a bounded visual residual adjustment, or pursue same-view point
+grounding when the extra refinement is actually needed.

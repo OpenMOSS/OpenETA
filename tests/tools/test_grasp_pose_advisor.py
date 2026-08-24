@@ -7,6 +7,7 @@ from PIL import Image
 
 from agent.backends.planner import CallablePlannerBackend
 from agent.tools.grasp_pose_advisor import (
+    GRASP_POSE_ADVISOR_SYSTEM_PROMPT,
     GRASP_SELECTION_ADVICE_SCHEMA,
     GRASP_SELECTION_BUNDLE_SCHEMA,
     BackendGraspPoseAdvisor,
@@ -133,6 +134,17 @@ def test_backend_advisor_is_isolated_and_returns_audited_recommendation(
         bundle["overview_ref"],
         *bundle["contact_sheet_refs"],
     ]
+
+
+def test_advisor_prompt_prioritizes_transport_stability_over_convenient_approach(
+) -> None:
+    prompt = GRASP_POSE_ADVISOR_SYSTEM_PROMPT.lower()
+
+    assert "primary objective" in prompt
+    assert "without the object slipping or falling" in prompt
+    assert "do not trade away grasp stability" in prompt
+    assert "broad middle body" in prompt
+    assert "cap, neck, top rim, or shoulder" in prompt
 
 
 def test_backend_advisor_rejects_hidden_action_output(tmp_path: Path) -> None:

@@ -1338,8 +1338,21 @@ def build_grasp_pose_estimate_handler(
             and attempt.get("reason") != "backend_gripper_width_mismatch"
             for attempt in attempts
         )
+        no_executable_failures = [
+            attempt
+            for attempt in attempts
+            if attempt.get("status") == "failed"
+            and attempt.get("reason") == "no_executable_grasp_candidates"
+        ]
+        only_no_executable_failures = bool(no_executable_failures) and all(
+            attempt.get("status") != "failed"
+            or attempt.get("reason") == "no_executable_grasp_candidates"
+            for attempt in attempts
+        )
         reason = (
-            "no_compatible_backend"
+            "no_executable_grasp_candidates"
+            if only_no_executable_failures
+            else "no_compatible_backend"
             if width_mismatch is not None and not other_failures
             else (
                 "all_backends_failed"
@@ -1351,7 +1364,10 @@ def build_grasp_pose_estimate_handler(
             _grasp_pose_estimate_failure(
                 reason,
                 attempts=attempts,
-                retryable=reason == "all_backends_failed",
+                retryable=reason in {
+                    "all_backends_failed",
+                    "no_executable_grasp_candidates",
+                },
                 content=(
                     str(width_mismatch.get("message") or "")
                     if width_mismatch is not None and not other_failures
@@ -4825,6 +4841,12 @@ def _grasp_pose_estimate_failure(
                 }
             ],
             "recovery_options": recovery_options,
+            "semantic_outcome": (
+                "no_executable_grasp_candidates"
+                if reason == "no_executable_grasp_candidates"
+                else "operational_failure"
+            ),
+            "operational_success": False,
         },
     )
 

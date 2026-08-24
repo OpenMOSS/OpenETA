@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
@@ -10,6 +11,7 @@ from agent.runtime.memory import (
     ARTICULATED_ATTACHMENT_PROBE_KEY,
     AgentMemory,
     GRASP_PROVENANCE_KEY,
+    ROBOT_MOTION_EPOCH_KEY,
 )
 from agent.runtime.pipeline import ActionPipeline
 from agent.runtime.planner import (
@@ -82,6 +84,8 @@ def _record_ik_receipt(
     receipt_id: str,
     target_pose: dict,
     classification: str = "feasible",
+    captured_quat_xyzw: list[float] | None = None,
+    joint_positions: list[float] | None = None,
 ) -> None:
     """Record one host-owned IK handoff for Agent-facing move_to tests."""
 
@@ -118,6 +122,25 @@ def _record_ik_receipt(
                                             "position_tolerance_m": 0.01,
                                             "orientation_tolerance_rad": 0.1,
                                         },
+                                        **(
+                                            {
+                                                "reachability": {
+                                                    "target": {
+                                                        "xyz": list(target_pose["xyz"]),
+                                                        "quat_xyzw": list(
+                                                            captured_quat_xyzw
+                                                        ),
+                                                    },
+                                                },
+                                                "best_candidate": {
+                                                    "joint_positions": list(
+                                                        joint_positions or []
+                                                    )
+                                                },
+                                            }
+                                            if captured_quat_xyzw is not None
+                                            else {}
+                                        ),
                                     }
                                 }
                             },
@@ -181,6 +204,68 @@ def test_compiled_grasp_waypoint_is_host_resolved_for_ik_preview() -> None:
     assert plan.status is PipelineStatus.EXECUTED
     assert dispatched[0]["target_pose"] == pose
     assert dispatched[0]["check_endpoint_collision"] is True
+    assert "target_pose" not in plan.request.parameters
+
+
+def test_compiled_grasp_position_only_ik_preserves_policy_without_rotation() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="inspect the cube near the grasp anchor")
+    pose = {
+        "frame": "world",
+        "xyz": [0.1, 0.2, 0.3],
+        "rotation_matrix": [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        "compiled_grasp_id": "compiled-position-only-ref",
+        "waypoint_role": "grasp_clearance",
+    }
+    memory.save_artifact(
+        "compiled-position-only-ref",
+        {
+            "type": "compiled_grasp",
+            "compiled_grasp_id": "compiled-position-only-ref",
+            "scene_epoch": 0,
+            "hover_pose": dict(pose),
+        },
+        source="compile_grasp_seed",
+    )
+    tools = build_default_tool_registry()
+    dispatched: list[dict] = []
+
+    def record_ik(context: ToolExecutionContext) -> ToolResult:
+        dispatched.append(dict(context.parameters))
+        return ToolResult(True)
+
+    tools.bind_handler("ik_preview_check", record_ik)
+
+    plan = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="ik_preview_check",
+            parameters={
+                "compiled_grasp_id": "compiled-position-only-ref",
+                "waypoint_role": "grasp_clearance",
+                "preserve_current_orientation": True,
+                "check_endpoint_collision": True,
+            },
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert plan.status is PipelineStatus.EXECUTED
+    resolved = dispatched[0]
+    assert resolved["preserve_current_orientation"] is True
+    assert resolved["check_endpoint_collision"] is True
+    assert resolved["target_pose"]["xyz"] == pose["xyz"]
+    assert resolved["target_pose"]["compiled_grasp_id"] == (
+        "compiled-position-only-ref"
+    )
+    assert "rotation_matrix" not in resolved["target_pose"]
     assert "target_pose" not in plan.request.parameters
 
 
@@ -475,6 +560,63 @@ def test_follow_trajectory_resolves_ordered_ik_receipts_without_model_copied_pos
     ]
 
 
+def test_host_builds_condition_c_route_bundle_from_current_ik_receipts() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="move through a checked path")
+    poses = [
+        {"frame": "world", "xyz": [0.10, 0.20, 0.30]},
+        {"frame": "world", "xyz": [0.11, 0.20, 0.31]},
+    ]
+    captured = [0.0, 0.0, 0.70710678, 0.70710678]
+    joints = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6, 0.7]
+    for index, pose in enumerate(poses):
+        _record_ik_receipt(
+            memory,
+            receipt_id=f"ik-route-{index}",
+            target_pose=pose,
+            captured_quat_xyzw=captured,
+            joint_positions=joints,
+        )
+
+    bundle = memory.resolve_ik_trajectory_execution_bundle(
+        {"ik_receipt_ids": ["ik-route-0", "ik-route-1"]}
+    )
+
+    assert bundle is not None
+    assert bundle["condition"] == "C"
+    assert bundle["authority"] == "host_memory_exact_receipt_resolution"
+    assert bundle["sequential_preview_policy"] == (
+        "just_in_time_from_actual_segment_end"
+    )
+    assert [entry["source_ik_receipt_id"] for entry in bundle["entries"]] == [
+        "ik-route-0",
+        "ik-route-1",
+    ]
+    assert bundle["entries"][0]["target_pose"]["quat_xyzw"] == captured
+    assert bundle["entries"][0]["source_captured_quat_xyzw"] == captured
+    assert bundle["entries"][0]["source_seed_hint"]["joint_positions"] == joints
+
+
+def test_condition_c_route_bundle_rejects_stale_receipt() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="move through a checked path")
+    _record_ik_receipt(
+        memory,
+        receipt_id="ik-route-stale",
+        target_pose={"frame": "world", "xyz": [0.10, 0.20, 0.30]},
+    )
+    memory._advance_runtime_epochs(
+        tool="move_to",
+        object_scene_changed=False,
+        source="unit_test_motion",
+    )
+
+    with pytest.raises(ValueError, match="stale"):
+        memory.resolve_ik_trajectory_execution_bundle(
+            {"ik_receipt_ids": ["ik-route-stale"]}
+        )
+
+
 def test_follow_trajectory_rejects_copied_path_and_infeasible_waypoint() -> None:
     memory = AgentMemory()
     memory.start_session(task="move through a checked path")
@@ -584,6 +726,159 @@ def test_typed_trajectory_completes_matching_frozen_attachment_probe() -> None:
     assert probe is not None
     assert probe["status"] == "completed"
     assert probe["last_attempt_status"] == "executed"
+
+
+def test_ik_resolves_exact_attachment_probe_waypoint_from_short_id() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="lift the held object")
+    marker = "probe-waypoint-short-id"
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.10, 0.20, 0.35],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+        "probe_path_sha256": marker,
+    }
+    memory.save_fact(
+        ARTICULATED_ATTACHMENT_PROBE_KEY,
+        {
+            "schema_version": "openeta.articulated_attachment_probe.v1",
+            "status": "prepared",
+            "probe_id": f"probe:{marker}",
+            "path_sha256": marker,
+            "scene_epoch": 0,
+            "robot_motion_epoch": 0,
+            "frozen_path": [target_pose],
+            "frozen_motion": {
+                "name": "move_to",
+                "parameters": {
+                    "target_pose": target_pose,
+                    "enable_collision_check": True,
+                },
+            },
+        },
+        source="unit_test",
+    )
+    captured: list[dict] = []
+    tools = build_default_tool_registry()
+    tools.bind_handler(
+        "ik_preview_check",
+        lambda context: captured.append(dict(context.parameters)) or ToolResult(True),
+    )
+
+    request_parameters = {
+        "probe_id": f"probe:{marker}",
+        "waypoint_index": 0,
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.10,
+        "check_endpoint_collision": True,
+    }
+    plan = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="ik_preview_check",
+            parameters=request_parameters,
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert plan.status is PipelineStatus.EXECUTED
+    assert captured == [
+        {
+            "target_pose": target_pose,
+            "position_tolerance_m": 0.01,
+            "orientation_tolerance_rad": 0.10,
+            "check_endpoint_collision": True,
+        }
+    ]
+    assert plan.tool_calls[0].parameters == request_parameters
+
+
+@pytest.mark.parametrize(
+    ("parameters", "message"),
+    [
+        ({"probe_id": "probe:wrong", "waypoint_index": 0}, "active probe_id"),
+        ({"probe_id": "probe:current", "waypoint_index": 2}, "valid indices=[0]"),
+    ],
+)
+def test_ik_probe_reference_rejection_returns_actionable_feedback(
+    parameters: dict,
+    message: str,
+) -> None:
+    memory = AgentMemory()
+    memory.start_session(task="lift the held object")
+    marker = "current"
+    pose = {
+        "frame": "world",
+        "xyz": [0.1, 0.2, 0.35],
+        "probe_path_sha256": marker,
+    }
+    memory.save_fact(
+        ARTICULATED_ATTACHMENT_PROBE_KEY,
+        {
+            "status": "prepared",
+            "probe_id": "probe:current",
+            "path_sha256": marker,
+            "scene_epoch": 0,
+            "robot_motion_epoch": 0,
+            "frozen_path": [pose],
+            "frozen_motion": {
+                "name": "move_to",
+                "parameters": {"target_pose": pose, "enable_collision_check": True},
+            },
+        },
+        source="unit_test",
+    )
+
+    plan = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="ik_preview_check",
+            parameters=parameters,
+        ),
+        observation=_observation(),
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert plan.status is PipelineStatus.BLOCKED
+    assert plan.metadata["repair_bundle"]["code"] == (
+        "invalid_attachment_probe_reference"
+    )
+    assert message in plan.tool_calls[0].reason
+
+
+def test_attachment_probe_waypoint_reference_expires_after_robot_motion() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="lift the held object")
+    marker = "stale-after-motion"
+    pose = {
+        "frame": "world",
+        "xyz": [0.1, 0.2, 0.35],
+        "probe_path_sha256": marker,
+    }
+    memory.save_fact(
+        ARTICULATED_ATTACHMENT_PROBE_KEY,
+        {
+            "status": "prepared",
+            "probe_id": f"probe:{marker}",
+            "path_sha256": marker,
+            "scene_epoch": 0,
+            "robot_motion_epoch": 0,
+            "frozen_path": [pose],
+        },
+        source="unit_test",
+    )
+    memory.save_fact(ROBOT_MOTION_EPOCH_KEY, {"epoch": 1}, source="unit_test")
+
+    with pytest.raises(ValueError, match="robot_motion_epoch=0, current=1"):
+        memory.resolve_attachment_probe_waypoint(
+            probe_id=f"probe:{marker}",
+            waypoint_index=0,
+        )
 
 
 def _record_target_selection(
@@ -1825,7 +2120,16 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         source="compile_grasp_seed",
     )
 
-    def contact_action(*, reached: bool, steps: int, collision: dict) -> EnvAction:
+    def contact_action(
+        *,
+        reached: bool,
+        steps: int,
+        collision: dict,
+        actual_xyz: list[float] | None = None,
+        position_error_m: float | None = None,
+        max_axis_position_error_m: float | None = None,
+        orientation_error_rad: float = 0.0,
+    ) -> EnvAction:
         target_pose = {
             "frame": "world",
             "compiled_grasp_id": "compiled-current",
@@ -1833,6 +2137,17 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
             "waypoint_role": "grasp_contact",
             "xyz": [0.1, 0.2, 0.1],
         }
+        actual = actual_xyz or [0.1, 0.2, 0.1 if reached else 0.16]
+        position_error = (
+            position_error_m
+            if position_error_m is not None
+            else (0.0 if reached else 0.06)
+        )
+        max_axis_error = (
+            max_axis_position_error_m
+            if max_axis_position_error_m is not None
+            else position_error
+        )
         details = {
             "operational_success": reached,
             "outputs": {
@@ -1841,8 +2156,10 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
                     "steps_executed": steps,
                     "stop_reason": "target_reached" if reached else "collision_detected",
                     "start": {"xyz": [0.1, 0.2, 0.2]},
-                    "end": {"xyz": [0.1, 0.2, 0.1 if reached else 0.16]},
-                    "position_error_m": 0.0 if reached else 0.06,
+                    "end": {"xyz": actual},
+                    "position_error_m": position_error,
+                    "max_axis_position_error_m": max_axis_error,
+                    "orientation_error_rad": orientation_error_rad,
                     "collision": collision,
                 }
             },
@@ -1918,9 +2235,67 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
     assert blocked.metadata["repair_bundle"]["code"] == "compiled_contact_not_reached"
     reason = blocked.tool_calls[0].reason
     assert "reached_target=false" in reason
-    assert "tomato_sauce_1_g4" in reason
     assert "actual_eef_xyz=[0.1, 0.2, 0.16]" in reason
-    assert "replace the identity anchor" in reason
+    assert "position_error_m=0.06 (limit=0.005)" in reason
+    assert "Collision diagnostics from the preceding arm motion do not block" in reason
+
+    memory.add_action(
+        contact_action(
+            reached=False,
+            steps=17,
+            actual_xyz=[0.1003, 0.2002, 0.1001],
+            position_error_m=0.0004,
+            max_axis_position_error_m=0.0003,
+            orientation_error_rad=0.155,
+            collision={
+                "detected": True,
+                "geom1_name": "robot0_link7_collision",
+                "geom2_name": "milk_1_g1",
+            },
+        )
+    )
+    near_contact_receipt = memory.latest_compiled_contact_execution()
+    assert near_contact_receipt["max_axis_position_error_m"] == 0.0003
+    assert near_contact_receipt["orientation_error_rad"] == 0.155
+    collision_does_not_block_finger_close = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 0},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+    assert collision_does_not_block_finger_close.status is not PipelineStatus.BLOCKED
+
+    memory.add_action(
+        contact_action(
+            reached=False,
+            steps=8,
+            actual_xyz=[0.1003, 0.2002, 0.1001],
+            position_error_m=0.0004,
+            max_axis_position_error_m=0.0003,
+            orientation_error_rad=0.301,
+            collision={"detected": False},
+        )
+    )
+    excessive_orientation_error = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 0},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+    assert excessive_orientation_error.status is PipelineStatus.BLOCKED
+    assert "orientation_error_rad=0.301 (limit=0.3)" in (
+        excessive_orientation_error.tool_calls[0].reason or ""
+    )
 
     memory.add_action(contact_action(reached=True, steps=3, collision={"detected": False}))
     allowed = pipeline.compile(
@@ -1935,6 +2310,74 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         memory=memory,
     )
     assert allowed.status is not PipelineStatus.BLOCKED
+
+    memory.save_artifact(
+        "compiled-next",
+        {
+            "type": "compiled_grasp",
+            "compiled_grasp_id": "compiled-next",
+            "scene_epoch": 0,
+            "target_anchor_world_xyz": [0.1, 0.2, 0.1],
+            "contact_pose": {
+                "frame": "world",
+                "compiled_grasp_id": "compiled-next",
+                "waypoint_role": "grasp_contact",
+                "xyz": [0.1, 0.2, 0.1],
+            },
+        },
+        source="compile_grasp_seed",
+    )
+    memory.save_fact(
+        GRASP_PROVENANCE_KEY,
+        {
+            "schema_version": "openeta.grasp_provenance.v1",
+            "compiled_grasp_id": "compiled-next",
+            "target_evidence_id": "sam3:sam3-current:detection_000",
+            "object_scene_epoch": 0,
+        },
+        source="compile_grasp_seed_evidence_graph",
+    )
+    same_target_new_plan = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 0},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+    assert same_target_new_plan.status is not PipelineStatus.BLOCKED
+    assert memory.resolve_active_attachment_candidate()["compiled_grasp_id"] == (
+        "compiled-current"
+    )
+
+    memory.save_fact(
+        GRASP_PROVENANCE_KEY,
+        {
+            "schema_version": "openeta.grasp_provenance.v1",
+            "compiled_grasp_id": "compiled-next",
+            "target_evidence_id": "sam3:other-target:detection_001",
+            "object_scene_epoch": 0,
+        },
+        source="compile_grasp_seed_evidence_graph",
+    )
+    cross_target_mismatch = pipeline.compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 0},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+    assert cross_target_mismatch.status is PipelineStatus.BLOCKED
+    assert cross_target_mismatch.metadata["repair_bundle"]["code"] == (
+        "compiled_contact_receipt_mismatch"
+    )
 
 
 def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> None:

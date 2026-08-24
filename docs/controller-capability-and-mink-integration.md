@@ -256,6 +256,16 @@ maximum per-axis absolute residual. The receipt includes both the value and
 metric; Euclidean `position_error_m` may therefore be slightly larger while
 `reached_target=true` remains internally consistent.
 
+Gripper close has a separate contact-admissibility envelope. It does not inherit
+the arm controller's aggregate `reached_target` verdict or collision stop as an
+automatic veto because `gripper_control` actuates only the fingers. A current
+compiled-contact receipt authorizes close when maximum per-axis position error
+is at most 5 mm and any reported orientation error is at most 0.30 rad. Motion
+collision diagnostics remain visible to the Agent for recovery but do not block
+the finger-only command. Close binds to the latest physically executed contact
+branch; a later compiled planning candidate for the same target does not replace
+that branch, while a cross-target change or epoch mismatch still fails closed.
+
 Full repository regression after the attachment-refresh and semantic-feedback
 patches: `1225 passed, 12 skipped`.
 

@@ -252,6 +252,10 @@ def prepare_attachment_probe(
     if not candidate_id:
         raise AttachmentProbeError("compiled grasp candidate provenance is incomplete")
     scene_epoch = _nonnegative_int(memory.get("scene_epoch"), "scene_epoch")
+    robot_motion_epoch = _nonnegative_int(
+        memory.get("robot_motion_epoch", 0),
+        "robot_motion_epoch",
+    )
     if observation is None:
         raise AttachmentProbeError("a current observation is required")
     pose = getattr(getattr(observation, "robot", None), "end_effector_pose", None)
@@ -346,13 +350,14 @@ def prepare_attachment_probe(
         {
             "tool": "ik_preview_check",
             "parameters": {
-                "target_pose": dict(pose),
+                "probe_id": probe_id,
+                "waypoint_index": index,
                 "position_tolerance_m": 0.01,
                 "orientation_tolerance_rad": 0.10,
                 "check_endpoint_collision": True,
             },
         }
-        for pose in frozen_path
+        for index, _pose in enumerate(frozen_path)
     ]
     execution_parameters = (
         {
@@ -380,6 +385,7 @@ def prepare_attachment_probe(
         "candidate_id": candidate_id,
         "compiled_grasp_id": compiled_grasp_id,
         "scene_epoch": scene_epoch,
+        "robot_motion_epoch": robot_motion_epoch,
         "interaction_family": "articulated_handle",
         "motion_type": motion_type,
         "distance_m": ARTICULATED_ATTACHMENT_PROBE_DISTANCE_M,

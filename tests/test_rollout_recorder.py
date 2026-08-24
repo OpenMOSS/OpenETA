@@ -127,7 +127,7 @@ def test_rollout_transition_preserves_media_state_action_and_reward(tmp_path: Pa
         if tool["name"] == "get_memory"
     )
     assert memory_contract["schema_version"] == "openeta.tool_contract.v1"
-    assert memory_contract["maturity"] == "declared"
+    assert memory_contract["maturity"] == "verified"
     contract_runtime = manifest["provenance"]["tool_contract_runtime"]
     assert contract_runtime["schema_version"] == (
         "openeta.tool_contract_runtime_provenance.v1"

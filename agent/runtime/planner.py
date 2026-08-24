@@ -254,13 +254,8 @@ class ToolCallingPlanner(BasePlanner):
                 skills=skills,
                 tool_contract_catalog=self.tool_contract_catalog,
                 tool_contract_policy=self.tool_contract_policy,
-            )
-            canonicalizations = _canonicalize_host_parameters(
-                decision,
                 tool_context=tool_context,
             )
-            if canonicalizations:
-                decision.metadata["host_parameter_canonicalizations"] = canonicalizations
             required_skill = ""
             if not validation_errors:
                 required_skill = _required_skill_inspection_name(
@@ -575,12 +570,19 @@ def _decision_from_backend_result(
     skills: SkillRegistry,
     tool_contract_catalog: ToolContractCatalog | None = None,
     tool_contract_policy: ToolContractRuntimePolicy | None = None,
+    tool_context: JsonDict | None = None,
 ) -> tuple[PlannerDecision, list[str]]:
     payload, parse_errors = _parse_backend_payload(result.payload)
     if parse_errors:
         return _invalid_decision(parse_errors), parse_errors
 
     decision, build_errors = _build_planner_decision(payload)
+    canonicalizations = _canonicalize_host_parameters(
+        decision,
+        tool_context=tool_context or {},
+    )
+    if canonicalizations:
+        decision.metadata["host_parameter_canonicalizations"] = canonicalizations
     catalog = tool_contract_catalog or _default_tool_contract_catalog()
     policy = tool_contract_policy or ToolContractRuntimePolicy()
     validation_errors = [
@@ -806,7 +808,195 @@ def _validate_tool_batch(parameters: JsonDict, tools: ToolRegistry) -> list[str]
     return errors
 
 
+_STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
+    "observe": {
+        "types": {"reason": "string"},
+    },
+    "create_simulator_env": {
+        "required": ("env_id",),
+        "types": {
+            "env_id": "string",
+            "seed": "integer",
+            "task": "string",
+            "render_mode": "string",
+            "image_width": "integer",
+            "image_height": "integer",
+            "session_id": "string",
+            "include_objects": "boolean",
+        },
+    },
+    "close_simulator_env": {"types": {}},
+    "retrieve_asset_reference": {
+        "required": ("environment", "target_object", "source_packet_id"),
+        "types": {
+            "environment": "string",
+            "target_object": "string",
+            "source_packet_id": "string",
+            "camera_frame_id": "string",
+        },
+    },
+    "select_sam3_detection": {
+        "required": ("sam3_result_id", "detection_id"),
+        "types": {
+            "sam3_result_id": "string",
+            "detection_id": "string",
+            "selection_confidence": "number",
+            "reason": "string",
+            "identity_anchor_id": "string",
+            "identity_relation": "string",
+            "evidence_role": "string",
+            "target_geometry_family": "string",
+        },
+        "enums": {
+            "identity_relation": {"same_instance", "replace_misidentified_anchor"},
+            "evidence_role": {"target_object", "placement_region"},
+        },
+    },
+    "reject_sam3_detections": {
+        "required": ("sam3_result_id", "reason"),
+        "types": {"sam3_result_id": "string", "reason": "string"},
+    },
+    "compile_grasp_seed": {
+        "required": ("grasp_result_id", "candidate_id"),
+        "types": {
+            "grasp_result_id": "string",
+            "candidate_id": "string",
+            "target_geometry_family": "string",
+            "target_class": "string",
+            "strategy_id": "string",
+            "articulated_handle_options": "object",
+            "pregrasp_distance_m": "number",
+        },
+    },
+    "compute_wrist_alignment": {
+        "required": ("bundle_id",),
+        "types": {"bundle_id": "string", "max_correction_m": "number"},
+    },
+    "propose_wrist_viewpoints": {
+        "required": ("compiled_grasp_id", "source_packet_id", "camera_frame_id"),
+        "types": {
+            "compiled_grasp_id": "string",
+            "source_packet_id": "string",
+            "camera_frame_id": "string",
+        },
+    },
+    "prepare_attachment_probe": {
+        "required": ("compiled_grasp_id", "motion_type"),
+        "types": {
+            "compiled_grasp_id": "string",
+            "motion_type": "string",
+            "direction_world_xyz": "array",
+            "waypoint_offsets_world_xyz": "array",
+            "reason": "string",
+        },
+        "enums": {"motion_type": {"linear", "arc"}},
+    },
+    "assess_attachment_probe": {
+        "required": ("probe_id",),
+        "types": {"probe_id": "string"},
+    },
+    "move_to": {
+        "required": ("ik_receipt_id",),
+        "types": {
+            "ik_receipt_id": "string",
+            "num_steps": "integer",
+            "tolerance": "number",
+            "ori_tolerance": "number",
+            "enable_collision_check": "boolean",
+        },
+    },
+    "follow_eef_trajectory": {
+        "required": ("ik_receipt_ids",),
+        "types": {
+            "ik_receipt_ids": "array",
+            "num_steps_per_waypoint": "integer",
+            "tolerance": "number",
+            "ori_tolerance": "number",
+            "enable_collision_check": "boolean",
+        },
+    },
+    "ik_preview_check": {
+        "types": {
+            "target_pose": "object",
+            "compiled_grasp_id": "string",
+            "waypoint_role": "string",
+            "viewpoint_proposal_id": "string",
+            "candidate_id": "string",
+            "probe_id": "string",
+            "waypoint_index": "integer",
+            "position_tolerance_m": "number",
+            "orientation_tolerance_rad": "number",
+            "preserve_current_orientation": "boolean",
+            "check_endpoint_collision": "boolean",
+        },
+        "enums": {
+            "waypoint_role": {
+                "grasp_clearance",
+                "grasp_precontact",
+                "grasp_alignment_reference",
+                "grasp_contact",
+            }
+        },
+        "one_of_required": (
+            ("target_pose",),
+            ("compiled_grasp_id", "waypoint_role"),
+            ("viewpoint_proposal_id", "candidate_id"),
+            ("probe_id", "waypoint_index"),
+        ),
+    },
+}
+
+
+def _validate_static_tool_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    rules = _STATIC_TOOL_PARAMETER_RULES[tool_name]
+    types = rules.get("types")
+    types = types if isinstance(types, dict) else {}
+    errors = _unsupported_parameter_errors(tool_name, parameters, set(types))
+    for name in rules.get("required", ()):
+        if name not in parameters:
+            errors.append(f"{tool_name} requires `parameters.{name}`.")
+    one_of = rules.get("one_of_required")
+    if isinstance(one_of, tuple):
+        matched = sum(
+            all(name in parameters for name in group)
+            for group in one_of
+            if isinstance(group, tuple)
+        )
+        if matched != 1:
+            errors.append(f"{tool_name} requires exactly one supported reference shape.")
+    for name, expected in types.items():
+        if name not in parameters:
+            continue
+        value = parameters[name]
+        valid = {
+            "string": isinstance(value, str),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "boolean": isinstance(value, bool),
+            "array": isinstance(value, list),
+            "object": isinstance(value, dict),
+        }.get(str(expected), True)
+        if not valid:
+            errors.append(f"{tool_name} `parameters.{name}` must be {expected}.")
+            continue
+        if expected == "string" and not value:
+            errors.append(f"{tool_name} `parameters.{name}` must be non-empty.")
+    enums = rules.get("enums")
+    enums = enums if isinstance(enums, dict) else {}
+    for name, allowed in enums.items():
+        if name in parameters and parameters[name] not in allowed:
+            errors.append(f"{tool_name} `parameters.{name}` has an unsupported value.")
+    return errors
+
+
 def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]:
+    if tool_name in _STATIC_TOOL_PARAMETER_RULES:
+        return _validate_static_tool_parameters(tool_name, parameters)
+    if tool_name == "python_exec":
+        return _validate_python_exec_parameters(parameters)
     if tool_name == "web_search":
         return _validate_web_search_parameters(parameters)
     if tool_name == "web_fetch":
@@ -835,6 +1025,31 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
         return _validate_gripper_control_parameters(parameters)
     if tool_name == "grasp_pose_estimate":
         return _validate_grasp_pose_estimate_parameters(parameters)
+    if tool_name == "propose_calibration_profile":
+        return _validate_proposal_parameters(
+            tool_name,
+            parameters,
+            payload_field="profile",
+            extra_fields={"profile_fingerprint": dict, "validation_gates": list, "ledger": list},
+            required_extra=("profile_fingerprint",),
+        )
+    if tool_name == "propose_grasp_strategy":
+        return _validate_proposal_parameters(
+            tool_name,
+            parameters,
+            payload_field="strategy",
+            extra_fields={
+                "base_strategy_sha256": str,
+                "rollout_summary": dict,
+                "ledger": list,
+            },
+        )
+    if tool_name in {"promote_calibration_profile", "promote_grasp_strategy"}:
+        return _validate_promotion_parameters(tool_name, parameters)
+    if tool_name in {"save_memory", "get_memory", "delete_memory", "compact_memory"}:
+        return _validate_memory_tool_parameters(tool_name, parameters)
+    if tool_name in {"register_skill", "update_skill"}:
+        return _validate_skill_management_parameters(tool_name, parameters)
     if tool_name == "graspgenx":
         return _validate_graspgenx_parameters(parameters)
     if tool_name != "anygrasp":
@@ -874,6 +1089,195 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
                 + ". Copy fx/fy/cx/cy/scale from the same observe/render camera metadata."
             )
     return errors
+
+
+def _validate_python_exec_parameters(parameters: JsonDict) -> list[str]:
+    errors = _unsupported_parameter_errors(
+        "python_exec",
+        parameters,
+        {"code", "sandbox", "timeout_s"},
+    )
+    code = parameters.get("code")
+    if not isinstance(code, str) or not code:
+        errors.append("python_exec requires a non-empty string `parameters.code`.")
+    sandbox = parameters.get("sandbox")
+    if sandbox is not None and sandbox not in {"sandbox", "outside_sandbox"}:
+        errors.append("python_exec sandbox must be sandbox or outside_sandbox.")
+    timeout_s = parameters.get("timeout_s")
+    if timeout_s is not None and (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, (int, float))
+        or not 0 < float(timeout_s) <= 600
+    ):
+        errors.append("python_exec timeout_s must be a number in (0, 600].")
+    return errors
+
+
+def _validate_proposal_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+    *,
+    payload_field: str,
+    extra_fields: dict[str, type],
+    required_extra: tuple[str, ...] = (),
+) -> list[str]:
+    allowed = {payload_field, "rationale", *extra_fields}
+    errors = _unsupported_parameter_errors(tool_name, parameters, allowed)
+    payload = parameters.get(payload_field)
+    if not isinstance(payload, dict):
+        errors.append(f"{tool_name} requires object `parameters.{payload_field}`.")
+    rationale = parameters.get("rationale")
+    if not isinstance(rationale, str) or not rationale:
+        errors.append(f"{tool_name} requires non-empty string `parameters.rationale`.")
+    for name in required_extra:
+        if name not in parameters:
+            errors.append(f"{tool_name} requires `parameters.{name}`.")
+    for name, expected_type in extra_fields.items():
+        value = parameters.get(name)
+        if value is not None and not isinstance(value, expected_type):
+            errors.append(
+                f"{tool_name} `parameters.{name}` must be {expected_type.__name__}."
+            )
+    return errors
+
+
+def _validate_promotion_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    errors = _unsupported_parameter_errors(
+        tool_name,
+        parameters,
+        {"proposal_id", "target_status", "evidence"},
+    )
+    proposal_id = parameters.get("proposal_id")
+    if not isinstance(proposal_id, str) or not proposal_id:
+        errors.append(f"{tool_name} requires non-empty string `parameters.proposal_id`.")
+    if parameters.get("target_status") not in {"candidate", "validated"}:
+        errors.append(f"{tool_name} target_status must be candidate or validated.")
+    evidence = parameters.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        errors.append(f"{tool_name} requires a non-empty evidence list.")
+    else:
+        for index, item in enumerate(evidence):
+            if not isinstance(item, dict):
+                errors.append(f"{tool_name} evidence[{index}] must be an object.")
+                continue
+            if set(item) - {"path", "split"}:
+                errors.append(f"{tool_name} evidence[{index}] has unsupported fields.")
+            if not isinstance(item.get("path"), str) or not item.get("path"):
+                errors.append(f"{tool_name} evidence[{index}].path must be non-empty.")
+            if item.get("split") not in {"canary", "held_out"}:
+                errors.append(
+                    f"{tool_name} evidence[{index}].split must be canary or held_out."
+                )
+    return errors
+
+
+def _validate_memory_tool_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    allowed_by_tool = {
+        "save_memory": {"namespace", "key", "content", "tags"},
+        "get_memory": {"namespace", "key"},
+        "delete_memory": {"namespace", "key"},
+        "compact_memory": {"max_events"},
+    }
+    errors = _unsupported_parameter_errors(
+        tool_name,
+        parameters,
+        allowed_by_tool[tool_name],
+    )
+    if tool_name == "compact_memory":
+        max_events = parameters.get("max_events")
+        if max_events is not None and (
+            isinstance(max_events, bool)
+            or not isinstance(max_events, int)
+            or max_events < 1
+        ):
+            errors.append("compact_memory max_events must be an integer >= 1.")
+        return errors
+    namespace = parameters.get("namespace")
+    allowed_namespaces = {"facts", "artifacts", "skill_notes"}
+    if tool_name != "save_memory":
+        allowed_namespaces.add("all")
+    if namespace is not None and namespace not in allowed_namespaces:
+        errors.append(
+            f"{tool_name} namespace must be one of {sorted(allowed_namespaces)}."
+        )
+    key = parameters.get("key")
+    if key is not None and (not isinstance(key, str) or not key):
+        errors.append(f"{tool_name} key must be a non-empty string when supplied.")
+    if tool_name in {"save_memory", "delete_memory"} and "key" not in parameters:
+        errors.append(f"{tool_name} requires `parameters.key`.")
+    if tool_name == "save_memory":
+        if "content" not in parameters:
+            errors.append("save_memory requires `parameters.content`.")
+        tags = parameters.get("tags")
+        if tags is not None and (
+            not isinstance(tags, list)
+            or any(not isinstance(tag, str) for tag in tags)
+        ):
+            errors.append("save_memory tags must be an array of strings.")
+    return errors
+
+
+def _validate_skill_management_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    allowed = (
+        {
+            "name",
+            "goal",
+            "description",
+            "requirements",
+            "examples",
+            "content",
+            "task_patterns",
+            "allowed_tools",
+        }
+        if tool_name == "register_skill"
+        else {"name", "requested_changes", "examples", "requirements", "content"}
+    )
+    errors = _unsupported_parameter_errors(tool_name, parameters, allowed)
+    name = parameters.get("name")
+    if not isinstance(name, str) or not name:
+        errors.append(f"{tool_name} requires non-empty string `parameters.name`.")
+    elif tool_name == "register_skill" and re.fullmatch(
+        r"[a-z0-9]+(?:-[a-z0-9]+)*", name
+    ) is None:
+        errors.append("register_skill name must be a lowercase hyphenated slug.")
+    string_fields = (
+        {"goal", "description", "content"}
+        if tool_name == "register_skill"
+        else {"requested_changes", "content"}
+    )
+    for field in string_fields:
+        value = parameters.get(field)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{tool_name} {field} must be a string when supplied.")
+    if tool_name == "register_skill":
+        for field in ("task_patterns", "allowed_tools"):
+            value = parameters.get(field)
+            if value is not None and (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) for item in value)
+            ):
+                errors.append(f"register_skill {field} must be an array of strings.")
+    return errors
+
+
+def _unsupported_parameter_errors(
+    tool_name: str,
+    parameters: JsonDict,
+    allowed: set[str],
+) -> list[str]:
+    extras = sorted(set(parameters) - allowed)
+    if not extras:
+        return []
+    return [f"{tool_name} received unsupported parameters: {', '.join(extras)}."]
 
 
 def _tool_contract_shadow_validation(
@@ -1001,7 +1405,11 @@ def _validate_gripper_control_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_web_search_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "web_search",
+        parameters,
+        {"query", "max_results", "language", "time_range"},
+    )
     query = parameters.get("query")
     if not isinstance(query, str) or not query.strip() or len(query.strip()) > 512:
         errors.append(
@@ -1022,7 +1430,11 @@ def _validate_web_search_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "web_fetch",
+        parameters,
+        {"url", "max_chars"},
+    )
     url = parameters.get("url")
     if not isinstance(url, str) or not url.strip() or len(url.strip()) > 2048:
         errors.append(
@@ -1052,7 +1464,20 @@ def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "sam3",
+        parameters,
+        {
+            "source_packet_id",
+            "camera_frame_id",
+            "mode",
+            "prompt",
+            "points",
+            "positive_points",
+            "roi_bbox_xyxy",
+            "evidence_role",
+        },
+    )
     source_packet_id = parameters.get("source_packet_id")
     if not isinstance(source_packet_id, str) or not source_packet_id.strip():
         errors.append(
@@ -1131,7 +1556,11 @@ def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_molmopoint_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "molmopoint",
+        parameters,
+        {"sources", "prompt"},
+    )
     if "images" in parameters:
         errors.append(
             "molmopoint no longer accepts `parameters.images`; use ordered packet "
@@ -1660,6 +2089,8 @@ def _validate_official_reward_completion(
     memory = tool_context.get("memory")
     metadata = memory.get("metadata") if isinstance(memory, dict) else None
     if not isinstance(metadata, dict) or metadata.get("source") != "ParallelEpisodeHarness":
+        return []
+    if metadata.get("require_official_reward") is False:
         return []
     receipt = tool_context.get("latest_environment_receipt")
     info = receipt.get("info") if isinstance(receipt, dict) else None
@@ -2208,6 +2639,7 @@ def _build_tool_context_payload(
         )
     skill_usage = _skill_usage_guidance(selected_skill_guidance, memory)
     memory_context = memory.planning_context(max_events=config.max_memory_events)
+    pending_ik_execution_index = _pending_ik_execution_index(memory)
     tool_loop_warning = _motion_failure_attractor_warning(
         memory
     ) or _conversation_no_progress_warning(memory)
@@ -2243,6 +2675,7 @@ def _build_tool_context_payload(
     context: JsonDict = {
         "schema_version": "openeta.planner_context.v1",
         "task": effective_task,
+        "task_authority": memory.metadata.get("task_authority") or "environment_task",
         "active_environment_task": memory_context.get("active_environment_task"),
         "task_playbook": task_playbook,
         "observation": _observation_summary(
@@ -2279,6 +2712,7 @@ def _build_tool_context_payload(
         "attachment_evidence": memory_context.get("attachment_evidence"),
         "motion_reconciliation": memory_context.get("motion_reconciliation"),
         "ik_preview_receipts": memory_context.get("ik_preview_receipts"),
+        "pending_ik_execution_index": pending_ik_execution_index,
         "fresh_observation_obligation": {
             "schema_version": "openeta.fresh_observation_obligation.v1",
             "required": True,
@@ -2346,7 +2780,7 @@ def _build_agent_decision_context(
 
     explicit_world_evidence = memory.get("world_evidence")
     runtime_evidence = (
-        dict(explicit_world_evidence)
+        _project_world_evidence(dict(explicit_world_evidence))
         if isinstance(explicit_world_evidence, dict)
         else {}
     )
@@ -2360,7 +2794,14 @@ def _build_agent_decision_context(
     for output_key, context_key in question_fields.items():
         value = memory.get(context_key)
         if value is not None:
-            open_questions[output_key] = value
+            open_questions[output_key] = (
+                _project_perception_failure(
+                    value,
+                    retained_grasp=memory.get("retained_targeted_grasp"),
+                )
+                if output_key == "perception_failure" and isinstance(value, dict)
+                else value
+            )
 
     recent_events = memory.get("recent_events")
     recent_events = recent_events if isinstance(recent_events, list) else []
@@ -2409,6 +2850,22 @@ def _build_agent_decision_context(
     tool_loop_warning = runtime_context.get("tool_loop_warning")
     if isinstance(tool_loop_warning, dict):
         unresolved_obligations["no_progress_tool_loop"] = tool_loop_warning
+    pending_ik_execution_index = runtime_context.get("pending_ik_execution_index")
+    if isinstance(pending_ik_execution_index, dict) and pending_ik_execution_index.get(
+        "receipts"
+    ):
+        unresolved_obligations["preview_execution_gap"] = {
+            "pending_receipt_ids": [
+                item.get("receipt_id")
+                for item in pending_ik_execution_index["receipts"]
+                if isinstance(item, dict) and item.get("receipt_id")
+            ],
+            "resolution": (
+                "Execute an exact receipt reference, intentionally supersede it with "
+                "materially changed evidence/geometry, or explain why it is no longer "
+                "useful before repeating same-state perception."
+            ),
+        }
     camera_artifacts = runtime_context.get("current_camera_artifacts")
     camera_artifacts = camera_artifacts if isinstance(camera_artifacts, list) else []
     packet_ids = list(
@@ -2444,9 +2901,11 @@ def _build_agent_decision_context(
         "latest_compiled_contact_execution": memory.get(
             "latest_compiled_contact_execution"
         ),
+        "pending_execution_receipts": pending_ik_execution_index,
         "unresolved_obligations": unresolved_obligations,
         "last_action_effect": _latest_action_effect(recent_events),
         "no_progress_tool_loop": tool_loop_warning,
+        "tool_health": memory.get("tool_health", {}),
         "available_tools": [
             reference.get("name")
             for reference in tool_references
@@ -2458,6 +2917,7 @@ def _build_agent_decision_context(
         "schema_version": "openeta.agent_context.v2",
         "objective": {
             "task": runtime_context.get("task"),
+            "task_authority": runtime_context.get("task_authority"),
             "active_environment_task": runtime_context.get("active_environment_task"),
             "latest_human_interaction": memory.get("latest_human_interaction"),
         },
@@ -2470,7 +2930,9 @@ def _build_agent_decision_context(
         },
         "visual_history": runtime_context.get("visual_history"),
         "recent_transitions": recent_transitions,
-        "transition_ledger": memory.get("transition_ledger", []),
+        "transition_ledger": _project_transition_ledger(
+            memory.get("transition_ledger", [])
+        ),
         "world_evidence": runtime_evidence,
         "evidence_graph": evidence_graph,
         "host_resolved_inputs": {
@@ -2508,6 +2970,131 @@ def _build_agent_decision_context(
         "vision_image_paths": runtime_context.get("vision_image_paths", []),
         "vision_evidence": visual_evidence,
     }
+
+
+def _pending_ik_execution_index(memory: AgentMemory) -> JsonDict | None:
+    """Project current executable IK receipts that have not been dispatched.
+
+    The index is deliberately capability-oriented: it does not choose a target,
+    force motion, or advance a host-owned stage.  It merely makes the causal gap
+    between a successful read-only preview and physical execution hard to miss.
+    """
+
+    state = memory.ik_preview_receipts() or {}
+    receipts = [
+        item for item in state.get("receipts", []) if isinstance(item, dict)
+    ]
+    if not receipts:
+        return None
+    current_object_epoch = memory.object_scene_epoch()
+    current_robot_epoch = memory.robot_motion_epoch()
+    latest_disposition: dict[str, str] = {}
+    for event in reversed(memory.events[-240:]):
+        if event.event_type == "ik_preview_receipt":
+            if (
+                _planner_epoch(event.payload.get("object_scene_epoch"))
+                == current_object_epoch
+                and _planner_epoch(event.payload.get("robot_motion_epoch"))
+                == current_robot_epoch
+            ):
+                receipt_id = str(event.payload.get("receipt_id") or "")
+                if receipt_id:
+                    latest_disposition.setdefault(receipt_id, "previewed")
+            continue
+        if event.event_type != "action":
+            continue
+        anchor = event.payload.get("input_state_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        if not anchor or (
+            _planner_epoch(anchor.get("object_scene_epoch")) != current_object_epoch
+            or _planner_epoch(anchor.get("robot_motion_epoch")) != current_robot_epoch
+        ):
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        if name == "move_to":
+            receipt_id = str(parameters.get("ik_receipt_id") or "")
+            if receipt_id:
+                latest_disposition.setdefault(receipt_id, "attempted")
+        elif name == "follow_eef_trajectory":
+            receipt_ids = parameters.get("ik_receipt_ids")
+            if isinstance(receipt_ids, list):
+                for value in receipt_ids:
+                    receipt_id = str(value or "")
+                    if receipt_id:
+                        latest_disposition.setdefault(receipt_id, "attempted")
+
+    projected: list[JsonDict] = []
+    seen: set[str] = set()
+    for receipt in reversed(receipts):
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if (
+            not receipt_id
+            or receipt_id in seen
+            or latest_disposition.get(receipt_id) == "attempted"
+        ):
+            continue
+        seen.add(receipt_id)
+        if (
+            _planner_epoch(receipt.get("object_scene_epoch")) != current_object_epoch
+            or _planner_epoch(receipt.get("robot_motion_epoch")) != current_robot_epoch
+        ):
+            continue
+        classification = str(receipt.get("classification") or "")
+        delegation = receipt.get("motion_collision_delegation")
+        delegated = bool(
+            classification == "kinematically_feasible_collision_deferred"
+            and isinstance(delegation, dict)
+            and delegation.get("available_for_matching_move") is True
+        )
+        if classification != "feasible" and not delegated:
+            continue
+        execution_parameters: JsonDict = {"ik_receipt_id": receipt_id}
+        if delegated:
+            execution_parameters["enable_collision_check"] = True
+        item: JsonDict = {
+            "receipt_id": receipt_id,
+            "status": "previewed_not_executed",
+            "classification": classification,
+            "orientation_policy": receipt.get("orientation_policy"),
+            "target_signature": receipt.get("target_signature"),
+            "execution_reference": {
+                "tool": "move_to",
+                "parameters": execution_parameters,
+            },
+        }
+        request_reference = receipt.get("request_reference")
+        if isinstance(request_reference, dict) and request_reference:
+            item["request_reference"] = dict(request_reference)
+        projected.append(item)
+        if len(projected) >= 3:
+            break
+    if not projected:
+        return None
+    return {
+        "schema_version": "openeta.decision_state.pending_execution_index.v1",
+        "receipts": projected,
+        "interpretation": (
+            "Each entry is an executable IK preview that has not yet been dispatched. "
+            "The Agent may execute the exact short reference, supersede it with "
+            "materially changed evidence/geometry, or decline it with an explicit reason."
+        ),
+        "host_policy": "capability_index_only; no next action is forced or gated",
+    }
+
+
+def _planner_epoch(value: object) -> int:
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
 
 
 def _conversation_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
@@ -2556,6 +3143,21 @@ def _conversation_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
         if isinstance(packet_id, str) and packet_id:
             packet_ids.append(packet_id)
     if repeated >= 2:
+        repeated_anchors = _recent_equivalent_request_anchors(
+            memory,
+            tool_name=latest_name,
+            semantic_signature=latest_signature,
+            limit=repeated,
+        )
+        if (
+            len(repeated_anchors) >= 2
+            and all(anchor.get("visual_signature") for anchor in repeated_anchors)
+            and not all(
+                _same_semantic_state_anchor(anchor, repeated_anchors[0])
+                for anchor in repeated_anchors[1:]
+            )
+        ):
+            return None
         return {
             "schema_version": "openeta.no_progress_tool_loop.v1",
             "tool": latest_name,
@@ -2573,6 +3175,41 @@ def _conversation_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
     return _interleaved_no_progress_warning(memory)
 
 
+def _recent_equivalent_request_anchors(
+    memory: AgentMemory,
+    *,
+    tool_name: str,
+    semantic_signature: str,
+    limit: int,
+) -> list[JsonDict]:
+    anchors: list[JsonDict] = []
+    for event in reversed(memory.events[-160:]):
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": _without_packet_provenance(parameters)},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        if name != tool_name or signature != semantic_signature:
+            break
+        anchor = event.payload.get("input_state_anchor")
+        anchors.append(dict(anchor) if isinstance(anchor, dict) else {})
+        if len(anchors) >= limit:
+            break
+    return anchors
+
+
 def _interleaved_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
     """Detect equivalent calls hidden inside a short read-only/planning cycle.
 
@@ -2581,6 +3218,10 @@ def _interleaved_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
     deliberately remains advisory: it exposes a ready bundle and asks the Agent
     to consume it, but never blocks a legitimate refresh after visible change.
     """
+
+    semantic_state_warning = _semantic_state_cycle_warning(memory)
+    if semantic_state_warning is not None:
+        return semantic_state_warning
 
     actions: list[tuple[str, str, JsonDict]] = []
     world_mutating = {"move_to", "follow_eef_trajectory", "gripper_control"}
@@ -2656,6 +3297,152 @@ def _interleaved_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
         ),
         "host_policy": "reflection_warning_only; no tool is forced or blocked",
     }
+
+
+def _semantic_state_cycle_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect a repeated negative outcome under identical visual/epoch evidence."""
+
+    actions: list[JsonDict] = []
+    world_mutating = {
+        "move_to",
+        "follow_eef_trajectory",
+        "gripper_control",
+        "lower_body_control_policy",
+    }
+    for event in reversed(memory.events[-240:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            continue
+        name = str(request.get("name") or "")
+        if name in world_mutating:
+            break
+        anchor = event.payload.get("input_state_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        visual_signature = str(anchor.get("visual_signature") or "")
+        if not visual_signature:
+            continue
+        semantic_outcome = _event_tool_semantic_outcome(command, name=name)
+        actions.append(
+            {
+                "name": name,
+                "semantic_outcome": semantic_outcome,
+                "anchor": anchor,
+            }
+        )
+        if len(actions) >= 16:
+            break
+    if len(actions) < 2:
+        return None
+    latest = actions[0]
+    latest_outcome = str(latest.get("semantic_outcome") or "")
+    if not _is_no_progress_semantic_outcome(latest_outcome):
+        return None
+    latest_anchor = latest["anchor"]
+    match_index: int | None = None
+    repeat_count = 1
+    for index, candidate in enumerate(actions[1:], start=1):
+        if (
+            candidate.get("name") == latest.get("name")
+            and candidate.get("semantic_outcome") == latest_outcome
+            and _same_semantic_state_anchor(candidate.get("anchor"), latest_anchor)
+        ):
+            repeat_count += 1
+            if match_index is None:
+                match_index = index
+    if match_index is None:
+        return None
+    intervening_tools = [
+        str(item.get("name") or "") for item in reversed(actions[1:match_index])
+    ]
+    pending = _pending_ik_execution_index(memory)
+    pending_ids = []
+    if isinstance(pending, dict):
+        pending_ids = [
+            str(item.get("receipt_id") or "")
+            for item in pending.get("receipts", [])
+            if isinstance(item, dict) and item.get("receipt_id")
+        ]
+    return {
+        "schema_version": "openeta.no_progress_tool_loop.v1",
+        "trigger_type": "semantic_state_cycle_without_world_change",
+        "tool": latest.get("name"),
+        "semantic_outcome": latest_outcome,
+        "equivalent_outcome_count": repeat_count,
+        "intervening_tools": list(dict.fromkeys(intervening_tools)),
+        "state_anchor": {
+            "visual_signature": latest_anchor.get("visual_signature"),
+            "object_scene_epoch": latest_anchor.get("object_scene_epoch"),
+            "robot_motion_epoch": latest_anchor.get("robot_motion_epoch"),
+        },
+        "pending_execution_receipt_ids": pending_ids,
+        "interpretation": (
+            "The same non-progress outcome recurred after a multi-tool read-only "
+            "cycle while the visual observation hash and both world epochs stayed "
+            "unchanged. Additional same-state perception is unlikely to add evidence. "
+            "Consume a useful pending execution reference, materially change the "
+            "geometry/evidence, choose another strategy, or explain why retry is useful."
+        ),
+        "host_policy": "reflection_warning_only; no tool is forced or blocked",
+    }
+
+
+def _event_tool_semantic_outcome(command: JsonDict, *, name: str) -> str:
+    calls = command.get("tool_calls")
+    calls = calls if isinstance(calls, list) else []
+    for call in reversed(calls):
+        if not isinstance(call, dict) or str(call.get("name") or "") != name:
+            continue
+        result = call.get("result")
+        result = result if isinstance(result, dict) else {}
+        details = result.get("details")
+        details = details if isinstance(details, dict) else {}
+        outcome = details.get("semantic_outcome")
+        if isinstance(outcome, str):
+            return outcome.strip().lower()
+    return ""
+
+
+def _is_no_progress_semantic_outcome(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    exact = {
+        "requires_better_view",
+        "no_detection",
+        "not_found",
+        "target_not_reached",
+        "no_material_view_change",
+        "unchanged",
+        "inconclusive",
+        "retry_required",
+        "blocked",
+        "rejected",
+        "failed",
+    }
+    return normalized in exact or any(
+        marker in normalized
+        for marker in ("not_reached", "no_detection", "better_view", "infeasible")
+    )
+
+
+def _same_semantic_state_anchor(left: object, right: object) -> bool:
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    return bool(left.get("visual_signature")) and all(
+        left.get(field_name) == right.get(field_name)
+        for field_name in (
+            "visual_signature",
+            "object_scene_epoch",
+            "robot_motion_epoch",
+        )
+    )
 
 
 def _semantic_repeat_parameters(name: str, parameters: JsonDict) -> JsonDict:
@@ -2869,7 +3656,10 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "effect": details.get("effect"),
             "facts_produced": details.get("facts_produced", []),
             "recovery_options": details.get("recovery_options", []),
-            "outputs": _bounded_decision_value(outputs),
+            "outputs": _project_latest_tool_outputs(
+                str(call.get("name") or ""),
+                outputs,
+            ),
             "grasp_selection_advice": _bounded_decision_value(
                 grasp_selection_advice
             )
@@ -2909,7 +3699,11 @@ def _recent_high_fidelity_transitions(
     if observation_turns <= 0:
         return []
     relevant = [
-        event
+        (
+            _project_recovery_feedback_event(event)
+            if event.get("type") == "recovery_feedback"
+            else event
+        )
         for event in events
         if isinstance(event, dict)
         and event.get("type") in {"observation", "recovery_feedback"}
@@ -2927,6 +3721,323 @@ def _recent_high_fidelity_transitions(
     # example, a preflight rejection). Keep a small bounded fallback rather than
     # silently hiding the only actionable evidence.
     return relevant[-observation_turns:]
+
+
+def _project_recovery_feedback_event(event: JsonDict) -> JsonDict:
+    """Keep actionable failure evidence without replaying a full ToolResult."""
+
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    command = payload.get("command")
+    command = command if isinstance(command, dict) else {}
+    effect = _latest_action_effect(
+        [{"type": "action", "payload": {"command": command}}]
+    )
+    request = command.get("request")
+    request = request if isinstance(request, dict) else {}
+    return {
+        "type": "recovery_feedback",
+        "timestamp_s": event.get("timestamp_s"),
+        "payload": {
+            "source": payload.get("source"),
+            "keys": payload.get("keys"),
+            "request": {
+                "name": request.get("name"),
+                "parameters": _bounded_decision_value(
+                    request.get("parameters", {}),
+                    depth=4,
+                    max_items=16,
+                    max_string_chars=500,
+                ),
+            },
+            "outcome": effect,
+            "durable_trace": "full recovery event remains in the session event log",
+        },
+    }
+
+
+def _project_latest_tool_outputs(tool: str, outputs: JsonDict) -> object:
+    """Bound the latest result by semantic fields, not arbitrary raw size."""
+
+    if tool == "prepare_attachment_probe":
+        return _bounded_decision_value(
+            {
+                key: outputs[key]
+                for key in (
+                    "schema_version",
+                    "status",
+                    "probe_id",
+                    "compiled_grasp_id",
+                    "scene_epoch",
+                    "robot_motion_epoch",
+                    "motion_type",
+                    "path_sha256",
+                    "ik_preview_requests",
+                    "execution_handoff",
+                )
+                if key in outputs
+            },
+            depth=7,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    projected = _bounded_decision_value(outputs)
+    serialized = json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= 8_000:
+        return projected
+    priority = {
+        "schema_version",
+        "result_id",
+        "candidate_count",
+        "best_grasp_candidate",
+        "selected_grasp_source",
+        "grasp_selection_advice",
+        "grasp_selection_bundle",
+        "compiled_grasp_id",
+        "contact_pose",
+        "hover_pose",
+        "precontact_pose",
+        "execution_guidance",
+        "ik_receipt",
+        "receipt",
+        "reachability",
+        "classification",
+        "reason_code",
+        "message",
+        "suggestions",
+        "motion_summary",
+        "collision_coverage",
+        "pose_feedback",
+        "attachment_proxy_receipt",
+        "observation_summary",
+        "response_path",
+        "raw_output_ref",
+        "complete_outputs_artifact",
+    }
+    selected = {
+        key: value
+        for key, value in outputs.items()
+        if key in priority
+    }
+    compact = _bounded_decision_value(
+        selected,
+        depth=4,
+        max_items=12,
+        max_string_chars=750,
+    )
+    if isinstance(compact, dict):
+        compact["projection"] = {
+            "tool": tool,
+            "full_output_omitted": True,
+            "available_via": "artifact path or durable tool receipt",
+        }
+    return compact
+
+
+def _project_world_evidence(evidence: JsonDict) -> JsonDict:
+    """Project large evidence banks while preserving their durable runtime form."""
+
+    projected = dict(evidence)
+    ik_entry = projected.get("ik_preview_receipts")
+    if isinstance(ik_entry, dict):
+        value = ik_entry.get("value")
+        if isinstance(value, dict):
+            receipts = value.get("receipts")
+            receipts = receipts if isinstance(receipts, list) else []
+            compact_receipts = [
+                _compact_ik_receipt(receipt)
+                for receipt in receipts
+                if isinstance(receipt, dict)
+            ]
+            projected["ik_preview_receipts"] = {
+                **ik_entry,
+                "value": {
+                    "schema_version": "openeta.ik_preview_receipt_projection.v1",
+                    "receipt_count": len(receipts),
+                    "latest": _bounded_decision_value(
+                        value.get("latest", {}),
+                        depth=5,
+                        max_items=24,
+                        max_string_chars=1_000,
+                    ),
+                    "index": compact_receipts,
+                    "query": (
+                        "Use the exact receipt_id in ik_preview_check/move_to. Full "
+                        "receipts remain in durable memory and rollout artifacts."
+                    ),
+                },
+            }
+    candidate_entry = projected.get("grasp_candidates")
+    if isinstance(candidate_entry, dict):
+        value = candidate_entry.get("value")
+        if isinstance(value, dict):
+            candidates = value.get("grasp_candidates")
+            candidates = candidates if isinstance(candidates, list) else []
+            advice = value.get("grasp_selection_advice")
+            advice = advice if isinstance(advice, dict) else {}
+            recommended_id = str(advice.get("recommended_candidate_id") or "")
+            visible_ids = {
+                recommended_id,
+                *(
+                    str(item)
+                    for item in advice.get("alternatives", [])
+                    if isinstance(item, str)
+                ),
+            }
+            visible = [
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and str(candidate.get("id") or "") in visible_ids
+            ]
+            if not visible:
+                visible = [item for item in candidates[:3] if isinstance(item, dict)]
+            projected["grasp_candidates"] = {
+                **candidate_entry,
+                "value": {
+                    key: value.get(key)
+                    for key in (
+                        "type",
+                        "result_id",
+                        "candidate_count",
+                        "scene_epoch",
+                        "source_tool",
+                        "source_backend",
+                        "source_rgb",
+                        "source_depth",
+                        "target_mask",
+                        "raw_output_ref",
+                        "complete_outputs_artifact",
+                        "query_hint",
+                    )
+                    if value.get(key) is not None
+                },
+            }
+            projected_value = projected["grasp_candidates"]["value"]
+            projected_value["visible_candidates"] = _bounded_decision_value(
+                visible[:4], depth=5, max_items=16, max_string_chars=750
+            )
+            projected_value["grasp_selection_advice"] = {
+                key: advice.get(key)
+                for key in (
+                    "status",
+                    "decision",
+                    "recommended_candidate_id",
+                    "alternatives",
+                    "confidence",
+                    "reasons",
+                    "uncertainties",
+                    "bundle_id",
+                )
+                if advice.get(key) is not None
+            }
+            projected_value["projection"] = {
+                "visible_candidate_count": len(visible[:4]),
+                "full_candidate_count": len(candidates),
+                "full_bank_available_via": (
+                    value.get("complete_outputs_artifact")
+                    or value.get("raw_output_ref")
+                ),
+            }
+    return projected
+
+
+def _compact_ik_receipt(receipt: JsonDict) -> JsonDict:
+    target = receipt.get("target_pose")
+    target = target if isinstance(target, dict) else {}
+    return {
+        key: receipt.get(key)
+        for key in (
+            "receipt_id",
+            "classification",
+            "reason_code",
+            "orientation_policy",
+            "pose_policy_signature",
+            "object_scene_epoch",
+            "robot_motion_epoch",
+        )
+        if receipt.get(key) is not None
+    } | {
+        "target": {
+            key: target.get(key)
+            for key in ("xyz", "waypoint_role", "compiled_grasp_id")
+            if target.get(key) is not None
+        }
+    }
+
+
+def _project_perception_failure(
+    failure: JsonDict,
+    *,
+    retained_grasp: object,
+) -> JsonDict:
+    projected = dict(failure)
+    frame_id = str(
+        failure.get("frame_id")
+        or failure.get("camera_frame_id")
+        or ""
+    )
+    if "wrist" not in frame_id.lower():
+        return projected
+    retained = retained_grasp if isinstance(retained_grasp, dict) else {}
+    projected["workflow_impact"] = {
+        "classification": "optional_wrist_refinement_unavailable",
+        "coarse_grasp_invalidated": False,
+        "retained_compiled_grasp_id": retained.get("compiled_grasp_id"),
+        "guidance": (
+            "A wrist-view segmentation miss does not invalidate current-epoch "
+            "scene-view grasp evidence. Inspect the fresh dual view and either use "
+            "the retained grasp as a reference, make an Agent-owned bounded residual "
+            "adjustment, or pursue same-view point grounding only when refinement is "
+            "actually needed. Do not restart the entire scene pipeline by default."
+        ),
+        "host_policy": "advisory_only",
+    }
+    return projected
+
+
+def _project_transition_ledger(value: object) -> list[JsonDict]:
+    """Drop repeated zero-reward receipts from the model projection only."""
+
+    rows = (
+        [dict(row) for row in value if isinstance(row, dict)]
+        if isinstance(value, list)
+        else []
+    )
+    zero_environment_indices = [
+        index
+        for index, row in enumerate(rows)
+        if row.get("tool") == "environment_receipt"
+        and float(row.get("reward") or 0.0) <= 0
+        and row.get("terminated") is not True
+        and row.get("truncated") is not True
+    ]
+    latest_zero_environment_index = (
+        zero_environment_indices[-1] if zero_environment_indices else None
+    )
+    projected: list[JsonDict] = []
+    for index, row in enumerate(rows):
+        if row.get("tool") != "environment_receipt":
+            projected.append(row)
+            continue
+        if (
+            float(row.get("reward") or 0.0) > 0
+            or row.get("terminated") is True
+            or row.get("truncated") is True
+        ):
+            projected.append(row)
+            continue
+        if index == latest_zero_environment_index:
+            projected.append(
+                {
+                    **row,
+                    "projection_note": (
+                        f"latest of {len(zero_environment_indices)} repeated zero-reward "
+                        "environment receipts; full ledger remains durable"
+                    ),
+                }
+            )
+    return projected
 
 
 def _bounded_artifact_index(
@@ -3919,6 +5030,15 @@ def _skill_query_text(
 
 
 def _effective_task_text(observation: EnvObservation, memory: AgentMemory) -> str:
+    # Benchmark environments often expose their native manipulation instruction
+    # in every observation.  Most runs intentionally use that as the objective,
+    # but focused evaluation/probe episodes may provide a narrower user request
+    # (for example, execute one motion and stop).  Keep that authority explicit
+    # in run metadata instead of guessing from the wording of either task.
+    if memory.metadata.get("task_authority") == "session_user_request":
+        requested = memory.current_user_request or memory.task
+        if isinstance(requested, str) and requested.strip():
+            return requested.strip()
     active = memory.active_environment_task()
     task = active.get("task") if isinstance(active, dict) else None
     return task.strip() if isinstance(task, str) and task.strip() else observation.task

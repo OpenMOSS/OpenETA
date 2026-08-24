@@ -11,6 +11,7 @@ from agent.backends.planner import (
 )
 from agent.runtime.actions import PipelineStatus
 from agent.runtime.episode import DummyEpisodeEnvironment, OpenEtaEpisodeRunner
+from agent.runtime.memory import AgentMemory
 from agent.runtime.parallel import (
     ParallelEpisodeHarness,
     ParallelEpisodeSpec,
@@ -179,6 +180,35 @@ def test_episode_extends_turns_only_for_distinct_confirmed_recovery_branches() -
     assert result.metadata["hard_max_turns"] == 4
     assert result.metadata["recovery_turns_granted"] == 1
     assert result.metadata["stop_reason"] == "max_turns"
+
+
+def test_reopened_failed_grasp_still_counts_as_post_close_recovery_branch() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="retry a failed grasp")
+    memory.record(
+        "grasp_provenance_bound",
+        {"evidence_id": "grasp:failed-branch"},
+    )
+    memory.record(
+        "gripper_command_state_changed",
+        {"position": 0, "latched": True},
+    )
+    memory.record(
+        "gripper_command_state_changed",
+        {"position": 1, "latched": True},
+    )
+
+    assert memory._gripper_close_attempted_since_provenance(
+        "grasp:failed-branch"
+    ) is True
+
+    memory.record(
+        "grasp_provenance_bound",
+        {"evidence_id": "grasp:fresh-branch"},
+    )
+    assert memory._gripper_close_attempted_since_provenance(
+        "grasp:fresh-branch"
+    ) is False
 
 
 def test_episode_fails_when_cumulative_model_tokens_exceed_budget() -> None:

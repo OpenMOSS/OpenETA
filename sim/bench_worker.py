@@ -994,6 +994,7 @@ async def controller_goal_env(request):
                 if isinstance(body.get("ik_execution_seed"), dict)
                 else None
             ),
+            motion_execution_condition=body.get("motion_execution_condition", "A"),
             step_callback=lambda action, render: _step_with_image(
                 env,
                 action,

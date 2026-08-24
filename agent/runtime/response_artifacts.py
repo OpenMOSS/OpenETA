@@ -314,6 +314,73 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
         summary["convergence_diagnostics"] = _plain_json_value(
             convergence_diagnostics
         )
+    motion_profile = payload.get("motion_execution_profile")
+    if isinstance(motion_profile, dict):
+        summary["motion_execution_profile"] = _compact_scalar_mapping(
+            motion_profile
+        )
+    for key in ("waypoints_requested", "waypoints_completed"):
+        value = payload.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            summary[key] = value
+    waypoint_results = payload.get("waypoint_results")
+    if isinstance(waypoint_results, list):
+        compact_waypoints: list[JsonDict] = []
+        for index, result in enumerate(waypoint_results[:5]):
+            if not isinstance(result, dict):
+                continue
+            compact: JsonDict = {"index": index}
+            for key in (
+                "reached_target",
+                "stop_reason",
+                "code",
+                "steps_executed",
+                "position_error_m",
+                "max_axis_position_error_m",
+                "orientation_error_rad",
+            ):
+                value = result.get(key)
+                if _is_small_scalar(value):
+                    compact[key] = value
+            for key in ("end", "target"):
+                value = result.get(key)
+                if isinstance(value, dict):
+                    compact[key] = _compact_pose(value)
+            collision = result.get("collision")
+            if isinstance(collision, dict):
+                compact["collision"] = _compact_scalar_mapping(collision)
+            receipt = result.get("controller_receipt")
+            if isinstance(receipt, dict):
+                compact["controller_receipt"] = _compact_scalar_mapping(receipt)
+            compact_waypoints.append(compact)
+        summary["waypoint_results"] = compact_waypoints
+    sequential_preview = payload.get("sequential_route_preview")
+    if isinstance(sequential_preview, dict):
+        compact_preview = _compact_scalar_mapping(sequential_preview)
+        receipts = sequential_preview.get("receipts")
+        if isinstance(receipts, list):
+            compact_preview["receipts"] = [
+                {
+                    key: value
+                    for key, value in receipt.items()
+                    if key
+                    in {
+                        "index",
+                        "source_ik_receipt_id",
+                        "preview_id",
+                        "status",
+                        "feasible",
+                        "reason_code",
+                        "preview_state",
+                        "path_collision_checked",
+                        "path_collision_authority",
+                    }
+                    and _is_small_scalar(value)
+                }
+                for receipt in receipts[:5]
+                if isinstance(receipt, dict)
+            ]
+        summary["sequential_route_preview"] = compact_preview
     for key in ("start", "end", "target"):
         value = payload.get(key)
         if isinstance(value, dict):

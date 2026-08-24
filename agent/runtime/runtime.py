@@ -195,6 +195,9 @@ class OpenEtaAgentRuntime:
                     self.memory.resolve_active_attachment_candidate
                 ),
                 "_ik_execution_seed_resolver": self.memory.resolve_ik_execution_seed,
+                "_ik_trajectory_execution_bundle_resolver": (
+                    self.memory.resolve_ik_trajectory_execution_bundle
+                ),
                 "_controller_capabilities_resolver": self.memory.controller_capabilities,
                 "supervision_context": {
                     "memory": self.memory.planning_context(max_events=4),

@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from adapter.motion_profiles import motion_control_profile
 from adapter.protocol import EnvAction, EnvObservation, JsonDict, RobotState, StepResult
 from agent.runtime.artifact_paths import artifact_session_id
 from agent.runtime.image_artifacts import (
@@ -554,6 +555,30 @@ class SimulatorMcpToolProxy:
             artifact_session_id=artifact_session_id(context.metadata),
             execution_metadata=context.metadata,
         )
+        if agent_tool == "observe":
+            response = normalized["outputs"].get("response")
+            response = response if isinstance(response, dict) else {}
+            cameras = response.get("cameras")
+            cameras = cameras if isinstance(cameras, list) else []
+            normalized["outputs"].update(
+                {
+                    "camera_ids": [
+                        str(camera.get("frame_id") or "")
+                        for camera in cameras
+                        if isinstance(camera, dict) and camera.get("frame_id")
+                    ],
+                    "objects": (
+                        response.get("objects")
+                        if isinstance(response.get("objects"), list)
+                        else []
+                    ),
+                    "metadata": (
+                        response.get("metadata")
+                        if isinstance(response.get("metadata"), dict)
+                        else {}
+                    ),
+                }
+            )
         attachment_contract_missing = False
         if mcp_tool == "gripper_open":
             # Opening retires any candidate attachment.  The backend capability
@@ -667,13 +692,31 @@ class SimulatorMcpToolProxy:
                 normalized["outputs"]["response"]["execution_authorization"] = (
                     execution_authorization
                 )
+                read_only_effect = {
+                    "schema_version": "openeta.read_only_preflight_effect.v1",
+                    "world_mutated": False,
+                    "eef_pose_unchanged": True,
+                    "robot_motion_epoch_unchanged": True,
+                    "object_scene_epoch_unchanged": True,
+                    "interpretation": (
+                        "IK preview only checked geometry. It did not move the robot "
+                        "or create a new camera viewpoint. Execute the returned receipt "
+                        "with move_to, or combine 1-5 current-epoch receipt ids with "
+                        "follow_eef_trajectory, before claiming the target was reached."
+                    ),
+                }
+                normalized["outputs"]["world_effect"] = read_only_effect
+                normalized["outputs"]["response"]["world_effect"] = read_only_effect
                 if execution_authorization["authorized_for_move_to"] is True:
                     execution_ref = {
                         "schema_version": "openeta.ik_motion_execution_ref.v1",
                         "tool": "move_to",
                         "ik_receipt_id": ik_receipt.get("receipt_id"),
                         "instruction": (
-                            "Pass this ik_receipt_id to move_to; do not copy target_pose."
+                            "This preview did not move the robot. Pass this ik_receipt_id "
+                            "to move_to to physically reach the checked endpoint, or "
+                            "include it in ordered ik_receipt_ids for "
+                            "follow_eef_trajectory; do not copy target_pose."
                         ),
                     }
                     normalized["outputs"]["motion_execution_ref"] = execution_ref
@@ -871,6 +914,21 @@ class SimulatorMcpToolProxy:
             )
         if agent_tool == "follow_eef_trajectory":
             arguments = dict(context.parameters)
+            profile = motion_control_profile()
+            if profile.sequential_route_preview_enabled:
+                resolver = context.metadata.get(
+                    "_ik_trajectory_execution_bundle_resolver"
+                )
+                if not callable(resolver):
+                    raise ValueError(
+                        "condition C requires the host-private trajectory bundle resolver"
+                    )
+                bundle = resolver(context.parameters)
+                if not isinstance(bundle, dict):
+                    raise ValueError(
+                        "condition C could not resolve a current sequential route bundle"
+                    )
+                arguments["route_execution_bundle"] = bundle
             # Receipt ids are a host-side authorization/reference mechanism.  The
             # simulator owns only the resolved path and must not need to understand
             # OpenETA memory identifiers.
@@ -2287,6 +2345,56 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
                 ),
             },
         ]
+    if collision.get("detected") is True:
+        geometry_names = [
+            str(collision.get(key))
+            for key in ("geom1_name", "geom2_name", "attached_object", "obstacle")
+            if collision.get(key)
+        ]
+        target = motion.get("target")
+        requested_xyz = _motion_xyz(target) if isinstance(target, dict) else None
+        return [
+            {
+                "action": "classify_named_collision_before_replanning",
+                "evidence": {
+                    "collision_geometry": geometry_names,
+                    "actual_eef_xyz": actual_xyz,
+                    "requested_target_xyz": requested_xyz,
+                    "steps_executed": steps,
+                },
+                "reason": (
+                    "Use the returned agentview/wrist images and named geometry to "
+                    "distinguish transit clutter from intended target contact. A raised "
+                    "transit detour does not repair a bad near-contact corridor or a "
+                    "target that moved."
+                ),
+            },
+            {
+                "action": "plan_ik_checked_raised_or_lateral_detour",
+                "parameters": {
+                    "start_from_actual_eef_xyz": actual_xyz,
+                    "preserve_current_orientation_for_clearance": True,
+                    "preview_each_waypoint_separately": True,
+                    "execute_with": "follow_eef_trajectory",
+                    "enable_collision_check": True,
+                },
+                "reason": (
+                    "For unrelated transit clutter, choose a visually free lift and/or "
+                    "lateral point outside the contact envelope, IK-preview every point, "
+                    "then execute the ordered receipts with collision checking. Do not "
+                    "use the arithmetic midpoint of the failed segment because it remains "
+                    "on the same swept path."
+                ),
+            },
+            {
+                "action": "replan_from_actual_pose",
+                "parameters": {"actual_eef_xyz": actual_xyz},
+                "reason": (
+                    "The controller moved before stopping; the requested target is not "
+                    "the current robot pose."
+                ),
+            },
+        ]
     return [
         {
             "action": "inspect_fresh_observation",
@@ -2420,9 +2528,19 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
             )
         else:
             receipt_note = ""
+        world_effect = response.get("world_effect")
+        effect_note = ""
+        if (
+            isinstance(world_effect, dict)
+            and world_effect.get("world_mutated") is False
+        ):
+            effect_note = (
+                " This was a read-only preview and did not move the robot or "
+                "create a new camera viewpoint."
+            )
         return (
             f"IK preview {status} ({reason}). {message}{coverage_note}"
-            f"{delegation_note}{receipt_note}"
+            f"{delegation_note}{effect_note}{receipt_note}"
         ).strip()
     has_motion_evidence = isinstance(response.get("motion_summary"), dict) or any(
         key in response for key in ("start", "end", "target", "controller_failure")

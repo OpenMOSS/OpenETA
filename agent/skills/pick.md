@@ -148,7 +148,34 @@ Use as text guidance only, not an executable macro. Inspect each result.
    hover/contact pose has zero residual and can be requested directly—do not split
    that approach into 2 cm increments. If a distinct far transit waypoint is useful,
    omit `compiled_grasp_id` and `waypoint_role`, keep it outside the contact safety
-   envelope, observe there, and then use the compiled anchor. For normal compiled
+   envelope, observe there, and then use the compiled anchor. Do not use the
+   arithmetic midpoint of a failed straight segment: it lies on the same swept
+   corridor and normally preserves the collision. Choose the waypoint count when
+   planning each motion edge, never once at task start. The current measured EEF is
+   the implicit route start: use one checked endpoint for a short visibly clear
+   motion, or choose 2-5 ordered checked endpoints for a long transit, carried-object
+   motion, visible obstruction, or collision recovery. Generic intermediate points
+   have no host-interpreted task-stage role. Their ordered geometry, not labels such
+   as hover/transfer/place, defines the route. For a visually clear transit
+   obstruction, author a short **raised detour** from the reported actual EEF pose:
+   first lift far enough to clear the visible obstacle while preserving the current
+   orientation, then translate above the destination/clearance region, and only then
+   use the compiled approach. Keep generic detour points outside the compiled contact
+   envelope. Run a separate `ik_preview_check` for each selected endpoint without
+   moving between previews, then pass the ordered receipt ids to
+   `follow_eef_trajectory` with collision checking enabled. After its receipt, obtain
+   fresh observation and replan from the actual endpoint; do not assume an older
+   remaining route is still valid. This is an Agent-owned optional route, not a host
+   task phase; choose the height, lateral side, and point count from current
+   agentview+wrist evidence and the named collision geometry. If the current pose is
+   already on a collision boundary, first execute one monotonic escape endpoint and
+   observe again before constructing a longer route. Endpoint IK
+   does not prove the intervening path, so treat a controller collision stop as
+   safe evidence to choose a materially different side rather than disabling the
+   check or replaying the route. A near-contact collision with the target or an
+   adjacent object is not repaired by a high transit point alone: re-observe the
+   local corridor and change the approach side, wrist orientation, or grasp
+   candidate before descending. For normal compiled
    hover/contact reaches, call `ik_preview_check` with only the exact
    `compiled_grasp_id` and chosen `waypoint_role`; the host resolves the immutable
    pose. Then pass its `ik_receipt_id` to `move_to`, omit `num_steps`, and let the tool use its closed-loop
@@ -209,6 +236,16 @@ Use as text guidance only, not an executable macro. Inspect each result.
    - `commanded_state` is the last acknowledged binary latch command;
    - `measured_aperture.open_fraction` is continuous sensor feedback;
    - attachment remains unknown until post-lift co-motion/source-vacancy evidence.
+   Close authorization uses an independent contact envelope rather than the
+   preceding arm controller's aggregate `reached_target` bit: maximum per-axis
+   position error must be at most 5 mm, while orientation error may be as large
+   as 0.30 rad. A collision or stop reported by that preceding `move_to` remains
+   important visual/replanning evidence, but it does not by itself block the
+   finger-only close command. A later `compile_grasp_seed` for the same target is
+   planning evidence and does not move the robot; close remains bound to the
+   latest current-epoch contact that was actually executed. A different-target
+   branch or any intervening robot/object epoch change still requires a new
+   contact execution before close.
    A held wide object may leave the measured aperture above 0.5; the compatibility
    `legacy_threshold_open=true` therefore does not mean that an open command was
    issued or that the grasp is empty. Its acknowledgement and observed aperture
@@ -223,9 +260,11 @@ Use as text guidance only, not an executable macro. Inspect each result.
    script. If the close receipt already reports an empty-close aperture or no active
    proxy, reopen and repair contact instead of probing. For an
    articulated handle, call `prepare_attachment_probe` with the current
-   `compiled_grasp_id`, run every returned `ik_preview_request` in order, and pass
-   only the resulting receipt id(s) to the indicated motion tool. Do not copy the
-   frozen poses. Then call `assess_attachment_probe` with its `probe_id`. Treat
+   `compiled_grasp_id`, run every returned `ik_preview_request` in order by copying
+   only its `probe_id` and zero-based `waypoint_index`, and pass only the resulting
+   receipt id(s) to the indicated motion tool. The host resolves each exact frozen
+   pose; do not copy or reconstruct it. Then call `assess_attachment_probe` with
+   its `probe_id`. Treat
    PASS/FAIL/UNKNOWN as evidence; choose the recovery or continuation yourself.
    Once co-motion is established, treat the held object—not only the fingers—as
    part of the moving collision envelope. Keep enough vertical clearance for the
@@ -363,6 +402,13 @@ inventing pixels or accumulating blind residuals.
   then translate with bounded horizontal waypoints. Do not combine a long lateral
   carry with descent toward a receptacle: the gripper can remain perfectly closed
   while a rim mechanically strips the object from the fingers.
+- After any collision-stopped motion, classify the named pair before choosing a
+  waypoint. For robot/held-object versus unrelated clutter, build a raised or
+  lateral detour from `actual_eef_pose`. For gripper versus the intended target
+  near contact, inspect whether contact was intended and authorized; otherwise
+  repair the contact corridor. If the fresh image shows that the target tipped or
+  moved, discard the old object-relative contact geometry and re-ground it. Never
+  treat the rejected requested pose as the current pose.
 
 For explicit robot/environment calibration or parameter discovery, use the
 `embodiment_explore` skill outside the benchmark episode. This skill consumes

@@ -562,6 +562,7 @@ def build_object_memory_configuration_warning_handler(
                 "warning": warning,
             },
             diagnostics=[warning],
+            semantic_outcome="reference_service_unavailable",
         )
 
     return handler

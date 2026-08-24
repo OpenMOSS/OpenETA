@@ -897,7 +897,18 @@ def test_ik_preview_proxy_preserves_execution_seed_quality_for_agent() -> None:
         "authorized_for_move_to"
     ] is True
     assert result.details["outputs"]["motion_execution_ref"]["ik_receipt_id"]
+    world_effect = result.details["outputs"]["world_effect"]
+    assert world_effect == result.details["outputs"]["response"]["world_effect"]
+    assert world_effect["world_mutated"] is False
+    assert world_effect["eef_pose_unchanged"] is True
+    assert world_effect["robot_motion_epoch_unchanged"] is True
+    assert world_effect["object_scene_epoch_unchanged"] is True
+    assert "did not move the robot" in world_effect["interpretation"]
+    assert "did not move the robot" in result.details["outputs"][
+        "motion_execution_ref"
+    ]["instruction"]
     assert "Execution reference:" in result.content
+    assert "did not move the robot" in result.content
     assert "execution-fragile" in result.content
 
 
@@ -1360,7 +1371,8 @@ def test_move_to_proxy_preserves_transport_success_but_marks_target_miss_operati
     assert result.details["diagnostics"][0]["code"] == "simulator_mcp_collision"
     assert result.details["diagnostics"][0]["position_error_m"] == pytest.approx(0.18)
     assert {item["action"] for item in result.details["recovery_options"]} == {
-        "inspect_fresh_observation",
+        "classify_named_collision_before_replanning",
+        "plan_ik_checked_raised_or_lateral_detour",
         "replan_from_actual_pose",
     }
     assert "stopped for collision" in result.content
@@ -1678,6 +1690,58 @@ def test_zero_step_attached_collision_is_promoted_to_top_level_content(tmp_path:
     ]["reason"]
 
 
+def test_partial_motion_collision_recommends_checked_detour_from_actual_pose(
+    tmp_path: Path,
+) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": False,
+            "steps_executed": 23,
+            "collision": {
+                "detected": True,
+                "geom1_name": "robot0_link7_collision",
+                "geom2_name": "tomato_sauce_1_g4",
+                "trajectory_checked": True,
+                "world_checked": True,
+                "world_object_count": 4,
+            },
+            "start": {"xyz": [0.0, 0.0, 0.30]},
+            "end": {"xyz": [0.08, -0.04, 0.24]},
+            "target": {"xyz": [0.12, -0.08, 0.18]},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-partial-collision",
+            handle="env-partial-collision",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.12, -0.08, 0.18]}})
+
+    recovery = {item["action"]: item for item in result.details["recovery_options"]}
+    classify = recovery["classify_named_collision_before_replanning"]
+    assert classify["evidence"]["collision_geometry"] == [
+        "robot0_link7_collision",
+        "tomato_sauce_1_g4",
+    ]
+    assert classify["evidence"]["actual_eef_xyz"] == [0.08, -0.04, 0.24]
+    detour = recovery["plan_ik_checked_raised_or_lateral_detour"]
+    assert detour["parameters"] == {
+        "start_from_actual_eef_xyz": [0.08, -0.04, 0.24],
+        "preserve_current_orientation_for_clearance": True,
+        "preview_each_waypoint_separately": True,
+        "execute_with": "follow_eef_trajectory",
+        "enable_collision_check": True,
+    }
+    assert "arithmetic midpoint" in detour["reason"]
+
+
 def test_ik_proxy_preserves_configuration_collision_scope() -> None:
     transport = FakeSimulatorMcpTransport(
         {
@@ -1812,6 +1876,49 @@ def test_follow_eef_trajectory_proxy_forwards_to_simulator_mcp() -> None:
         "trajectory": [{"xyz": [0.0, 0.0, 0.4]}],
         "ik_receipt_ids": ["ik-host-only"],
     }
+
+
+def test_condition_c_privately_forwards_sequential_route_bundle(monkeypatch) -> None:
+    monkeypatch.setenv("OPENETA_MOTION_EXPERIMENT_CONDITION", "C")
+    transport = FakeSimulatorMcpTransport(
+        {"success": True, "reached_target": True, "cameras": [], "robot": {}}
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("follow_eef_trajectory",),
+    )
+    parameters = {
+        "trajectory": [{"frame": "world", "xyz": [0.0, 0.0, 0.4]}],
+        "ik_receipt_ids": ["ik-host-only"],
+    }
+    bundle = {
+        "schema_version": "openeta.experimental_route_execution_bundle.v1",
+        "condition": "C",
+        "authority": "host_memory_exact_receipt_resolution",
+        "entries": [
+            {
+                "source_ik_receipt_id": "ik-host-only",
+                "target_pose": parameters["trajectory"][0],
+            }
+        ],
+    }
+
+    result = tools.call(
+        "follow_eef_trajectory",
+        parameters,
+        metadata={
+            "_ik_trajectory_execution_bundle_resolver": lambda request: bundle
+        },
+    )
+
+    assert result.success is True
+    forwarded = transport.calls[0]["arguments"]
+    assert forwarded["route_execution_bundle"] == bundle
+    assert "ik_receipt_ids" not in forwarded
+    assert "route_execution_bundle" not in result.details["parameters"]
+    assert result.details["parameters"] == parameters
 
 
 def test_follow_eef_trajectory_incomplete_receipt_requires_reconciliation() -> None:

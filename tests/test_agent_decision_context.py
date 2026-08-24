@@ -10,7 +10,12 @@ from agent.runtime.actions import PipelineStatus
 from agent.runtime.memory import AgentMemory
 from agent.runtime.memory_store import JsonMemoryStore
 from agent.runtime.pipeline import ActionPipeline
-from agent.runtime.planner import PlannerDecision, ToolCallingPlanner, build_tool_context
+from agent.runtime.planner import (
+    PlannerDecision,
+    ToolCallingPlanner,
+    _project_latest_tool_outputs,
+    build_tool_context,
+)
 from agent.runtime.skills import build_default_skill_registry
 from agent.tools.registry import build_default_tool_registry
 
@@ -83,6 +88,30 @@ def test_agent_context_prioritizes_current_evidence_and_agent_memory() -> None:
     assert "required_action" not in str(agent_context)
     compatibility_payload = {key: value for key, value in context.items() if key != "agent_context"}
     assert len(json.dumps(agent_context)) < len(json.dumps(compatibility_payload))
+
+
+def test_latest_probe_projection_keeps_short_ik_handoff_and_omits_pose_payload() -> None:
+    short_request = {
+        "tool": "ik_preview_check",
+        "parameters": {"probe_id": "probe:short", "waypoint_index": 0},
+    }
+    projected = _project_latest_tool_outputs(
+        "prepare_attachment_probe",
+        {
+            "schema_version": "openeta.articulated_attachment_probe.v1",
+            "probe_id": "probe:short",
+            "frozen_path": [{"xyz": [0.1, 0.2, 0.3], "trace": "x" * 12_000}],
+            "ik_preview_requests": [short_request],
+            "execution_handoff": {
+                "tool": "move_to",
+                "parameters": {"ik_receipt_id": "<receipt>"},
+            },
+        },
+    )
+
+    assert isinstance(projected, dict)
+    assert projected["ik_preview_requests"] == [short_request]
+    assert "frozen_path" not in projected
 
 
 def test_agent_context_bounds_artifact_index_and_does_not_duplicate_tool_schemas() -> None:
@@ -227,6 +256,186 @@ def test_world_evidence_is_derived_with_provenance_and_scene_freshness() -> None
 
     memory.save_fact("scene_epoch", {"epoch": 1}, source="runtime")
     assert memory.world_evidence_context()["selected_target"]["freshness"] == "stale_scene_epoch"
+
+
+def test_agent_context_projects_ik_receipt_bank_without_mutating_memory() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    receipts = [
+        {
+            "receipt_id": f"ik-{index}",
+            "classification": "reachable",
+            "reason_code": "ik_solution_found",
+            "orientation_policy": "explicit",
+            "pose_policy_signature": f"pose-{index}",
+            "object_scene_epoch": 0,
+            "robot_motion_epoch": index,
+            "target_pose": {
+                "xyz": [0.1, 0.2, 0.3],
+                "waypoint_role": "grasp_contact",
+                "rotation_matrix": [[1.0, 0.0, 0.0]] * 3,
+            },
+            "suggestions": ["large diagnostic payload " * 50],
+        }
+        for index in range(12)
+    ]
+    memory.save_fact(
+        "ik_preview_receipts",
+        {
+            "schema_version": "openeta.ik_preview_receipt_index.v1",
+            "latest": receipts[-1],
+            "receipts": receipts,
+        },
+        source="ik_preview_check",
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]
+    projected = context["world_evidence"]["ik_preview_receipts"]["value"]
+
+    assert projected["receipt_count"] == 12
+    assert len(projected["index"]) == 12
+    assert projected["latest"]["receipt_id"] == "ik-11"
+    assert "suggestions" not in projected["index"][0]
+    assert len(memory.ik_preview_receipts()["receipts"]) == 12
+
+
+def test_wrist_segmentation_miss_does_not_invalidate_coarse_grasp_evidence() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    memory.save_fact(
+        "sam3_no_detection",
+        {
+            "result_id": "sam3-wrist-miss",
+            "frame_id": "wrist",
+            "source_packet_id": "packet-wrist-4",
+            "target_prompt": "cube",
+            "scene_epoch": 0,
+        },
+        source="sam3",
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]
+    impact = context["open_questions"]["perception_failure"]["workflow_impact"]
+
+    assert impact["classification"] == "optional_wrist_refinement_unavailable"
+    assert impact["coarse_grasp_invalidated"] is False
+    assert impact["host_policy"] == "advisory_only"
+
+
+def test_infrastructure_failures_open_advisory_tool_health_circuit() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+
+    def record(*, success: bool, failure_code: str = "mcp_timeout") -> None:
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed" if success else "failed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "molmopoint",
+                        "parameters": {"sources": []},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "molmopoint",
+                            "status": "executed" if success else "failed",
+                            "parameters": {"sources": []},
+                            "result": {
+                                "success": success,
+                                "content": "ok" if success else "backend timed out",
+                                "details": {
+                                    "diagnostics": []
+                                    if success
+                                    else [{"code": failure_code}],
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    record(success=False)
+    assert memory.tool_health()["molmopoint"]["status"] == "degraded"
+    record(success=False)
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]
+    health = context["decision_state"]["tool_health"]["molmopoint"]
+    assert health["status"] == "circuit_open"
+    assert health["host_enforcement"] == "advisory_only"
+
+    # A structured semantic failure proves that the backend answered, so it
+    # closes the infrastructure circuit even though the task result failed.
+    record(success=False, failure_code="inconsistent_point_outputs")
+    assert memory.tool_health()["molmopoint"]["status"] == "healthy"
+
+    record(success=True)
+    assert memory.tool_health()["molmopoint"]["status"] == "healthy"
+    assert memory.tool_health()["molmopoint"]["consecutive_infrastructure_failures"] == 0
+
+
+def test_transition_projection_coalesces_repeated_zero_reward_receipts() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    for index in range(2):
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "python_exec",
+                        "parameters": {"code": f"result = {index}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "python_exec",
+                            "status": "executed",
+                            "result": {"success": True, "details": {"outputs": {}}},
+                        }
+                    ],
+                },
+            )
+        )
+        memory.record_environment_receipt(
+            reward=0.0,
+            terminated=False,
+            truncated=False,
+        )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]
+    projected = context["transition_ledger"]
+
+    assert len(memory.transition_ledger()) == 4
+    assert [row["tool"] for row in projected] == [
+        "python_exec",
+        "python_exec",
+        "environment_receipt",
+    ]
+    assert "latest of 2" in projected[-1]["projection_note"]
 
 
 def test_compiled_grasp_is_retained_as_read_only_evidence() -> None:
@@ -1022,6 +1231,234 @@ def test_agent_context_warns_on_packet_churn_without_forcing_next_tool() -> None
     ]
     assert latest_outputs["proposal_id"] == "wrist_viewpoint:stable"
     assert latest_outputs["candidates"][0]["candidate_id"] == "wrist_view_00"
+
+
+def test_agent_context_surfaces_feasible_ik_preview_until_exact_reference_is_dispatched() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    memory.add_observation(_observation())
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.10, -0.20, 0.30],
+        "viewpoint_proposal_id": "wrist-view:1",
+        "viewpoint_id": "candidate-0",
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {
+                        "target_pose": target_pose,
+                        "preserve_current_orientation": True,
+                    },
+                },
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "parameters": {
+                            "target_pose": target_pose,
+                            "preserve_current_orientation": True,
+                        },
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "operational_success": True,
+                                "semantic_outcome": "ik_feasible",
+                                "outputs": {
+                                    "ik_preview_receipt": {
+                                        "schema_version": "openeta.ik_preview_receipt.v1",
+                                        "receipt_id": "ik-wrist-view-1",
+                                        "classification": "feasible",
+                                        "orientation_policy": "preserve_current",
+                                    }
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+    decision_state = context["agent_context"]["decision_state"]
+    pending = decision_state["pending_execution_receipts"]
+    assert pending["host_policy"].startswith("capability_index_only")
+    assert pending["receipts"] == [
+        {
+            "receipt_id": "ik-wrist-view-1",
+            "status": "previewed_not_executed",
+            "classification": "feasible",
+            "orientation_policy": "preserve_current",
+            "target_signature": memory.ik_preview_receipts()["latest"][
+                "target_signature"
+            ],
+            "execution_reference": {
+                "tool": "move_to",
+                "parameters": {"ik_receipt_id": "ik-wrist-view-1"},
+            },
+            "request_reference": {
+                "viewpoint_proposal_id": "wrist-view:1",
+                "viewpoint_id": "candidate-0",
+            },
+        }
+    ]
+    assert decision_state["unresolved_obligations"]["preview_execution_gap"][
+        "pending_receipt_ids"
+    ] == ["ik-wrist-view-1"]
+
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": {"ik_receipt_id": "ik-wrist-view-1"},
+                },
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": {"ik_receipt_id": "ik-wrist-view-1"},
+                        "result": {
+                            "success": False,
+                            "details": {
+                                "operational_success": False,
+                                "semantic_outcome": "target_not_reached",
+                                "outputs": {},
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    after_dispatch = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]["decision_state"]
+    assert after_dispatch["pending_execution_receipts"] is None
+    assert "preview_execution_gap" not in after_dispatch["unresolved_obligations"]
+
+
+def test_agent_context_warns_on_multi_tool_negative_cycle_at_same_visual_epochs() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    memory.add_observation(_observation())
+
+    def record(name: str, semantic_outcome: str) -> None:
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": name,
+                        "parameters": {"source_packet_id": f"packet-{name}"},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": name,
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "details": {
+                                    "operational_success": True,
+                                    "semantic_outcome": semantic_outcome,
+                                    "outputs": {},
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    record("compute_wrist_alignment", "requires_better_view")
+    record("sam3", "no_detection")
+    record("select_sam3_detection", "completed")
+    record("compute_wrist_alignment", "requires_better_view")
+
+    warning = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]["decision_state"]["no_progress_tool_loop"]
+    assert warning["trigger_type"] == "semantic_state_cycle_without_world_change"
+    assert warning["tool"] == "compute_wrist_alignment"
+    assert warning["semantic_outcome"] == "requires_better_view"
+    assert warning["equivalent_outcome_count"] == 2
+    assert warning["intervening_tools"] == ["sam3", "select_sam3_detection"]
+    assert warning["state_anchor"]["object_scene_epoch"] == 0
+    assert warning["state_anchor"]["robot_motion_epoch"] == 0
+    assert warning["state_anchor"]["visual_signature"]
+    assert warning["host_policy"].startswith("reflection_warning_only")
+
+
+def test_semantic_cycle_warning_resets_after_visual_observation_changes() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    first = _observation()
+    memory.add_observation(first)
+
+    def alignment() -> None:
+        memory.add_action(
+            EnvAction(
+                action_type="tool_call",
+                command={
+                    "status": "executed",
+                    "request": {
+                        "kind": "tool_call",
+                        "name": "compute_wrist_alignment",
+                        "parameters": {},
+                    },
+                    "tool_calls": [
+                        {
+                            "name": "compute_wrist_alignment",
+                            "status": "executed",
+                            "result": {
+                                "success": True,
+                                "details": {
+                                    "semantic_outcome": "requires_better_view",
+                                    "outputs": {},
+                                },
+                            },
+                        }
+                    ],
+                },
+            )
+        )
+
+    alignment()
+    changed = _observation()
+    changed.cameras[0].rgb = [[[255, 255, 255]]]
+    changed.metadata["step_idx"] = 4
+    memory.add_observation(changed)
+    alignment()
+
+    warning = build_tool_context(
+        observation=changed,
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )["agent_context"]["decision_state"]["no_progress_tool_loop"]
+    assert warning is None
 
 
 def test_agent_context_warns_on_interleaved_sam3_selection_cycle_and_exposes_bundle() -> None:

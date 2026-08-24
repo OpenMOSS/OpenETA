@@ -11,6 +11,7 @@ The heavy lifting is delegated to sibling modules:
 from __future__ import annotations
 
 import functools
+import hashlib
 import math
 import os
 import sys
@@ -67,6 +68,7 @@ from sim.mcp_server.rest_api import (
     session_env_stream,
 )
 from sim.reachability import ROBUST_EXECUTION_JOINT_MARGIN_RAD
+from adapter.motion_profiles import motion_control_profile
 
 # ── FastMCP server ────────────────────────────────────────────────────
 
@@ -1073,6 +1075,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         target_quat = _euler_to_quat(_math.radians(roll), _math.radians(pitch), _math.radians(yaw))
 
     if controller_capability.get("goal_executor") == "openeta.worker_mink_goal.v1":
+        motion_profile = motion_control_profile()
         attachment = meta.get("_attachment_proxy")
         if enable_collision_check and isinstance(attachment, dict):
             with _session_last_obs_lock:
@@ -1137,6 +1140,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             "orientation_tolerance_rad": float(ori_tolerance),
             "gripper_command": float(_gripper_cmd(meta)) if "_gripper_cmd" in meta else 0.0,
             "enable_collision_check": bool(enable_collision_check),
+            # Host-private experiment configuration.  It is selected by the
+            # server process and is never copied from an Agent tool argument.
+            "motion_execution_condition": motion_profile.condition,
         }
         if resolved_contact is not None:
             body["contact_authorization"] = resolved_contact
@@ -1599,6 +1605,11 @@ def _trajectory_pose_arguments(pose: dict, *, index: int) -> dict:
 def _trajectory_waypoint_reached(result: dict, waypoint: dict, *, tolerance: float) -> bool:
     if not isinstance(result, dict) or result.get("error"):
         return False
+    # When the controller publishes an authoritative attainment verdict, the
+    # route wrapper must not overwrite it with a position-only approximation.
+    # This matters for stable-arrival and explicit-orientation failures.
+    if "reached_target" in result and result.get("reached_target") is not True:
+        return False
     collision = result.get("collision")
     if isinstance(collision, dict) and collision.get("detected") is True:
         return False
@@ -1617,6 +1628,128 @@ def _trajectory_waypoint_reached(result: dict, waypoint: dict, *, tolerance: flo
     )
 
 
+def _condition_c_route_entries(
+    bundle: object,
+    trajectory: list[dict],
+) -> list[dict]:
+    """Validate the host-private receipt bundle against the resolved public path."""
+
+    if not isinstance(bundle, dict):
+        raise ValueError("condition C requires route_execution_bundle")
+    if bundle.get("schema_version") != "openeta.experimental_route_execution_bundle.v1":
+        raise ValueError("route_execution_bundle has an unsupported schema_version")
+    if bundle.get("condition") != "C":
+        raise ValueError("route_execution_bundle is not authorized for condition C")
+    if bundle.get("authority") != "host_memory_exact_receipt_resolution":
+        raise ValueError("route_execution_bundle lacks host receipt authority")
+    entries = bundle.get("entries")
+    if not isinstance(entries, list) or len(entries) != len(trajectory):
+        raise ValueError("route_execution_bundle must contain one entry per waypoint")
+    validated: list[dict] = []
+    for index, (entry, raw_pose) in enumerate(zip(entries, trajectory)):
+        if not isinstance(entry, dict):
+            raise ValueError(f"route_execution_bundle.entries[{index}] must be an object")
+        receipt_id = str(entry.get("source_ik_receipt_id") or "").strip()
+        if not receipt_id:
+            raise ValueError(
+                f"route_execution_bundle.entries[{index}] has no source receipt id"
+            )
+        pose = entry.get("target_pose")
+        if not isinstance(pose, dict):
+            raise ValueError(
+                f"route_execution_bundle.entries[{index}] has no target_pose"
+            )
+        private_args = _trajectory_pose_arguments(pose, index=index)
+        public_args = _trajectory_pose_arguments(raw_pose, index=index)
+        if any(
+            abs(float(private_args[axis]) - float(public_args[axis])) > 1e-9
+            for axis in ("x", "y", "z")
+        ):
+            raise ValueError(
+                f"route_execution_bundle.entries[{index}] target does not match "
+                "the host-resolved trajectory"
+            )
+        validated.append({**entry, "execution_arguments": private_args})
+    return validated
+
+
+def _sequential_route_preview(
+    meta: dict,
+    entry: dict,
+    *,
+    index: int,
+    tolerance: float,
+    ori_tolerance: float,
+) -> tuple[dict, dict | None]:
+    """Re-preview one route endpoint from the actual preceding segment end."""
+
+    arguments = dict(entry.get("execution_arguments") or {})
+    preview_body: dict = {
+        "target_xyz": [arguments["x"], arguments["y"], arguments["z"]],
+        "position_tolerance_m": float(tolerance),
+        "orientation_tolerance_rad": float(ori_tolerance),
+        "preserve_current_orientation": not all(
+            key in arguments for key in ("roll", "pitch", "yaw")
+        ),
+    }
+    if all(key in arguments for key in ("roll", "pitch", "yaw")):
+        preview_body["target_euler_xyz_deg"] = [
+            arguments["roll"],
+            arguments["pitch"],
+            arguments["yaw"],
+        ]
+    raw = _proxy_reachability(meta, preview_body)
+    raw = raw if isinstance(raw, dict) else {}
+    candidate = raw.get("best_candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    joints = candidate.get("joint_positions")
+    feasible = (
+        raw.get("status") == "reachable"
+        and raw.get("feasible") is True
+        and isinstance(joints, list)
+        and len(joints) == 7
+        and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            for value in joints
+        )
+    )
+    source_id = str(entry.get("source_ik_receipt_id") or "")
+    preview_id = hashlib.sha256(
+        f"{source_id}:{index}:{raw.get('target')}:{joints}".encode("utf-8")
+    ).hexdigest()[:20]
+    receipt = {
+        "schema_version": "openeta.sequential_route_preview_receipt.v1",
+        "index": index,
+        "source_ik_receipt_id": source_id,
+        "preview_id": preview_id,
+        "status": raw.get("status", "unknown"),
+        "feasible": feasible,
+        "reason_code": raw.get("reason_code"),
+        "message": raw.get("message"),
+        "target": raw.get("target"),
+        "joint_margin_min_rad": candidate.get("joint_margin_min_rad"),
+        "joint_travel_l2_rad": candidate.get("joint_travel_l2_rad"),
+        "preview_state": "actual_preceding_segment_end",
+        "path_collision_checked": False,
+        "path_collision_authority": "controller_per_step_only",
+    }
+    if not feasible:
+        return receipt, None
+    seed = {
+        "schema_version": "openeta.ik_execution_seed.v1",
+        "receipt_id": preview_id,
+        "pose_policy_signature": f"condition-c-route:{source_id}",
+        "joint_positions": [float(value) for value in joints],
+        "preview_tolerances": {
+            "position_tolerance_m": float(tolerance),
+            "orientation_tolerance_rad": float(ori_tolerance),
+        },
+    }
+    return receipt, seed
+
+
 @_blocking_tool
 @_serialized_env_control
 def follow_eef_trajectory(
@@ -1628,6 +1761,7 @@ def follow_eef_trajectory(
     tolerance: float = 0.002,
     ori_tolerance: float = 0.05,
     enable_collision_check: bool = True,
+    route_execution_bundle: dict | None = None,
 ) -> dict:
     """Execute 1-5 short world-frame EEF waypoints sequentially.
 
@@ -1647,12 +1781,71 @@ def follow_eef_trajectory(
         return {"error": str(exc)}
     if not isinstance(num_steps_per_waypoint, int) or not 1 <= num_steps_per_waypoint <= 100:
         return {"error": "num_steps_per_waypoint must be an integer in [1, 100]"}
+    profile = motion_control_profile()
+    sid = session_id or _current_session.get() or ""
+    route_meta = _session_envs.get(sid, {}).get(handle)
+    if profile.sequential_route_preview_enabled and not isinstance(route_meta, dict):
+        return {
+            "ok": False,
+            "code": "sequential_route_environment_missing",
+            "error": f"Unknown: {handle}",
+            "reached_target": False,
+            "steps_executed": 0,
+            "stop_reason": "route_environment_missing",
+            "motion_execution_profile": profile.receipt(),
+        }
+    route_entries: list[dict] = []
+    if profile.sequential_route_preview_enabled:
+        try:
+            route_entries = _condition_c_route_entries(
+                route_execution_bundle,
+                trajectory,
+            )
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "code": "sequential_route_bundle_invalid",
+                "error": str(exc),
+                "reached_target": False,
+                "steps_executed": 0,
+                "stop_reason": "route_bundle_rejected",
+                "motion_execution_profile": profile.receipt(),
+            }
     move_impl = getattr(move_to, "__wrapped__", None)
     if not callable(move_impl):
         return {"error": "move_to implementation is unavailable"}
     results: list[dict] = []
+    sequential_previews: list[dict] = []
     completed = 0
-    for waypoint in waypoints:
+    for index, waypoint in enumerate(waypoints):
+        execution_waypoint = waypoint
+        execution_seed = None
+        if profile.sequential_route_preview_enabled:
+            entry = route_entries[index]
+            execution_waypoint = dict(entry["execution_arguments"])
+            preview, execution_seed = _sequential_route_preview(
+                route_meta,
+                entry,
+                index=index,
+                tolerance=tolerance,
+                ori_tolerance=ori_tolerance,
+            )
+            sequential_previews.append(preview)
+            if execution_seed is None:
+                results.append(
+                    {
+                        "ok": False,
+                        "code": "sequential_route_preview_rejected",
+                        "error": (
+                            f"waypoint {index} was not authorized from the actual "
+                            f"preceding endpoint: {preview.get('message') or preview.get('reason_code')}"
+                        ),
+                        "reached_target": False,
+                        "steps_executed": 0,
+                        "stop_reason": "sequential_preview_rejected",
+                    }
+                )
+                break
         result = move_impl(
             handle=handle,
             session_id=session_id,
@@ -1660,10 +1853,15 @@ def follow_eef_trajectory(
             tolerance=tolerance,
             ori_tolerance=ori_tolerance,
             enable_collision_check=enable_collision_check,
-            **waypoint,
+            ik_execution_seed=execution_seed,
+            **execution_waypoint,
         )
         results.append(result)
-        reached = _trajectory_waypoint_reached(result, waypoint, tolerance=tolerance)
+        reached = _trajectory_waypoint_reached(
+            result,
+            execution_waypoint,
+            tolerance=tolerance,
+        )
         if reached:
             completed += 1
         if (
@@ -1705,14 +1903,44 @@ def follow_eef_trajectory(
         "terminated": bool(final.get("terminated")),
         "truncated": bool(final.get("truncated")),
         "reward": final.get("reward", 0.0),
+        "stop_reason": final.get("stop_reason"),
+        "code": final.get("code"),
         "collision": final.get("collision"),
         "waypoint_results": results,
+        **(
+            {
+                "motion_execution_profile": profile.receipt(),
+                "sequential_route_preview": {
+                    "schema_version": "openeta.sequential_route_preview_chain.v1",
+                    "policy": "just_in_time_from_actual_segment_end",
+                    "waypoints_previewed": len(sequential_previews),
+                    "waypoints_authorized": sum(
+                        item.get("feasible") is True for item in sequential_previews
+                    ),
+                    "path_collision_checked": False,
+                    "path_collision_authority": "controller_per_step_only",
+                    "receipts": sequential_previews,
+                },
+            }
+            if profile.sequential_route_preview_enabled
+            else {}
+        ),
         **(
             {"controller_receipt": controller_receipt}
             if isinstance(controller_receipt, dict)
             else {}
         ),
         **({"error": final.get("error")} if final.get("error") else {}),
+        **(
+            {"controller_failure": final.get("controller_failure")}
+            if isinstance(final.get("controller_failure"), dict)
+            else {}
+        ),
+        **(
+            {"convergence_diagnostics": final.get("convergence_diagnostics")}
+            if isinstance(final.get("convergence_diagnostics"), dict)
+            else {}
+        ),
     }
 
 

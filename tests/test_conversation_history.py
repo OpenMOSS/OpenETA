@@ -200,6 +200,121 @@ def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> N
     assert projected["candidates"][1]["width"] == 0.079
 
 
+def test_large_ik_receipt_is_semantically_projected_in_conversation() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="check reachability")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+                },
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "reachable",
+                            "details": {
+                                "outputs": {
+                                    "ik_receipt": {
+                                        "receipt_id": "ik-receipt-1",
+                                        "classification": "reachable",
+                                    },
+                                    "motion_summary": {"reached_target": True},
+                                    "raw_solver_trace": [
+                                        {"diagnostic": "x" * 2_000}
+                                        for _ in range(20)
+                                    ],
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    message = memory.model_conversation_messages()[-1]["content"]
+    result = json.loads(message.split("\n", 1)[1])["openeta_host_result"][
+        "tool_calls"
+    ][0]["result"]
+
+    assert result["outputs"]["ik_receipt"]["receipt_id"] == "ik-receipt-1"
+    assert result["outputs"]["projection"]["full_output_omitted"] is True
+    assert "raw_solver_trace" not in result["outputs"]
+    assert len(message) < 12_000
+
+
+def test_attachment_probe_short_handoff_survives_bounded_conversation_projection() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="verify attachment")
+    short_request = {
+        "tool": "ik_preview_check",
+        "parameters": {
+            "probe_id": "probe:short",
+            "waypoint_index": 0,
+            "position_tolerance_m": 0.01,
+            "orientation_tolerance_rad": 0.10,
+            "check_endpoint_collision": True,
+        },
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "prepare_attachment_probe",
+                    "parameters": {},
+                },
+                "tool_calls": [
+                    {
+                        "name": "prepare_attachment_probe",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "probe prepared",
+                            "details": {
+                                "outputs": {
+                                    "schema_version": "openeta.articulated_attachment_probe.v1",
+                                    "status": "prepared",
+                                    "probe_id": "probe:short",
+                                    "compiled_grasp_id": "compiled-1",
+                                    "scene_epoch": 0,
+                                    "robot_motion_epoch": 0,
+                                    "motion_type": "linear",
+                                    "path_sha256": "short",
+                                    "frozen_path": [
+                                        {"xyz": [0.1, 0.2, 0.3], "trace": "x" * 12_000}
+                                    ],
+                                    "ik_preview_requests": [short_request],
+                                    "execution_handoff": {
+                                        "tool": "move_to",
+                                        "parameters": {"ik_receipt_id": "<receipt>"},
+                                    },
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    feedback = json.loads(memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1])
+    outputs = feedback["openeta_host_result"]["tool_calls"][0]["result"]["outputs"]
+
+    assert outputs["ik_preview_requests"] == [short_request]
+    assert "frozen_path" not in outputs
+
+
 def test_planner_retry_receipt_survives_into_next_turn_host_feedback() -> None:
     memory = AgentMemory()
     memory.start_session(task="repair a tool request")

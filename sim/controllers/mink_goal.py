@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import math
 from typing import Any, Callable
 
@@ -12,9 +13,39 @@ from sim.controllers.collision_recovery import (
     verified_collision_boundary_escape,
     verified_joint_limit_escape,
 )
+from adapter.motion_profiles import motion_control_profile
 
 
 StepCallback = Callable[[np.ndarray, bool], dict[str, Any]]
+
+
+def summarize_cartesian_progress_window(
+    samples: list[tuple[np.ndarray, float]],
+    *,
+    target_direction_xyz: np.ndarray,
+) -> dict[str, float]:
+    """Summarize measured EEF progress without claiming physical contact."""
+
+    if len(samples) < 2:
+        raise ValueError("at least two progress samples are required")
+    start_xyz, start_error = samples[0]
+    end_xyz, end_error = samples[-1]
+    displacement = np.asarray(end_xyz, dtype=np.float64) - np.asarray(
+        start_xyz, dtype=np.float64
+    )
+    direction = np.asarray(target_direction_xyz, dtype=np.float64)
+    norm = float(np.linalg.norm(direction))
+    direction = direction / norm if norm > 1e-12 else np.zeros(3, dtype=np.float64)
+    aligned = float(np.dot(displacement, direction))
+    cross_track = displacement - aligned * direction
+    return {
+        "window_steps": float(len(samples) - 1),
+        "command_aligned_progress_m": aligned,
+        "cross_track_drift_m": float(np.linalg.norm(cross_track)),
+        "position_error_start_m": float(start_error),
+        "position_error_end_m": float(end_error),
+        "position_error_improvement_m": float(start_error - end_error),
+    }
 
 
 def execute_libero_mink_goal(
@@ -32,12 +63,14 @@ def execute_libero_mink_goal(
     attachment_proxy: dict[str, Any] | None,
     ik_execution_seed: dict[str, Any] | None,
     step_callback: StepCallback,
+    motion_execution_condition: object = "A",
 ) -> dict[str, Any]:
     """Drive one fixed JOINT_VELOCITY environment to an EEF goal with Mink."""
 
     import mink
 
     raw, robot = _libero_runtime(env)
+    motion_profile = motion_control_profile(motion_execution_condition)
     if str(getattr(getattr(env, "_env", None), "_controller", "")) != "JOINT_VELOCITY":
         raise RuntimeError("Mink goal executor requires a JOINT_VELOCITY LIBERO environment")
     target = _finite_vector(target_xyz, 3, "target_xyz")
@@ -109,7 +142,7 @@ def execute_libero_mink_goal(
         # basin and saturate Panda joint 6 even when the preview solution had
         # ample margin.  Keep Cartesian error dominant, but give the private
         # host-carried seed enough weight to steer null-space motion.
-        seed_cost[qvel_indices] = 1.0
+        seed_cost[qvel_indices] = 5.0 if motion_profile.condition == "C" else 1.0
         seeded_posture_task = mink.PostureTask(
             model,
             cost=seed_cost,
@@ -148,7 +181,11 @@ def execute_libero_mink_goal(
         and str(attachment_proxy.get("object_name") or "")
         and str(attachment_proxy.get("status") or "") in {"tentative", "confirmed"}
     )
-    joint_velocity_limit_rad_s = 0.2 if carrying_object else 0.5
+    joint_velocity_limit_rad_s = (
+        motion_profile.carrying_joint_velocity_limit_rad_s
+        if carrying_object
+        else motion_profile.nominal_joint_velocity_limit_rad_s
+    )
     velocity_by_joint = {
         name: np.array([joint_velocity_limit_rad_s]) for name in robot.robot_joints
     }
@@ -196,6 +233,16 @@ def execute_libero_mink_goal(
     )
     orientation_stall_steps = 0
     convergence_stalled = False
+    convergence_stall_kind = ""
+    stable_steps_completed = 0
+    final_joint_velocity_max_abs: float | None = None
+    progress_samples: deque[tuple[np.ndarray, float]] = deque(
+        maxlen=max(1, motion_profile.progress_window_steps + 1)
+    )
+    progress_diagnostics: dict[str, Any] | None = None
+    target_direction_xyz = target - start_xyz
+    if motion_profile.progress_stall_enabled:
+        progress_samples.append((start_xyz.copy(), start_position_error))
 
     while total_steps < max_steps:
         current_xyz, current_quat = _eef_pose(raw, robot)
@@ -211,8 +258,29 @@ def execute_libero_mink_goal(
             orientation_error is None
             or orientation_error < orientation_tolerance_rad
         )
-        if position_ok and orientation_ok:
+        current_arm_velocity = np.asarray(
+            raw.sim.data.qvel[qvel_indices], dtype=np.float64
+        )
+        current_joint_velocity_max_abs = (
+            float(np.max(np.abs(current_arm_velocity)))
+            if current_arm_velocity.size
+            else 0.0
+        )
+        final_joint_velocity_max_abs = current_joint_velocity_max_abs
+        pose_ok = position_ok and orientation_ok
+        if pose_ok and not motion_profile.stable_arrival_enabled:
             break
+        if (
+            pose_ok
+            and motion_profile.stable_arrival_enabled
+            and stable_steps_completed >= motion_profile.stable_steps_required
+            and current_joint_velocity_max_abs
+            < motion_profile.joint_velocity_tolerance_rad_s
+        ):
+            break
+        settling = bool(pose_ok and motion_profile.stable_arrival_enabled)
+        if not pose_ok:
+            stable_steps_completed = 0
 
         configuration.update(q=raw.sim.data.qpos.copy())
         current_pair_distances = (
@@ -262,14 +330,18 @@ def execute_libero_mink_goal(
         used_collision_qp_fallback = False
         current_projected_joint_indices: list[int] = []
         try:
-            velocity = mink.solve_ik(
-                configuration,
-                controller_tasks,
-                dt,
-                solver="quadprog",
-                damping=1e-6,
-                safety_break=False,
-                limits=limits,
+            velocity = (
+                np.zeros(model.nv, dtype=np.float64)
+                if settling
+                else mink.solve_ik(
+                    configuration,
+                    controller_tasks,
+                    dt,
+                    solver="quadprog",
+                    damping=1e-6,
+                    safety_break=False,
+                    limits=limits,
+                )
             )
         except AssertionError:
             used_collision_qp_fallback = True
@@ -557,9 +629,73 @@ def execute_libero_mink_goal(
         if final_step.get("terminated") or final_step.get("truncated"):
             terminated = True
             break
+        post_step_xyz, post_step_quat = _eef_pose(raw, robot)
+        post_step_position_error = float(np.linalg.norm(target - post_step_xyz))
+        post_step_max_axis_error = float(np.max(np.abs(target - post_step_xyz)))
+        post_step_orientation_error = (
+            _angular_error_rad(post_step_quat, target_quat)
+            if target_quat is not None
+            else None
+        )
+        post_step_pose_ok = bool(
+            post_step_max_axis_error < position_tolerance_m
+            and (
+                post_step_orientation_error is None
+                or post_step_orientation_error < orientation_tolerance_rad
+            )
+        )
+        post_arm_velocity = np.asarray(
+            raw.sim.data.qvel[qvel_indices], dtype=np.float64
+        )
+        final_joint_velocity_max_abs = (
+            float(np.max(np.abs(post_arm_velocity)))
+            if post_arm_velocity.size
+            else 0.0
+        )
+        if motion_profile.stable_arrival_enabled:
+            if (
+                settling
+                and post_step_pose_ok
+                and final_joint_velocity_max_abs
+                < motion_profile.joint_velocity_tolerance_rad_s
+            ):
+                stable_steps_completed += 1
+            else:
+                stable_steps_completed = 0
+
+        if motion_profile.progress_stall_enabled and not settling:
+            progress_samples.append(
+                (post_step_xyz.copy(), post_step_position_error)
+            )
+            if len(progress_samples) == progress_samples.maxlen:
+                metrics = summarize_cartesian_progress_window(
+                    list(progress_samples),
+                    target_direction_xyz=target_direction_xyz,
+                )
+                insufficient_progress = (
+                    metrics["command_aligned_progress_m"]
+                    < motion_profile.minimum_aligned_progress_m
+                )
+                error_not_improving = (
+                    metrics["position_error_improvement_m"]
+                    < motion_profile.minimum_error_improvement_m
+                )
+                significant_cross_track = (
+                    metrics["cross_track_drift_m"]
+                    >= motion_profile.cross_track_tolerance_m
+                )
+                progress_diagnostics = {
+                    **metrics,
+                    "insufficient_aligned_progress": insufficient_progress,
+                    "error_not_improving": error_not_improving,
+                    "significant_cross_track_drift": significant_cross_track,
+                }
+                if insufficient_progress and (
+                    error_not_improving or significant_cross_track
+                ):
+                    convergence_stalled = True
+                    convergence_stall_kind = "position_progress_stalled"
         if target_quat is not None:
-            post_step_xyz, post_step_quat = _eef_pose(raw, robot)
-            post_step_position_error = float(np.linalg.norm(target - post_step_xyz))
             if post_step_position_error < best_position_error - 1e-4:
                 best_position_error = post_step_position_error
                 consecutive_position_regressions = 0
@@ -581,9 +717,6 @@ def execute_libero_mink_goal(
                     "different full-pose candidate."
                 )
                 break
-            post_step_orientation_error = _angular_error_rad(
-                post_step_quat, target_quat
-            )
             post_step_position_ok = bool(
                 np.max(np.abs(target - post_step_xyz)) < position_tolerance_m
             )
@@ -602,7 +735,7 @@ def execute_libero_mink_goal(
                 orientation_stall_steps = 0
             if orientation_stall_steps >= 30:
                 convergence_stalled = True
-                break
+                convergence_stall_kind = "orientation_progress_stalled"
         if collision_policy is not None:
             actual = mink.Configuration(model, q=raw.sim.data.qpos.copy())
             actual_pair_distances = _collision_pair_distances(
@@ -735,6 +868,8 @@ def execute_libero_mink_goal(
                     ),
                 }
                 break
+        if convergence_stalled:
+            break
 
     end_xyz, end_quat = _eef_pose(raw, robot)
     position_error = float(np.linalg.norm(target - end_xyz))
@@ -753,6 +888,15 @@ def execute_libero_mink_goal(
         and not terminated
         and not control_error
         and not collision_detected
+        and (
+            not motion_profile.stable_arrival_enabled
+            or (
+                stable_steps_completed >= motion_profile.stable_steps_required
+                and final_joint_velocity_max_abs is not None
+                and final_joint_velocity_max_abs
+                < motion_profile.joint_velocity_tolerance_rad_s
+            )
+        )
     )
     stop_reason = (
         "target_reached"
@@ -828,6 +972,23 @@ def execute_libero_mink_goal(
             "orientation_stall_steps": orientation_stall_steps,
         },
     }
+    if motion_profile.condition != "A":
+        result["motion_execution_profile"] = motion_profile.receipt()
+        result["controller_receipt"].update(
+            {
+                "motion_execution_profile": motion_profile.receipt(),
+                "convergence_stall_kind": convergence_stall_kind or None,
+                "stable_arrival_enabled": motion_profile.stable_arrival_enabled,
+                "stable_steps_required": motion_profile.stable_steps_required,
+                "stable_steps_completed": stable_steps_completed,
+                "joint_velocity_tolerance_rad_s": (
+                    motion_profile.joint_velocity_tolerance_rad_s
+                ),
+                "joint_velocity_max_abs_rad_s": final_joint_velocity_max_abs,
+            }
+        )
+    if progress_diagnostics is not None:
+        result["controller_receipt"]["progress_diagnostics"] = progress_diagnostics
     if target_quat is not None:
         result["target"]["quat_xyzw"] = target_quat.tolist()
         result["orientation_error_rad"] = orientation_error
@@ -840,12 +1001,22 @@ def execute_libero_mink_goal(
         )
         result["convergence_diagnostics"] = {
             "schema_version": "openeta.controller_convergence_diagnostics.v1",
-            "code": "full_pose_local_convergence_stalled",
+            "code": (
+                "cartesian_position_progress_stalled"
+                if convergence_stall_kind == "position_progress_stalled"
+                else "full_pose_local_convergence_stalled"
+            ),
             "message": (
-                "Position is within tolerance, but explicit orientation stopped "
+                "Measured EEF progress toward the target stalled within the bounded "
+                "tracking window. More iterations on the same segment are unlikely "
+                "to help; use the actual EEF pose and choose a materially different "
+                "waypoint or orientation."
+                if convergence_stall_kind == "position_progress_stalled"
+                else "Position is within tolerance, but explicit orientation stopped "
                 "improving for 30 control steps. More iterations on the same pose "
                 "are unlikely to help; choose a higher-margin orientation or waypoint."
             ),
+            "progress": progress_diagnostics,
             "best_orientation_error_rad": best_orientation_error,
             "final_orientation_error_rad": orientation_error,
             "orientation_tolerance_rad": float(orientation_tolerance_rad),

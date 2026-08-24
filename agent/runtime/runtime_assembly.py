@@ -139,6 +139,11 @@ MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
 VDM_MAX_OUTPUT_TOKENS = 2048
 DEFAULT_PERCEPTION_TOOL_TIMEOUT_S = 120.0
+# MolmoPoint deployments may need roughly three minutes to cold-load their
+# resident model after a service restart.  Keep that recovery budget separate
+# from the normal perception timeout so TUI and batch assembly do not
+# accidentally override the MCP pointer's established 600 second default.
+DEFAULT_MOLMOPOINT_TOOL_TIMEOUT_S = 600.0
 
 
 REMOTE_PLACEHOLDER_TOOLS = (
@@ -197,6 +202,7 @@ class RuntimeAssemblyConfig:
     visual_history: VisualHistoryConfig = field(default_factory=VisualHistoryConfig.from_env)
     perception_capability_timeout_s: float = 10.0
     perception_tool_timeout_s: float = DEFAULT_PERCEPTION_TOOL_TIMEOUT_S
+    molmopoint_tool_timeout_s: float = DEFAULT_MOLMOPOINT_TOOL_TIMEOUT_S
     anygrasp_capability_query: AnyGraspCapabilityQuery | None = None
     grasp_pose_advisor_enabled: bool = True
 
@@ -381,6 +387,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         artifact_root=artifact_root,
         grasp_pose_advisor_enabled=config.grasp_pose_advisor_enabled,
         timeout_s=config.perception_tool_timeout_s,
+        molmopoint_timeout_s=config.molmopoint_tool_timeout_s,
     )
     tool_contract_catalog = build_default_tool_contract_catalog(tools.list())
     config.tool_contract_policy.ensure_valid(tool_contract_catalog)
@@ -573,9 +580,12 @@ def bind_runtime_perception_tools(
     artifact_root: Path,
     grasp_pose_advisor_enabled: bool = True,
     timeout_s: float = DEFAULT_PERCEPTION_TOOL_TIMEOUT_S,
+    molmopoint_timeout_s: float = DEFAULT_MOLMOPOINT_TOOL_TIMEOUT_S,
 ) -> DepthPriorPrefetchCoordinator | None:
     if timeout_s <= 0:
         raise ValueError("perception tool timeout must be positive")
+    if molmopoint_timeout_s <= 0:
+        raise ValueError("MolmoPoint tool timeout must be positive")
     object_memory_configuration_error = ""
     try:
         object_memory_config = load_configured_object_memory_bank()
@@ -663,7 +673,7 @@ def bind_runtime_perception_tools(
             build_molmopoint_handler(
                 build_sse_molmopoint_mcp_pointer(
                     url=endpoints.molmopoint_url,
-                    timeout_seconds=timeout_s,
+                    timeout_seconds=molmopoint_timeout_s,
                 ),
                 output_root=artifact_root / "molmopoint_results",
             ),

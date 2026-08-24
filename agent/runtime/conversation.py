@@ -507,14 +507,12 @@ def _summarize_tool_calls(value: Any) -> list[JsonDict]:
                 outputs = details.get("outputs")
                 if isinstance(outputs, dict):
                     result_summary["output_keys"] = sorted(str(key) for key in outputs)[:20]
-                    # Every tool gets a bounded value projection. Large payloads stay in
-                    # durable artifacts, but merely listing output keys leaves the Agent
-                    # unable to reason about the result it just requested.
-                    result_summary["outputs"] = _bounded_value(
+                    # Keep direct code results, but project structured perception and
+                    # control receipts by semantic fields. The complete action remains
+                    # in the append-only event trace and large artifacts.
+                    result_summary["outputs"] = _conversation_tool_output_projection(
+                        str(raw.get("name") or ""),
                         outputs,
-                        max_depth=6,
-                        max_items=DEFAULT_MAX_TOOL_RESULT_ITEMS,
-                        max_string_chars=DEFAULT_MAX_TOOL_RESULT_STRING_CHARS,
                     )
                     # Preserve the historical direct field for coding-agent callers.
                     if raw.get("name") == "python_exec" and "result" in outputs:
@@ -546,6 +544,94 @@ def _summarize_tool_calls(value: Any) -> list[JsonDict]:
             }
         )
     return calls
+
+
+def _conversation_tool_output_projection(tool: str, outputs: JsonDict) -> JsonDict:
+    """Avoid duplicating full structured receipts in every history layer."""
+
+    if tool == "python_exec":
+        projected = _bounded_value(
+            outputs,
+            max_depth=6,
+            max_items=DEFAULT_MAX_TOOL_RESULT_ITEMS,
+            max_string_chars=DEFAULT_MAX_TOOL_RESULT_STRING_CHARS,
+        )
+        return projected if isinstance(projected, dict) else {}
+    if tool == "prepare_attachment_probe":
+        projected = _bounded_value(
+            {
+                key: outputs[key]
+                for key in (
+                    "schema_version",
+                    "status",
+                    "probe_id",
+                    "compiled_grasp_id",
+                    "scene_epoch",
+                    "robot_motion_epoch",
+                    "motion_type",
+                    "path_sha256",
+                    "ik_preview_requests",
+                    "execution_handoff",
+                )
+                if key in outputs
+            },
+            max_depth=7,
+            max_items=16,
+            max_string_chars=2_000,
+        )
+        return projected if isinstance(projected, dict) else {}
+    projected = _bounded_value(
+        outputs,
+        max_depth=5,
+        max_items=32,
+        max_string_chars=2_000,
+    )
+    if not isinstance(projected, dict):
+        return {}
+    serialized = json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= 8_000:
+        return projected
+    priority = {
+        "schema_version",
+        "result_id",
+        "candidate_count",
+        "best_grasp_candidate",
+        "selected_grasp_source",
+        "grasp_selection_bundle",
+        "grasp_selection_advice",
+        "compiled_grasp_id",
+        "hover_pose",
+        "precontact_pose",
+        "contact_pose",
+        "execution_guidance",
+        "ik_receipt",
+        "receipt",
+        "reachability",
+        "classification",
+        "reason_code",
+        "message",
+        "suggestions",
+        "motion_summary",
+        "collision_coverage",
+        "pose_feedback",
+        "attachment_proxy_receipt",
+        "observation_summary",
+        "response_path",
+        "raw_output_ref",
+        "complete_outputs_artifact",
+    }
+    compact = _bounded_value(
+        {key: value for key, value in outputs.items() if key in priority},
+        max_depth=4,
+        max_items=12,
+        max_string_chars=750,
+    )
+    compact = compact if isinstance(compact, dict) else {}
+    compact["projection"] = {
+        "full_output_omitted": True,
+        "available_via": "append-only action trace or returned artifact path",
+    }
+    return compact
 
 
 def _compact_host_result(result_data: JsonDict) -> JsonDict:

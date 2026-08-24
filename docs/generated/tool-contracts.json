@@ -4,13 +4,10 @@
     "tool_count": 35,
     "maturity_counts": {
       "inferred": 0,
-      "declared": 34,
-      "verified": 1
+      "declared": 0,
+      "verified": 35
     },
-    "coverage_gap_counts": {
-      "rollout_conformance_verification": 34,
-      "runtime_schema_enforcement": 34
-    }
+    "coverage_gap_counts": {}
   },
   "tools": [
     {
@@ -22,7 +19,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -151,10 +148,7 @@
         "agent/runtime/episode.py",
         "agent/runtime/observation_packets.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -165,7 +159,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -443,10 +437,7 @@
         "agent/runtime/pipeline.py",
         "agent/runtime/depth_enhancement.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -652,7 +643,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": true,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -832,10 +823,7 @@
         "agent/tools/sim_mcp.py",
         "agent/runtime/runtime_assembly.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -846,7 +834,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": true,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {},
@@ -963,10 +951,7 @@
         "agent/tools/default_contracts.py",
         "agent/tools/sim_mcp.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -977,7 +962,7 @@
       "safe_by_default": true,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -1147,10 +1132,7 @@
         "agent/tools/default_contracts.py",
         "agent/tools/coding.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -1161,7 +1143,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -1332,10 +1314,7 @@
         "agent/runtime/planner.py",
         "agent/tools/web_access.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -1346,7 +1325,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -1499,10 +1478,7 @@
         "agent/runtime/planner.py",
         "agent/tools/web_access.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -1513,7 +1489,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -1863,10 +1839,7 @@
         "agent/tools/handlers.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -1877,7 +1850,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -2088,10 +2061,7 @@
         "agent/tools/object_memory.py",
         "agent/runtime/pipeline.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -2102,7 +2072,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -2306,10 +2276,7 @@
         "agent/runtime/pipeline.py",
         "agent/tools/handlers.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -2320,7 +2287,7 @@
       "safe_by_default": true,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -2511,10 +2478,7 @@
         "agent/runtime/memory.py",
         "agent/runtime/pipeline.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -2525,7 +2489,7 @@
       "safe_by_default": true,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -2671,10 +2635,7 @@
         "agent/runtime/runtime.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -2685,7 +2646,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -2889,10 +2850,7 @@
         "agent/runtime/memory.py",
         "agent/tools/handlers.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -2903,7 +2861,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -3072,10 +3030,7 @@
         "agent/runtime/memory.py",
         "agent/tools/handlers.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -3086,7 +3041,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -3280,10 +3235,7 @@
         "agent/runtime/pipeline.py",
         "agent/tools/handlers.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -3294,7 +3246,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -3479,10 +3431,7 @@
         "agent/tools/default_contracts.py",
         "agent/runtime/calibration.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -3493,7 +3442,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -3691,10 +3640,7 @@
         "agent/tools/default_contracts.py",
         "agent/runtime/calibration.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -3705,7 +3651,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -3885,10 +3831,7 @@
         "agent/tools/default_contracts.py",
         "agent/runtime/grasp_strategy_lifecycle.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -3899,7 +3842,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -4100,10 +4043,7 @@
         "agent/tools/default_contracts.py",
         "agent/runtime/grasp_strategy_lifecycle.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -4114,7 +4054,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -4309,10 +4249,7 @@
         "agent/runtime/memory.py",
         "agent/tools/grasp_geometry.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -4323,7 +4260,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -4529,10 +4466,7 @@
         "agent/runtime/memory.py",
         "agent/tools/grasp_geometry.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -4543,7 +4477,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -4732,10 +4666,7 @@
         "agent/runtime/memory.py",
         "agent/tools/grasp_geometry.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -4746,7 +4677,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -4997,10 +4928,7 @@
         "agent/tools/attachment_probe.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -5011,7 +4939,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -5171,10 +5099,7 @@
         "agent/tools/attachment_probe.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -5185,7 +5110,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": true,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -5550,21 +5475,18 @@
         "agent/runtime/memory.py",
         "agent/tools/sim_mcp.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
       "name": "follow_eef_trajectory",
       "category": "control",
-      "description": "Follow 1-5 short, individually IK-checked end-effector waypoints atomically while retaining the latched gripper command. Pass ordered ik_receipt_ids; the host resolves exact poses and rejects copied trajectory arrays, unknown ids, stale receipts, or unapproved waypoints. Path/world collision remains the motion controller's responsibility.",
+      "description": "Follow 1-5 short, individually IK-checked end-effector waypoints atomically while retaining the latched gripper command. Pass ordered ik_receipt_ids; the host resolves exact poses and rejects copied trajectory arrays, unknown ids, stale receipts, or unapproved waypoints. Path/world collision remains the motion controller's responsibility. For an Agent-authored collision detour, preview a raised/lateral waypoint and the following clearance waypoint before moving, then submit their ordered receipt ids; do not insert the arithmetic midpoint of a failed straight segment because it preserves the same swept corridor.",
       "effect": "world_mutating",
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": true,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -5934,10 +5856,7 @@
         "agent/runtime/memory.py",
         "agent/tools/sim_mcp.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -5948,7 +5867,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": true,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -6187,21 +6106,18 @@
         "agent/runtime/memory.py",
         "agent/tools/sim_mcp.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
       "name": "ik_preview_check",
       "category": "safety",
-      "description": "Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.",
+      "description": "Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. For a prepared attachment probe, pass only probe_id and the ordered zero-based waypoint_index; the host resolves the exact frozen pose. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.",
       "effect": "read_only",
       "safe_by_default": true,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -6230,6 +6146,15 @@
           "candidate_id": {
             "type": "string",
             "minLength": 1
+          },
+          "probe_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "waypoint_index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
           },
           "position_tolerance_m": {
             "type": "number",
@@ -6264,6 +6189,12 @@
               "viewpoint_proposal_id",
               "candidate_id"
             ]
+          },
+          {
+            "required": [
+              "probe_id",
+              "waypoint_index"
+            ]
           }
         ]
       },
@@ -6276,7 +6207,8 @@
         "agent_parameters": [
           "target_pose",
           "compiled_grasp_id + waypoint_role",
-          "viewpoint_proposal_id + candidate_id"
+          "viewpoint_proposal_id + candidate_id",
+          "probe_id + waypoint_index"
         ],
         "resolved_parameters": [
           "target_pose",
@@ -6319,6 +6251,14 @@
           "required": false,
           "schema_version": "openeta.aligned_grasp_reference.v1",
           "when": "an aligned reference is previewed"
+        },
+        {
+          "fact_type": "openeta.articulated_attachment_probe.v1",
+          "path": "request.probe_id",
+          "authority": "host",
+          "required": false,
+          "schema_version": "openeta.articulated_attachment_probe.v1",
+          "when": "an attachment-probe waypoint reference branch is used"
         }
       ],
       "outcomes": [
@@ -6619,10 +6559,7 @@
         "agent/runtime/memory.py",
         "agent/tools/sim_mcp.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -6633,7 +6570,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -6772,10 +6709,7 @@
         "agent/runtime/runtime.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -6786,7 +6720,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -6910,10 +6844,7 @@
         "agent/runtime/runtime.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -6924,7 +6855,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -7041,10 +6972,7 @@
         "agent/runtime/runtime.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -7055,7 +6983,7 @@
       "safe_by_default": false,
       "batchable": true,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -7166,10 +7094,7 @@
         "agent/runtime/runtime.py",
         "agent/runtime/memory.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -7180,7 +7105,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -7355,10 +7280,7 @@
         "agent/runtime/runtime_assembly.py",
         "agent/skills/registry.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     },
     {
       "schema_version": "openeta.tool_contract.v1",
@@ -7369,7 +7291,7 @@
       "safe_by_default": false,
       "batchable": false,
       "requires_observation_after_call": false,
-      "maturity": "declared",
+      "maturity": "verified",
       "request_schema": {
         "type": "object",
         "properties": {
@@ -7533,10 +7455,7 @@
         "agent/runtime/runtime_assembly.py",
         "agent/skills/registry.py"
       ],
-      "coverage_gaps": [
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification"
-      ]
+      "coverage_gaps": []
     }
   ]
 }

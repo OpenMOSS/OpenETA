@@ -8,6 +8,10 @@ from pathlib import Path
 
 from adapter.protocol import JsonDict
 from agent.evals.tool_contract_conformance import audit_tool_contract_conformance
+from agent.evals.tool_contract_promotion_campaign import (
+    _authority_canary_passed_for_tool,
+    _review_approved_for_tool,
+)
 from agent.evals.tool_contract_readiness import audit_tool_contract_request_readiness
 from agent.evals.tool_contract_shadow import audit_tool_contract_shadow
 from agent.tools.contracts import build_default_tool_contract_catalog
@@ -22,6 +26,7 @@ def build_tool_contract_promotion_dossier(
     run_paths: list[str | Path],
     fixture_receipt_paths: list[str | Path] | None = None,
     *,
+    integration_canary_path: str | Path | None = None,
     review_decision_path: str | Path | None = None,
     authority_canary_path: str | Path | None = None,
 ) -> JsonDict:
@@ -96,6 +101,65 @@ def build_tool_contract_promotion_dossier(
     ]
     result_count = sum(row["tool_result_count"] for row in result_reports)
     result_violation_count = sum(row["violation_count"] for row in result_reports)
+    integration_canary = _read_optional_object(integration_canary_path)
+    canary_rows = integration_canary.get("tools")
+    canary_rows = canary_rows if isinstance(canary_rows, list) else []
+    canary_row = next(
+        (
+            row
+            for row in canary_rows
+            if isinstance(row, dict) and row.get("tool") == tool_name
+        ),
+        {},
+    )
+    canary_schema_valid = bool(
+        integration_canary.get("schema_version")
+        == "openeta.tool_contract_integration_canary.v1"
+        and integration_canary.get("authority") == "promotion_evidence_only"
+        and canary_row.get("conformant") is True
+    )
+    canary_valid_count = (
+        int(canary_row.get("valid_request_count") or 0)
+        if canary_schema_valid
+        else 0
+    )
+    canary_invalid_count = (
+        int(canary_row.get("invalid_request_count") or 0)
+        if canary_schema_valid
+        else 0
+    )
+    canary_result_count = (
+        int(canary_row.get("tool_result_count") or 0)
+        if canary_schema_valid
+        else 0
+    )
+    canary_result_violation_count = (
+        int(canary_row.get("tool_result_violation_count") or 0)
+        if canary_schema_valid
+        else 0
+    )
+    combined_valid_count = len(valid_requests) + canary_valid_count
+    combined_invalid_count = len(invalid_requests) + canary_invalid_count
+    combined_result_count = result_count + canary_result_count
+    combined_result_violation_count = (
+        result_violation_count + canary_result_violation_count
+    )
+    request_sources_present = bool(request_records) or canary_schema_valid
+    request_parity = bool(
+        request_sources_present
+        and all(record.get("acceptance_match") is True for record in request_records)
+        and (
+            not canary_schema_valid
+            or canary_row.get("request_acceptance_parity") is True
+        )
+    )
+    shadow_only = bool(
+        not enforcing_requests
+        and (
+            not canary_schema_valid
+            or canary_row.get("observational_only") is True
+        )
+    )
     fixture_receipts = [
         _read_fixture_receipt(path, tool_name=tool_name)
         for path in (fixture_receipt_paths or [])
@@ -108,12 +172,13 @@ def build_tool_contract_promotion_dossier(
     handler_fixture_coverage = any(
         isinstance(receipt.get("coverage"), dict)
         and receipt["coverage"].get("all_success_outcomes_covered") is True
+        and receipt["coverage"].get("all_declared_outcomes_covered") is True
         and receipt["coverage"].get("representative_failure_covered") is True
         for receipt in conformant_fixture_receipts
     )
     gate_binding_coverage = any(
         isinstance(receipt.get("coverage"), dict)
-        and receipt["coverage"].get("runtime_gate_rejection_observed") is True
+        and receipt["coverage"].get("runtime_gate_evidence_observed") is True
         and bool(receipt["coverage"].get("matched_gate_check_ids"))
         for receipt in conformant_fixture_receipts
     )
@@ -123,14 +188,13 @@ def build_tool_contract_promotion_dossier(
         "deterministic_valid_invalid_parity": bool(
             readiness_row.get("ready_for_live_invalid_canary")
         ),
-        "live_valid_request_seen": bool(valid_requests),
-        "live_invalid_request_seen": bool(invalid_requests),
-        "live_request_acceptance_parity": bool(request_records)
-        and all(record.get("acceptance_match") is True for record in request_records),
-        "live_tool_result_seen": result_count > 0,
-        "live_tool_result_conformant": result_count > 0
-        and result_violation_count == 0,
-        "evidence_collected_in_shadow": not enforcing_requests,
+        "live_valid_request_seen": combined_valid_count > 0,
+        "live_invalid_request_seen": combined_invalid_count > 0,
+        "live_request_acceptance_parity": request_parity,
+        "live_tool_result_seen": combined_result_count > 0,
+        "live_tool_result_conformant": combined_result_count > 0
+        and combined_result_violation_count == 0,
+        "evidence_collected_in_shadow": shadow_only,
         "durable_handler_fixture_receipt_conformant": handler_fixture_coverage,
         "runtime_gate_rejection_bound_to_check_id": gate_binding_coverage,
     }
@@ -141,28 +205,14 @@ def build_tool_contract_promotion_dossier(
         )
     if not gate_binding_coverage:
         unresolved.append(
-            "an observed runtime gate rejection must resolve to a machine-bound check id"
+            "observed runtime gate evidence must resolve to a machine-bound check id"
         )
     review_decision = _read_optional_object(review_decision_path)
-    review_canary = review_decision.get("decisions", {}).get("first_authority_canary")
-    review_canary = review_canary if isinstance(review_canary, dict) else {}
-    review_approved = (
-        review_decision.get("review_status") == "approved"
-        and review_canary.get("status") == "approved"
-        and review_canary.get("tool") == tool_name
-        and review_canary.get("request_validation_authority") is True
-        and review_canary.get("gate_repair_envelope_authority") is False
-        and review_canary.get("executable_gate_authority") == "legacy_runtime"
-    )
+    review_approved = _review_approved_for_tool(tool_name, review_decision)
     authority_canary = _read_optional_object(authority_canary_path)
-    authority_audit = authority_canary.get("authority_audit")
-    authority_audit = authority_audit if isinstance(authority_audit, dict) else {}
-    canary_approved = (
-        authority_canary.get("passed") is True
-        and authority_canary.get("tool") == tool_name
-        and authority_canary.get("successful_execution_count") == 1
-        and authority_audit.get("conformant") is True
-        and authority_audit.get("violation_count") == 0
+    canary_approved = _authority_canary_passed_for_tool(
+        tool_name,
+        authority_canary,
     )
     if not review_approved:
         unresolved.append(
@@ -191,15 +241,21 @@ def build_tool_contract_promotion_dossier(
         "evidence_checks": evidence_checks,
         "request_evidence": {
             "record_count": len(request_records),
-            "valid_count": len(valid_requests),
-            "invalid_count": len(invalid_requests),
+            "valid_count": combined_valid_count,
+            "invalid_count": combined_invalid_count,
             "enforcing_count": len(enforcing_requests),
             "records": request_records,
         },
         "tool_result_evidence": {
-            "event_count": result_count,
-            "violation_count": result_violation_count,
+            "event_count": combined_result_count,
+            "violation_count": combined_result_violation_count,
             "runs": result_reports,
+        },
+        "integration_canary_evidence": {
+            "present": bool(canary_row),
+            "conformant": canary_schema_valid,
+            "source": str(integration_canary_path or ""),
+            "row": canary_row,
         },
         "fixture_evidence": {
             "receipt_count": len(fixture_receipts),
@@ -258,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tool", required=True)
     parser.add_argument("--run", action="append", default=[])
     parser.add_argument("--fixture-receipt", action="append", default=[])
+    parser.add_argument("--integration-canary", default="")
     parser.add_argument("--review-decision", default="")
     parser.add_argument("--authority-canary", default="")
     parser.add_argument("--output", default="")
@@ -266,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         args.tool,
         args.run,
         args.fixture_receipt,
+        integration_canary_path=args.integration_canary or None,
         review_decision_path=args.review_decision or None,
         authority_canary_path=args.authority_canary or None,
     )

@@ -103,6 +103,12 @@
       }
     ]
   },
+  "integration_canary_evidence": {
+    "present": false,
+    "conformant": false,
+    "source": "",
+    "row": {}
+  },
   "fixture_evidence": {
     "receipt_count": 1,
     "conformant_receipt_count": 1,
@@ -112,9 +118,9 @@
         "schema_version": "openeta.tool_contract_fixture_receipt.v1",
         "tool": "estimate_depth_prior",
         "authority": "promotion_evidence_only",
-        "artifact_root": ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r38",
+        "artifact_root": ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5",
         "contract_schema_version": "openeta.tool_contract.v1",
-        "contract_maturity": "declared",
+        "contract_maturity": "verified",
         "handler_implementation": "agent.tools.handlers.build_depth_prior_handler",
         "host_resolver_id": "openeta.host_resolver.estimate_depth_prior.v1",
         "host_resolver_implementation": "agent.tools.runtime_contract_bindings._resolve_estimate_depth_prior_input",
@@ -126,11 +132,14 @@
             "operational_success": true,
             "semantic_outcome": "completed",
             "diagnostic_codes": [],
+            "diagnostic_messages": [],
             "artifact_paths": [
-              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r38/success/fixture-success/20260820T072829753247Z-7af2bded/agentview-confidence.npy",
-              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r38/success/fixture-success/20260820T072829753247Z-7af2bded/agentview-depth.npy",
-              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r38/success/fixture-success/20260820T072829753247Z-7af2bded/tool_result.json"
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-confidence.npy",
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-depth.npy",
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/tool_result.json"
             ],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
             "conformant": true,
             "violations": []
           },
@@ -143,7 +152,10 @@
             "diagnostic_codes": [
               "mcp_call_failed"
             ],
+            "diagnostic_messages": [],
             "artifact_paths": [],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
             "conformant": true,
             "violations": []
           },
@@ -179,7 +191,7 @@
               "authoritative_gate": "legacy_runtime",
               "repair_envelope_authority": "legacy_runtime",
               "tool": "estimate_depth_prior",
-              "contract_maturity": "declared",
+              "contract_maturity": "verified",
               "contract_gate_checks": [
                 "source packet and camera frame resolve",
                 "resolution level is in [0, 10)",
@@ -212,11 +224,24 @@
             "completed"
           ],
           "all_success_outcomes_covered": true,
+          "expected_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "observed_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "all_declared_outcomes_covered": true,
           "representative_failure_covered": true,
+          "runtime_gate_evidence_observed": true,
           "runtime_gate_rejection_observed": true,
           "matched_gate_check_ids": [
             "runtime.source_packet_resolution"
-          ]
+          ],
+          "freshness_and_invalidation_covered": true,
+          "remote_backend_semantics_covered": true,
+          "world_mutating_execution_receipt_covered": true
         },
         "conformant": true
       }

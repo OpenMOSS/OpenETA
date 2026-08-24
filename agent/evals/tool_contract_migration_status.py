@@ -16,6 +16,9 @@ from adapter.protocol import JsonDict
 from agent.evals.tool_contract_readiness import (
     audit_tool_contract_request_readiness,
 )
+from agent.evals.tool_contract_promotion_campaign import (
+    build_tool_contract_promotion_campaign,
+)
 from agent.tools.contracts import (
     ContractMaturity,
     build_default_tool_contract_catalog,
@@ -162,6 +165,24 @@ def audit_tool_contract_migration_status(
         and review_canary.get("gate_repair_envelope_authority") is False
         and review_canary.get("executable_gate_authority") == "legacy_runtime"
     )
+    remaining_names = sorted(
+        contract.name
+        for contract in catalog.list()
+        if contract.name != "estimate_depth_prior"
+    )
+    remaining_review = review_decisions.get("remaining_tool_promotions")
+    remaining_review = (
+        remaining_review if isinstance(remaining_review, Mapping) else {}
+    )
+    remaining_review_approved = bool(
+        review_approved
+        and remaining_review.get("status") == "approved"
+        and sorted(str(name) for name in remaining_review.get("approved_tools", []))
+        == remaining_names
+        and remaining_review.get("request_validation_authority_canary") is True
+        and remaining_review.get("gate_repair_envelope_authority") is False
+        and remaining_review.get("executable_gate_authority") == "legacy_runtime"
+    )
     authority_canary = _read_object(
         generated / "tool-contract-authority-canary.json"
     )
@@ -181,6 +202,48 @@ def audit_tool_contract_migration_status(
         and canary_audit.get("conformant") is True
         and canary_audit.get("violation_count") == 0
     )
+    catalog_authority_canary = _read_object(
+        generated / "tool-contract-catalog-authority-canary.json"
+    )
+    catalog_canary_policy = catalog_authority_canary.get("policy")
+    catalog_canary_policy = (
+        catalog_canary_policy
+        if isinstance(catalog_canary_policy, Mapping)
+        else {}
+    )
+    catalog_canary_audit = catalog_authority_canary.get("authority_audit")
+    catalog_canary_audit = (
+        catalog_canary_audit
+        if isinstance(catalog_canary_audit, Mapping)
+        else {}
+    )
+    catalog_canary_rows = catalog_authority_canary.get("tools")
+    catalog_canary_rows = (
+        catalog_canary_rows if isinstance(catalog_canary_rows, list) else []
+    )
+    remaining_authority_canary_safe = bool(
+        catalog_authority_canary.get("schema_version")
+        == "openeta.tool_contract_catalog_authority_canary.v1"
+        and catalog_authority_canary.get("passed") is True
+        and catalog_authority_canary.get("catalog_sha256") == catalog_sha256
+        and catalog_authority_canary.get("tool_count") == 34
+        and catalog_authority_canary.get("passed_tool_count") == 34
+        and catalog_authority_canary.get("tool_execution_count") == 0
+        and catalog_authority_canary.get("world_mutation_count") == 0
+        and sorted(catalog_canary_policy.get("request_validation_authority", []))
+        == remaining_names
+        and catalog_canary_policy.get("gate_repair_envelope_authority") == []
+        and catalog_canary_policy.get("executable_gate_authority")
+        == "legacy_runtime"
+        and sorted(
+            str(row.get("tool") or "")
+            for row in catalog_canary_rows
+            if isinstance(row, Mapping) and row.get("passed") is True
+        )
+        == remaining_names
+        and catalog_canary_audit.get("conformant") is True
+        and catalog_canary_audit.get("violation_count") == 0
+    )
 
     shared_rfc_sync = _read_object(
         generated / "tool-contract-shared-rfc-sync.json"
@@ -189,7 +252,10 @@ def audit_tool_contract_migration_status(
         shared_rfc_sync.get("status") == "synced"
         and shared_rfc_sync.get("review_decision")
         == "docs/generated/tool-contract-review-decision.json"
+        and shared_rfc_sync.get("section")
+        == "C.8.1 其余 34 个公共工具的 verified promotion"
         and isinstance(shared_rfc_sync.get("revision"), int)
+        and int(shared_rfc_sync.get("revision", 0)) >= 2139
     )
 
     dossier = _read_object(
@@ -208,6 +274,61 @@ def audit_tool_contract_migration_status(
         and dossier.get("unresolved_requirements") == []
     )
 
+    fixture_receipts = [
+        _read_object(path)
+        for path in sorted(generated.glob("*-fixture-receipt.json"))
+    ]
+    integration_canary = _read_object(
+        generated / "tool-contract-integration-canary.json"
+    )
+    expected_campaign = build_tool_contract_promotion_campaign(
+        catalog,
+        fixture_receipts=fixture_receipts,
+        integration_canary=integration_canary,
+        review_decision=review,
+        authority_canary=catalog_authority_canary,
+    )
+    campaign_projection = _projection_check(
+        generated / "tool-contract-promotion-campaign.json",
+        expected_campaign,
+        exact_text=False,
+    )
+    campaign_rows = {
+        str(row.get("tool") or ""): row
+        for row in expected_campaign.get("tools", [])
+        if isinstance(row, Mapping)
+    }
+    promotion_dossiers = [
+        _read_object(path)
+        for path in sorted((generated / "promotion-dossiers").glob("*.json"))
+    ]
+    dossier_by_tool = {
+        str(row.get("tool") or ""): row for row in promotion_dossiers
+    }
+    remaining_promotions_complete = bool(
+        expected_campaign.get("verified_count") == 35
+        and expected_campaign.get("declared_count") == 0
+        and all(
+            campaign_rows.get(name, {}).get("eligible_for_verified_promotion")
+            is True
+            and campaign_rows.get(name, {}).get("promotion_gaps") == []
+            and dossier_by_tool.get(name, {}).get("promotion_complete") is True
+            and dossier_by_tool.get(name, {}).get("unresolved_requirements") == []
+            for name in remaining_names
+        )
+        and sorted(dossier_by_tool) == remaining_names
+    )
+    review_request = _read_object(
+        generated / "tool-contract-remaining-review-request.json"
+    )
+    review_request_fulfilled = bool(
+        review_request.get("status") == "fulfilled_by_separate_decision_receipt"
+        and review_request.get("decision_receipt")
+        == "docs/generated/tool-contract-review-decision.json"
+        and sorted(str(name) for name in review_request.get("tools", []))
+        == remaining_names
+    )
+
     generated_current = all(
         item.get("current") is True
         for item in (
@@ -215,11 +336,17 @@ def audit_tool_contract_migration_status(
             markdown_projection,
             readiness_projection,
             resolver_projection,
+            campaign_projection,
         )
     )
     local_checks = {
         "catalog_inventory": summary.get("tool_count") == len(registry.list()) == 35,
         "declared_contract_structure": not structural_issues and len(declared) == 35,
+        "reviewed_catalog_fully_verified": (
+            summary.get("maturity_counts")
+            == {"inferred": 0, "declared": 0, "verified": 35}
+            and summary.get("coverage_gap_counts") == {}
+        ),
         "review_decision_approved": review_approved,
         "generated_projections_current": generated_current,
         "typed_toolchains_compatible": chains_conformant,
@@ -232,11 +359,15 @@ def audit_tool_contract_migration_status(
         ),
         "request_readiness_audited": (
             readiness.get("declared_tool_count") == 35
-            and readiness.get("ready_for_live_invalid_canary_count") == 6
+            and readiness.get("ready_for_live_invalid_canary_count") == 35
         ),
         "empty_policy_authority_baseline_safe": authority_safe,
         "estimate_depth_prior_authority_canary_safe": authority_canary_safe,
         "estimate_depth_prior_promotion_complete": dossier_ready,
+        "remaining_tool_review_approved": remaining_review_approved,
+        "remaining_tool_authority_canary_safe": remaining_authority_canary_safe,
+        "remaining_tool_promotions_complete": remaining_promotions_complete,
+        "remaining_review_request_fulfilled": review_request_fulfilled,
         "shared_rfc_synced": shared_rfc_synced,
         "agent_choice_preserved": all(
             contract.gate.preserves_agent_choice for contract in declared
@@ -298,12 +429,20 @@ def audit_tool_contract_migration_status(
         ),
         _requirement(
             "promotion_evidence_package",
-            "complete" if dossier_ready else "failed",
-            ["docs/generated/estimate-depth-prior-promotion-dossier.json"],
+            "complete"
+            if dossier_ready and remaining_promotions_complete
+            else "failed",
+            [
+                "docs/generated/estimate-depth-prior-promotion-dossier.json",
+                "docs/generated/tool-contract-promotion-campaign.json",
+                "docs/generated/promotion-dossiers/<tool>.json",
+            ],
         ),
         _requirement(
             "three_person_schema_and_promotion_review",
-            "complete" if review_approved else "failed",
+            "complete"
+            if review_approved and remaining_review_approved
+            else "failed",
             [
                 "docs/rfc-tool-contract-v1-proposal.md",
                 "docs/generated/tool-contract-review-decision.json",
@@ -317,10 +456,13 @@ def audit_tool_contract_migration_status(
         ),
         _requirement(
             "verified_authority_canary",
-            "complete" if authority_canary_safe else "failed",
+            "complete"
+            if authority_canary_safe and remaining_authority_canary_safe
+            else "failed",
             [
                 "estimate_depth_prior",
                 "docs/generated/tool-contract-authority-canary.json",
+                "docs/generated/tool-contract-catalog-authority-canary.json",
             ],
         ),
     ]
@@ -339,14 +481,14 @@ def audit_tool_contract_migration_status(
             "markdown": markdown_projection,
             "readiness": readiness_projection,
             "host_resolvers": resolver_projection,
+            "promotion_campaign": campaign_projection,
         },
         "typed_toolchains": chains,
         "requirements": requirements,
         "external_blockers": external_blockers,
         "next_action": (
-            "Define a versioned gate-repair extension only after a concrete tool result "
-            "cannot be represented by the common v1 envelope; keep every additional "
-            "runtime authority promotion separately reviewed and canaried."
+            "Keep gate-repair-envelope authority empty and executable gates on "
+            "legacy_runtime until a separately reviewed authority change is approved."
         ),
         "test_summary": {
             "passed": int(test_passed),
@@ -360,7 +502,8 @@ def audit_tool_contract_migration_status(
         "interpretation": (
             "The reviewed migration is complete only when local evidence, the durable "
             "review decision, the narrow enforcing canary, and shared RFC sync all pass. "
-            "This does not grant authority to any other tool or gate surface."
+            "All 35 public tools are verified. Request-validation canaries are scoped "
+            "separately; gate-repair and executable-gate authority remain unchanged."
         ),
     }
 

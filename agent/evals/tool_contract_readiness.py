@@ -134,6 +134,9 @@ def _schema_fixture(schema: Mapping[str, Any]) -> Any:
         return enum[0]
     schema_type = schema.get("type")
     if schema_type == "string":
+        pattern = str(schema.get("pattern") or "")
+        if pattern.startswith("^https://"):
+            return "https://example.com"
         return "x" * max(1, int(schema.get("minLength") or 0))
     if schema_type == "integer":
         value = int(schema.get("minimum") or 0)

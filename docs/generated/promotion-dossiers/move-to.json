@@ -1,0 +1,354 @@
+{
+  "schema_version": "openeta.tool_contract_promotion_dossier.v1",
+  "tool": "move_to",
+  "current_maturity": "verified",
+  "promotion_authority": "three_person_review_approved",
+  "eligible_for_review": true,
+  "eligible_for_verified_promotion": true,
+  "promotion_complete": true,
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "coverage_gaps": [],
+  "evidence_checks": {
+    "declared_or_verified_contract": true,
+    "deterministic_valid_invalid_parity": true,
+    "live_valid_request_seen": true,
+    "live_invalid_request_seen": true,
+    "live_request_acceptance_parity": true,
+    "live_tool_result_seen": true,
+    "live_tool_result_conformant": true,
+    "evidence_collected_in_shadow": true,
+    "durable_handler_fixture_receipt_conformant": true,
+    "runtime_gate_rejection_bound_to_check_id": true
+  },
+  "request_evidence": {
+    "record_count": 0,
+    "valid_count": 1,
+    "invalid_count": 1,
+    "enforcing_count": 0,
+    "records": []
+  },
+  "tool_result_evidence": {
+    "event_count": 1,
+    "violation_count": 0,
+    "runs": []
+  },
+  "integration_canary_evidence": {
+    "present": true,
+    "conformant": true,
+    "source": "docs/generated/tool-contract-integration-canary.json",
+    "row": {
+      "tool": "move_to",
+      "contract_maturity": "verified",
+      "session_id": "catalog-r2-move-to",
+      "model_calls": ".openeta_eval/audits/toolcontract-integration-catalog-20260820-r2/sessions/catalog-r2-move-to/rollout/model_calls.jsonl",
+      "tool_calls": ".openeta_eval/audits/toolcontract-integration-catalog-20260820-r2/sessions/catalog-r2-move-to/rollout/tool_calls.jsonl",
+      "request_record_count": 2,
+      "valid_request_count": 1,
+      "invalid_request_count": 1,
+      "request_acceptance_parity": true,
+      "observational_only": true,
+      "tool_result_count": 1,
+      "tool_result_violation_count": 0,
+      "semantic_outcome": "mutation_acknowledged",
+      "conformant": true
+    }
+  },
+  "fixture_evidence": {
+    "receipt_count": 1,
+    "conformant_receipt_count": 1,
+    "receipts": [
+      {
+        "source": "docs/generated/move-to-fixture-receipt.json",
+        "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+        "tool": "move_to",
+        "authority": "promotion_evidence_only",
+        "artifact_root": ".openeta_eval/audits/toolcontract-fixture-move-to-r5",
+        "contract_schema_version": "openeta.tool_contract.v1",
+        "contract_maturity": "verified",
+        "handler_implementation": "agent.tools.sim_mcp.SimulatorMcpToolProxy.handler_for",
+        "host_resolver_id": "openeta.host_resolver.move_to.v1",
+        "host_resolver_implementation": "agent.runtime.memory.AgentMemory.resolve_ik_motion_reference",
+        "cases": [
+          {
+            "case": "handler_success_1",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "mutation_acknowledged",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/mutation/responses/fixture-sim-session-9946292267-0001-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_success_2",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "target_already_within_tolerance",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/noop/responses/fixture-sim-session-bcb129a85d-0001-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_success_3",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "requires_attachment_confirmation",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/tentative/responses/fixture-sim-session-dabee5819e-0001-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_success_4",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "no_attachment_evidence",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/empty/responses/fixture-sim-session-52e6f12692-0001-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_success_5",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "attachment_contract_unavailable",
+            "diagnostic_codes": [
+              "attachment_proxy_backend_contract_missing"
+            ],
+            "diagnostic_messages": [
+              "The simulator accepted host contact authorization but did not return an attachment-proxy receipt. Physical attachment and carried-object collision coverage remain unknown."
+            ],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/attachment-missing/responses/fixture-sim-session-78ba29c7ee-0002-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_declared_outcome_1",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": false,
+            "semantic_outcome": "target_not_reached",
+            "diagnostic_codes": [
+              "simulator_mcp_target_not_reached"
+            ],
+            "diagnostic_messages": [
+              "Simulator motion did not reach the requested target."
+            ],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-move-to-r5/target-miss/responses/fixture-sim-session-61dda0f09d-0001-move_to/move_to-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_dependency_failure",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": false,
+            "semantic_outcome": "operational_failure",
+            "diagnostic_codes": [
+              "simulator_mcp_call_failed"
+            ],
+            "diagnostic_messages": [
+              "deterministic simulator fixture failure: move_to"
+            ],
+            "artifact_paths": [],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "motion_reconciliation_gate_rejection",
+            "boundary": "ActionPipeline -> host gate",
+            "blocked": true,
+            "tool_execution_count": 0,
+            "repair_code": "motion_reconciliation_required",
+            "matched_gate_check_ids": [
+              "runtime.motion_reconciliation"
+            ],
+            "authoritative_gate": "legacy_runtime",
+            "enforcing": false,
+            "conformant": true,
+            "contract_shadow_validation": {
+              "schema_version": "openeta.gate_contract_shadow_validation.v1",
+              "evaluated": true,
+              "enforcing": false,
+              "authoritative_gate": "legacy_runtime",
+              "repair_envelope_authority": "legacy_runtime",
+              "tool": "move_to",
+              "contract_maturity": "verified",
+              "contract_gate_checks": [
+                "receipt exists and is executable",
+                "receipt pose policy and tolerances match the frozen preview",
+                "receipt epochs are current",
+                "compiled residual budget is respected when applicable",
+                "collision capability matches deferred-collision authorization"
+              ],
+              "contract_gate_binding_count": 7,
+              "matched_gate_bindings": [
+                {
+                  "check_id": "runtime.motion_reconciliation",
+                  "description": "Unknown mutation outcomes must be observed and reconciled.",
+                  "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+                  "repair_codes": [
+                    "motion_reconciliation_required"
+                  ],
+                  "applies_when": "motion reconciliation status is required or unresolved"
+                }
+              ],
+              "conformant": true,
+              "violations": []
+            }
+          },
+          {
+            "case": "freshness_or_provenance_gate_rejection",
+            "boundary": "ActionPipeline -> host resolver",
+            "blocked": true,
+            "tool_execution_count": 0,
+            "repair_code": "invalid_ik_receipt_reference",
+            "matched_gate_check_ids": [
+              "runtime.ik_receipt_resolution"
+            ],
+            "authoritative_gate": "legacy_runtime",
+            "enforcing": false,
+            "conformant": true,
+            "contract_shadow_validation": {
+              "schema_version": "openeta.gate_contract_shadow_validation.v1",
+              "evaluated": true,
+              "enforcing": false,
+              "authoritative_gate": "legacy_runtime",
+              "repair_envelope_authority": "legacy_runtime",
+              "tool": "move_to",
+              "contract_maturity": "verified",
+              "contract_gate_checks": [
+                "receipt exists and is executable",
+                "receipt pose policy and tolerances match the frozen preview",
+                "receipt epochs are current",
+                "compiled residual budget is respected when applicable",
+                "collision capability matches deferred-collision authorization"
+              ],
+              "contract_gate_binding_count": 7,
+              "matched_gate_bindings": [
+                {
+                  "check_id": "runtime.ik_receipt_resolution",
+                  "description": "A motion request resolves an exact host-issued IK receipt.",
+                  "implementation": "agent/runtime/memory.py:AgentMemory.resolve_ik_motion_reference",
+                  "repair_codes": [
+                    "invalid_ik_receipt_reference"
+                  ],
+                  "applies_when": ""
+                }
+              ],
+              "conformant": true,
+              "violations": []
+            }
+          }
+        ],
+        "coverage": {
+          "expected_success_outcomes": [
+            "attachment_contract_unavailable",
+            "mutation_acknowledged",
+            "no_attachment_evidence",
+            "requires_attachment_confirmation",
+            "target_already_within_tolerance"
+          ],
+          "observed_success_outcomes": [
+            "attachment_contract_unavailable",
+            "mutation_acknowledged",
+            "no_attachment_evidence",
+            "requires_attachment_confirmation",
+            "target_already_within_tolerance"
+          ],
+          "all_success_outcomes_covered": true,
+          "expected_declared_outcomes": [
+            "attachment_contract_unavailable",
+            "mutation_acknowledged",
+            "no_attachment_evidence",
+            "operational_failure",
+            "requires_attachment_confirmation",
+            "target_already_within_tolerance",
+            "target_not_reached"
+          ],
+          "observed_declared_outcomes": [
+            "attachment_contract_unavailable",
+            "mutation_acknowledged",
+            "no_attachment_evidence",
+            "operational_failure",
+            "requires_attachment_confirmation",
+            "target_already_within_tolerance",
+            "target_not_reached"
+          ],
+          "all_declared_outcomes_covered": true,
+          "representative_failure_covered": true,
+          "runtime_gate_evidence_observed": true,
+          "runtime_gate_rejection_observed": true,
+          "matched_gate_check_ids": [
+            "runtime.ik_receipt_resolution",
+            "runtime.motion_reconciliation"
+          ],
+          "freshness_and_invalidation_covered": true,
+          "remote_backend_semantics_covered": false,
+          "world_mutating_execution_receipt_covered": true
+        },
+        "conformant": true
+      }
+    ]
+  },
+  "review_evidence": {
+    "approved": true,
+    "source": "docs/generated/tool-contract-review-decision.json"
+  },
+  "authority_canary_evidence": {
+    "passed": true,
+    "source": "docs/generated/tool-contract-catalog-authority-canary.json"
+  },
+  "runs": [],
+  "unresolved_requirements": [],
+  "interpretation": "This dossier aggregates evidence and never changes maturity or runtime authority. verified remains a reviewed declaration, not an audit side effect."
+}

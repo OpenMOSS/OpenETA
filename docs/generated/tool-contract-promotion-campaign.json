@@ -1,0 +1,1585 @@
+{
+  "schema_version": "openeta.tool_contract_promotion_campaign.v1",
+  "authority": "promotion_evidence_only",
+  "catalog_tool_count": 35,
+  "campaign_target_count": 34,
+  "verified_count": 35,
+  "declared_count": 0,
+  "request_parity_ready_count": 34,
+  "fixture_registered_count": 34,
+  "integration_canary_conformant_count": 34,
+  "risk_tier_counts": {
+    "backend_or_artifact": 2,
+    "evidence_sensitive": 16,
+    "local_deterministic": 11,
+    "world_mutating": 5
+  },
+  "resolver_binding_audit_conformant": true,
+  "tools": [
+    {
+      "tool": "observe",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 1,
+      "host_resolution": {
+        "mode": "post_call_observation",
+        "layer": "post_environment",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "enhance_depth",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "depth_enhanced",
+        "requires_depth_alignment_repair"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_observation_packet_plus_optional_prior",
+        "layer": "pipeline",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_observation_packet",
+        "layer": "pipeline",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": false,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 1,
+      "promotion_gaps": [
+        "authority_canary_passed"
+      ],
+      "eligible_for_verified_promotion": false
+    },
+    {
+      "tool": "create_simulator_env",
+      "category": "environment",
+      "effect": "world_mutating",
+      "maturity": "verified",
+      "risk_tier": "world_mutating",
+      "successful_semantic_outcomes": [
+        "mutation_acknowledged"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "environment_lifecycle",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "world_mutating_execution_receipt",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "world_mutating_execution_receipt": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "close_simulator_env",
+      "category": "environment",
+      "effect": "world_mutating",
+      "maturity": "verified",
+      "risk_tier": "world_mutating",
+      "successful_semantic_outcomes": [
+        "mutation_acknowledged"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "host_active_handle",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "world_mutating_execution_receipt"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "world_mutating_execution_receipt": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "python_exec",
+      "category": "coding",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "sandbox_capability_injection",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "web_search",
+      "category": "web",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "backend_or_artifact",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "configured_provider_capability",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "web_fetch",
+      "category": "web",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "backend_or_artifact",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "public_https_fetch",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "sam3",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "detections_available",
+        "no_detection"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_reference",
+        "layer": "pipeline",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "object_memory_plus_packet",
+        "layer": "pipeline",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "molmopoint",
+      "category": "perception",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "ordered_packet_references",
+        "layer": "pipeline",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "select_sam3_detection",
+      "category": "perception",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "evidence_graph_lookup",
+        "layer": "memory",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "category": "perception",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "pending_result_lookup",
+        "layer": "memory",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "category": "manipulation",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "candidates_available"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_bundle",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "anyplace",
+      "category": "manipulation",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "candidates_available"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_bundle",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation",
+        "remote_backend_semantics"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true,
+        "remote_backend_semantics": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "category": "geometry",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "exclusive_placement_reference_or_explicit_geometry",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "category": "calibration",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "session_proposal_workspace",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "category": "calibration",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "reviewed_proposal_plus_host_evidence",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "category": "strategy_management",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "session_proposal_workspace",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "category": "strategy_management",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "reviewed_proposal_plus_host_evidence",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "category": "geometry",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "evidence_graph_lookup",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "category": "geometry",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed",
+        "requires_better_view"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "opaque_bundle",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "category": "geometry",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "multi_reference",
+        "layer": "memory",
+        "contract_driven_dispatch": true
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "category": "geometry",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "compiled_grasp_plus_current_observation",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "category": "safety",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "completed_probe_lookup",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "move_to",
+      "category": "control",
+      "effect": "world_mutating",
+      "maturity": "verified",
+      "risk_tier": "world_mutating",
+      "successful_semantic_outcomes": [
+        "mutation_acknowledged",
+        "target_already_within_tolerance",
+        "attachment_contract_unavailable",
+        "requires_attachment_confirmation",
+        "no_attachment_evidence"
+      ],
+      "gate_binding_count": 7,
+      "host_resolution": {
+        "mode": "execution_receipt_lookup",
+        "layer": "memory",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "world_mutating_execution_receipt",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "world_mutating_execution_receipt": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "category": "control",
+      "effect": "world_mutating",
+      "maturity": "verified",
+      "risk_tier": "world_mutating",
+      "successful_semantic_outcomes": [
+        "mutation_acknowledged",
+        "target_already_within_tolerance",
+        "attachment_contract_unavailable",
+        "requires_attachment_confirmation",
+        "no_attachment_evidence"
+      ],
+      "gate_binding_count": 7,
+      "host_resolution": {
+        "mode": "execution_receipt_lookup",
+        "layer": "memory",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "world_mutating_execution_receipt",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "world_mutating_execution_receipt": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "gripper_control",
+      "category": "control",
+      "effect": "world_mutating",
+      "maturity": "verified",
+      "risk_tier": "world_mutating",
+      "successful_semantic_outcomes": [
+        "mutation_acknowledged",
+        "requires_attachment_probe",
+        "no_attachment_evidence",
+        "attachment_contract_unavailable"
+      ],
+      "gate_binding_count": 3,
+      "host_resolution": {
+        "mode": "none",
+        "layer": "",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "world_mutating_execution_receipt"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "world_mutating_execution_receipt": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "ik_preview_check",
+      "category": "safety",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "evidence_sensitive",
+      "successful_semantic_outcomes": [
+        "ik_feasible",
+        "ik_kinematically_feasible_collision_deferred",
+        "ik_repairable",
+        "ik_inconclusive",
+        "ik_hard_infeasible"
+      ],
+      "gate_binding_count": 4,
+      "host_resolution": {
+        "mode": "exclusive_reference_or_agent_pose",
+        "layer": "pipeline",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary",
+        "freshness_and_invalidation"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true,
+        "freshness_and_invalidation": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "save_memory",
+      "category": "memory",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "none",
+        "layer": "",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "get_memory",
+      "category": "memory",
+      "effect": "read_only",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "none",
+        "layer": "",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "delete_memory",
+      "category": "memory",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "none",
+        "layer": "",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "compact_memory",
+      "category": "memory",
+      "effect": "bookkeeping",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "none",
+        "layer": "",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "register_skill",
+      "category": "skill_management",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "isolated_authoring_and_review",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    },
+    {
+      "tool": "update_skill",
+      "category": "skill_management",
+      "effect": "planning",
+      "maturity": "verified",
+      "risk_tier": "local_deterministic",
+      "successful_semantic_outcomes": [
+        "completed"
+      ],
+      "gate_binding_count": 2,
+      "host_resolution": {
+        "mode": "isolated_authoring_and_review",
+        "layer": "handler",
+        "contract_driven_dispatch": false
+      },
+      "requirements": [
+        "request_and_result_conformance",
+        "production_handler_success_and_failure",
+        "live_shadow_and_gate_evidence",
+        "three_person_review_and_authority_canary"
+      ],
+      "fixture_receipt_count": 1,
+      "conformant_fixture_receipt_count": 1,
+      "integration_canary_present": true,
+      "checks": {
+        "explicit_contract": true,
+        "request_shadow_parity": true,
+        "host_resolver_binding_conformant": true,
+        "production_fixture_registered": true,
+        "successful_outcomes_fixture_covered": true,
+        "representative_failure_fixture_covered": true,
+        "all_declared_outcomes_fixture_covered": true,
+        "live_result_conformance": true,
+        "valid_invalid_live_shadow_parity": true,
+        "gate_repair_binding_observed": true,
+        "three_person_promotion_review": true,
+        "authority_canary_passed": true
+      },
+      "promotion_gap_count": 0,
+      "promotion_gaps": [],
+      "eligible_for_verified_promotion": true
+    }
+  ],
+  "interpretation": "This matrix is promotion evidence and work planning only. Empty gaps, review approval, and an authority canary are all required before a tool may be declared verified; this report never changes runtime authority."
+}

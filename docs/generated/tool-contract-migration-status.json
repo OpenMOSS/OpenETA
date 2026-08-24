@@ -7,18 +7,16 @@
     "tool_count": 35,
     "maturity_counts": {
       "inferred": 0,
-      "declared": 34,
-      "verified": 1
+      "declared": 0,
+      "verified": 35
     },
-    "coverage_gap_counts": {
-      "rollout_conformance_verification": 34,
-      "runtime_schema_enforcement": 34
-    }
+    "coverage_gap_counts": {}
   },
-  "catalog_sha256": "8e87f68f5ac7af24d979bf3cb99a2d48f7a56d447ddcc8ea0e11ec32ecc1b6d0",
+  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
   "local_checks": {
     "catalog_inventory": true,
     "declared_contract_structure": true,
+    "reviewed_catalog_fully_verified": true,
     "review_decision_approved": true,
     "generated_projections_current": true,
     "typed_toolchains_compatible": true,
@@ -27,6 +25,10 @@
     "empty_policy_authority_baseline_safe": true,
     "estimate_depth_prior_authority_canary_safe": true,
     "estimate_depth_prior_promotion_complete": true,
+    "remaining_tool_review_approved": true,
+    "remaining_tool_authority_canary_safe": true,
+    "remaining_tool_promotions_complete": true,
+    "remaining_review_request_fulfilled": true,
     "shared_rfc_synced": true,
     "agent_choice_preserved": true
   },
@@ -49,6 +51,11 @@
     },
     "host_resolvers": {
       "path": "docs/generated/host-resolver-binding-audit.json",
+      "present": true,
+      "current": true
+    },
+    "promotion_campaign": {
+      "path": "docs/generated/tool-contract-promotion-campaign.json",
       "present": true,
       "current": true
     }
@@ -179,7 +186,9 @@
       "id": "promotion_evidence_package",
       "status": "complete",
       "evidence": [
-        "docs/generated/estimate-depth-prior-promotion-dossier.json"
+        "docs/generated/estimate-depth-prior-promotion-dossier.json",
+        "docs/generated/tool-contract-promotion-campaign.json",
+        "docs/generated/promotion-dossiers/<tool>.json"
       ],
       "gaps": []
     },
@@ -205,21 +214,22 @@
       "status": "complete",
       "evidence": [
         "estimate_depth_prior",
-        "docs/generated/tool-contract-authority-canary.json"
+        "docs/generated/tool-contract-authority-canary.json",
+        "docs/generated/tool-contract-catalog-authority-canary.json"
       ],
       "gaps": []
     }
   ],
   "external_blockers": [],
-  "next_action": "Define a versioned gate-repair extension only after a concrete tool result cannot be represented by the common v1 envelope; keep every additional runtime authority promotion separately reviewed and canaried.",
+  "next_action": "Keep gate-repair-envelope authority empty and executable gates on legacy_runtime until a separately reviewed authority change is approved.",
   "test_summary": {
-    "passed": 1353,
-    "skipped": 12,
-    "warnings": 36
+    "passed": 255,
+    "skipped": 0,
+    "warnings": 0
   },
   "harness_wiki": {
     "url": "https://sii-czxy.feishu.cn/wiki/A6M9wTBoCiOYPwkT9rWcwgfon2f",
-    "revision": 267
+    "revision": 291
   },
-  "interpretation": "The reviewed migration is complete only when local evidence, the durable review decision, the narrow enforcing canary, and shared RFC sync all pass. This does not grant authority to any other tool or gate surface."
+  "interpretation": "The reviewed migration is complete only when local evidence, the durable review decision, the narrow enforcing canary, and shared RFC sync all pass. All 35 public tools are verified. Request-validation canaries are scoped separately; gate-repair and executable-gate authority remain unchanged."
 }

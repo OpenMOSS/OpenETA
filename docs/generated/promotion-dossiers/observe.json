@@ -1,0 +1,165 @@
+{
+  "schema_version": "openeta.tool_contract_promotion_dossier.v1",
+  "tool": "observe",
+  "current_maturity": "verified",
+  "promotion_authority": "three_person_review_approved",
+  "eligible_for_review": true,
+  "eligible_for_verified_promotion": true,
+  "promotion_complete": true,
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "coverage_gaps": [],
+  "evidence_checks": {
+    "declared_or_verified_contract": true,
+    "deterministic_valid_invalid_parity": true,
+    "live_valid_request_seen": true,
+    "live_invalid_request_seen": true,
+    "live_request_acceptance_parity": true,
+    "live_tool_result_seen": true,
+    "live_tool_result_conformant": true,
+    "evidence_collected_in_shadow": true,
+    "durable_handler_fixture_receipt_conformant": true,
+    "runtime_gate_rejection_bound_to_check_id": true
+  },
+  "request_evidence": {
+    "record_count": 0,
+    "valid_count": 1,
+    "invalid_count": 1,
+    "enforcing_count": 0,
+    "records": []
+  },
+  "tool_result_evidence": {
+    "event_count": 1,
+    "violation_count": 0,
+    "runs": []
+  },
+  "integration_canary_evidence": {
+    "present": true,
+    "conformant": true,
+    "source": "docs/generated/tool-contract-integration-canary.json",
+    "row": {
+      "tool": "observe",
+      "contract_maturity": "verified",
+      "session_id": "catalog-r2-observe",
+      "model_calls": ".openeta_eval/audits/toolcontract-integration-catalog-20260820-r2/sessions/catalog-r2-observe/rollout/model_calls.jsonl",
+      "tool_calls": ".openeta_eval/audits/toolcontract-integration-catalog-20260820-r2/sessions/catalog-r2-observe/rollout/tool_calls.jsonl",
+      "request_record_count": 2,
+      "valid_request_count": 1,
+      "invalid_request_count": 1,
+      "request_acceptance_parity": true,
+      "observational_only": true,
+      "tool_result_count": 1,
+      "tool_result_violation_count": 0,
+      "semantic_outcome": "completed",
+      "conformant": true
+    }
+  },
+  "fixture_evidence": {
+    "receipt_count": 1,
+    "conformant_receipt_count": 1,
+    "receipts": [
+      {
+        "source": "docs/generated/observe-fixture-receipt.json",
+        "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+        "tool": "observe",
+        "authority": "promotion_evidence_only",
+        "artifact_root": ".openeta_eval/audits/toolcontract-fixture-observe-r5",
+        "contract_schema_version": "openeta.tool_contract.v1",
+        "contract_maturity": "verified",
+        "handler_implementation": "agent.tools.sim_mcp.SimulatorMcpToolProxy.handler_for",
+        "host_resolver_id": "openeta.host_resolver.observe.v1",
+        "host_resolver_implementation": "agent.runtime.memory.AgentMemory.add_observation",
+        "cases": [
+          {
+            "case": "handler_success",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "completed",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-observe-r5/success/responses/fixture-sim-session-de940952f4-0001-render_env/render_env-response.json"
+            ],
+            "environment_receipt_present": true,
+            "state_delta_keys": [
+              "motion",
+              "observation"
+            ],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_dependency_failure",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": false,
+            "semantic_outcome": "operational_failure",
+            "diagnostic_codes": [
+              "simulator_mcp_call_failed"
+            ],
+            "diagnostic_messages": [
+              "deterministic simulator fixture failure: render_env"
+            ],
+            "artifact_paths": [],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "batch_boundary_allow",
+            "boundary": "ActionPipeline batched read-only boundary",
+            "blocked": false,
+            "allowed": true,
+            "tool_execution_count": 2,
+            "matched_gate_check_ids": [
+              "runtime.batch_boundary"
+            ],
+            "authoritative_gate": "legacy_runtime",
+            "enforcing": true,
+            "conformant": true
+          }
+        ],
+        "coverage": {
+          "expected_success_outcomes": [
+            "completed"
+          ],
+          "observed_success_outcomes": [
+            "completed"
+          ],
+          "all_success_outcomes_covered": true,
+          "expected_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "observed_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "all_declared_outcomes_covered": true,
+          "representative_failure_covered": true,
+          "runtime_gate_evidence_observed": true,
+          "runtime_gate_rejection_observed": false,
+          "matched_gate_check_ids": [
+            "runtime.batch_boundary"
+          ],
+          "freshness_and_invalidation_covered": true,
+          "remote_backend_semantics_covered": true,
+          "world_mutating_execution_receipt_covered": true
+        },
+        "conformant": true
+      }
+    ]
+  },
+  "review_evidence": {
+    "approved": true,
+    "source": "docs/generated/tool-contract-review-decision.json"
+  },
+  "authority_canary_evidence": {
+    "passed": true,
+    "source": "docs/generated/tool-contract-catalog-authority-canary.json"
+  },
+  "runs": [],
+  "unresolved_requirements": [],
+  "interpretation": "This dossier aggregates evidence and never changes maturity or runtime authority. verified remains a reviewed declaration, not an audit side effect."
+}

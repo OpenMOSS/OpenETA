@@ -1,0 +1,91 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "observe",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-observe-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.tools.sim_mcp.SimulatorMcpToolProxy.handler_for",
+  "host_resolver_id": "openeta.host_resolver.observe.v1",
+  "host_resolver_implementation": "agent.runtime.memory.AgentMemory.add_observation",
+  "cases": [
+    {
+      "case": "handler_success",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "completed",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-observe-r5/success/responses/fixture-sim-session-de940952f4-0001-render_env/render_env-response.json"
+      ],
+      "environment_receipt_present": true,
+      "state_delta_keys": [
+        "motion",
+        "observation"
+      ],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_dependency_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "simulator_mcp_call_failed"
+      ],
+      "diagnostic_messages": [
+        "deterministic simulator fixture failure: render_env"
+      ],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "batch_boundary_allow",
+      "boundary": "ActionPipeline batched read-only boundary",
+      "blocked": false,
+      "allowed": true,
+      "tool_execution_count": 2,
+      "matched_gate_check_ids": [
+        "runtime.batch_boundary"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": true,
+      "conformant": true
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "completed"
+    ],
+    "observed_success_outcomes": [
+      "completed"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "observed_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": false,
+    "matched_gate_check_ids": [
+      "runtime.batch_boundary"
+    ],
+    "freshness_and_invalidation_covered": true,
+    "remote_backend_semantics_covered": true,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

@@ -1,0 +1,115 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "update_skill",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-update-skill-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.runtime.runtime_assembly._skill_change_handler",
+  "host_resolver_id": "openeta.host_resolver.update_skill.v1",
+  "host_resolver_implementation": "agent.runtime.runtime_assembly._skill_change_handler",
+  "cases": [
+    {
+      "case": "handler_success",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "completed",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_dependency_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "skill_authoring_failed"
+      ],
+      "diagnostic_messages": [
+        "skill update failed: Unknown skill: missing-fixture-skill"
+      ],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "motion_reconciliation_gate_rejection",
+      "boundary": "ActionPipeline -> host gate",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "motion_reconciliation_required",
+      "matched_gate_check_ids": [
+        "runtime.motion_reconciliation"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "update_skill",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "named skill exists and is editable",
+          "at least one update instruction is supplied",
+          "updated SkillSpec preserves tool-contract boundary",
+          "supervision policy or independent/human review approves"
+        ],
+        "contract_gate_binding_count": 2,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.motion_reconciliation",
+            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+            "repair_codes": [
+              "motion_reconciliation_required"
+            ],
+            "applies_when": "motion reconciliation status is required or unresolved"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "completed"
+    ],
+    "observed_success_outcomes": [
+      "completed"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "observed_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": true,
+    "matched_gate_check_ids": [
+      "runtime.motion_reconciliation"
+    ],
+    "freshness_and_invalidation_covered": false,
+    "remote_backend_semantics_covered": false,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

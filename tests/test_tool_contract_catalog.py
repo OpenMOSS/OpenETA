@@ -172,21 +172,25 @@ def test_fact_binding_requires_known_authority() -> None:
         )
 
 
-def test_default_catalog_declares_every_public_tool() -> None:
+def test_default_catalog_verifies_every_reviewed_public_tool() -> None:
     registry = build_default_tool_registry()
 
     catalog = build_default_tool_contract_catalog(registry.list())
 
     assert catalog.coverage_summary()["maturity_counts"] == {
         "inferred": 0,
-        "declared": 34,
-        "verified": 1,
+        "declared": 0,
+        "verified": 35,
     }
     explicit = [
         contract for contract in catalog.list() if contract.maturity is not ContractMaturity.INFERRED
     ]
     assert all(contract.gate.preserves_agent_choice for contract in explicit)
     assert catalog.get("estimate_depth_prior").maturity is ContractMaturity.VERIFIED
+    assert all(
+        contract.maturity is ContractMaturity.VERIFIED for contract in explicit
+    )
+    assert all(not contract.coverage_gaps for contract in explicit)
     assert catalog.get("move_to").request_schema["required"] == ["ik_receipt_id"]
     assert catalog.get("gripper_control").request_schema["additionalProperties"] is False
     assert {
@@ -201,6 +205,24 @@ def test_default_catalog_declares_every_public_tool() -> None:
         "hand_pose_database",
         "obstacle_avoidance",
     }.isdisjoint({contract.name for contract in catalog.list()})
+
+
+def test_registry_level_missing_handler_failure_is_contract_conformant() -> None:
+    registry = build_default_tool_registry()
+    catalog = build_default_tool_contract_catalog(registry.list())
+
+    result = registry.call(
+        "save_memory",
+        {"key": "fixture", "content": {"value": 1}},
+    )
+
+    assert result.success is False
+    assert result.details["semantic_outcome"] == "operational_failure"
+    assert result.details["recovery_options"]
+    assert check_tool_result_conformance(
+        catalog.get("save_memory"),
+        result.details,
+    ) == ()
 
 
 def test_environment_and_memory_contracts_expose_non_task_state_facts() -> None:
@@ -450,6 +472,10 @@ def test_request_conformance_checks_exactly_one_request_branch() -> None:
         contract,
         {"compiled_grasp_id": "compiled-1", "waypoint_role": "grasp_contact"},
     ) == ()
+    assert check_tool_request_conformance(
+        contract,
+        {"probe_id": "probe:one", "waypoint_index": 0},
+    ) == ()
     violations = check_tool_request_conformance(
         contract,
         {
@@ -461,6 +487,16 @@ def test_request_conformance_checks_exactly_one_request_branch() -> None:
 
     assert [item.code for item in violations] == ["request_one_of_mismatch"]
 
+    mixed_probe = check_tool_request_conformance(
+        contract,
+        {
+            "target_pose": {"xyz": [0, 0, 0.3]},
+            "probe_id": "probe:one",
+            "waypoint_index": 0,
+        },
+    )
+    assert [item.code for item in mixed_probe] == ["request_one_of_mismatch"]
+
 
 def test_default_contract_overrides_support_partial_runtime_registries() -> None:
     registry = build_default_tool_registry()
@@ -469,7 +505,7 @@ def test_default_contract_overrides_support_partial_runtime_registries() -> None
     catalog = build_default_tool_contract_catalog(partial)
 
     assert [contract.name for contract in catalog.list()] == ["sam3", "move_to"]
-    assert all(contract.maturity is ContractMaturity.DECLARED for contract in catalog.list())
+    assert all(contract.maturity is ContractMaturity.VERIFIED for contract in catalog.list())
 
 
 def test_agent_tool_projection_uses_contract_request_schema() -> None:
@@ -549,7 +585,13 @@ def test_planner_shadow_ignores_removed_non_public_tool() -> None:
 
 
 def test_runtime_policy_rejects_unverified_or_unknown_authority_entries() -> None:
-    catalog = build_default_tool_contract_catalog(build_default_tool_registry().list())
+    reviewed = build_default_tool_contract_catalog(build_default_tool_registry().list())
+    catalog = ToolContractCatalog(
+        replace(contract, maturity=ContractMaturity.DECLARED)
+        if contract.name in {"gripper_control", "move_to"}
+        else contract
+        for contract in reviewed.list()
+    )
     policy = ToolContractRuntimePolicy(
         request_validation_authority=frozenset({"gripper_control", "missing"}),
         gate_repair_envelope_authority=frozenset({"move_to"}),
@@ -674,16 +716,15 @@ def test_verified_gate_repair_policy_never_replaces_executable_gate_authority() 
     assert trace["authoritative_gate"] == "legacy_runtime"
 
 
-def test_request_readiness_matrix_is_evidence_only_and_exposes_mismatches() -> None:
+def test_request_readiness_matrix_is_evidence_only_and_all_tools_have_parity() -> None:
     report = audit_tool_contract_request_readiness()
 
     assert report["authority"] == "promotion_evidence_only"
     assert report["declared_tool_count"] == 35
-    assert "estimate_depth_prior" in report["ready_for_live_invalid_canary"]
-    assert "gripper_control" in report["ready_for_live_invalid_canary"]
-    observe = next(item for item in report["tools"] if item["tool"] == "observe")
-    assert observe["deterministic_request_parity"] is False
-    assert "unexpected_property" in observe["mismatch_cases"]
+    assert report["ready_for_live_invalid_canary_count"] == 35
+    assert len(report["ready_for_live_invalid_canary"]) == 35
+    assert all(item["deterministic_request_parity"] is True for item in report["tools"])
+    assert all(item["mismatch_cases"] == [] for item in report["tools"])
 
 
 def test_gate_repair_contract_requires_clear_evidence_and_preserves_agent_choice() -> None:

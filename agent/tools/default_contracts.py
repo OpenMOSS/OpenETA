@@ -162,7 +162,7 @@ def _operational_failure() -> OutcomeContract:
     )
 
 
-def _declared(
+def _explicit_contract(
     spec: ToolSpecLike,
     *,
     request_schema: JsonDict,
@@ -172,11 +172,8 @@ def _declared(
     evidence_lifetime: EvidenceLifetimeContract | None = None,
     gate: GateContract | None = None,
     source_paths: tuple[str, ...] = (),
-    maturity: ContractMaturity = ContractMaturity.DECLARED,
-    coverage_gaps: tuple[str, ...] = (
-        "runtime_schema_enforcement",
-        "rollout_conformance_verification",
-    ),
+    maturity: ContractMaturity = ContractMaturity.VERIFIED,
+    coverage_gaps: tuple[str, ...] = (),
 ) -> ToolContract:
     effect = getattr(spec.effect, "value", spec.effect)
     return ToolContract(
@@ -424,7 +421,7 @@ def _runtime_gate_bindings(tool_name: str) -> tuple[GateCheckBinding, ...]:
 
 
 def _observe(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object({"reason": _string()}, additional_properties=False),
         outcomes=(
@@ -499,7 +496,7 @@ def _create_simulator_env(spec: ToolSpecLike) -> ToolContract:
         },
         required=("env_id",),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         outcomes=(
@@ -560,7 +557,7 @@ def _create_simulator_env(spec: ToolSpecLike) -> ToolContract:
 
 
 def _close_simulator_env(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(),
         consumes=(
@@ -616,7 +613,7 @@ def _python_exec(spec: ToolSpecLike) -> ToolContract:
         },
         required=("code",),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         outcomes=(
@@ -680,7 +677,7 @@ def _python_exec(spec: ToolSpecLike) -> ToolContract:
 
 
 def _web_search(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -737,7 +734,7 @@ def _web_search(spec: ToolSpecLike) -> ToolContract:
 
 
 def _web_fetch(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -803,7 +800,7 @@ def _packet_camera_request(*, extra: JsonDict | None = None) -> JsonDict:
 
 
 def _estimate_depth_prior(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_packet_camera_request(
             extra={"resolution_level": _integer(minimum=0, maximum=9)}
@@ -878,7 +875,7 @@ def _enhance_depth(spec: ToolSpecLike) -> ToolContract:
         "quality": _object(additional_properties=True),
         "alignment": _object(additional_properties=True),
     }
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_packet_camera_request(
             extra={"config": _object(additional_properties=True)}
@@ -947,7 +944,7 @@ def _enhance_depth(spec: ToolSpecLike) -> ToolContract:
 
 
 def _retrieve_asset_reference(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -1023,7 +1020,7 @@ def _molmopoint(spec: ToolSpecLike) -> ToolContract:
         },
         required=("source_packet_id",),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -1083,7 +1080,7 @@ def _molmopoint(spec: ToolSpecLike) -> ToolContract:
 
 
 def _reject_sam3(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {"sam3_result_id": _string(minLength=1), "reason": _string(minLength=1)},
@@ -1154,7 +1151,7 @@ def _sam3(spec: ToolSpecLike) -> ToolContract:
         "detections": _array(_object(additional_properties=True)),
         "detection_count": _integer(minimum=0),
     }
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1247,7 +1244,7 @@ def _select_sam3(spec: ToolSpecLike) -> ToolContract:
         },
         required=("sam3_result_id", "detection_id"),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1321,7 +1318,7 @@ def _grasp_pose_estimate(spec: ToolSpecLike) -> ToolContract:
         },
         required=("bundle_id",),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1404,7 +1401,7 @@ def _compile_grasp_seed(spec: ToolSpecLike) -> ToolContract:
         },
         required=("grasp_result_id", "candidate_id"),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1466,7 +1463,7 @@ def _propose_wrist_viewpoints(spec: ToolSpecLike) -> ToolContract:
         },
         required=("compiled_grasp_id", "source_packet_id", "camera_frame_id"),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1523,7 +1520,7 @@ def _compute_wrist_alignment(spec: ToolSpecLike) -> ToolContract:
         {"bundle_id": _string(minLength=1), "max_correction_m": _number(minimum=0.005, maximum=0.05)},
         required=("bundle_id",),
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1606,6 +1603,8 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
             ),
             "viewpoint_proposal_id": _string(minLength=1),
             "candidate_id": _string(minLength=1),
+            "probe_id": _string(minLength=1),
+            "waypoint_index": _integer(minimum=0, maximum=4),
             "position_tolerance_m": _number(exclusiveMinimum=0),
             "orientation_tolerance_rad": _number(exclusiveMinimum=0),
             "preserve_current_orientation": _boolean(),
@@ -1615,6 +1614,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
             {"required": ["target_pose"]},
             {"required": ["compiled_grasp_id", "waypoint_role"]},
             {"required": ["viewpoint_proposal_id", "candidate_id"]},
+            {"required": ["probe_id", "waypoint_index"]},
         ],
     )
     executable = _fact(
@@ -1622,7 +1622,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
         "outputs.motion_execution_ref.ik_receipt_id",
         FactAuthority.HOST,
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -1646,6 +1646,13 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
                 FactAuthority.HOST,
                 required=False,
                 when="an aligned reference is previewed",
+            ),
+            _fact(
+                ATTACHMENT_PROBE_PLAN,
+                "request.probe_id",
+                FactAuthority.HOST,
+                required=False,
+                when="an attachment-probe waypoint reference branch is used",
             ),
         ),
         outcomes=(
@@ -1704,6 +1711,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
                 "target_pose",
                 "compiled_grasp_id + waypoint_role",
                 "viewpoint_proposal_id + candidate_id",
+                "probe_id + waypoint_index",
             ),
             resolved_parameters=("target_pose", "orientation policy", "private IK seed", "provenance"),
             freshness_dimensions=("robot_motion_epoch", "object_scene_epoch"),
@@ -1740,7 +1748,7 @@ def additional_ik_properties() -> JsonDict:
 
 def _prepare_attachment_probe(spec: ToolSpecLike) -> ToolContract:
     vector = _array(_number(), minItems=3, maxItems=3)
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -1829,7 +1837,7 @@ def _prepare_attachment_probe(spec: ToolSpecLike) -> ToolContract:
 
 
 def _assess_attachment_probe(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {"probe_id": _string(minLength=1)},
@@ -1919,7 +1927,7 @@ def _motion_contract(
     trajectory: bool,
 ) -> ToolContract:
     reference_path = "request.ik_receipt_ids[]" if trajectory else "request.ik_receipt_id"
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request_schema,
         consumes=(
@@ -2039,7 +2047,7 @@ def _motion_contract(
 
 
 def _gripper_control(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {"position": {"type": ["integer", "boolean"], "enum": [0, 1, False, True]}},
@@ -2126,7 +2134,7 @@ def _gripper_control(spec: ToolSpecLike) -> ToolContract:
 
 
 def _anyplace(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object({"bundle_id": _string(minLength=1)}, required=("bundle_id",)),
         consumes=(
@@ -2198,7 +2206,7 @@ def _camera_pose_to_world(spec: ToolSpecLike) -> ToolContract:
             {"required": ["camera_pose"]},
         ],
     )
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=request,
         consumes=(
@@ -2275,7 +2283,7 @@ def _evidence_references_schema() -> JsonDict:
 
 
 def _propose_calibration_profile(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2334,7 +2342,7 @@ def _propose_calibration_profile(spec: ToolSpecLike) -> ToolContract:
 
 
 def _promote_calibration_profile(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2395,7 +2403,7 @@ def _promote_calibration_profile(spec: ToolSpecLike) -> ToolContract:
 
 
 def _propose_grasp_strategy(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2455,7 +2463,7 @@ def _propose_grasp_strategy(spec: ToolSpecLike) -> ToolContract:
 
 
 def _promote_grasp_strategy(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2517,7 +2525,7 @@ def _promote_grasp_strategy(spec: ToolSpecLike) -> ToolContract:
 
 
 def _save_memory(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2556,7 +2564,7 @@ def _save_memory(spec: ToolSpecLike) -> ToolContract:
 
 
 def _get_memory(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2599,7 +2607,7 @@ def _get_memory(spec: ToolSpecLike) -> ToolContract:
 
 
 def _delete_memory(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2633,7 +2641,7 @@ def _delete_memory(spec: ToolSpecLike) -> ToolContract:
 
 
 def _compact_memory(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {"max_events": _integer(minimum=1)},
@@ -2688,7 +2696,7 @@ def _skill_authoring_outcomes() -> tuple[OutcomeContract, ...]:
 
 
 def _register_skill(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {
@@ -2731,7 +2739,7 @@ def _register_skill(spec: ToolSpecLike) -> ToolContract:
 
 
 def _update_skill(spec: ToolSpecLike) -> ToolContract:
-    return _declared(
+    return _explicit_contract(
         spec,
         request_schema=_object(
             {

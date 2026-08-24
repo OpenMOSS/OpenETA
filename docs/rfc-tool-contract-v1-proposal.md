@@ -132,7 +132,7 @@ Structural coverage alone is explicitly insufficient for promotion.
 
 ## Current implementation evidence
 
-- 35 public facade/runtime interfaces registered: 34 declared and one verified;
+- 35 public facade/runtime interfaces registered and verified;
 - all 35 explicit tools pass generated structural request, semantic-outcome, and
   bound gate-repair fixtures;
 - no inferred placeholder or direct-backend ToolSpecs remain in the default
@@ -151,10 +151,9 @@ Structural coverage alone is explicitly insufficient for promotion.
 - a deterministic rejected unknown-packet canary returned
   `invalid_source_packet`, matched `runtime.source_packet_resolution`, offered
   `observe`, and had zero gate-repair conformance violations;
-- the deterministic request matrix covers all 35 explicit tools; six currently
-  have complete generated-class parity. `estimate_depth_prior` is the proposed
-  first read-only authority canary because it also has a successful conformant
-  r28 event. It is now the only review-approved verified contract;
+- the deterministic request matrix covers all 35 explicit tools. The first
+  read-only authority canary promoted `estimate_depth_prior`; the later exact
+  34-tool review and post-review canary completed the remainder;
 - r29-r31 tested live invalid-request repair for `estimate_depth_prior`. An
   explicit retry rejection envelope stopped unchanged invalid repeats, and the
   new `openeta.planner_validation_receipt.v1` preserves rejected attempts into
@@ -179,6 +178,12 @@ Structural coverage alone is explicitly insufficient for promotion.
   `estimate_depth_prior` appears in request-validation authority; gate-repair
   authority is empty, executable gates remain legacy, and the authority audit
   reports zero violations;
+- the catalog campaign covers the remaining 34 tools with production fixtures,
+  per-tool dossiers, 70 integration shadows, and an exact three-person approval.
+  Its post-review request-validation canary passed 34/34 tools over 68 Planner
+  traces with zero tool execution, zero world mutation, and zero authority-audit
+  violations. Gate-repair authority stayed empty and executable gates stayed
+  `legacy_runtime`;
 - an older pre-receipt rollout correctly reports historical IK and AnyPlace
   schema drift and is not accepted as current behavior.
 

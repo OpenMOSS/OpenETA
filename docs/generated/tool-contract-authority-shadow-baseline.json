@@ -1,8 +1,8 @@
 {
   "schema_version": "openeta.tool_contract_authority_baseline.v1",
-  "session_id": "authority-shadow-r40",
-  "manifest": ".openeta_eval/audits/toolcontract-authority-shadow-20260820-r40/sessions/authority-shadow-r40/rollout/manifest.json",
-  "catalog_sha256": "8e87f68f5ac7af24d979bf3cb99a2d48f7a56d447ddcc8ea0e11ec32ecc1b6d0",
+  "session_id": "catalog-baseline-20260824",
+  "manifest": "/tmp/openeta-toolcontract-review-20260824/sessions/catalog-baseline-20260824/rollout/manifest.json",
+  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
   "policy": {
     "executable_gate_authority": "legacy_runtime",
     "gate_repair_envelope_authority": [],
@@ -11,7 +11,7 @@
   },
   "planner_pipeline_alignment": {
     "catalog_match": true,
-    "pipeline_catalog_sha256": "8e87f68f5ac7af24d979bf3cb99a2d48f7a56d447ddcc8ea0e11ec32ecc1b6d0",
+    "pipeline_catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
     "pipeline_policy": {
       "executable_gate_authority": "legacy_runtime",
       "gate_repair_envelope_authority": [],

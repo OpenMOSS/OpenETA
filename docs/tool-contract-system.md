@@ -1,14 +1,15 @@
 # OpenETA tool contract system
 
 Status: reviewed ToolContract v1 integration with contract-driven Agent
-documentation, fail-closed per-tool authority policy, and the first narrowly
-enforcing request-validation canary.
+documentation, 35 verified public contracts, and fail-closed per-tool authority
+policy.
 The Agent-visible `available_tools` projection now comes from ToolContract,
 while deployment availability still comes from ToolRegistry handler binding.
 The production default authority allowlists remain empty. The reviewed r41
-canary explicitly enables request validation only for the verified
-`estimate_depth_prior` contract; runtime gates remain legacy-authoritative.
-ToolContract cannot become authoritative for an inferred or declared tool.
+canary enabled request validation only for `estimate_depth_prior`; the later
+34-tool canary enabled only request validation and performed no tool execution
+or world mutation. Runtime gates remain legacy-authoritative. ToolContract
+cannot become authoritative for an inferred or declared tool.
 
 ## Why this exists
 
@@ -42,6 +43,17 @@ Generated projections are:
 - `docs/generated/tool-contracts.md` for human interface review.
 - `docs/generated/tool-contract-readiness.json` for deterministic valid/invalid
   Planner acceptance parity evidence.
+- `docs/generated/tool-contract-promotion-campaign.json` for the evidence-gated
+  promotion record of the reviewed 34-tool campaign.
+- `docs/generated/tool-contract-integration-canary.json` for catalog-wide live
+  Planner retry/shadow and ToolRegistry rollout-boundary evidence.
+- `docs/tool-contract-remaining-promotion-review.md` for the generated
+  three-person review packet; it is not itself an approval receipt.
+- `docs/generated/tool-contract-remaining-review-request.json` for the
+  machine-readable review request and its link to the separate approval
+  receipt. The request itself is never consumed as approval.
+- `docs/generated/promotion-dossiers/<tool>.json` for one evidence dossier per
+  remaining public tool.
 - `docs/generated/estimate-depth-prior-promotion-dossier.json` for the first
   candidate's review evidence and explicitly unresolved promotion conditions.
 - `docs/generated/estimate-depth-prior-fixture-receipt.json` for durable
@@ -56,6 +68,8 @@ Generated projections are:
   authority and promotion decisions.
 - `docs/generated/tool-contract-authority-canary.json` for the first narrow
   enforcing request-validation canary.
+- `docs/generated/tool-contract-catalog-authority-canary.json` for the reviewed
+  34-tool request-validation canary with zero tool execution and world mutation.
 - `docs/generated/tool-contract-shared-rfc-sync.json` for the verified shared RFC
   section and revision.
 - `docs/generated/tool-contract-migration-status.json` for the reproducible
@@ -113,9 +127,16 @@ catalog-wide switch. A tool is eligible only when all of the following hold:
 7. the three-person review approves the shared schema/authority change and a
    separately scoped canary enables contract authority for that tool.
 
-The catalog-wide structural fixtures cover all 35 explicit contracts, but that
-alone does not satisfy live handler/rollout evidence. `estimate_depth_prior` is
-the only contract promoted to `verified`; the other 34 remain `declared`.
+The catalog-wide campaign has deterministic request parity and production
+fixture receipts for all 34 reviewed targets. All declared semantic outcomes
+are covered, including focused evidence for 19 freshness/invalidation tools,
+11 remote-backend tools, and five world-mutating tools. A separate integration
+canary records 70 valid/invalid Planner shadows with zero mismatch or unexpected
+enforcement and 35 ToolRegistry results with zero conformance violations. After
+the exact 34-tool three-person approval, the post-review authority canary passed
+34/34 tools across 68 Planner traces with zero tool execution, zero world
+mutation, and zero authority-audit violations. All 35 public contracts are now
+`verified`.
 
 `openeta.tool_contract_runtime_policy.v1` is the only authority switch. It has
 separate per-tool allowlists for request validation and gate-repair-envelope
@@ -216,18 +237,18 @@ sync, and the narrow authority canary all conform. The current report records
 `implementation_ready_for_review=true` and `goal_complete=true`; this completion
 does not grant runtime authority beyond the explicitly reviewed canary policy.
 
-The default catalog now contains only the 35 reviewed public interfaces, all at
-explicit maturity: 34 are `declared` and `estimate_depth_prior` is the first
-review-approved `verified` contract. Six unimplemented architecture placeholders were removed
+The default catalog now contains only 35 reviewed and `verified` public
+interfaces. Six unimplemented architecture placeholders were removed
 from default registration. AnyGrasp and GraspGenX are host-internal handlers in
 the facade's backend map rather than ToolSpecs; GraspGenX capability discovery
 is host-only. Contact-GraspNet is no longer loaded by the runtime or accepted by
 the facade. Its isolated adapter/service code remains only for legacy deployment
 compatibility and cannot enter Agent `available_tools`.
 
-The 2026-08-20 three-person review approved the five v1 fact-authority
-categories, per-tool maturity with per-outcome evidence, and the narrow
-`estimate_depth_prior` request-validation authority canary. `openeta.gate_repair.v1`
+The 2026-08-20 three-person reviews approved the five v1 fact-authority
+categories, per-tool maturity with per-outcome evidence, the narrow
+`estimate_depth_prior` request-validation authority canary, and the exact
+remaining 34-tool promotion/canary scope. `openeta.gate_repair.v1`
 now emits a reserved empty `extensions` object; v1 assigns no keys, semantics, or
 inner schema to it. A concrete future need must define a separately reviewed,
 versioned extension rather than retroactively guessing one here. Gate-repair
@@ -298,15 +319,54 @@ python scripts/check_tool_contract_readiness.py \
   --output docs/generated/tool-contract-readiness.json
 ```
 
-The current matrix covers all 35 explicit tools and finds six with complete
-parity over its generated classes: `enhance_depth`, `estimate_depth_prior`,
-`grasp_pose_estimate`, `anyplace`, `camera_pose_to_world`, and
-`gripper_control`. This is promotion evidence only. `estimate_depth_prior` is
-the preferred first read-only authority canary because r28 supplies a live
-successful request/result and r31 supplies the relevant invalid-request repair.
-It is now the only `verified` contract after review and the separately scoped
-authority canary completed. The matrix also makes legacy drift explicit instead
-of hiding it behind a catalog-wide switch.
+The current deterministic matrix covers all 35 explicit tools with complete
+generated valid/invalid acceptance parity. The catalog integration canary then
+runs those cases through the actual Planner retry and rollout recorder boundary
+under an empty authority policy. It also records one schema-conformant
+ToolRegistry result per tool through a deterministic adapter. This adapter is
+integration evidence only: production handler success, alternate outcomes,
+failures, freshness gates, and world receipts remain established by the
+separate registry-bound fixture receipts. Those receipts, the exact review
+decision, and the post-review canary now close the remaining 34 tools' promotion
+gaps.
+
+Regenerate the catalog-wide evidence and review packet with:
+
+```bash
+python scripts/run_tool_contract_integration_canary.py \
+  --root .openeta_eval/audits/toolcontract-integration-catalog-20260820-r1 \
+  --session-prefix catalog-r1 \
+  --output docs/generated/tool-contract-integration-canary.json
+```
+
+```bash
+python scripts/build_tool_contract_promotion_campaign.py \
+  --fixture-receipt docs/generated/<tool>-fixture-receipt.json \
+  --integration-canary docs/generated/tool-contract-integration-canary.json \
+  --output docs/generated/tool-contract-promotion-campaign.json \
+  --markdown-output docs/tool-contract-remaining-promotion-review.md
+```
+
+The fixture argument is repeatable and must include all 35 generated receipts;
+the abbreviated command above documents the shape rather than a shell glob.
+
+All 34 generated dossiers report `eligible_for_review=true`,
+`eligible_for_verified_promotion=true`, `promotion_complete=true`, and no
+unresolved requirements. The canary entry point is fail-closed for any named
+contract that is not `verified`:
+
+```bash
+python scripts/run_tool_contract_catalog_authority_canary.py \
+  --root .openeta_eval/audits/toolcontract-catalog-authority-<run> \
+  --session-id <session> \
+  --tool <reviewed-tool> \
+  --tool <another-reviewed-tool>
+```
+
+This canary records invalid and corrected-valid enforcing request traces but
+does not compile or dispatch tool calls. Its expected tool-execution and
+world-mutation counts are both zero. Gate-repair-envelope authority remains
+empty and executable gates remain `legacy_runtime`.
 
 First build the durable runtime fixture receipt, then build the review dossier;
 neither command changes maturity or authority:
@@ -409,15 +469,22 @@ the universal contract.
 ## Current validation baseline
 
 The 2026-08-20 reviewed migration baseline passes the full regression suite.
-The generated catalog contains 34 declared plus one verified public tool and no inferred
-placeholder/backend entries. All 30
+The generated catalog contains 35 verified public tools and no inferred or
+declared placeholder/backend entries. All 30
 non-`none` host-resolution declarations have stable runtime bindings, and the
 r40 durable authority audit reports one auditable empty-policy manifest with zero
 violations. The r41 canary enables only `estimate_depth_prior` request validation,
 executes one repaired valid request after one contract rejection, and also audits
 with zero violations. No executable gate predicate is transferred.
 
+The reviewed 34-tool post-review canary enables exactly those tools for
+request validation, records 68 valid/invalid Planner traces, and passes 34/34
+without compiling or dispatching a tool call. Its tool-execution and
+world-mutation counts are both zero. Gate-repair-envelope authority remains
+empty and executable gate authority remains `legacy_runtime`.
+
 The machine-readable migration audit requires the local projections, review
-decision receipt, r41 authority canary, promotion dossier, and shared RFC sync
-receipt together. Passing it grants no authority beyond the one reviewed tool
-and one request-validation surface.
+decision receipts, both authority canaries, all promotion dossiers, and shared
+RFC sync receipt together. Passing it does not change production authority:
+the default allowlists remain empty and canary authority is scoped to its own
+recorded session.

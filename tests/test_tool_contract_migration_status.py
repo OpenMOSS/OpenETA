@@ -16,7 +16,7 @@ def test_reviewed_tool_contract_migration_is_complete_and_narrowly_authoritative
         test_passed=1353,
         test_skipped=12,
         test_warnings=36,
-        harness_revision=267,
+        harness_revision=271,
     )
 
     assert report["internal_conformant"] is True
@@ -25,12 +25,12 @@ def test_reviewed_tool_contract_migration_is_complete_and_narrowly_authoritative
     assert report["structural_issues"] == []
     assert report["catalog_summary"]["tool_count"] == 35
     assert report["catalog_sha256"] == (
-        "8e87f68f5ac7af24d979bf3cb99a2d48f7a56d447ddcc8ea0e11ec32ecc1b6d0"
+        "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9"
     )
     assert report["catalog_summary"]["maturity_counts"] == {
         "inferred": 0,
-        "declared": 34,
-        "verified": 1,
+        "declared": 0,
+        "verified": 35,
     }
     assert all(
         row["current"] is True
@@ -48,4 +48,8 @@ def test_reviewed_tool_contract_migration_is_complete_and_narrowly_authoritative
     assert statuses["verified_authority_canary"] == "complete"
     assert report["external_blockers"] == []
     assert report["local_checks"]["estimate_depth_prior_authority_canary_safe"] is True
+    assert report["local_checks"]["remaining_tool_review_approved"] is True
+    assert report["local_checks"]["remaining_tool_authority_canary_safe"] is True
+    assert report["local_checks"]["remaining_tool_promotions_complete"] is True
+    assert report["local_checks"]["remaining_review_request_fulfilled"] is True
     assert report["local_checks"]["shared_rfc_synced"] is True

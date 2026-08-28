@@ -1,0 +1,3 @@
+{
+  "default_adapter": "tools.manual_vlm_openeta:OpenETAProtocolAdapter"
+}

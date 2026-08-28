@@ -1,0 +1,1304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenETA Human VLM</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #090d13;
+  --sidebar: #0d131c;
+  --surface: #121a25;
+  --surface-2: #172231;
+  --surface-3: #0b1119;
+  --line: #263548;
+  --line-strong: #38506b;
+  --text: #eef4fb;
+  --muted: #91a2b8;
+  --accent: #5fe0ac;
+  --accent-deep: #174d3d;
+  --blue: #85b8ff;
+  --blue-deep: #172d4c;
+  --warn: #ffc46b;
+  --warn-deep: #4a3518;
+  --bad: #ff8492;
+  --bad-deep: #4a2028;
+  --purple: #c3a4ff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+button, input, textarea { font: inherit; }
+button { color: inherit; }
+.app {
+  display: grid;
+  grid-template-columns: 318px minmax(0, 1fr);
+  height: 100vh;
+}
+.sidebar {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+}
+.brand { padding: 18px 17px 14px; border-bottom: 1px solid var(--line); }
+.brand-row { display: flex; align-items: center; gap: 10px; }
+.logo {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid #2c8d6e;
+  border-radius: 9px;
+  background: var(--accent-deep);
+  color: var(--accent);
+  font-weight: 800;
+}
+.brand h1 { margin: 0; font-size: 16px; letter-spacing: .01em; }
+.brand p { margin: 6px 0 0 41px; color: var(--muted); font-size: 11px; }
+.queue { min-height: 0; flex: 1; overflow: auto; padding: 10px; }
+.session {
+  margin-bottom: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0a1018;
+}
+.session > summary {
+  cursor: pointer;
+  padding: 9px 10px;
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-items { padding: 0 6px 6px; }
+.request {
+  width: 100%;
+  margin: 0 0 5px;
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.request:hover { background: var(--surface); }
+.request.selected { border-color: var(--line-strong); background: var(--surface-2); }
+.request-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.turn { font-weight: 650; }
+.request-task {
+  margin-top: 6px;
+  overflow: hidden;
+  color: #c4d0df;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.request-meta { margin-top: 5px; color: var(--muted); font-size: 10px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 21px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.chip.main_planner { border-color: #28765f; background: var(--accent-deep); color: var(--accent); }
+.chip.visual_differencing, .chip.isolated_json { border-color: #385d8e; background: var(--blue-deep); color: var(--blue); }
+.chip.retry { border-color: #8a6330; background: var(--warn-deep); color: var(--warn); }
+.chip.error { border-color: #84404c; background: var(--bad-deep); color: var(--bad); }
+.status-pending { color: var(--warn); }
+.status-responded { color: var(--accent); }
+.status-cancelled { color: var(--bad); }
+.main {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 58px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #0c121b;
+}
+.title-line { min-width: 0; }
+.title { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.subtitle { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.top-actions { display: flex; align-items: center; gap: 10px; }
+.view-tabs {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-3);
+}
+.view-tab {
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.view-tab.active { background: var(--surface-2); color: var(--text); }
+.raw-link { color: var(--blue); text-decoration: none; font-size: 12px; }
+.viewer { min-height: 0; overflow: auto; padding: 20px; overscroll-behavior: contain; }
+.empty { display: grid; height: 100%; place-items: center; color: var(--muted); }
+.turn-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto 16px;
+  max-width: 1440px;
+}
+.eyebrow { color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.turn-hero h2 { margin: 5px 0 0; max-width: 900px; font-size: 22px; line-height: 1.3; }
+.hero-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.alert {
+  max-width: 1440px;
+  margin: 0 auto 16px;
+  padding: 12px 14px;
+  border: 1px solid #79404b;
+  border-radius: 9px;
+  background: var(--bad-deep);
+  color: #ffd1d7;
+}
+.alert-title { margin-bottom: 5px; color: var(--bad); font-weight: 750; }
+.alert ul { margin: 0; padding-left: 20px; }
+.operate-grid {
+  display: grid;
+  max-width: 1440px;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, 1.55fr) minmax(330px, .75fr);
+  gap: 16px;
+  align-items: start;
+}
+.panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+.panel + .panel { margin-top: 16px; }
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 43px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-title { font-size: 13px; font-weight: 720; }
+.panel-note { color: var(--muted); font-size: 11px; }
+.panel-body { padding: 13px; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.evidence {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #05080d;
+}
+.evidence img {
+  display: block;
+  width: 100%;
+  height: min(52vh, 480px);
+  object-fit: contain;
+  cursor: zoom-in;
+}
+.evidence-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-3);
+  font-size: 11px;
+}
+.evidence-role { color: var(--muted); }
+.no-images { padding: 38px 16px; color: var(--muted); text-align: center; }
+.last-action { padding: 13px; }
+.last-action-name { color: var(--blue); font: 650 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.last-action-content { margin-top: 7px; color: #cfdae8; }
+.success { color: var(--accent); }
+.failure { color: var(--bad); }
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.fact {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+.fact-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.fact-value { margin-top: 3px; overflow-wrap: anywhere; color: #dce6f2; font-size: 12px; }
+.json {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #c7d3e1;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.muted { color: var(--muted); }
+.skills { display: flex; flex-wrap: wrap; gap: 6px; }
+.skill { padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-3); }
+.skill b { color: var(--purple); font-size: 11px; }
+.skill span { margin-left: 5px; color: var(--muted); font-size: 11px; }
+.tool-panel { max-width: 1440px; margin: 16px auto 0; }
+.tool-search {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-3);
+  color: var(--text);
+}
+.tool-search:focus { border-color: #397d68; }
+.tool-grid {
+  display: grid;
+  max-height: 285px;
+  margin-top: 10px;
+  overflow: auto;
+  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+  gap: 8px;
+}
+.tool-card { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-3); }
+.tool-card.selected { border-color: #397d68; background: #10271f; }
+.tool-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tool-name { color: var(--blue); font: 650 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tool-desc { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.tool-use {
+  padding: 4px 8px;
+  border: 1px solid #35745f;
+  border-radius: 6px;
+  background: var(--accent-deep);
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+}
+.audit { max-width: 1440px; margin: 0 auto; }
+.audit-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 13px;
+  padding: 11px 13px;
+  border: 1px solid #34577f;
+  border-radius: 9px;
+  background: var(--blue-deep);
+  color: #cfe2ff;
+  font-size: 12px;
+}
+.audit-metrics { display: grid; margin-bottom: 13px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.metric { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.metric-value { font-size: 18px; font-weight: 760; }
+.metric-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.message-map { display: flex; flex-wrap: wrap; gap: 6px; }
+.message-map-item {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 10px;
+}
+.message-map-item b { color: var(--text); }
+.message {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.role-system { color: var(--blue); }
+.role-user { color: var(--accent); }
+.role-assistant { color: var(--purple); }
+.part-label { padding: 8px 12px 0; color: var(--muted); font-size: 10px; }
+.text-part {
+  max-height: 52vh;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.audit-image { padding: 10px 12px 13px; }
+.audit-image img { display: block; max-width: 100%; max-height: 58vh; border: 1px solid var(--line); background: #05080d; cursor: zoom-in; }
+.object-part { margin: 10px 12px; padding: 10px; border-radius: 7px; background: var(--surface-3); }
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.main-pager { margin: 12px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.btn {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:disabled { opacity: .4; cursor: default; }
+.composer {
+  z-index: 5;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  background: #0c121b;
+  box-shadow: 0 -10px 30px #0009;
+}
+.composer-top { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; flex-wrap: wrap; }
+.composer-mode { color: var(--warn); font-size: 11px; font-weight: 700; }
+.composer-tabs { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-3); }
+.composer-tab { padding: 5px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.composer-tab.active { background: var(--surface-2); color: var(--text); }
+.composer-body { max-height: 46vh; overflow: auto; }
+.tool-form-head { display: grid; grid-template-columns: minmax(220px, 360px) 1fr; gap: 10px; align-items: end; margin-bottom: 9px; }
+.form-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.form-select, .form-input, .form-textarea {
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: none;
+  background: #070b11;
+  color: var(--text);
+}
+.form-select:focus, .form-input:focus, .form-textarea:focus { border-color: #397d68; }
+.form-textarea { min-height: 74px; resize: vertical; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.parameter-list { display: grid; gap: 7px; }
+.parameter-row { display: grid; grid-template-columns: minmax(150px, .55fr) minmax(130px, .42fr) minmax(230px, 1fr); gap: 9px; align-items: start; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-3); }
+.parameter-key { color: var(--blue); font: 650 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.parameter-description { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.parameter-badges { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+.parameter-default { padding: 8px 9px; border: 1px dashed var(--line-strong); border-radius: 7px; color: #d4dfec; background: #0b1119; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.parameter-omitted { padding: 8px 4px; color: var(--muted); font-size: 11px; }
+.reasoning-row { margin-top: 9px; }
+.decision-preview { margin-top: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-3); }
+.decision-preview summary { padding: 7px 9px; color: var(--muted); cursor: pointer; font-size: 11px; }
+.decision-preview pre { margin: 0; max-height: 210px; overflow: auto; padding: 9px; border-top: 1px solid var(--line); white-space: pre-wrap; color: #c8d5e3; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.composer-help { padding: 10px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--muted); text-align: center; }
+.raw-response-note { margin-bottom: 7px; color: var(--muted); font-size: 11px; }
+.spacer { flex: 1; }
+.composer .raw-response {
+  width: 100%;
+  height: 126px;
+  min-height: 82px;
+  max-height: 58vh;
+  resize: vertical;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  background: #070b11;
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.composer textarea:focus { border-color: #397d68; }
+.primary { border-color: #2d8c6b; background: #146348; }
+.danger { color: #ffc3ca; }
+.hidden { display: none !important; }
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: #000e;
+}
+.modal-head { display: flex; justify-content: flex-end; padding: 10px; }
+.modal-stage { display: grid; min-height: 0; overflow: auto; place-items: center; padding: 16px; }
+.modal-stage img { max-width: none; cursor: zoom-out; }
+.toast {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 40;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+@media (max-width: 1050px) {
+  .operate-grid { grid-template-columns: 1fr; }
+  .right-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .right-column .panel { margin: 0; }
+}
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 184px minmax(0, 1fr); }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { padding: 9px 12px 7px; }
+  .brand p { display: none; }
+  .queue { display: flex; gap: 8px; padding: 7px; }
+  .session { min-width: 260px; margin: 0; }
+  .main { height: calc(100vh - 184px); }
+  .viewer { padding: 12px; }
+  .topbar { padding: 8px 10px; }
+  .raw-link { display: none; }
+  .turn-hero { flex-direction: column; }
+  .hero-chips { justify-content: flex-start; }
+  .right-column { display: block; }
+  .right-column .panel + .panel { margin-top: 12px; }
+  .audit-metrics { grid-template-columns: repeat(2, 1fr); }
+  .composer { padding: 8px 10px; }
+  .tool-form-head, .parameter-row { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-row"><div class="logo">η</div><h1>OpenETA Human VLM</h1></div>
+      <p>Decide clearly · audit exactly</p>
+    </div>
+    <div id="queue" class="queue"></div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div class="title-line">
+        <div id="title" class="title">等待 harness 请求…</div>
+        <div id="subtitle" class="subtitle">Human decision console</div>
+      </div>
+      <div class="top-actions">
+        <div class="view-tabs" aria-label="Console view">
+          <button class="view-tab active" data-view="operate">决策台</button>
+          <button class="view-tab" data-view="audit">模型输入审计</button>
+        </div>
+        <a id="rawLink" class="raw-link hidden" target="_blank">Raw JSON</a>
+      </div>
+    </header>
+    <section id="viewer" class="viewer"><div class="empty">启动 agent turn 后，请求会显示在这里。</div></section>
+    <section id="composer" class="composer hidden">
+      <div class="composer-top">
+        <span id="mode" class="composer-mode"></span>
+        <div id="composerTabs" class="composer-tabs">
+          <button class="composer-tab active" data-compose="tool">调用工具</button>
+          <button class="composer-tab" data-compose="other">其他响应</button>
+        </div>
+        <span class="spacer"></span>
+        <button id="cancel" class="btn danger">Cancel</button>
+        <button id="submit" class="btn primary">Send to harness</button>
+      </div>
+      <div id="composerBody" class="composer-body"></div>
+      <textarea id="response" class="raw-response hidden" spellcheck="false" placeholder="输入该请求需要的完整 JSON 或原始响应。Ctrl/Cmd+Enter 发送。"></textarea>
+    </section>
+  </main>
+</div>
+<div id="modal" class="modal hidden">
+  <div class="modal-head"><button id="closeModal" class="btn">Close</button></div>
+  <div class="modal-stage"><img id="modalImage" alt="Full-size evidence"></div>
+</div>
+<div id="toast" class="toast hidden"></div>
+<script>
+var state = {
+  requests: [],
+  selected: null,
+  detail: null,
+  view: localStorage.getItem("manual-vlm-view") || "operate",
+  messagePage: 0,
+  textPages: {},
+  toolFilter: "",
+  composerMode: "tool",
+  selectedTool: "",
+  parameterStates: {},
+  reasoning: "",
+  otherType: "talk",
+  otherMessage: ""
+};
+var PAGE_MESSAGES = 4;
+var PAGE_CHARS = 12000;
+var PAGE_LINES = 100;
+function qs(selector) { return document.querySelector(selector); }
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char];
+  });
+}
+function toast(message) {
+  var node = qs("#toast");
+  node.textContent = message;
+  node.classList.remove("hidden");
+  setTimeout(function () { node.classList.add("hidden"); }, 2200);
+}
+async function api(url, options) {
+  var response = await fetch(url, options);
+  var value = await response.json();
+  if (!response.ok) throw new Error((value.error && value.error.message) || response.statusText);
+  return value;
+}
+function isEmpty(value) {
+  if (value == null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return value === "";
+}
+function pretty(value) { return JSON.stringify(value, null, 2); }
+function compactNumber(value) { return new Intl.NumberFormat().format(Number(value || 0)); }
+function renderQueue() {
+  var groups = [];
+  state.requests.forEach(function (request) {
+    var group = groups.find(function (item) { return item.id === request.session_id; });
+    if (!group) {
+      group = {id: request.session_id, source: request.session_source, requests: []};
+      groups.push(group);
+    }
+    group.requests.push(request);
+  });
+  qs("#queue").innerHTML = groups.map(function (group) {
+    return '<details class="session" open><summary title="' + esc(group.id) + '">' +
+      esc(group.id) + ' · ' + group.requests.length + ' turns · ' + esc(group.source) +
+      '</summary><div class="session-items">' + group.requests.map(function (request) {
+        var retry = request.attempt > 1 ? '<span class="chip retry">retry ' + request.attempt + '</span>' : "";
+        var errors = request.validation_error_count ? '<span class="chip error">' + request.validation_error_count + ' errors</span>' : "";
+        return '<button class="request ' + (state.selected === request.id ? "selected" : "") +
+          '" data-id="' + esc(request.id) + '"><div class="request-top"><span class="turn">Turn ' +
+          request.session_turn + '</span><span class="status-' + esc(request.status) + '">' +
+          esc(request.status) + '</span></div><div class="request-task">' +
+          esc(request.task || request.request_label) + '</div><div class="request-meta"><span class="chip ' +
+          esc(request.request_type) + '">' + esc(request.request_label) + '</span> ' + retry + " " +
+          errors + ' · ' + request.message_count + ' msg · ' + request.image_count + ' img</div></button>';
+      }).join("") + '</div></details>';
+  }).join("") || '<div class="empty">No sessions yet</div>';
+  document.querySelectorAll(".request").forEach(function (node) {
+    node.onclick = function () { selectRequest(node.dataset.id); };
+  });
+}
+function readableText(raw) {
+  var value = String(raw == null ? "" : raw);
+  var candidates = [0];
+  Array.from(value.matchAll(/\n(?=\s*[\[{])/g)).forEach(function (match) { candidates.push(match.index + 1); });
+  candidates.sort(function (a, b) { return b - a; });
+  for (var index = 0; index < candidates.length; index += 1) {
+    var at = candidates[index];
+    try {
+      var prefix = value.slice(0, at);
+      var parsed = JSON.parse(value.slice(at).trim());
+      return prefix + JSON.stringify(parsed, null, 2);
+    } catch (_error) {}
+  }
+  return value;
+}
+function splitText(raw) {
+  var lines = readableText(raw).split("\n");
+  var pages = [];
+  var page = [];
+  var chars = 0;
+  lines.forEach(function (line) {
+    if (page.length && (page.length >= PAGE_LINES || chars + line.length > PAGE_CHARS)) {
+      pages.push(page.join("\n"));
+      page = [];
+      chars = 0;
+    }
+    if (line.length > PAGE_CHARS) {
+      if (page.length) {
+        pages.push(page.join("\n"));
+        page = [];
+        chars = 0;
+      }
+      for (var offset = 0; offset < line.length; offset += PAGE_CHARS) pages.push(line.slice(offset, offset + PAGE_CHARS));
+    } else {
+      page.push(line);
+      chars += line.length + 1;
+    }
+  });
+  if (page.length || !pages.length) pages.push(page.join("\n"));
+  return pages;
+}
+function textHtml(raw, key) {
+  var pages = splitText(raw);
+  var page = Math.min(state.textPages[key] || 0, pages.length - 1);
+  var pager = "";
+  if (pages.length > 1) {
+    pager = '<div class="pager"><button class="btn text-page" data-key="' + esc(key) +
+      '" data-delta="-1" ' + (page === 0 ? "disabled" : "") + '>← 上一页</button><span>正文 ' +
+      (page + 1) + ' / ' + pages.length + '</span><button class="btn text-page" data-key="' +
+      esc(key) + '" data-delta="1" ' + (page === pages.length - 1 ? "disabled" : "") +
+      '>下一页 →</button></div>';
+  }
+  return '<div class="text-part">' + esc(pages[page]) + '</div>' + pager;
+}
+function openImage(url) {
+  qs("#modalImage").src = url;
+  qs("#modal").classList.remove("hidden");
+}
+function toolForm(name) {
+  return ((state.detail && state.detail.tool_forms) || []).find(function (item) { return item.name === name; });
+}
+function displayValue(value) {
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+function initialParameterState(field) {
+  return {
+    mode: field.has_default ? "default" : (field.required === true ? "custom" : "omit"),
+    value: field.has_default ? displayValue(field.default) : ""
+  };
+}
+function selectTool(name) {
+  state.selectedTool = name;
+  state.composerMode = "tool";
+  state.parameterStates = {};
+  var form = toolForm(name);
+  (form && form.fields || []).forEach(function (field) {
+    state.parameterStates[field.name] = initialParameterState(field);
+  });
+  renderComposer();
+  var composer = qs("#composer");
+  if (composer) composer.scrollIntoView({behavior: "smooth", block: "end"});
+}
+function xmlName(name) { return String(name).replace(/[^A-Za-z0-9_.-]/g, "_"); }
+function xmlText(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function valueToXml(name, value, indent) {
+  var tag = xmlName(name);
+  var pad = " ".repeat(indent);
+  if (value === null) return pad + "<" + tag + ' type="null"/>';
+  if (Array.isArray(value)) {
+    if (!value.length) return pad + "<" + tag + ' type="array"/>';
+    return pad + "<" + tag + ' type="array">\n' + value.map(function (item) {
+      return valueToXml("item", item, indent + 2);
+    }).join("\n") + "\n" + pad + "</" + tag + ">";
+  }
+  if (typeof value === "object") {
+    var entries = Object.entries(value);
+    if (!entries.length) return pad + "<" + tag + ' type="object"/>';
+    return pad + "<" + tag + ' type="object">\n' + entries.map(function (entry) {
+      return valueToXml(entry[0], entry[1], indent + 2);
+    }).join("\n") + "\n" + pad + "</" + tag + ">";
+  }
+  if (typeof value === "boolean") {
+    return pad + "<" + tag + ' type="boolean">' + (value ? "true" : "false") + "</" + tag + ">";
+  }
+  if (typeof value === "number") {
+    var numericType = Number.isInteger(value) ? "integer" : "number";
+    return pad + "<" + tag + ' type="' + numericType + '">' + value + "</" + tag + ">";
+  }
+  return pad + "<" + tag + ' type="string">' + xmlText(value) + "</" + tag + ">";
+}
+function parseFieldValue(field, raw) {
+  var value = String(raw == null ? "" : raw).trim();
+  if (field.value_type === "json") {
+    try { return {value: JSON.parse(value)}; }
+    catch (_error) { return {error: field.name + " 必须是合法 JSON"}; }
+  }
+  if (field.value_type === "integer") {
+    if (!/^-?\d+$/.test(value)) return {error: field.name + " 必须是整数"};
+    return {value: Number(value)};
+  }
+  if (field.value_type === "number") {
+    if (value === "" || !Number.isFinite(Number(value))) return {error: field.name + " 必须是数字"};
+    return {value: Number(value)};
+  }
+  if (field.value_type === "boolean") {
+    if (!['true', 'false'].includes(value.toLowerCase())) return {error: field.name + " 必须是 true 或 false"};
+    return {value: value.toLowerCase() === "true"};
+  }
+  return {value: value};
+}
+function buildToolDecision() {
+  var form = toolForm(state.selectedTool);
+  if (!form) return {errors: ["请先选择一个工具"]};
+  var errors = [];
+  var values = [];
+  (form.fields || []).forEach(function (field) {
+    var current = state.parameterStates[field.name] || initialParameterState(field);
+    if (current.mode === "omit") {
+      if (field.required === true) errors.push(field.name + " 是必填参数，不能省略");
+      return;
+    }
+    var parsed;
+    if (current.mode === "default") {
+      if (!field.has_default) {
+        errors.push(field.name + " 没有声明默认值");
+        return;
+      }
+      parsed = {value: field.default};
+    } else {
+      if (String(current.value || "").trim() === "") {
+        if (field.required === true) errors.push(field.name + " 是必填参数");
+        return;
+      }
+      parsed = parseFieldValue(field, current.value);
+    }
+    if (parsed.error) errors.push(parsed.error);
+    else values.push([field.name, parsed.value]);
+  });
+  if (errors.length) return {errors: errors};
+  var parameters = values.length
+    ? "  <parameters>\n" + values.map(function (entry) { return valueToXml(entry[0], entry[1], 4); }).join("\n") + "\n  </parameters>"
+    : "  <parameters/>";
+  var reasoning = state.reasoning.trim() || "Human-selected tool call.";
+  var decision = {kind: "tool_call", name: form.name, parameters: Object.fromEntries(values), reasoning: reasoning};
+  return {decision: decision, content: "<decision>\n  <kind>tool_call</kind>\n  <name>" + xmlText(form.name) +
+    "</name>\n" + parameters + "\n  <reasoning type=\"string\">" + xmlText(reasoning) +
+    "</reasoning>\n</decision>", errors: []};
+}
+function buildOtherDecision() {
+  if (state.otherType === "raw") {
+    var raw = qs("#response").value.trim();
+    return raw ? {content: raw, errors: []} : {errors: ["请输入完整响应"]};
+  }
+  var message = state.otherMessage.trim();
+  if (["talk", "ask_human"].includes(state.otherType) && !message) {
+    return {errors: ["请输入要发送的 message"]};
+  }
+  var parameters = state.otherType === "task_complete"
+    ? "  <parameters/>"
+    : "  <parameters>\n" + valueToXml("message", message, 4) + "\n  </parameters>";
+  var reasoning = state.reasoning.trim() || "Human-selected response.";
+  var decision = {
+    kind: "response",
+    name: state.otherType,
+    parameters: state.otherType === "task_complete" ? {} : {message: message},
+    reasoning: reasoning
+  };
+  return {decision: decision, content: "<decision>\n  <kind>response</kind>\n  <name>" + xmlText(state.otherType) +
+    "</name>\n" + parameters + "\n  <reasoning type=\"string\">" + xmlText(reasoning) +
+    "</reasoning>\n</decision>", errors: []};
+}
+function buildComposerResponse() {
+  if (state.detail && state.detail.response_mode === "json") {
+    var raw = qs("#response").value.trim();
+    return raw ? {content: raw, errors: []} : {errors: ["请输入完整 JSON"]};
+  }
+  return state.composerMode === "tool" ? buildToolDecision() : buildOtherDecision();
+}
+function modeOptions(field, current) {
+  var options = [];
+  if (field.required !== true) options.push(["omit", "省略（不发送）"]);
+  options.push(["custom", "填写值"]);
+  if (field.has_default) options.push(["default", "使用默认值"]);
+  return options.map(function (option) {
+    return '<option value="' + option[0] + '" ' + (current === option[0] ? "selected" : "") + '>' + option[1] + '</option>';
+  }).join("");
+}
+function customFieldInput(field, current) {
+  var value = current.value == null ? "" : String(current.value);
+  if (field.choices && field.choices.length) {
+    return '<select class="form-select" data-param-value="' + esc(field.name) + '"><option value="">请选择…</option>' +
+      field.choices.map(function (choice) {
+        return '<option value="' + esc(choice) + '" ' + (value === choice ? "selected" : "") + '>' + esc(choice) + '</option>';
+      }).join("") + '</select>';
+  }
+  if (field.value_type === "boolean") {
+    return '<select class="form-select" data-param-value="' + esc(field.name) + '"><option value="">请选择…</option>' +
+      '<option value="true" ' + (value === "true" ? "selected" : "") + '>true</option>' +
+      '<option value="false" ' + (value === "false" ? "selected" : "") + '>false</option></select>';
+  }
+  if (field.value_type === "json" || field.name === "code" || value.includes("\n")) {
+    return '<textarea class="form-textarea" data-param-value="' + esc(field.name) +
+      '" placeholder="' + (field.value_type === "json" ? "输入合法 JSON" : "输入参数值") + '">' + esc(value) + '</textarea>';
+  }
+  var inputType = ["integer", "number"].includes(field.value_type) ? "number" : "text";
+  var step = field.value_type === "integer" ? ' step="1"' : (field.value_type === "number" ? ' step="any"' : "");
+  return '<input class="form-input" type="' + inputType + '"' + step + ' data-param-value="' +
+    esc(field.name) + '" value="' + esc(value) + '" placeholder="输入参数值">';
+}
+function parameterFieldHtml(field) {
+  var current = state.parameterStates[field.name] || initialParameterState(field);
+  var requirement = field.required === true ? "必填" : (field.required === false ? "可选" : "未声明");
+  var requirementClass = field.required === true ? "error" : "";
+  var editor;
+  if (current.mode === "omit") {
+    editor = '<div class="parameter-omitted">此参数不会出现在发送给 harness 的调用中。</div>';
+  } else if (current.mode === "default") {
+    editor = '<div class="parameter-default">' + esc(displayValue(field.default)) + '</div>';
+  } else {
+    editor = customFieldInput(field, current);
+  }
+  return '<div class="parameter-row"><div><div class="parameter-key">' + esc(field.name) + '</div>' +
+    '<div class="parameter-badges"><span class="chip ' + requirementClass + '">' + requirement + '</span>' +
+    '<span class="chip">' + esc(field.value_type) + '</span>' +
+    (field.has_default ? '<span class="chip">有 default</span>' : "") + '</div>' +
+    '<div class="parameter-description">' + esc(field.description || "No parameter description.") + '</div></div>' +
+    '<div><label class="form-label">处理方式</label><select class="form-select" data-param-mode="' +
+    esc(field.name) + '">' + modeOptions(field, current.mode) + '</select></div><div><label class="form-label">' +
+    (current.mode === "default" ? "Default value" : (current.mode === "omit" ? "状态" : "Value")) +
+    '</label>' + editor + '</div></div>';
+}
+function refreshDecisionPreview() {
+  var preview = qs("#decisionPreview");
+  if (!preview) return;
+  var built = state.composerMode === "tool" ? buildToolDecision() : buildOtherDecision();
+  preview.textContent = built.errors && built.errors.length
+    ? "尚不能发送：\n- " + built.errors.join("\n- ")
+    : built.content;
+}
+function bindComposerFields() {
+  var toolSelect = qs("#composerToolSelect");
+  if (toolSelect) toolSelect.onchange = function () { selectTool(toolSelect.value); };
+  document.querySelectorAll("[data-param-mode]").forEach(function (select) {
+    select.onchange = function () {
+      var name = select.dataset.paramMode;
+      state.parameterStates[name].mode = select.value;
+      renderComposer();
+    };
+  });
+  document.querySelectorAll("[data-param-value]").forEach(function (input) {
+    input.oninput = input.onchange = function () {
+      state.parameterStates[input.dataset.paramValue].value = input.value;
+      refreshDecisionPreview();
+    };
+  });
+  var reasoning = qs("#reasoningInput");
+  if (reasoning) reasoning.oninput = function () {
+    state.reasoning = reasoning.value;
+    refreshDecisionPreview();
+  };
+  var otherType = qs("#otherType");
+  if (otherType) otherType.onchange = function () {
+    state.otherType = otherType.value;
+    renderComposer();
+  };
+  var otherMessage = qs("#otherMessage");
+  if (otherMessage) otherMessage.oninput = function () {
+    state.otherMessage = otherMessage.value;
+    refreshDecisionPreview();
+  };
+}
+function renderComposer() {
+  var detail = state.detail;
+  if (!detail || detail.status !== "pending") return;
+  var body = qs("#composerBody");
+  var raw = qs("#response");
+  var tabs = qs("#composerTabs");
+  raw.classList.add("hidden");
+  document.querySelectorAll(".composer-tab").forEach(function (tab) {
+    tab.classList.toggle("active", tab.dataset.compose === state.composerMode);
+  });
+  if (detail.response_mode === "json") {
+    tabs.classList.add("hidden");
+    qs("#mode").textContent = "该内部请求需要完整 JSON 响应";
+    var contract = detail.operator && detail.operator.required_output;
+    body.innerHTML = '<div class="raw-response-note">这是非工具型 JSON 请求。请依据输出契约填写完整 JSON。' +
+      (contract ? '<pre class="json">' + esc(pretty(contract)) + '</pre>' : "") + '</div>';
+    raw.classList.remove("hidden");
+    return;
+  }
+  tabs.classList.remove("hidden");
+  qs("#mode").textContent = state.composerMode === "tool" ? "结构化 Tool Call" : "其他响应";
+  if (state.composerMode === "tool") {
+    var forms = detail.tool_forms || [];
+    var form = toolForm(state.selectedTool);
+    var options = '<option value="">请选择工具…</option>' + forms.map(function (item) {
+      return '<option value="' + esc(item.name) + '" ' + (item.name === state.selectedTool ? "selected" : "") + '>' + esc(item.name) + '</option>';
+    }).join("");
+    var fields = form && form.fields || [];
+    body.innerHTML = '<div class="tool-form-head"><div><label class="form-label">Tool</label>' +
+      '<select id="composerToolSelect" class="form-select">' + options + '</select></div><div class="muted">' +
+      esc(form && form.description || "从上方工具列表选择，或在这里直接选择。") + '</div></div>' +
+      (!form ? '<div class="composer-help">选择工具后，这里会自动展开对应参数。</div>' :
+        (fields.length ? '<div class="parameter-list">' + fields.map(parameterFieldHtml).join("") + '</div>' :
+          '<div class="composer-help">这个工具没有参数，将发送空 parameters。</div>') +
+        '<div class="reasoning-row"><label class="form-label">Reasoning（可选）</label>' +
+        '<input id="reasoningInput" class="form-input" value="' + esc(state.reasoning) +
+        '" placeholder="留空时使用 Human-selected tool call."></div>' +
+        '<details class="decision-preview"><summary>查看自动生成的 XML</summary><pre id="decisionPreview"></pre></details>');
+  } else {
+    var needsMessage = ["talk", "ask_human"].includes(state.otherType);
+    body.innerHTML = '<div class="tool-form-head"><div><label class="form-label">响应类型</label>' +
+      '<select id="otherType" class="form-select"><option value="talk" ' + (state.otherType === "talk" ? "selected" : "") +
+      '>talk</option><option value="ask_human" ' + (state.otherType === "ask_human" ? "selected" : "") +
+      '>ask_human</option><option value="task_complete" ' + (state.otherType === "task_complete" ? "selected" : "") +
+      '>task_complete</option><option value="raw" ' + (state.otherType === "raw" ? "selected" : "") +
+      '>原始响应（高级）</option></select></div><div class="muted">非工具动作放在这里；一般情况下优先使用 Tool Call。</div></div>' +
+      (needsMessage ? '<div><label class="form-label">Message</label><textarea id="otherMessage" class="form-textarea">' +
+        esc(state.otherMessage) + '</textarea></div>' : "") +
+      (state.otherType !== "raw" ? '<div class="reasoning-row"><label class="form-label">Reasoning（可选）</label>' +
+        '<input id="reasoningInput" class="form-input" value="' + esc(state.reasoning) + '"></div>' +
+        '<details class="decision-preview"><summary>查看自动生成的 XML</summary><pre id="decisionPreview"></pre></details>' :
+        '<div class="raw-response-note">高级模式：直接填写完整 XML 响应。</div>');
+    if (state.otherType === "raw") raw.classList.remove("hidden");
+  }
+  bindComposerFields();
+  refreshDecisionPreview();
+}
+function toolPicker(detail) {
+  if (!detail.tools || !detail.tools.length) {
+    return '<section class="panel tool-panel"><div class="panel-body muted">当前请求没有可调用工具。</div></section>';
+  }
+  var query = state.toolFilter.toLowerCase();
+  var shown = detail.tools.filter(function (tool) {
+    return !query || JSON.stringify(tool).toLowerCase().includes(query);
+  });
+  return '<section class="panel tool-panel"><div class="panel-head"><div><div class="panel-title">选择下一步工具</div>' +
+    '<div class="panel-note">' + detail.tools.length + ' tools · 选择后在底部填写结构化参数</div></div></div>' +
+    '<div class="panel-body"><input id="toolSearch" class="tool-search" value="' + esc(state.toolFilter) +
+    '" placeholder="搜索工具名称、能力或参数…"><div class="tool-grid">' + shown.map(function (tool) {
+      return '<div class="tool-card ' + (state.selectedTool === tool.name ? "selected" : "") +
+        '"><div class="tool-card-top"><span class="tool-name">' + esc(tool.name) +
+        '</span><button class="tool-use" data-name="' + esc(tool.name) + '">' +
+        (state.selectedTool === tool.name ? "已选择" : "选择") + '</button></div>' +
+        '<div class="tool-desc">' + esc(tool.description || tool.category || "") + '</div></div>';
+    }).join("") + '</div></div></section>';
+}
+function renderValidation(errors) {
+  if (!errors || !errors.length) return "";
+  return '<div class="alert"><div class="alert-title">上一份回复未通过 harness 校验，请先修正</div><ul>' +
+    errors.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join("") + '</ul></div>';
+}
+function renderLatestAction(action) {
+  if (isEmpty(action)) return '<div class="panel-body muted">这是该 session 的首个动作请求。</div>';
+  var successClass = action.operational_success === false ? "failure" : "success";
+  var stateText = action.status || action.semantic_outcome || "recorded";
+  return '<div class="last-action"><div class="last-action-name">' + esc(action.tool || "action") +
+    ' <span class="' + successClass + '">· ' + esc(stateText) + '</span></div><div class="last-action-content">' +
+    esc(action.content || "No human-readable result content.") + '</div></div>';
+}
+function renderObservation(observation, environment) {
+  var gripper = observation.gripper_state || {};
+  var pose = observation.end_effector_pose || {};
+  var objects = Array.isArray(observation.objects) ? observation.objects : [];
+  var objectNames = objects.slice(0, 8).map(function (item) {
+    return typeof item === "string" ? item : (item.name || item.id || item.label || "object");
+  });
+  return '<div class="facts">' +
+    '<div class="fact"><div class="fact-label">Environment</div><div class="fact-value">' +
+      esc(environment.env_id || "not created") + '</div></div>' +
+    '<div class="fact"><div class="fact-label">Observation</div><div class="fact-value">step ' +
+      esc(observation.step == null ? "—" : observation.step) + ' · ' +
+      (observation.fresh === false ? '<span class="failure">stale</span>' : '<span class="success">fresh</span>') +
+      '</div></div>' +
+    '<div class="fact"><div class="fact-label">Cameras</div><div class="fact-value">' +
+      esc((observation.camera_ids || []).join(", ") || "none") + '</div></div>' +
+    '<div class="fact"><div class="fact-label">Objects</div><div class="fact-value">' +
+      esc(String(observation.object_count == null ? objects.length : observation.object_count)) +
+      (objectNames.length ? " · " + esc(objectNames.join(", ")) : "") + '</div></div>' +
+    '<div class="fact"><div class="fact-label">Gripper</div><div class="fact-value">' +
+      esc(gripper.open == null ? "unknown" : (gripper.open ? "open" : "closed")) +
+      (gripper.openness == null ? "" : " · " + Number(gripper.openness).toFixed(3)) + '</div></div>' +
+    '<div class="fact"><div class="fact-label">EEF xyz</div><div class="fact-value">' +
+      esc(Array.isArray(pose.xyz) ? pose.xyz.map(function (value) { return Number(value).toFixed(3); }).join(", ") : "unknown") +
+      '</div></div></div>';
+}
+function renderJsonPanel(title, value, emptyText) {
+  return '<section class="panel"><div class="panel-head"><div class="panel-title">' + esc(title) +
+    '</div></div><div class="panel-body">' + (isEmpty(value)
+      ? '<span class="muted">' + esc(emptyText || "None") + '</span>'
+      : '<pre class="json">' + esc(pretty(value)) + '</pre>') + '</div></section>';
+}
+function renderOperator(detail) {
+  var operator = detail.operator || {};
+  var classification = operator.classification || {};
+  var observation = operator.observation || {};
+  var images = operator.images || [];
+  var imageHtml = images.length ? '<div class="image-grid">' + images.map(function (image) {
+    return '<figure class="evidence"><img src="' + esc(image.url) + '" data-full="' + esc(image.url) +
+      '" alt="' + esc(image.label) + '"><figcaption class="evidence-caption"><span>' + esc(image.label) +
+      '</span><span class="evidence-role">' + esc(image.role) +
+      (image.freshness ? " · " + esc(image.freshness) : "") + '</span></figcaption></figure>';
+  }).join("") + '</div>' : '<div class="no-images">这个请求没有视觉附件，请依据结构化状态和历史证据决策。</div>';
+  var skills = operator.skills || [];
+  var skillsHtml = skills.length
+    ? '<div class="skills">' + skills.map(function (skill) {
+        return '<div class="skill"><b>' + esc(skill.name) + '</b><span>' + esc(skill.description || "") + '</span></div>';
+      }).join("") + '</div>'
+    : '<span class="muted">当前 turn 没有注入额外 skill。</span>';
+  var heroChips = '<span class="chip ' + esc(classification.type) + '">' + esc(classification.label) + '</span>' +
+    '<span class="chip">attempt ' + esc(operator.attempt || 1) + '</span>' +
+    '<span class="chip">' + esc(String(detail.image_count)) + ' images</span>';
+  return '<div class="turn-hero"><div><div class="eyebrow">Current objective</div><h2>' +
+    esc(operator.task || classification.label || "Inspect the current request") +
+    '</h2></div><div class="hero-chips">' + heroChips + '</div></div>' +
+    renderValidation(operator.validation_errors) +
+    '<div class="operate-grid"><div class="left-column">' +
+      '<section class="panel"><div class="panel-head"><div><div class="panel-title">当前视觉证据</div>' +
+      '<div class="panel-note">点击图片查看原始分辨率</div></div><span class="chip">' + images.length +
+      ' attached</span></div><div class="panel-body">' + imageHtml + '</div></section>' +
+      '<section class="panel"><div class="panel-head"><div class="panel-title">当前机器人与环境状态</div></div>' +
+      '<div class="panel-body">' + renderObservation(observation, operator.environment || {}) + '</div></section>' +
+      '<section class="panel"><div class="panel-head"><div class="panel-title">本 turn 的模型指令</div></div>' +
+      '<div class="panel-body"><div class="muted">' + esc(operator.instruction || "Follow the request contract.") +
+      '</div></div></section>' +
+    '</div><div class="right-column">' +
+      '<section class="panel"><div class="panel-head"><div class="panel-title">上一步执行结果</div></div>' +
+      renderLatestAction(operator.latest_action || {}) + '</section>' +
+      renderJsonPanel("未解决约束", operator.unresolved_obligations, "没有未解决约束。") +
+      renderJsonPanel("待回答问题 / 输出契约",
+        !isEmpty(operator.open_questions) ? operator.open_questions : operator.required_output,
+        "没有额外问题或特殊输出约束。") +
+      '<section class="panel"><div class="panel-head"><div class="panel-title">本 turn 相关 skills</div></div>' +
+      '<div class="panel-body">' + skillsHtml + '</div></section>' +
+    '</div></div>' + toolPicker(detail);
+}
+function partHtml(part, index, key) {
+  if (typeof part === "string") return textHtml(part, key);
+  if (!part || typeof part !== "object") return '<pre class="json object-part">' + esc(pretty(part)) + '</pre>';
+  if (part.type === "text") {
+    return '<div class="part-label">TEXT CONTENT PART ' + (index + 1) + ' · ' +
+      compactNumber(String(part.text || "").length) + ' chars</div>' + textHtml(part.text || "", key);
+  }
+  if (part.type === "image_url") {
+    var url = (part.image_url && part.image_url.url) || part.image_url || "";
+    var detail = (part.image_url && part.image_url.detail) || "default";
+    return '<div class="part-label">IMAGE CONTENT PART ' + (index + 1) + ' · detail=' + esc(detail) +
+      ' · ' + esc(part.wire_url_kind || "") + '</div><div class="audit-image"><img src="' +
+      esc(url) + '" data-full="' + esc(url) + '" alt="Model input image ' + (index + 1) + '"></div>';
+  }
+  return '<pre class="json object-part">' + esc(pretty(part)) + '</pre>';
+}
+function messagePager(page, count) {
+  if (count <= 1) return "";
+  return '<div class="pager main-pager"><button class="btn main-page" data-delta="-1" ' +
+    (page === 0 ? "disabled" : "") + '>← 上一页</button><span>消息页 ' + (page + 1) + " / " +
+    count + '</span><button class="btn main-page" data-delta="1" ' +
+    (page === count - 1 ? "disabled" : "") + '>下一页 →</button></div>';
+}
+function renderAudit(detail) {
+  var audit = detail.wire_audit || {};
+  var pageCount = Math.max(1, Math.ceil(detail.messages.length / PAGE_MESSAGES));
+  state.messagePage = Math.min(state.messagePage, pageCount - 1);
+  var start = state.messagePage * PAGE_MESSAGES;
+  var visible = detail.messages.slice(start, start + PAGE_MESSAGES);
+  var pager = messagePager(state.messagePage, pageCount);
+  var map = (audit.messages || []).map(function (message) {
+    var parts = (message.parts || []).map(function (part) {
+      return part.type === "text" ? "text " + compactNumber(part.chars) : part.type;
+    }).join(" + ");
+    return '<span class="message-map-item"><b>' + (message.index + 1) + ' ' + esc(message.role) +
+      '</b> · ' + esc(parts) + '</span>';
+  }).join("");
+  var exactMessages = visible.map(function (message, visibleIndex) {
+    var index = start + visibleIndex;
+    var body = Array.isArray(message.content)
+      ? message.content.map(function (part, partIndex) {
+          return partHtml(part, partIndex, "m" + index + "p" + partIndex);
+        }).join("")
+      : textHtml(message.content == null ? "" : message.content, "m" + index);
+    return '<article class="message"><div class="message-head role-' + esc(message.role) +
+      '"><span>Message ' + (index + 1) + ' · ' + esc(message.role || "unknown") +
+      '</span><span>exact content</span></div>' + body + '</article>';
+  }).join("");
+  return '<div class="audit"><div class="audit-banner"><b>完整输入校验</b><span>' +
+    esc(audit.note || "Every provider message is shown below.") +
+    ' 如需核对原始 base64 和所有顶层字段，请打开右上角 Raw JSON。<br>Normalized SHA-256: <code>' +
+    esc(audit.normalized_sha256 || "unavailable") + '</code></span></div>' +
+    '<div class="audit-metrics"><div class="metric"><div class="metric-value">' +
+      compactNumber(audit.message_count) + '</div><div class="metric-label">messages</div></div>' +
+      '<div class="metric"><div class="metric-value">' + compactNumber(audit.text_chars) +
+      '</div><div class="metric-label">text characters</div></div>' +
+      '<div class="metric"><div class="metric-value">' + compactNumber(audit.image_count) +
+      '</div><div class="metric-label">images</div></div>' +
+      '<div class="metric"><div class="metric-value">' + compactNumber(audit.normalized_body_bytes) +
+      '</div><div class="metric-label">normalized bytes</div></div></div>' +
+    '<section class="panel"><div class="panel-head"><div class="panel-title">消息结构总览</div>' +
+      '<div class="panel-note">顺序与 provider request 完全一致</div></div><div class="panel-body">' +
+      '<div class="message-map">' + map + '</div></div></section>' +
+    pager + exactMessages + pager +
+    '<details class="message"><summary class="message-head">Request options · 除 messages 外的所有字段</summary>' +
+      '<pre class="json object-part">' + esc(pretty(detail.request_options)) + '</pre></details>' +
+    (detail.response_text ? '<article class="message"><div class="message-head role-assistant">Manual response</div>' +
+      textHtml(detail.response_text, "response") + '</article>' : "") +
+    (detail.response_error ? '<article class="message"><div class="message-head status-cancelled">Cancelled</div>' +
+      textHtml(detail.response_error, "error") + '</article>' : "") + '</div>';
+}
+function bindRenderedEvents() {
+  document.querySelectorAll("img[data-full]").forEach(function (image) {
+    image.onclick = function () { openImage(image.dataset.full); };
+  });
+  document.querySelectorAll(".text-page").forEach(function (button) {
+    button.onclick = function () {
+      state.textPages[button.dataset.key] = (state.textPages[button.dataset.key] || 0) + Number(button.dataset.delta);
+      renderDetail();
+    };
+  });
+  document.querySelectorAll(".main-page").forEach(function (button) {
+    button.onclick = function () {
+      state.messagePage += Number(button.dataset.delta);
+      qs("#viewer").scrollTop = 0;
+      renderDetail();
+    };
+  });
+  document.querySelectorAll(".tool-use").forEach(function (button) {
+    button.onclick = function () { selectTool(button.dataset.name); };
+  });
+  var search = qs("#toolSearch");
+  if (search) {
+    search.oninput = function (event) {
+      state.toolFilter = event.target.value;
+      renderDetail();
+      var next = qs("#toolSearch");
+      if (next) {
+        next.focus();
+        next.setSelectionRange(next.value.length, next.value.length);
+      }
+    };
+  }
+}
+function renderDetail() {
+  var detail = state.detail;
+  var viewer = qs("#viewer");
+  var composer = qs("#composer");
+  document.querySelectorAll(".view-tab").forEach(function (tab) {
+    tab.classList.toggle("active", tab.dataset.view === state.view);
+  });
+  if (!detail) {
+    viewer.innerHTML = '<div class="empty">选择一个请求。</div>';
+    composer.classList.add("hidden");
+    return;
+  }
+  var operator = detail.operator || {};
+  var classification = operator.classification || {};
+  qs("#title").textContent = (operator.task || classification.label || detail.model) + " · Turn " + detail.session_turn;
+  qs("#subtitle").textContent = classification.label + " · " + detail.status + " · " + detail.id.slice(0, 10);
+  qs("#rawLink").href = "/api/requests/" + detail.id + "/raw";
+  qs("#rawLink").classList.remove("hidden");
+  viewer.innerHTML = state.view === "audit" ? renderAudit(detail) : renderOperator(detail);
+  bindRenderedEvents();
+  if (detail.status === "pending") {
+    composer.classList.remove("hidden");
+    renderComposer();
+  } else {
+    composer.classList.add("hidden");
+  }
+}
+async function selectRequest(id) {
+  state.selected = id;
+  state.messagePage = 0;
+  state.textPages = {};
+  state.toolFilter = "";
+  state.composerMode = "tool";
+  state.selectedTool = "";
+  state.parameterStates = {};
+  state.reasoning = "";
+  state.otherType = "talk";
+  state.otherMessage = "";
+  qs("#response").value = "";
+  renderQueue();
+  state.detail = await api("/api/requests/" + id);
+  renderDetail();
+}
+async function poll() {
+  try {
+    var listing = await api("/api/requests");
+    var before = state.requests.map(function (request) { return request.id + ":" + request.status; }).join();
+    state.requests = listing.requests;
+    renderQueue();
+    if (!state.selected) {
+      var first = state.requests.find(function (request) { return request.status === "pending"; }) || state.requests[0];
+      if (first) await selectRequest(first.id);
+    } else {
+      var after = state.requests.map(function (request) { return request.id + ":" + request.status; }).join();
+      if (before !== after) {
+        state.detail = await api("/api/requests/" + state.selected);
+        renderDetail();
+        var pending = state.requests.find(function (request) { return request.status === "pending"; });
+        if (state.detail.status !== "pending" && pending) await selectRequest(pending.id);
+      }
+    }
+  } catch (error) {
+    console.error(error);
+  } finally {
+    setTimeout(poll, 750);
+  }
+}
+document.querySelectorAll(".view-tab").forEach(function (tab) {
+  tab.onclick = function () {
+    state.view = tab.dataset.view;
+    localStorage.setItem("manual-vlm-view", state.view);
+    renderDetail();
+  };
+});
+document.querySelectorAll("[data-compose]").forEach(function (button) {
+  button.onclick = function () {
+    state.composerMode = button.dataset.compose;
+    renderComposer();
+  };
+});
+qs("#submit").onclick = async function () {
+  try {
+    var built = buildComposerResponse();
+    if (built.errors && built.errors.length) {
+      toast(built.errors[0]);
+      refreshDecisionPreview();
+      return;
+    }
+    await api("/api/requests/" + state.selected + "/response", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(built.decision ? {decision: built.decision} : {content: built.content})
+    });
+    qs("#response").value = "";
+    toast("Response sent to harness");
+  } catch (error) { toast(error.message); }
+};
+qs("#cancel").onclick = async function () {
+  if (!confirm("Cancel this waiting provider request?")) return;
+  try {
+    await api("/api/requests/" + state.selected + "/cancel", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({reason: "Cancelled by the human VLM operator."})
+    });
+    toast("Request cancelled");
+  } catch (error) { toast(error.message); }
+};
+var responseBox = qs("#response");
+var savedHeight = Number(localStorage.getItem("manual-vlm-response-height"));
+if (savedHeight >= 80) responseBox.style.height = Math.min(savedHeight, window.innerHeight * .58) + "px";
+new ResizeObserver(function (entries) {
+  var height = Math.round(entries[0].contentRect.height);
+  if (height >= 80) localStorage.setItem("manual-vlm-response-height", String(height));
+}).observe(responseBox);
+qs("#composer").onkeydown = function (event) {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    qs("#submit").click();
+  }
+};
+qs("#closeModal").onclick = function () { qs("#modal").classList.add("hidden"); };
+qs("#modal").onclick = function (event) {
+  if (event.target.id === "modal" || event.target.classList.contains("modal-stage")) qs("#modal").classList.add("hidden");
+};
+renderDetail();
+poll();
+</script>
+</body>
+</html>

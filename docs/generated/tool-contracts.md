@@ -32,7 +32,7 @@ required fields, output variants, evidence lifetime, or gate behavior are comple
 | `get_memory` | memory | `read_only` | verified | 2 |
 | `grasp_pose_estimate` | manipulation | `planning` | verified | 2 |
 | `gripper_control` | control | `world_mutating` | verified | 1 |
-| `ik_preview_check` | safety | `read_only` | verified | 11 |
+| `ik_preview_check` | safety | `read_only` | verified | 12 |
 | `molmopoint` | perception | `read_only` | verified | 2 |
 | `move_to` | control | `world_mutating` | verified | 5 |
 | `observe` | perception | `read_only` | verified | 1 |
@@ -60,6 +60,7 @@ Predict five camera-frame object placement transforms and the corresponding plac
 - Category/effect: `manipulation` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `host_resolved_bundle_only`
 
 ### Agent request
 
@@ -120,11 +121,12 @@ Predict five camera-frame object placement transforms and the corresponding plac
 
 ## `assess_attachment_probe`
 
-Independently compare the frozen articulated probe's before/after agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is read-only and cannot move the robot or use privileged joint state.
+Independently compare the frozen attachment probe's before/after agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is read-only and cannot move the robot or use privileged joint state.
 
 - Category/effect: `safety` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `visual_evidence_only`, `no_privileged_joint_state`, `not_motion_authorization`
 
 ### Agent request
 
@@ -189,6 +191,7 @@ Transform a camera-frame pose or grasp candidate into the world frame using host
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `host_owned_calibration`
 
 ### Agent request
 
@@ -262,6 +265,7 @@ Close the currently active remote simulator environment and clear its bound hand
 - Category/effect: `environment` / `world_mutating`
 - Contract maturity: `verified`
 - Requires observation after call: `true`
+- Agent semantic limits: `world_mutating`, `atomic_call_only`, `fresh_observation_after_call`, `exclusive_environment_cleanup_path`
 
 ### Agent request
 
@@ -324,6 +328,7 @@ Compact recent session events and working memory into a short summary.
 - Category/effect: `memory` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`
 
 ### Agent request
 
@@ -386,6 +391,7 @@ Resolve one session-owned estimator result/candidate id and compile its normaliz
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `candidate_not_motion_authorization`, `unknown_geometry_uses_generic_calibration`
 
 ### Agent request
 
@@ -457,6 +463,7 @@ Near a compiled clearance/hover reference, compute one bounded world-frame later
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `lateral_translation_only`, `no_orientation_or_axial_depth_refinement`, `not_motion_authorization`
 
 ### Agent request
 
@@ -524,6 +531,7 @@ Create exactly one remote simulator environment and reset it to obtain the initi
 - Category/effect: `environment` / `world_mutating`
 - Contract maturity: `verified`
 - Requires observation after call: `true`
+- Agent semantic limits: `world_mutating`, `atomic_call_only`, `fresh_observation_after_call`, `exclusive_environment_creation_path`
 
 ### Agent request
 
@@ -593,6 +601,7 @@ Delete a working-memory fact, artifact, or skill note entry by key.
 - Category/effect: `memory` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`
 
 ### Agent request
 
@@ -658,6 +667,7 @@ Fuse aligned RGB-D sensor depth with an optional metric monocular depth-prior ar
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `sensor_depth_authoritative`, `model_depth_hole_fill_only`
 
 ### Agent request
 
@@ -727,6 +737,7 @@ Call a configured remote metric monocular depth-prior service such as UniDepth, 
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `depth_prior_only`, `does_not_replace_sensor_depth`
 
 ### Agent request
 
@@ -794,6 +805,7 @@ Follow 1-5 short, individually IK-checked end-effector waypoints atomically whil
 - Category/effect: `control` / `world_mutating`
 - Contract maturity: `verified`
 - Requires observation after call: `true`
+- Agent semantic limits: `world_mutating`, `atomic_call_only`, `fresh_observation_after_call`, `exact_ik_receipt_sequence_only`, `path_collision_separate`, `preserves_latched_gripper`
 
 ### Agent request
 
@@ -854,7 +866,7 @@ Follow 1-5 short, individually IK-checked end-effector waypoints atomically whil
 |---|---|---|---|
 | `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_trajectory_resolution` | always | `invalid_ik_trajectory_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_trajectory_reference` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_clearance_not_reached`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
 | `runtime.ik_execution_authorization` | always | `ik_preview_required`, `ik_preview_not_feasible`, `ik_target_hard_infeasible`, `ik_collision_delegation_not_authorized` | `agent/runtime/memory.py:AgentMemory.ik_execution_gate_error` |
 | `runtime.pre_safety_checker` | always | `pre_safety_check_failed`, `ik_preview_not_feasible`, `ik_target_hard_infeasible` | `agent/runtime/pipeline.py:ActionPipeline._compile_pre_safety_checks` |
@@ -872,6 +884,7 @@ Read working-memory facts, artifacts, skill notes, or compact summary.
 - Category/effect: `memory` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`
 
 ### Agent request
 
@@ -937,6 +950,7 @@ Generate one normalized score-descending camera-frame grasp candidate queue from
 - Category/effect: `manipulation` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `host_selects_backend_fallback`, `advisor_recommendation_not_activation`
 
 ### Agent request
 
@@ -1004,6 +1018,7 @@ Transition the simulator's latched gripper command state. The command remains ac
 - Category/effect: `control` / `world_mutating`
 - Contract maturity: `verified`
 - Requires observation after call: `true`
+- Agent semantic limits: `world_mutating`, `atomic_call_only`, `fresh_observation_after_call`, `command_latched`, `command_ack_not_attachment`
 
 ### Agent request
 
@@ -1055,7 +1070,7 @@ None declared.
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
 | `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_clearance_not_reached`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1065,11 +1080,12 @@ None declared.
 
 ## `ik_preview_check`
 
-Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. For a prepared attachment probe, pass only probe_id and the ordered zero-based waypoint_index; the host resolves the exact frozen pose. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.
+Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. For a prepared attachment probe, pass only probe_id and the ordered zero-based waypoint_index; the host resolves the exact frozen pose. For a long compiled approach, the Agent may instead choose a path_fraction on its clearance-to-contact line; this preserves the compiled full orientation without assigning the sample a task stage. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.
 
 - Category/effect: `safety` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `endpoint_only`, `not_path_authorization`, `reachability_not_controller_recommendation`
 
 ### Agent request
 
@@ -1078,6 +1094,7 @@ Read-only endpoint reachability preview before execution. Returns reachable, unr
 | `target_pose` | no | `object` —  — `{"additionalProperties": true}` |
 | `compiled_grasp_id` | no | `string` —  — `{"minLength": 1}` |
 | `waypoint_role` | no | `string` —  — `{"enum": ["grasp_clearance", "grasp_precontact", "grasp_alignment_reference", "grasp_contact"]}` |
+| `path_fraction` | no | `number` —  — `{"exclusiveMinimum": 0, "exclusiveMaximum": 1}` |
 | `viewpoint_proposal_id` | no | `string` —  — `{"minLength": 1}` |
 | `candidate_id` | no | `string` —  — `{"minLength": 1}` |
 | `probe_id` | no | `string` —  — `{"minLength": 1}` |
@@ -1087,14 +1104,14 @@ Read-only endpoint reachability preview before execution. Returns reachable, unr
 | `preserve_current_orientation` | no | `boolean` —  |
 | `check_endpoint_collision` | no | `boolean` —  |
 
-Exclusive request branches: `[{"required": ["target_pose"]}, {"required": ["compiled_grasp_id", "waypoint_role"]}, {"required": ["viewpoint_proposal_id", "candidate_id"]}, {"required": ["probe_id", "waypoint_index"]}]`
+Exclusive request branches: `[{"required": ["target_pose"]}, {"required": ["compiled_grasp_id", "waypoint_role"]}, {"required": ["compiled_grasp_id", "path_fraction"]}, {"required": ["viewpoint_proposal_id", "candidate_id"]}, {"required": ["probe_id", "waypoint_index"]}]`
 
 ### Host resolution
 
 - Mode/resolver: `exclusive_reference_or_agent_pose` / `openeta.host_resolver.ik_preview_check.v1`
 - Runtime binding: `agent.runtime.pipeline.ActionPipeline.compile` (`pipeline` layer)
 - Contract-driven dispatch: no
-- Agent-visible references: `target_pose`, `compiled_grasp_id + waypoint_role`, `viewpoint_proposal_id + candidate_id`, `probe_id + waypoint_index`
+- Agent-visible references: `target_pose`, `compiled_grasp_id + waypoint_role`, `compiled_grasp_id + path_fraction`, `viewpoint_proposal_id + candidate_id`, `probe_id + waypoint_index`
 - Private resolved inputs: `target_pose`, `orientation policy`, `private IK seed`, `provenance`
 - Resolution freshness: `robot_motion_epoch`, `object_scene_epoch`
 - Resolution invalidated by: `unknown reference`, `stale reference`, `reference branch mismatch`
@@ -1155,6 +1172,7 @@ Ground a complete natural-language pointing prompt as zero or more pixel locatio
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`
 
 ### Agent request
 
@@ -1221,6 +1239,7 @@ Move the end effector to the exact pose frozen by one current-epoch ik_preview_c
 - Category/effect: `control` / `world_mutating`
 - Contract maturity: `verified`
 - Requires observation after call: `true`
+- Agent semantic limits: `world_mutating`, `atomic_call_only`, `fresh_observation_after_call`, `exact_ik_receipt_only`, `endpoint_ik_not_path_clearance`, `compiled_residual_budget_applies`
 
 ### Agent request
 
@@ -1281,7 +1300,7 @@ Move the end effector to the exact pose frozen by one current-epoch ik_preview_c
 |---|---|---|---|
 | `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_receipt_resolution` | always | `invalid_ik_receipt_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_motion_reference` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_clearance_not_reached`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
 | `runtime.ik_execution_authorization` | always | `ik_preview_required`, `ik_preview_not_feasible`, `ik_target_hard_infeasible`, `ik_collision_delegation_not_authorized` | `agent/runtime/memory.py:AgentMemory.ik_execution_gate_error` |
 | `runtime.pre_safety_checker` | always | `pre_safety_check_failed`, `ik_preview_not_feasible`, `ik_target_hard_infeasible` | `agent/runtime/pipeline.py:ActionPipeline._compile_pre_safety_checks` |
@@ -1299,6 +1318,7 @@ Request or retrieve the latest environment observation.
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`
 
 ### Agent request
 
@@ -1355,11 +1375,12 @@ None declared.
 
 ## `prepare_attachment_probe`
 
-Validate and freeze one Agent-proposed articulated-handle probe. The caller names a current compiled grasp from the provenance graph; the host checks evidence freshness and bounded geometry without tracking a grasp phase or prescribing when the probe must run.
+Validate and freeze one Agent-proposed attachment probe for a portable object or articulated handle. The caller names a current compiled grasp from the provenance graph; the host checks evidence freshness and bounded geometry without tracking a grasp phase or prescribing when the probe must run.
 
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `not_task_stage`, `not_motion_authorization`
 
 ### Agent request
 
@@ -1431,6 +1452,7 @@ Publish a reviewed session calibration as candidate or validated only after host
 - Category/effect: `calibration` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`, `atomic_call_only`, `review_and_evidence_gated`
 
 ### Agent request
 
@@ -1497,6 +1519,7 @@ Publish a reviewed session strategy as candidate or validated only after host-re
 - Category/effect: `strategy_management` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`, `atomic_call_only`, `review_and_evidence_gated`
 
 ### Agent request
 
@@ -1563,6 +1586,7 @@ Stage one schema-checked embodiment calibration profile inside the current sessi
 - Category/effect: `calibration` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`, `atomic_call_only`, `proposal_not_publication`
 
 ### Agent request
 
@@ -1629,6 +1653,7 @@ Validate and independently review one task-family grasp strategy, then stage it 
 - Category/effect: `strategy_management` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`, `atomic_call_only`, `proposal_not_activation`
 
 ### Agent request
 
@@ -1695,6 +1720,7 @@ Generate several calibrated target-facing wrist-camera observation poses around 
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `not_motion_authorization`
 
 ### Agent request
 
@@ -1763,6 +1789,7 @@ Execute a restricted Python snippet for session-local data inspection, filtering
 - Category/effect: `coding` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `atomic_call_only`, `session_local_sandbox`, `no_network`, `no_simulator_mcp`, `no_external_side_effects`
 
 ### Agent request
 
@@ -1827,6 +1854,7 @@ Ask an isolated skill-authoring sub-agent to create and validate one text-guidan
 - Category/effect: `skill_management` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `atomic_call_only`, `cannot_modify_tools`
 
 ### Agent request
 
@@ -1896,6 +1924,7 @@ Reject every candidate in one pending SAM3 result when visual review shows that 
 - Category/effect: `perception` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `atomic_call_only`
 
 ### Agent request
 
@@ -1961,6 +1990,7 @@ Resolve an object-only asset phrase (identity/appearance, not a scene relation) 
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `object_identity_phrase_only`, `no_agent_supplied_url`, `ambiguous_match_fails_closed`
 
 ### Agent request
 
@@ -2030,6 +2060,7 @@ Segment objects or regions from RGB observations using text, one to 64 foregroun
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `session_packet_only`, `point_and_roi_mutually_exclusive`, `candidate_rank_not_identity_confirmation`
 
 ### Agent request
 
@@ -2107,6 +2138,7 @@ Save a concise working-memory note for later planner turns.
 - Category/effect: `memory` / `bookkeeping`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `bookkeeping_only`
 
 ### Agent request
 
@@ -2172,6 +2204,7 @@ Resolve a pending SAM3 semantic-verification obligation by selecting one stable 
 - Category/effect: `perception` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `atomic_call_only`, `explicit_semantic_confirmation`
 
 ### Agent request
 
@@ -2243,6 +2276,7 @@ Ask an isolated skill-authoring sub-agent to revise one existing editable SkillS
 - Category/effect: `skill_management` / `planning`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `planning_only`, `atomic_call_only`, `cannot_modify_tools`
 
 ### Agent request
 
@@ -2311,6 +2345,7 @@ Fetch and extract readable text from one public HTTPS page. Local, private, non-
 - Category/effect: `web` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `public_https_only`, `untrusted_external_content`, `no_private_or_authenticated_targets`
 
 ### Agent request
 
@@ -2374,6 +2409,7 @@ Search the public web through the host-configured planner provider's Responses w
 - Category/effect: `web` / `read_only`
 - Contract maturity: `verified`
 - Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`, `public_web_only`, `untrusted_external_content`, `no_private_data`
 
 ### Agent request
 

@@ -267,7 +267,10 @@ def build_default_contract_overrides(
 
 
 _COMPILED_GRASP_REPAIR_CODES = (
+    "attached_release_after_failed_motion",
     "compiled_clearance_not_reached",
+    "compiled_contact_approach_misaligned",
+    "compiled_contact_orientation_misaligned",
     "compiled_contact_not_reached",
     "compiled_contact_receipt_mismatch",
     "compiled_contact_receipt_missing",
@@ -1601,6 +1604,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
             "waypoint_role": _string(
                 enum=["grasp_clearance", "grasp_precontact", "grasp_alignment_reference", "grasp_contact"]
             ),
+            "path_fraction": _number(exclusiveMinimum=0, exclusiveMaximum=1),
             "viewpoint_proposal_id": _string(minLength=1),
             "candidate_id": _string(minLength=1),
             "probe_id": _string(minLength=1),
@@ -1613,6 +1617,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
         one_of=[
             {"required": ["target_pose"]},
             {"required": ["compiled_grasp_id", "waypoint_role"]},
+            {"required": ["compiled_grasp_id", "path_fraction"]},
             {"required": ["viewpoint_proposal_id", "candidate_id"]},
             {"required": ["probe_id", "waypoint_index"]},
         ],
@@ -1710,6 +1715,7 @@ def _ik_preview_check(spec: ToolSpecLike) -> ToolContract:
             agent_parameters=(
                 "target_pose",
                 "compiled_grasp_id + waypoint_role",
+                "compiled_grasp_id + path_fraction",
                 "viewpoint_proposal_id + candidate_id",
                 "probe_id + waypoint_index",
             ),

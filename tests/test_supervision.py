@@ -164,8 +164,12 @@ def test_action_reviewer_prioritizes_current_observation_rgb() -> None:
     ]
     reviewer_contract = requests[0].tool_context["tool_contract"]
     assert reviewer_contract["name"] == "move_to"
-    assert reviewer_contract["description"] == tools.get("move_to").description
-    assert reviewer_contract["effect"] == "world_mutating"
+    assert reviewer_contract["description"] == (
+        "Move the end effector to the exact host-resolved pose frozen by one "
+        "current IK receipt."
+    )
+    assert reviewer_contract["description"] != tools.get("move_to").description
+    assert "world_mutating" in reviewer_contract["semantic_limits"]
     assert reviewer_contract["parameters"]["required"] == ["ik_receipt_id"]
     assert set(reviewer_contract["parameters"]["properties"]) == {
         "enable_collision_check",

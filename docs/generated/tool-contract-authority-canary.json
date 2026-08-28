@@ -2,9 +2,9 @@
   "schema_version": "openeta.tool_contract_authority_canary.v1",
   "passed": true,
   "tool": "estimate_depth_prior",
-  "session_id": "estimate-depth-prior-authority-20260824",
-  "manifest": "/tmp/openeta-toolcontract-review-20260824-estimate/sessions/estimate-depth-prior-authority-20260824/rollout/manifest.json",
-  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+  "session_id": "estimate-depth-prior-grasp-quality-20260825",
+  "manifest": "/tmp/openeta-toolcontract-estimate-canary-20260825/sessions/estimate-depth-prior-grasp-quality-20260825/rollout/manifest.json",
+  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
   "policy": {
     "executable_gate_authority": "legacy_runtime",
     "gate_repair_envelope_authority": [],
@@ -15,7 +15,7 @@
   },
   "planner_pipeline_alignment": {
     "catalog_match": true,
-    "pipeline_catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
     "pipeline_policy": {
       "executable_gate_authority": "legacy_runtime",
       "gate_repair_envelope_authority": [],
@@ -69,7 +69,7 @@
   "successful_execution_count": 1,
   "authority_audit": {
     "schema_version": "openeta.tool_contract_authority_audit.v1",
-    "source_root": "/tmp/openeta-toolcontract-review-20260824-estimate",
+    "source_root": "/tmp/openeta-toolcontract-estimate-canary-20260825",
     "manifest_count": 1,
     "auditable_manifest_count": 1,
     "conformant": true,
@@ -77,9 +77,9 @@
     "violations": [],
     "runs": [
       {
-        "manifest": "/tmp/openeta-toolcontract-review-20260824-estimate/sessions/estimate-depth-prior-authority-20260824/rollout/manifest.json",
-        "session_id": "estimate-depth-prior-authority-20260824",
-        "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+        "manifest": "/tmp/openeta-toolcontract-estimate-canary-20260825/sessions/estimate-depth-prior-grasp-quality-20260825/rollout/manifest.json",
+        "session_id": "estimate-depth-prior-grasp-quality-20260825",
+        "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
         "request_validation_authority": [
           "estimate_depth_prior"
         ],

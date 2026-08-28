@@ -25,7 +25,7 @@ def test_reviewed_tool_contract_migration_is_complete_and_narrowly_authoritative
     assert report["structural_issues"] == []
     assert report["catalog_summary"]["tool_count"] == 35
     assert report["catalog_sha256"] == (
-        "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9"
+        "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b"
     )
     assert report["catalog_summary"]["maturity_counts"] == {
         "inferred": 0,

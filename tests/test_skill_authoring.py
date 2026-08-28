@@ -16,6 +16,10 @@ from agent.runtime.skill_authoring import (
     validate_authored_skill,
 )
 from agent.runtime.skills import SkillSpec
+from agent.tools.contracts import (
+    build_default_tool_contract_catalog,
+    project_agent_tool_contract,
+)
 from agent.tools.registry import build_default_tool_registry
 
 
@@ -149,8 +153,10 @@ def test_tool_specs_are_host_owned_and_have_no_update_surface() -> None:
     assert not hasattr(tools, "update")
     with pytest.raises(FrozenInstanceError):
         observe.description = "mutated"  # type: ignore[misc]
-    assert "never" in tools.get("register_skill").description.lower()
-    assert "tools" in tools.get("update_skill").description.lower()
+    catalog = build_default_tool_contract_catalog(tools.list())
+    for name in ("register_skill", "update_skill"):
+        projection = project_agent_tool_contract(catalog.get(name))
+        assert "cannot_modify_tools" in projection["semantic_limits"]
 
 
 def test_cli_skill_tools_require_authoring_subagent(monkeypatch) -> None:

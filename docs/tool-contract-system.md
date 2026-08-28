@@ -84,15 +84,23 @@ python scripts/generate_tool_contract_docs.py \
   --markdown-output docs/generated/tool-contracts.md
 ```
 
-At runtime, `available_tools_schema_version=openeta.agent_tool_contract.v1`
-identifies the compact Agent projection. Its `parameters` field is the canonical
-request schema, rather than another prose-only parameter map. A host-only
+At runtime, `available_tools_schema_version=openeta.agent_tool_contract.v2`
+identifies the compact five-field Agent projection: `name`, a short
+`description`, canonical request `parameters`, compact `returns`, and explicit
+`semantic_limits`. Full host resolution, outcome schemas, gate bindings, and
+implementation evidence remain developer/host-only. A host-only
 `tool_contract_projection_audit` compares identity and top-level parameter names
 against legacy ToolSpec. The current two intentional mismatches remove obsolete
 host-resolved geometry/calibration fields from `grasp_pose_estimate` and
 `camera_pose_to_world`; they are evidence for deleting those ToolSpec duplicates,
 not hidden compatibility fallbacks. The entire tool block remains in the
 cache-stable prefix.
+
+The short descriptions and semantic-limit tags are an Agent projection policy;
+they do not rewrite the reviewed `openeta.tool_contract.v1` catalog or its
+authority-canary hash. `returns` is derived from declared semantic outcomes,
+top-level output properties, and produced fact references, so it cannot drift
+into a second hand-written result schema.
 
 The same contract projection is supplied to the independent action reviewer,
 skill lint reads public parameter names from the contract, and rollout manifests

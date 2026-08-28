@@ -1318,7 +1318,13 @@ def build_default_tool_registry() -> ToolRegistry:
                 "or network capability. Use stable Agent tools for external side effects."
             ),
             parameters={
-                "code": "Python code. Set a JSON-serializable `result` variable.",
+                "code": (
+                    "Python code. Set a JSON-serializable `result` variable. The "
+                    "session artifact API exposes describe(), list_files(), "
+                    "list_images(), read_json(), read_text(), and grep_text(); use "
+                    "those helpers instead of reconstructing host paths or embedding "
+                    "large artifacts in model context"
+                ),
                 "sandbox": (
                     "sandbox | outside_sandbox. outside_sandbox requires per-call user "
                     "approval and runs in a disposable host subprocess"
@@ -1821,7 +1827,8 @@ def build_default_tool_registry() -> ToolRegistry:
             name="prepare_attachment_probe",
             category="geometry",
             description=(
-                "Validate and freeze one Agent-proposed articulated-handle probe. "
+                "Validate and freeze one Agent-proposed attachment probe for a "
+                "portable object or articulated handle. "
                 "The caller names a current compiled grasp from the provenance graph; "
                 "the host checks evidence freshness and bounded geometry without "
                 "tracking a grasp phase or prescribing when the probe must run."
@@ -1846,7 +1853,7 @@ def build_default_tool_registry() -> ToolRegistry:
             name="assess_attachment_probe",
             category="safety",
             description=(
-                "Independently compare the frozen articulated probe's before/after "
+                "Independently compare the frozen attachment probe's before/after "
                 "agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is "
                 "read-only and cannot move the robot or use privileged joint state."
             ),
@@ -1881,7 +1888,8 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 "num_steps": (
                     "optional maximum closed-loop controller iterations; omit to use "
-                    "the server default reach budget. This is not a speed or distance "
+                    "the server default 150-iteration reach budget. The controller "
+                    "stops early on convergence. This is not a speed or distance "
                     "parameter, and a small value may deliberately stop short"
                 ),
                 "tolerance": (
@@ -1951,6 +1959,9 @@ def build_default_tool_registry() -> ToolRegistry:
                 "optional endpoint-collision diagnostics; it does not check a path. "
                 "For a prepared attachment probe, pass only probe_id and the ordered "
                 "zero-based waypoint_index; the host resolves the exact frozen pose. "
+                "For a long compiled approach, the Agent may instead choose a "
+                "path_fraction on its clearance-to-contact line; this preserves the "
+                "compiled full orientation without assigning the sample a task stage. "
                 "A reachable result may still report elevated execution-seed risk; "
                 "compare another grasp candidate/orientation before motion when one "
                 "is available rather than treating reachability as a positive "
@@ -1968,6 +1979,12 @@ def build_default_tool_registry() -> ToolRegistry:
                 "waypoint_role": (
                     "with compiled_grasp_id: grasp_clearance, grasp_precontact, "
                     "grasp_alignment_reference, or grasp_contact"
+                ),
+                "path_fraction": (
+                    "instead of waypoint_role, an Agent-chosen fraction strictly "
+                    "between 0 and 1 on the compiled clearance-to-contact segment; "
+                    "the host preserves the exact grasp orientation and returns a "
+                    "generic grasp_path_sample pose for separate IK checking"
                 ),
                 "viewpoint_proposal_id": (
                     "preferred instead of target_pose for a wrist viewpoint: exact "

@@ -21,7 +21,7 @@ from adapter.protocol import JsonDict
 TOOL_CONTRACT_SCHEMA_VERSION = "openeta.tool_contract.v1"
 TOOL_CONTRACT_CATALOG_SCHEMA_VERSION = "openeta.tool_contract_catalog.v1"
 GATE_REPAIR_SCHEMA_VERSION = "openeta.gate_repair.v1"
-AGENT_TOOL_PROJECTION_SCHEMA_VERSION = "openeta.agent_tool_contract.v1"
+AGENT_TOOL_PROJECTION_SCHEMA_VERSION = "openeta.agent_tool_contract.v2"
 AGENT_TOOL_PROJECTION_AUDIT_SCHEMA_VERSION = (
     "openeta.agent_tool_contract_projection_audit.v1"
 )
@@ -424,25 +424,233 @@ class ToolContractCatalog:
         }
 
 
+_AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "enhance_depth": (
+        "Fuse aligned sensor depth with an optional metric depth prior and materialize "
+        "enhanced geometry artifacts."
+    ),
+    "estimate_depth_prior": (
+        "Estimate and materialize a metric monocular depth prior for one session-owned "
+        "observation frame."
+    ),
+    "create_simulator_env": (
+        "Create one remote simulator environment and return its initial observation."
+    ),
+    "close_simulator_env": (
+        "Close the active remote simulator environment and clear its bound handle."
+    ),
+    "python_exec": (
+        "Execute restricted Python for session-local inspection, computation, and "
+        "derived artifacts."
+    ),
+    "web_search": "Search the public web and return a compact answer with citations and snippets.",
+    "web_fetch": "Fetch and extract readable text from one public HTTPS page.",
+    "sam3": (
+        "Segment an RGB observation from text or pixel prompts and return ranked "
+        "detections with review visuals in original-image coordinates."
+    ),
+    "retrieve_asset_reference": (
+        "Resolve an object identity phrase against controlled asset references and "
+        "return ranked scene-localization seeds for visual confirmation."
+    ),
+    "select_sam3_detection": (
+        "Select one stable detection from a pending SAM3 result as the visually "
+        "confirmed semantic target."
+    ),
+    "reject_sam3_detections": (
+        "Reject every candidate in a pending SAM3 result as a semantic mismatch."
+    ),
+    "grasp_pose_estimate": (
+        "Estimate a normalized, score-ranked camera-frame grasp candidate set from "
+        "host-resolved aligned RGB-D evidence."
+    ),
+    "camera_pose_to_world": (
+        "Transform a camera-frame pose or referenced placement candidate into the world frame."
+    ),
+    "propose_calibration_profile": (
+        "Stage and independently review one session-local embodiment calibration proposal."
+    ),
+    "promote_calibration_profile": (
+        "Publish an evidence-backed reviewed calibration proposal at an authorized "
+        "lifecycle status."
+    ),
+    "propose_grasp_strategy": (
+        "Stage and independently review one session-local task-family grasp strategy proposal."
+    ),
+    "promote_grasp_strategy": (
+        "Publish an evidence-backed reviewed grasp strategy at an authorized lifecycle status."
+    ),
+    "compile_grasp_seed": (
+        "Compile one referenced camera-frame grasp candidate into calibrated world-frame "
+        "EEF contact and clearance geometry."
+    ),
+    "compute_wrist_alignment": (
+        "Compute a bounded world-frame lateral correction for a compiled grasp from "
+        "fresh calibrated wrist RGB-D evidence."
+    ),
+    "propose_wrist_viewpoints": (
+        "Generate calibrated target-facing wrist-camera observation poses around one "
+        "current compiled grasp anchor."
+    ),
+    "prepare_attachment_probe": (
+        "Validate and freeze one Agent-proposed attachment probe against a current "
+        "compiled grasp."
+    ),
+    "assess_attachment_probe": (
+        "Assess attachment by independently comparing a frozen probe's before/after "
+        "scene and wrist images."
+    ),
+    "move_to": (
+        "Move the end effector to the exact host-resolved pose frozen by one current IK receipt."
+    ),
+    "follow_eef_trajectory": (
+        "Execute an ordered atomic trajectory of individually authorized end-effector "
+        "waypoints."
+    ),
+    "gripper_control": "Transition the simulator's latched gripper command state.",
+    "ik_preview_check": (
+        "Preview endpoint reachability and return an exact execution receipt or "
+        "structured infeasibility diagnostics."
+    ),
+    "register_skill": (
+        "Create, validate, and register one text-guidance SkillSpec through an isolated "
+        "authoring agent."
+    ),
+    "update_skill": "Revise one existing editable SkillSpec through an isolated authoring agent.",
+}
+
+
+_AGENT_TOOL_SEMANTIC_LIMITS: dict[str, tuple[str, ...]] = {
+    "enhance_depth": ("sensor_depth_authoritative", "model_depth_hole_fill_only"),
+    "estimate_depth_prior": ("depth_prior_only", "does_not_replace_sensor_depth"),
+    "create_simulator_env": ("exclusive_environment_creation_path",),
+    "close_simulator_env": ("exclusive_environment_cleanup_path",),
+    "python_exec": (
+        "session_local_sandbox",
+        "no_network",
+        "no_simulator_mcp",
+        "no_external_side_effects",
+    ),
+    "web_search": ("public_web_only", "untrusted_external_content", "no_private_data"),
+    "web_fetch": (
+        "public_https_only",
+        "untrusted_external_content",
+        "no_private_or_authenticated_targets",
+    ),
+    "sam3": (
+        "session_packet_only",
+        "point_and_roi_mutually_exclusive",
+        "candidate_rank_not_identity_confirmation",
+    ),
+    "retrieve_asset_reference": (
+        "object_identity_phrase_only",
+        "no_agent_supplied_url",
+        "ambiguous_match_fails_closed",
+    ),
+    "select_sam3_detection": ("explicit_semantic_confirmation",),
+    "grasp_pose_estimate": (
+        "host_selects_backend_fallback",
+        "advisor_recommendation_not_activation",
+    ),
+    "anyplace": ("host_resolved_bundle_only",),
+    "camera_pose_to_world": ("host_owned_calibration",),
+    "propose_calibration_profile": ("proposal_not_publication",),
+    "promote_calibration_profile": ("review_and_evidence_gated",),
+    "propose_grasp_strategy": ("proposal_not_activation",),
+    "promote_grasp_strategy": ("review_and_evidence_gated",),
+    "compile_grasp_seed": (
+        "candidate_not_motion_authorization",
+        "unknown_geometry_uses_generic_calibration",
+    ),
+    "compute_wrist_alignment": (
+        "lateral_translation_only",
+        "no_orientation_or_axial_depth_refinement",
+        "not_motion_authorization",
+    ),
+    "propose_wrist_viewpoints": ("not_motion_authorization",),
+    "prepare_attachment_probe": ("not_task_stage", "not_motion_authorization"),
+    "assess_attachment_probe": (
+        "visual_evidence_only",
+        "no_privileged_joint_state",
+        "not_motion_authorization",
+    ),
+    "move_to": (
+        "exact_ik_receipt_only",
+        "endpoint_ik_not_path_clearance",
+        "compiled_residual_budget_applies",
+    ),
+    "follow_eef_trajectory": (
+        "exact_ik_receipt_sequence_only",
+        "path_collision_separate",
+        "preserves_latched_gripper",
+    ),
+    "gripper_control": ("command_latched", "command_ack_not_attachment"),
+    "ik_preview_check": (
+        "endpoint_only",
+        "not_path_authorization",
+        "reachability_not_controller_recommendation",
+    ),
+    "register_skill": ("cannot_modify_tools",),
+    "update_skill": ("cannot_modify_tools",),
+}
+
+
 def project_agent_tool_contract(contract: ToolContract) -> JsonDict:
     """Project one ToolContract into the compact schema shown to the Agent.
 
-    Deployment availability remains a ToolRegistry concern, but parameter names,
-    required fields, alternatives and descriptions come from ToolContract.  Keeping
-    the complete request schema under ``parameters`` avoids a second prose-only
-    parameter map that can drift from request validation.
+    Deployment availability remains a ToolRegistry concern.  The Agent sees only
+    the short capability description, canonical request schema, compact result
+    names, and explicit semantic limits.  Full host resolution, outcome schemas,
+    gate bindings, and implementation evidence remain in the developer contract.
     """
 
     return {
         "name": contract.name,
-        "category": contract.category,
-        "description": contract.description,
+        "description": _AGENT_TOOL_DESCRIPTIONS.get(contract.name, contract.description),
         "parameters": dict(contract.request_schema),
-        "safe_by_default": contract.safe_by_default,
-        "effect": contract.effect,
-        "batchable": contract.batchable,
-        "requires_observation_after_call": contract.requires_observation_after_call,
+        "returns": _project_agent_returns(contract),
+        "semantic_limits": _project_agent_semantic_limits(contract),
     }
+
+
+def _project_agent_returns(contract: ToolContract) -> JsonDict:
+    """Project outcome names and composable top-level result references."""
+
+    outcomes: list[str] = []
+    fields: list[str] = []
+    for outcome in contract.outcomes:
+        if outcome.semantic_outcome == "operational_failure":
+            continue
+        outcomes.append(outcome.semantic_outcome)
+        properties = outcome.output_schema.get("properties")
+        if isinstance(properties, Mapping):
+            fields.extend(str(name) for name in properties if name != "schema_version")
+        for fact in outcome.produces:
+            terminal = fact.path.rsplit(".", 1)[-1]
+            if terminal not in {"outputs", "details"}:
+                fields.append(terminal)
+    return {
+        "outcomes": list(dict.fromkeys(outcomes)),
+        "fields": list(dict.fromkeys(fields)),
+    }
+
+
+def _project_agent_semantic_limits(contract: ToolContract) -> list[str]:
+    """Combine generic execution boundaries with tool-specific limit tags."""
+
+    effect_limit = {
+        "read_only": "read_only",
+        "planning": "planning_only",
+        "bookkeeping": "bookkeeping_only",
+        "world_mutating": "world_mutating",
+    }.get(contract.effect, contract.effect)
+    limits = [effect_limit]
+    if not contract.batchable:
+        limits.append("atomic_call_only")
+    if contract.requires_observation_after_call:
+        limits.append("fresh_observation_after_call")
+    limits.extend(_AGENT_TOOL_SEMANTIC_LIMITS.get(contract.name, ()))
+    return list(dict.fromkeys(value for value in limits if value))
 
 
 def audit_agent_tool_projection(
@@ -1252,6 +1460,11 @@ def render_tool_contract_markdown(catalog: ToolContractCatalog) -> str:
                 f"- Category/effect: `{contract.category}` / `{contract.effect}`",
                 f"- Contract maturity: `{contract.maturity.value}`",
                 f"- Requires observation after call: `{str(contract.requires_observation_after_call).lower()}`",
+                "- Agent semantic limits: "
+                + joined(
+                    _project_agent_semantic_limits(contract),
+                    empty="none declared",
+                ),
                 "",
                 "### Agent request",
                 "",

@@ -2,9 +2,9 @@
   "schema_version": "openeta.tool_contract_catalog_authority_canary.v1",
   "authority": "post_review_request_validation_canary",
   "passed": true,
-  "session_id": "remaining-catalog-authority-20260824",
-  "manifest": "/tmp/openeta-toolcontract-review-20260824-catalog/sessions/remaining-catalog-authority-20260824/rollout/manifest.json",
-  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+  "session_id": "remaining-catalog-grasp-quality-20260825",
+  "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
   "policy": {
     "executable_gate_authority": "legacy_runtime",
     "gate_repair_envelope_authority": [],
@@ -48,7 +48,7 @@
   },
   "planner_pipeline_alignment": {
     "catalog_match": true,
-    "pipeline_catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
     "pipeline_policy": {
       "executable_gate_authority": "legacy_runtime",
       "gate_repair_envelope_authority": [],
@@ -1637,7 +1637,7 @@
   ],
   "authority_audit": {
     "schema_version": "openeta.tool_contract_authority_audit.v1",
-    "source_root": "/tmp/openeta-toolcontract-review-20260824-catalog",
+    "source_root": "/tmp/openeta-toolcontract-catalog-canary-20260825",
     "manifest_count": 1,
     "auditable_manifest_count": 1,
     "conformant": true,
@@ -1645,9 +1645,9 @@
     "violations": [],
     "runs": [
       {
-        "manifest": "/tmp/openeta-toolcontract-review-20260824-catalog/sessions/remaining-catalog-authority-20260824/rollout/manifest.json",
-        "session_id": "remaining-catalog-authority-20260824",
-        "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+        "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+        "session_id": "remaining-catalog-grasp-quality-20260825",
+        "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
         "request_validation_authority": [
           "anyplace",
           "assess_attachment_probe",

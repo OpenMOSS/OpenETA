@@ -4672,7 +4672,7 @@
       "schema_version": "openeta.tool_contract.v1",
       "name": "prepare_attachment_probe",
       "category": "geometry",
-      "description": "Validate and freeze one Agent-proposed articulated-handle probe. The caller names a current compiled grasp from the provenance graph; the host checks evidence freshness and bounded geometry without tracking a grasp phase or prescribing when the probe must run.",
+      "description": "Validate and freeze one Agent-proposed attachment probe for a portable object or articulated handle. The caller names a current compiled grasp from the provenance graph; the host checks evidence freshness and bounded geometry without tracking a grasp phase or prescribing when the probe must run.",
       "effect": "read_only",
       "safe_by_default": false,
       "batchable": false,
@@ -4934,7 +4934,7 @@
       "schema_version": "openeta.tool_contract.v1",
       "name": "assess_attachment_probe",
       "category": "safety",
-      "description": "Independently compare the frozen articulated probe's before/after agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is read-only and cannot move the robot or use privileged joint state.",
+      "description": "Independently compare the frozen attachment probe's before/after agentview and wrist images and return PASS, FAIL, or UNKNOWN. It is read-only and cannot move the robot or use privileged joint state.",
       "effect": "read_only",
       "safe_by_default": false,
       "batchable": false,
@@ -5404,7 +5404,10 @@
             "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
+              "attached_release_after_failed_motion",
               "compiled_clearance_not_reached",
+              "compiled_contact_approach_misaligned",
+              "compiled_contact_orientation_misaligned",
               "compiled_contact_not_reached",
               "compiled_contact_receipt_mismatch",
               "compiled_contact_receipt_missing",
@@ -5785,7 +5788,10 @@
             "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
+              "attached_release_after_failed_motion",
               "compiled_clearance_not_reached",
+              "compiled_contact_approach_misaligned",
+              "compiled_contact_orientation_misaligned",
               "compiled_contact_not_reached",
               "compiled_contact_receipt_mismatch",
               "compiled_contact_receipt_missing",
@@ -6067,7 +6073,10 @@
             "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
+              "attached_release_after_failed_motion",
               "compiled_clearance_not_reached",
+              "compiled_contact_approach_misaligned",
+              "compiled_contact_orientation_misaligned",
               "compiled_contact_not_reached",
               "compiled_contact_receipt_mismatch",
               "compiled_contact_receipt_missing",
@@ -6112,7 +6121,7 @@
       "schema_version": "openeta.tool_contract.v1",
       "name": "ik_preview_check",
       "category": "safety",
-      "description": "Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. For a prepared attachment probe, pass only probe_id and the ordered zero-based waypoint_index; the host resolves the exact frozen pose. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.",
+      "description": "Read-only endpoint reachability preview before execution. Returns reachable, unreachable, or unknown with joint-limit, residual, and optional endpoint-collision diagnostics; it does not check a path. For a prepared attachment probe, pass only probe_id and the ordered zero-based waypoint_index; the host resolves the exact frozen pose. For a long compiled approach, the Agent may instead choose a path_fraction on its clearance-to-contact line; this preserves the compiled full orientation without assigning the sample a task stage. A reachable result may still report elevated execution-seed risk; compare another grasp candidate/orientation before motion when one is available rather than treating reachability as a positive controller recommendation.",
       "effect": "read_only",
       "safe_by_default": true,
       "batchable": true,
@@ -6138,6 +6147,11 @@
               "grasp_alignment_reference",
               "grasp_contact"
             ]
+          },
+          "path_fraction": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "exclusiveMaximum": 1
           },
           "viewpoint_proposal_id": {
             "type": "string",
@@ -6186,6 +6200,12 @@
           },
           {
             "required": [
+              "compiled_grasp_id",
+              "path_fraction"
+            ]
+          },
+          {
+            "required": [
               "viewpoint_proposal_id",
               "candidate_id"
             ]
@@ -6207,6 +6227,7 @@
         "agent_parameters": [
           "target_pose",
           "compiled_grasp_id + waypoint_role",
+          "compiled_grasp_id + path_fraction",
           "viewpoint_proposal_id + candidate_id",
           "probe_id + waypoint_index"
         ],

@@ -1,6 +1,6 @@
 {
   "schema_version": "openeta.tool_contract_authority_audit.v1",
-  "source_root": "/tmp/openeta-toolcontract-review-20260824",
+  "source_root": "/tmp/openeta-toolcontract-grasp-quality-20260825",
   "manifest_count": 1,
   "auditable_manifest_count": 1,
   "conformant": true,
@@ -8,9 +8,9 @@
   "violations": [],
   "runs": [
     {
-      "manifest": "/tmp/openeta-toolcontract-review-20260824/sessions/catalog-baseline-20260824/rollout/manifest.json",
-      "session_id": "catalog-baseline-20260824",
-      "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+      "manifest": "/tmp/openeta-toolcontract-grasp-quality-20260825/sessions/grasp-quality-baseline-20260825/rollout/manifest.json",
+      "session_id": "grasp-quality-baseline-20260825",
+      "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
       "request_validation_authority": [],
       "gate_repair_envelope_authority": [],
       "request_trace_count": 0,

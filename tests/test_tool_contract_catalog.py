@@ -516,6 +516,13 @@ def test_agent_tool_projection_uses_contract_request_schema() -> None:
 
     projection = project_agent_tool_contract(contract)
 
+    assert set(projection) == {
+        "name",
+        "description",
+        "parameters",
+        "returns",
+        "semantic_limits",
+    }
     assert projection["parameters"] == contract.request_schema
     assert projection["parameters"]["required"] == ["position"]
     assert projection["parameters"]["properties"]["position"]["enum"] == [
@@ -524,6 +531,18 @@ def test_agent_tool_projection_uses_contract_request_schema() -> None:
         False,
         True,
     ]
+    assert projection["returns"] == {
+        "outcomes": [
+            "mutation_acknowledged",
+            "requires_attachment_probe",
+            "no_attachment_evidence",
+            "attachment_contract_unavailable",
+        ],
+        "fields": ["response", "attachment_proxy_receipt"],
+    }
+    assert "world_mutating" in projection["semantic_limits"]
+    assert "command_latched" in projection["semantic_limits"]
+    assert "command_ack_not_attachment" in projection["semantic_limits"]
 
 
 def test_agent_tool_projection_audit_exposes_legacy_host_only_arguments() -> None:

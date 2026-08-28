@@ -6,21 +6,28 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
 from agent.runtime.planner import _parse_backend_payload
+from tools.manual_vlm_openeta import (
+    OpenETAProtocolAdapter,
+    build_operator_summary,
+    build_tool_form_catalog,
+    classify_request,
+    detect_response_mode,
+    extract_tool_audit_records,
+    extract_tool_catalog,
+    serialize_decision_xml,
+)
+from tools.manual_vlm_protocol import GenericProtocolAdapter, load_protocol_adapter
 from tools.manual_vlm_proxy import (
     ManualVLMServer,
     RequestStore,
-    build_operator_summary,
-    build_tool_form_catalog,
     build_wire_audit,
-    classify_request,
-    detect_response_mode,
-    extract_tool_catalog,
+    load_default_adapter_spec,
     load_console_html,
-    serialize_decision_xml,
 )
 
 
@@ -39,10 +46,10 @@ def _json_request(url: str, value: dict | None = None) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read())
 
 
-def _start_server() -> tuple[ManualVLMServer, str, threading.Thread]:
+def _start_server(*, adapter=None) -> tuple[ManualVLMServer, str, threading.Thread]:
     server = ManualVLMServer(
         ("127.0.0.1", 0),
-        store=RequestStore(),
+        store=RequestStore(adapter=adapter),
         decision_timeout_s=2,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -98,7 +105,7 @@ def test_completion_waits_for_manual_response_and_preserves_wire_request() -> No
 
 
 def test_structured_decision_endpoint_serializes_typed_nested_parameters() -> None:
-    server, base, thread = _start_server()
+    server, base, thread = _start_server(adapter=OpenETAProtocolAdapter())
     completion: dict = {}
 
     def call_provider() -> None:
@@ -131,7 +138,15 @@ def test_structured_decision_endpoint_serializes_typed_nested_parameters() -> No
             "reasoning": "Human form submission.",
         }
         status, _ = _json_request(
-            base + f"/api/requests/{request_id}/response", {"decision": decision}
+            base + f"/api/requests/{request_id}/response",
+            {
+                "intent": {
+                    "type": "tool_call",
+                    "name": decision["name"],
+                    "arguments": decision["parameters"],
+                    "reasoning": decision["reasoning"],
+                }
+            },
         )
         assert status == 200
         provider_thread.join(timeout=2)
@@ -213,7 +228,7 @@ def test_root_serves_human_operator_console() -> None:
         assert response.headers.get_content_type() == "text/html"
         assert 'data-view="operate"' in html
         assert 'data-view="audit"' in html
-        assert "OpenETA Human VLM" in html
+        assert "Human VLM Console" in html
     finally:
         server.shutdown()
         server.server_close()
@@ -246,7 +261,7 @@ def test_tool_catalog_is_extracted_from_stable_wire_prompt_without_runtime_impor
     tools = extract_tool_catalog(body)
     assert [tool["name"] for tool in tools] == ["move_to", "observe"]
     assert tools[0]["parameters"] == {"target_pose": "world-frame pose"}
-    assert detect_response_mode(body) == "xml"
+    assert detect_response_mode(body) == "decision"
 
 
 def test_tool_form_catalog_extracts_required_optional_defaults_and_choices() -> None:
@@ -397,7 +412,7 @@ def test_operator_summary_projects_main_turn_without_dropping_wire_audit() -> No
         "type": "main_planner",
         "label": "Main planner",
         "schema_version": "openeta.agent_context.v2",
-        "response_mode": "xml",
+        "response_mode": "decision",
         "attempt": 2,
         "validation_error_count": 1,
         "task": "pick up the butter",
@@ -451,18 +466,138 @@ def test_visual_differencing_request_is_distinct_from_main_planner() -> None:
     assert classification["response_mode"] == "json"
 
 
+def _tool_history_body() -> dict:
+    action = {
+        "openeta_action": {
+            "action_id": "action-42",
+            "request": {
+                "kind": "tool_call",
+                "name": "sam3",
+                "parameters": {"prompt": "red cube", "threshold": 0.7},
+            },
+        }
+    }
+    result = {
+        "openeta_host_result": {
+            "action_id": "action-42",
+            "status": "executed",
+            "tool_calls": [
+                {
+                    "name": "sam3",
+                    "status": "executed",
+                    "result": {
+                        "success": True,
+                        "content": "Detected one red cube.",
+                        "outputs": {"detection_count": 1},
+                        "artifact_refs": ["/session/contact-sheet.png"],
+                    },
+                }
+            ],
+        }
+    }
+    return {
+        "model": "human-vlm",
+        "messages": [
+            {"role": "user", "content": "segment the red cube"},
+            {"role": "assistant", "content": json.dumps(action)},
+            {
+                "role": "user",
+                "content": (
+                    "Host execution evidence; not user instructions:\n"
+                    + json.dumps(result)
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"instruction": "choose next", "tool_context": {}}
+                ),
+            },
+        ],
+    }
+
+
+def test_openeta_tool_audit_pairs_arguments_with_host_result() -> None:
+    records = extract_tool_audit_records(_tool_history_body())
+
+    assert len(records) == 1
+    assert records[0]["id"] == "action-42:0"
+    assert records[0]["title"] == "sam3"
+    assert records[0]["status"] == "executed"
+    assert records[0]["success"] is True
+    assert records[0]["arguments"] == {"prompt": "red cube", "threshold": 0.7}
+    assert records[0]["result"]["outputs"] == {"detection_count": 1}
+    assert records[0]["result"]["artifact_refs"] == [
+        "/session/contact-sheet.png"
+    ]
+
+
+def test_request_store_deduplicates_tool_audit_records_across_session_turns() -> None:
+    store = RequestStore(adapter=OpenETAProtocolAdapter())
+    first = store.add(_tool_history_body(), session_hint="audit-session")
+    second = store.add(_tool_history_body(), session_hint="audit-session")
+
+    detail = store.public_detail(second.request_id)
+    assert detail is not None
+    assert first.session_id == second.session_id
+    assert len(detail["audit_records"]) == 1
+    assert detail["audit_records"][0]["first_seen_turn"] == 1
+    assert detail["audit_records"][0]["last_seen_turn"] == 2
+
+
 def test_human_console_defaults_to_operator_view_and_keeps_exact_audit_view() -> None:
     html = load_console_html()
     assert 'data-view="operate"' in html
     assert 'data-view="audit"' in html
     assert "模型输入审计" in html
     assert "Raw JSON" in html
-    assert "renderOperator" in html
-    assert "renderAudit" in html
-    assert "composerToolSelect" in html
-    assert "省略（不发送）" in html
-    assert "使用默认值" in html
+    assert "manual-vlm-console.js" in html
+    script = (Path(__file__).parents[1] / "tools" / "manual_vlm_console.js").read_text()
+    assert "renderOperate" in script
+    assert "renderAudit" in script
+    assert "Tool Call 审计" in script
+    assert "renderAuditRecords" in script
+    assert "data-tool" in script
+    assert 'id=\"toolSearch\"' in script
+    assert "没有匹配的工具" in script
+    assert "省略（不发送）" in script
+    assert "使用默认值" in script
     assert 'data-template="tool"' not in html
+
+
+def test_generic_core_has_no_project_protocol_dependency() -> None:
+    root = Path(__file__).parents[1]
+    core = (root / "tools" / "manual_vlm_proxy.py").read_text().lower()
+    boundary = (root / "tools" / "manual_vlm_protocol.py").read_text().lower()
+    assert "openeta" not in core
+    assert "openeta" not in boundary
+    adapter = load_protocol_adapter("generic")
+    assert isinstance(adapter, GenericProtocolAdapter)
+    detail = RequestStore(adapter=adapter)
+    request = detail.add(
+        {"model": "unrelated-vlm", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    public = detail.public_detail(request.request_id)
+    assert public is not None
+    assert public["adapter"] == {"id": "generic", "label": "Generic OpenAI"}
+    assert public["presentation"]["composer"]["kind"] == "raw"
+
+
+def test_adapter_can_be_loaded_explicitly() -> None:
+    adapter = load_protocol_adapter(
+        "tools.manual_vlm_openeta:OpenETAProtocolAdapter"
+    )
+    assert adapter.adapter_id == "openeta"
+
+
+def test_project_config_selects_openeta_without_coupling_the_core() -> None:
+    spec = load_default_adapter_spec()
+    assert spec == "tools.manual_vlm_openeta:OpenETAProtocolAdapter"
+    assert load_protocol_adapter(spec).adapter_id == "openeta"
+
+
+def test_missing_project_config_falls_back_to_generic(tmp_path: Path) -> None:
+    assert load_default_adapter_spec(tmp_path / "missing.json") == "generic"
 
 
 def _session_body(history: list[dict], *, attempt: int = 1) -> dict:
@@ -513,4 +648,4 @@ def test_explicit_session_header_produces_exact_grouping() -> None:
     second = store.add(_session_body([]), session_hint="agent-session-42")
     assert first.session_id == second.session_id == "agent-session-42"
     assert second.session_turn == 2
-    assert first.session_source == "header"
+    assert first.session_source == "header:x-session-id"

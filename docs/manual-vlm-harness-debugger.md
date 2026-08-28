@@ -1,84 +1,89 @@
-# Manual VLM harness debugger
+# Manual VLM Console
 
-`tools.manual_vlm_proxy` lets a person take the place of the VLM while the real
-OpenETA harness continues to build prompts, validate decisions, execute tools,
-enforce gates, refresh observations, and record rollouts. Its default **决策台**
-view is a bounded human-operator projection; **模型输入审计** preserves the exact
-provider-facing request for turn-by-turn verification.
+The manual VLM console is a standalone OpenAI-compatible service that lets a
+person answer model requests while inspecting the exact provider-facing input.
+Its transport and UI core are protocol-neutral. Project-specific semantics are
+optional plugins loaded through the `ProtocolAdapter` boundary.
 
-It is a standalone OpenAI-compatible HTTP service. It does not import the agent
-runtime and therefore does not need to track internal harness classes. The GUI
-shows the final wire request: every system/history/user message, ordered content
-part, inline scene image, mask overlay, contact sheet, grasp preview, and request
-option. The raw JSON remains available for exact inspection.
+## Architecture
 
-## Two views
+The module is split into four independent pieces:
 
-### 决策台 (operator view)
+```text
+OpenAI-compatible client
+          │
+          ▼
+manual_vlm_proxy.py        transport, queue, records, images, wire audit
+          │
+          ▼
+manual_vlm_protocol.py     small adapter interface + generic fallback
+          │
+          ├── generic      raw assistant content; no project dependency
+          └── adapter      request projection + structured composer + encoder
+```
 
-Use this view to make the next decision. It promotes only the information a
-human normally needs:
+The core does not import a planner, agent runtime, tool registry, simulator, or
+any project protocol adapter. Adapters are discovered only when explicitly
+selected with `--adapter module:attribute`.
 
-- current objective and request type (main planner or an isolated VLM role);
-- validation errors and retry attempt;
-- labelled current visual evidence at inspectable resolution;
-- current robot/environment state and the latest executed action result;
-- unresolved obligations, special output contracts, and relevant skills;
-- a searchable tool picker backed by a structured parameter form.
+The browser is also data-driven. It understands generic presentation sections
+(`text`, `json`, and `images`) and generic composer intents (`tool_call`,
+`action`, or raw `content`). It does not understand an adapter's output syntax.
+The selected adapter translates those intents into the client protocol.
 
-Select a tool and fill only its parameters; the operator does not need to write
-XML. Each parameter exposes its key, description, inferred value type, and one
-of three explicit handling modes when allowed:
+## Generic mode
 
-- **填写值** — enter a custom scalar, or JSON for an object/array;
-- **省略（不发送）** — omit an optional or unspecified parameter entirely;
-- **使用默认值** — send the default documented by the tool contract.
+Generic mode has no project-specific dependency. Select it explicitly in this
+repository because the project configuration defaults to the OpenETA adapter:
 
-Explicitly required parameters cannot be omitted. Parameters with documented
-defaults initially select the default; optional parameters without defaults
-initially remain omitted. Because the current tool registry uses descriptive
-parameter strings rather than strict JSON Schema, required/optional/default
-metadata is normalized from conventions such as `required`, `optional`, and
-`defaults to`. Native `{type, required, default, enum}` descriptors are also
-supported for future tools.
+```bash
+python -m tools.manual_vlm_proxy --adapter generic --port 8099 --open \
+  --record-dir tmp/manual-vlm-traces
+```
 
-The browser submits a structured decision object. The proxy serializes it to
-typed nested XML before returning it to the harness, so booleans, numbers,
-objects, arrays, empty objects, and escaped text retain their intended types.
-The generated XML remains available as a read-only preview for verification.
-Use **其他响应** for `talk`, `ask_human`, `task_complete`, or an advanced raw
-response. Isolated JSON sub-planners retain a raw JSON editor because their
-output contracts are role-specific.
+Point any client that uses `POST /v1/chat/completions` at:
 
-The operator projection is derived from the wire request and never mutates or
-replaces it. Missing fields remain visibly unknown rather than being inferred by
-the proxy.
+```text
+http://127.0.0.1:8099/v1
+```
 
-### 模型输入审计 (wire audit)
+The console shows messages, ordered content parts, images, non-message request
+options, and the original request JSON. Enter the exact assistant content in the
+raw response box. The core wraps it in a standard chat-completion response.
 
-Use this view to verify exactly what one model call received. It shows message
-order, roles, content-part types and sizes, the complete text of every message,
-every image attachment, and every non-message request option. Long text is paged
-for navigation but is not summarized or truncated.
+Generic session grouping uses `X-Session-ID`, a top-level `session_id` or
+`conversation_id`, or best-effort conversation lineage.
 
-The browser-facing audit endpoint replaces inline image data URLs with small
-byte-preserving image endpoints so polling does not repeatedly transfer base64.
-Open **Raw JSON** to inspect the original parsed request body, including the
-original data URLs. Requests are grouped by session and retain separate turns,
-including validation retries. Isolated roles such as visual differencing are
-labelled separately from the main planner.
+## OpenETA adapter
 
-## Start
+The optional adapter in `tools.manual_vlm_openeta` owns all OpenETA-specific
+behavior:
 
-In terminal 1:
+- recognizing `openeta.*` schemas and planner roles;
+- reading serialized `tool_context`, objectives, observations, attempts, and
+  validation errors;
+- extracting `available_tools` and normalizing parameter descriptions;
+- exposing `talk`, `ask_human`, and `task_complete` actions;
+- converting the console's generic structured intent into typed `<decision>`
+  XML.
+
+This repository selects the adapter by default through
+`tools/manual_vlm_config.json`, so the normal command is:
 
 ```bash
 python -m tools.manual_vlm_proxy --port 8099 --open \
   --record-dir tmp/manual-vlm-traces
 ```
 
-In terminal 2, point only the planner provider at the proxy. Do not put these
-values in `.env` unless you intentionally want them to persist:
+The equivalent explicit invocation is:
+
+```bash
+python -m tools.manual_vlm_proxy \
+  --adapter tools.manual_vlm_openeta:OpenETAProtocolAdapter \
+  --port 8099 --open
+```
+
+Then point the planner provider at the proxy:
 
 ```bash
 OPENETA_LLM_PROVIDER=manual-vlm \
@@ -90,50 +95,81 @@ OPENETA_LLM_MAX_ATTEMPTS=1 \
 uv run openeta --once "inspect the current scene" --max-turns 8
 ```
 
-Open `http://127.0.0.1:8099/` if the browser was not opened automatically.
-Each planner call appears in the queue. Review the decision-focused state and
-images, optionally cross-check the full wire audit, enter the exact XML decision,
-then choose **Send to harness**. The agent advances through its normal pipeline
-and the next planner request appears with fresh tool feedback and observations.
+In the structured composer, select a tool and choose how to handle each
+parameter:
 
-The structured response form is pinned to the bottom of the viewport. In the audit view, long
-prompts are split into bounded text pages and long conversations into message
-pages, so neither requires scrolling to the end before responding. In the
-operator view, search the tool picker and choose **选择** to expose that tool's
-parameters. Choose whether each optional value is omitted, customized, or set
-to its documented default, then send the generated decision.
+- **填写值** enters a custom scalar or JSON value;
+- **省略（不发送）** leaves an optional parameter out entirely;
+- **使用默认值** sends the default documented by the tool descriptor.
 
-For an isolated JSON-returning sub-planner, inspect `response_format` under
-**Request options** and return the JSON object requested by its system prompt.
+The browser submits a protocol-neutral intent. It never asks the operator to
+write XML and does not generate XML itself. The OpenETA adapter performs the
+encoding on the server. Isolated JSON planners use the raw response composer
+because their output contracts are role-specific.
 
-## Useful controls
+## Views
 
-- Click an image to inspect it at its intrinsic resolution. Images are served by
-  index so the browser view does not duplicate multi-megabyte base64 in polling.
-- Switch between **决策台** and **模型输入审计** without losing the selected turn;
-  the preferred view is remembered locally.
-- Open **raw JSON** to inspect the exact request body received from the harness.
-- Press Ctrl/Cmd+Enter to submit a response.
-- Use **Cancel request** to make the provider call fail and exercise retry/failure
-  handling.
-- `--record-dir` stores `request.json`, `response.json`, or `cancel.json` under a
-  request-id directory for bug reports and diffing.
-- Multiple simultaneous evaluation workers are supported and appear as separate
-  pending requests. The left sidebar groups requests by session. It uses an exact
-  ID from `X-OpenETA-Session-ID`, `X-Session-ID`, or serialized session metadata
-  when present; otherwise it labels a best-effort conversation-lineage group as
-  `inferred`.
-- Drag the reply editor vertically to make it as large as needed. Its height is
-  stored in browser-local settings and restored on the next launch.
+### 操作台
 
-The server binds to loopback by default and has no authentication. Avoid binding
-it to a shared network: prompts and images can contain sensitive environment data.
+The selected adapter provides a bounded projection made of generic sections.
+With the OpenETA adapter this includes current visual evidence, observation
+state, latest action, validation errors, unresolved obligations, relevant
+skills, and the required output contract.
 
-## Why this stays decoupled
+The separate **Tool Call 审计** ledger pairs each serialized `openeta_action`
+with its `openeta_host_result` by `action_id`. It shows the exact projected
+arguments, execution status, success verdict, result content, structured
+outputs, and artifact references. Records are deduplicated and accumulated by
+session while the console is running, so a later prompt compaction does not
+remove results the console has already observed. A result appears when the next
+provider request carries the host execution feedback; it cannot appear before
+the tool has executed.
 
-The only contract is OpenAI-compatible `POST /v1/chat/completions` (plus
-`GET /v1/models`). The proxy observes the serialized payload after OpenETA has
-already selected and encoded visual attachments, so it neither reconstructs
-planner context nor reaches into memory, tool, simulator, or GUI internals. A
-harness update only affects this debugger if it removes or incompatibly changes
-the external OpenAI-compatible provider contract.
+An adapter projection never replaces or mutates the original request. Missing
+fields stay absent rather than being invented by the console.
+
+### 模型输入审计
+
+The audit view is entirely core-owned and always available, including in generic
+mode. It preserves message order, roles, content-part types and sizes, complete
+text, images, request options, and a normalized SHA-256 digest.
+
+Inline data URLs are replaced in the polling response with small byte-preserving
+image endpoints. **Raw JSON** exposes the original parsed body, including the
+original data URLs.
+
+## Adapter contract
+
+An adapter implements `tools.manual_vlm_protocol.ProtocolAdapter`:
+
+```python
+class ProtocolAdapter(Protocol):
+    adapter_id: str
+    label: str
+
+    def classify_request(self, body): ...
+    def session_identity(self, body, headers): ...
+    def attempt(self, body): ...
+    def presentation(self, body, *, request_id): ...
+    def encode_response(self, body, submission, *, request_id): ...
+```
+
+`presentation` returns a generic operator-view and composer schema.
+`encode_response` returns an `EncodedResponse` containing a standard assistant
+message and finish reason. A new client protocol can therefore be supported
+without changing the proxy, request store, HTTP handler, or browser code.
+
+## Useful controls and safety
+
+- Click an image to inspect it at intrinsic resolution.
+- Switch views without losing the selected request.
+- Press Ctrl/Cmd+Enter to submit.
+- Cancel a request to exercise provider retry or failure handling.
+- `--record-dir` stores exact request, response, and cancellation JSON.
+- `--decision-timeout 0` waits indefinitely; a positive value cancels an
+  unanswered request after that many seconds.
+- Multiple workers are kept as separate pending requests and grouped by exact
+  session identity or inferred conversation lineage.
+
+The service binds to loopback by default and has no authentication. Do not bind
+it to a shared network when prompts or images may contain sensitive data.

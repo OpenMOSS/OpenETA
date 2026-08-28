@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import mimetypes
 import threading
@@ -33,6 +34,7 @@ _CACHE_STABLE_AGENT_CONTEXT_KEYS = (
     "tool_references",
     "relevant_skills",
     "skill_usage",
+    "task_playbook",
 )
 
 
@@ -315,7 +317,13 @@ class CommercialApiPlannerBackend(PlannerBackend):
 OpenAICompatibleTransport = Callable[[str, JsonDict, dict[str, str], float], JsonDict]
 
 
-REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 2048
+# OpenAI-compatible reasoning models may spend this budget on hidden reasoning
+# before emitting the small JSON object requested by an isolated reviewer.
+# Live DeepSeek V4 attachment-review evidence exhausted the former 2k cap and
+# surfaced as an invalid verdict; 4k succeeded on the identical four images.
+# Keep additional variance headroom because the limit is only a ceiling and
+# normal short reviewer responses still stop early.
+REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 8192
 
 
 @dataclass(slots=True)
@@ -512,6 +520,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             bool(error.get("switch_provider_next")) for error in retry_errors
         )
         if final_error is not None:
+            provider_error_code = _provider_failure_code(final_error)
+            provider_error_retryable = _is_transient_provider_error(final_error)
             return PlannerBackendResult(
                 payload={
                     "kind": "response",
@@ -520,6 +530,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "message": "Planner provider request failed.",
                         "error_type": type(final_error).__name__,
                         "provider_attempts": provider_attempts,
+                        "provider_error_code": provider_error_code,
+                        "retryable": provider_error_retryable,
                     },
                     "reasoning": f"Planner provider request failed: {final_error}",
                 },
@@ -530,6 +542,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     "error_type": type(final_error).__name__,
                     "error": str(final_error),
                     "provider_attempts": provider_attempts,
+                    "provider_error_code": provider_error_code,
+                    "retryable": provider_error_retryable,
                     "retry_errors": retry_errors,
                     "provider_role": provider_role,
                     "provider_failover": provider_switch_count > 0,
@@ -599,7 +613,9 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
         else:
             active_endpoint = primary_endpoint
             provider_role = "primary"
+        attempted_provider_roles: set[str] = set()
         for attempt in range(1, max_attempts + 1):
+            attempted_provider_roles.add(provider_role)
             url = _chat_completions_url(active_endpoint.api_base)
             attempt_body = dict(body)
             attempt_body["model"] = active_endpoint.model
@@ -651,12 +667,20 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 protocol_details = (
                     dict(exc.details) if isinstance(exc, ProviderProtocolError) else None
                 )
-                switch_provider_next = (
-                    self.config.fallback is not None and _is_provider_failover_error(exc)
-                )
                 next_provider_role = None
-                if switch_provider_next:
-                    next_provider_role = "fallback" if provider_role == "primary" else "primary"
+                if self.config.fallback is not None and _is_provider_failover_error(exc):
+                    alternate_role = (
+                        "fallback" if provider_role == "primary" else "primary"
+                    )
+                    # Authentication/access/quota failures are persistent for one
+                    # endpoint configuration. Try the alternate endpoint once, but
+                    # do not cycle back to an endpoint that already returned the
+                    # same class of account failure.
+                    if not _is_provider_account_error(exc) or (
+                        alternate_role not in attempted_provider_roles
+                    ):
+                        next_provider_role = alternate_role
+                switch_provider_next = next_provider_role is not None
                 retryable = _is_transient_provider_error(exc) or switch_provider_next
                 provider_exchanges.append(
                     {
@@ -930,8 +954,9 @@ def _stable_planner_context_prompt(stable_context: JsonDict) -> str:
         separators=(",", ":"),
     )
     return (
-        "Stable OpenETA tool and skill context for this session. Treat these "
-        "schemas, guidance documents, and execution rules as authoritative. "
+        "Stable OpenETA contracts and guidance for this session. Tool contracts "
+        "own interfaces, skills own reusable domain advice, and any task playbook "
+        "is an exact-scope prior. "
         "The final user message supplies the current turn state.\n" + payload
     )
 
@@ -1247,7 +1272,16 @@ def _is_transient_provider_error(exc: Exception) -> bool:
         return exc.status_code in {408, 429, 500, 502, 503, 504} or (520 <= exc.status_code <= 527)
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in {408, 429, 500, 502, 503, 504}
-    return isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError))
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+        ),
+    )
 
 
 def _is_provider_failover_error(exc: Exception) -> bool:
@@ -1263,7 +1297,49 @@ def _is_provider_failover_error(exc: Exception) -> bool:
         )
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in {401, 403, 408, 429, 502, 503, 504} or 520 <= exc.code <= 527
-    return isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError))
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+        ),
+    )
+
+
+def _is_provider_account_error(exc: Exception) -> bool:
+    """Return whether retrying the same endpoint cannot repair this request."""
+
+    if isinstance(exc, ProviderHttpError):
+        return exc.status_code in {401, 403}
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {401, 403}
+    return False
+
+
+def _provider_failure_code(exc: Exception) -> str:
+    """Map terminal provider errors to a stable Agent/evaluation-facing code."""
+
+    message = str(exc).lower()
+    if any(
+        marker in message
+        for marker in (
+            "insufficient_user_quota",
+            "insufficient quota",
+            "insufficient balance",
+            "额度失败",
+            "剩余额度",
+            "余额不足",
+        )
+    ):
+        return "insufficient_provider_quota"
+    if _is_provider_account_error(exc):
+        return "provider_credentials_or_access_denied"
+    if _is_transient_provider_error(exc):
+        return "transient_provider_failure"
+    return "provider_request_failed"
 
 
 def _provider_error_reports_capacity(exc: Exception) -> bool:

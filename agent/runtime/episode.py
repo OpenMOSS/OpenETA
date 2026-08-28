@@ -1346,6 +1346,8 @@ def summarize_action(action: EnvAction) -> JsonDict:
                 "question",
                 "error_type",
                 "provider_attempts",
+                "provider_error_code",
+                "retryable",
                 "task_complete",
                 "success",
             )

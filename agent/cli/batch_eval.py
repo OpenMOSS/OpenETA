@@ -18,6 +18,7 @@ from agent.backends.planner import (
 )
 from agent.backends.provider_config import load_planner_provider_config
 from agent.runtime.episode import OpenEtaEpisodeRunner
+from agent.runtime.grasp_strategy_projection import apply_grasp_strategy_projection
 from agent.runtime.interactions import (
     PausedEpisodeRecord,
     PausedEpisodeStore,
@@ -202,6 +203,33 @@ def build_mcp_episode_worker_factory(
                 else {}
             ),
         )
+        evaluation_runtime = spec.metadata.get("evaluation_runtime")
+        evaluation_runtime = (
+            dict(evaluation_runtime) if isinstance(evaluation_runtime, dict) else {}
+        )
+        visual_history_overrides = evaluation_runtime.get("visual_history")
+        if visual_history_overrides is not None and not isinstance(
+            visual_history_overrides, dict
+        ):
+            raise ValueError("evaluation_runtime.visual_history must be an object")
+        grasp_strategy_overrides = evaluation_runtime.get("grasp_strategies")
+        grasp_strategy_projection = apply_grasp_strategy_projection(
+            workspace.grasp_strategy_root,
+            grasp_strategy_overrides,
+        )
+        visual_history = VisualHistoryConfig.from_mapping(
+            visual_history_overrides,
+            base=VisualHistoryConfig.from_env(),
+        )
+        allowed_runtime = {"visual_history", "grasp_strategies"}
+        unsupported_runtime = sorted(
+            str(key) for key in evaluation_runtime if key not in allowed_runtime
+        )
+        if unsupported_runtime:
+            raise ValueError(
+                "unsupported evaluation runtime section(s): "
+                + ", ".join(unsupported_runtime)
+            )
         staged_grasp_profile = json.loads(workspace.grasp_profile_path.read_text(encoding="utf-8"))
         staged_calibration_id = (
             str(staged_grasp_profile.get("calibration_id") or "")
@@ -237,27 +265,6 @@ def build_mcp_episode_worker_factory(
             ),
             tool_proxy_config=proxy_config,
         )
-        evaluation_runtime = spec.metadata.get("evaluation_runtime")
-        evaluation_runtime = (
-            dict(evaluation_runtime) if isinstance(evaluation_runtime, dict) else {}
-        )
-        visual_history_overrides = evaluation_runtime.get("visual_history")
-        if visual_history_overrides is not None and not isinstance(
-            visual_history_overrides, dict
-        ):
-            raise ValueError("evaluation_runtime.visual_history must be an object")
-        visual_history = VisualHistoryConfig.from_mapping(
-            visual_history_overrides,
-            base=VisualHistoryConfig.from_env(),
-        )
-        unsupported_runtime = sorted(
-            str(key) for key in evaluation_runtime if key != "visual_history"
-        )
-        if unsupported_runtime:
-            raise ValueError(
-                "unsupported evaluation runtime section(s): "
-                + ", ".join(unsupported_runtime)
-            )
         assembly = assemble_runtime(
             RuntimeAssemblyConfig(
                 workspace=workspace,
@@ -353,6 +360,7 @@ def build_mcp_episode_worker_factory(
                 "calibration_profile_id": staged_calibration_id,
                 "calibration_profile_sha256": workspace.grasp_profile_sha256,
                 "grasp_strategy_tree_sha256": workspace.grasp_strategy_tree_sha256,
+                "grasp_strategy_projection": grasp_strategy_projection,
                 "evaluation_runtime": evaluation_runtime,
             },
         )

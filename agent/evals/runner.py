@@ -245,6 +245,9 @@ def _provider_failure_pause(outcome: JsonDict) -> JsonDict:
     parameters = parameters if isinstance(parameters, dict) else {}
     message = str(parameters.get("message") or "").strip().lower()
     error_type = str(parameters.get("error_type") or "").strip()
+    provider_error_code = str(
+        parameters.get("provider_error_code") or ""
+    ).strip()
     provider_attempts = parameters.get("provider_attempts")
     if action.get("request_name") != "ask_human" or not (
         message == "planner provider request failed."
@@ -252,11 +255,17 @@ def _provider_failure_pause(outcome: JsonDict) -> JsonDict:
         and provider_attempts > 0
     ):
         return {}
+    retryable_value = parameters.get("retryable")
+    retryable = retryable_value if isinstance(retryable_value, bool) else True
+    external_dependency = provider_error_code in {
+        "insufficient_provider_quota",
+        "provider_credentials_or_access_denied",
+    }
     return {
-        "class": "infrastructure",
+        "class": "external_dependency" if external_dependency else "infrastructure",
         "stage": "provider",
-        "code": "planner_provider_request_failed",
-        "retryable": True,
+        "code": provider_error_code or "planner_provider_request_failed",
+        "retryable": retryable,
         "error_type": error_type or None,
         "provider_attempts": provider_attempts,
     }

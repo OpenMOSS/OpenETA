@@ -390,6 +390,37 @@ def test_failure_classification_separates_provider_task_and_resource() -> None:
         "error_type": "TimeoutError",
         "provider_attempts": 3,
     }
+    quota_pause = classify_evaluation_failure(
+        {
+            "status": "need_human",
+            "episode": {
+                "steps": [
+                    {
+                        "action": {
+                            "request_name": "ask_human",
+                            "request_parameters": {
+                                "message": "Planner provider request failed.",
+                                "error_type": "ProviderHttpError",
+                                "provider_attempts": 2,
+                                "provider_error_code": (
+                                    "insufficient_provider_quota"
+                                ),
+                                "retryable": False,
+                            },
+                        }
+                    }
+                ]
+            },
+        }
+    )
+    assert quota_pause == {
+        "class": "external_dependency",
+        "stage": "provider",
+        "code": "insufficient_provider_quota",
+        "retryable": False,
+        "error_type": "ProviderHttpError",
+        "provider_attempts": 2,
+    }
 
 
 def test_visual_history_extractor_reads_rollout_without_touching_generic_report(

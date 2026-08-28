@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 from pathlib import Path
 
@@ -221,6 +222,46 @@ def test_backend_fails_over_after_api_key_rejection() -> None:
     assert result.details["provider_failover"] is True
 
 
+def test_backend_tries_each_provider_once_for_persistent_quota_failure() -> None:
+    urls: list[str] = []
+
+    def quota_exhausted_transport(url, body, headers, timeout_s):
+        del body, headers, timeout_s
+        urls.append(url)
+        raise ProviderHttpError(
+            403,
+            '{"error":{"code":"insufficient_user_quota",'
+            '"message":"insufficient balance"}}',
+        )
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="primary-model",
+            api_base="https://primary.example.test",
+            api_key="primary-key",
+            max_attempts=3,
+            retry_backoff_s=0,
+            fallback=_fallback(),
+        ),
+        transport=quota_exhausted_transport,
+    )
+
+    result = backend.decide(_request())
+
+    assert result.status.value == "failed"
+    assert urls == [
+        "https://primary.example.test/v1/chat/completions",
+        "https://fallback.example.test/v1/chat/completions",
+    ]
+    assert result.details["provider_error_code"] == "insufficient_provider_quota"
+    assert result.details["retryable"] is False
+    assert result.details["provider_switch_count"] == 1
+    assert result.payload["parameters"]["provider_error_code"] == (
+        "insufficient_provider_quota"
+    )
+    assert result.payload["parameters"]["retryable"] is False
+
+
 def test_backend_fails_over_after_provider_overload() -> None:
     urls: list[str] = []
 
@@ -394,6 +435,40 @@ def test_backend_fails_over_for_temporarily_unavailable_http_500() -> None:
     assert result.details["provider_role"] == "fallback"
     assert result.details["provider_failover"] is True
     assert result.details["retry_errors"][0]["next_provider_role"] == "fallback"
+
+
+def test_backend_retries_and_fails_over_for_incomplete_http_body() -> None:
+    urls: list[str] = []
+
+    def incomplete_transport(url, body, headers, timeout_s):
+        del body, headers, timeout_s
+        urls.append(url)
+        if len(urls) == 1:
+            raise http.client.IncompleteRead(b"partial", 100)
+        return _success_response()
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="primary-model",
+            api_base="https://primary.example.test",
+            api_key="primary-key",
+            max_attempts=3,
+            retry_backoff_s=0,
+            fallback=_fallback(),
+        ),
+        transport=incomplete_transport,
+    )
+
+    result = backend.decide(_request())
+
+    assert result.status.value == "planned"
+    assert urls == [
+        "https://primary.example.test/v1/chat/completions",
+        "https://fallback.example.test/v1/chat/completions",
+    ]
+    assert result.details["provider_attempts"] == 2
+    assert result.details["provider_role"] == "fallback"
+    assert result.details["retry_errors"][0]["error_type"] == "IncompleteRead"
 
 
 def test_backend_fails_over_for_empty_success_response() -> None:

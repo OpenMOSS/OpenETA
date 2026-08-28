@@ -84,7 +84,10 @@ variant ordering.
 
 `runtime` is transported by the generic plan compiler and interpreted by the
 runtime assembly boundary. Unsupported runtime sections fail validation rather
-than being silently ignored. The first registered section is `visual_history`.
+than being silently ignored. Registered sections include `visual_history` and
+the evaluation-only `grasp_strategies` projection. The latter can exclude a
+strategy or strip its task-specific `canary_evidence` from the isolated session
+snapshot; it never mutates the repository strategy tree.
 
 ## Durable layout
 

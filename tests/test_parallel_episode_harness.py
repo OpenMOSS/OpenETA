@@ -37,6 +37,8 @@ def test_response_action_summary_keeps_bounded_provider_failure_evidence() -> No
                     "message": "Planner provider request failed.",
                     "error_type": "TimeoutError",
                     "provider_attempts": 3,
+                    "provider_error_code": "transient_provider_failure",
+                    "retryable": True,
                     "large_private_detail": "not durable",
                 },
             },
@@ -51,6 +53,8 @@ def test_response_action_summary_keeps_bounded_provider_failure_evidence() -> No
         "message": "Planner provider request failed.",
         "error_type": "TimeoutError",
         "provider_attempts": 3,
+        "provider_error_code": "transient_provider_failure",
+        "retryable": True,
     }
 
 

@@ -30,6 +30,9 @@ from agent.evals.store import DEFAULT_EVALUATION_ROOT, EvaluationRunStore
 from agent.runtime.planner import ToolCallingPlanner
 from agent.runtime.calibration_registry import load_grasp_calibration_capabilities
 from agent.runtime.mcp_catalog import simulator_mcp_contract_diagnostics
+from agent.runtime.grasp_strategy_projection import (
+    normalize_grasp_strategy_projection,
+)
 from agent.runtime.visual_history import VisualHistoryConfig
 from agent.tools.anygrasp_capabilities import check_anygrasp_compatibility
 from agent.tools.grasp_geometry import DEFAULT_GRASP_PROFILE
@@ -194,13 +197,15 @@ def _compiled_jobs_and_execution(
 
 
 def _validate_runtime(runtime: JsonDict) -> None:
-    unsupported = sorted(str(key) for key in runtime if key != "visual_history")
+    allowed = {"visual_history", "grasp_strategies"}
+    unsupported = sorted(str(key) for key in runtime if key not in allowed)
     if unsupported:
         raise ValueError("unsupported runtime section(s): " + ", ".join(unsupported))
     visual = runtime.get("visual_history")
     if visual is not None and not isinstance(visual, dict):
         raise ValueError("runtime.visual_history must be an object")
     VisualHistoryConfig.from_mapping(visual, base=VisualHistoryConfig())
+    normalize_grasp_strategy_projection(runtime.get("grasp_strategies"))
 
 
 def _store(args: argparse.Namespace) -> EvaluationRunStore:

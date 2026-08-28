@@ -1,0 +1,37 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "grasp-quality-full-milk-r18",
+  "description": "Full-task canary for Agent-chosen compiled grasp path samples and contact-quality recovery.",
+  "episode_manifest": "manifests/libero_object_task7_grasp_quality_r18.json",
+  "variants": [
+    {
+      "variant_id": "agent_first_bounded_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260825
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "purpose": "validate free-form geometric path sampling, grasp contact, carry, and placement"
+  }
+}

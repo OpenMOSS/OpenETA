@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-7-grasp-quality-r18",
+      "env_id": "openeta/libero_libero_object_task7-v0",
+      "task": "pick up the milk and place it in the basket",
+      "seed": 7,
+      "max_turns": 100,
+      "recovery_turns_per_branch": 20,
+      "max_recovery_turns": 60,
+      "max_tool_calls": 200,
+      "timeout_s": 7200,
+      "max_total_tokens": 12000000
+    }
+  ]
+}

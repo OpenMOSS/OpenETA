@@ -1,0 +1,85 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "grasp-strategy-milk-overfit-ablation-v1",
+  "description": "Paired task/seed ablation of the milk-derived top-down strategy and its task-specific evidence across six LIBERO Object tasks.",
+  "episode_manifest": "manifests/libero_object_milk_overfit_seed012.json",
+  "variants": [
+    {
+      "variant_id": "A_current_strategy_and_evidence",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "condition": "current",
+        "planner_model": "gpt-5.6-luna"
+      }
+    },
+    {
+      "variant_id": "B_without_milk_derived_strategy",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        },
+        "grasp_strategies": {
+          "exclude_strategy_ids": ["top-down-vertical-panda-p8"]
+        }
+      },
+      "metadata": {
+        "condition": "strategy_hidden",
+        "planner_model": "gpt-5.6-luna"
+      }
+    },
+    {
+      "variant_id": "C_strategy_without_milk_evidence",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        },
+        "grasp_strategies": {
+          "strip_canary_evidence_strategy_ids": ["top-down-vertical-panda-p8"]
+        }
+      },
+      "metadata": {
+        "condition": "task_specific_evidence_hidden",
+        "planner_model": "gpt-5.6-luna"
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 35891
+  },
+  "execution": {
+    "concurrency": 6,
+    "provider_concurrency": 6,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 3
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_indices": [1, 2, 3, 4, 7, 9],
+    "environment_seeds": [0, 1, 2],
+    "paired_fields": ["source_episode_id", "seed", "repeat_index"],
+    "job_count": 54,
+    "purpose": "separate milk-task strategy overfitting from generic grasp and placement toolchain failures"
+  }
+}

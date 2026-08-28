@@ -603,9 +603,11 @@ def test_observe_proxy_exposes_metric_intrinsics_for_depth_png(tmp_path: Path) -
     observation = result.details["state_delta"]["observation"]
     assert observation["robot"]["end_effector_pose"]["xyz"] == [0.1, 0.2, 0.3]
     assert observation["robot"]["gripper_state"]["open"] is False
-    assert observation["objects"][0]["category"] == "alphabet_soup"
+    assert observation["objects"] == []
+    assert payload.get("objects") == []
+    assert "alphabet_soup_1" not in response_path.read_text(encoding="utf-8")
     response_summary = result.details["outputs"]["response"]["observation_summary"]
-    assert response_summary["objects"][0]["position"] == [-0.1, -0.2, 0.47]
+    assert response_summary["objects"] == []
 
 
 def test_control_tool_proxy_forwards_to_simulator_mcp_and_materializes_images(
@@ -678,6 +680,45 @@ def test_control_tool_proxy_forwards_to_simulator_mcp_and_materializes_images(
         == (camera["rgb_path"])
     )
     assert PNG_1X1 not in json.dumps(result.details)
+
+
+def test_control_tool_proxy_promotes_explicit_remote_terminal_error(
+    tmp_path: Path,
+) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": False,
+            "error": (
+                "Worker-local controller goal failed: ValueError: "
+                "executing action in terminated episode"
+            ),
+            "motion_summary": {
+                "reached_target": False,
+                "steps_executed": 0,
+                "stop_reason": "controller_error",
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-terminated",
+            handle="env-terminated",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.1, 0.2, 0.3]}})
+
+    assert result.success is False
+    assert result.details["environment_receipt"]["terminated"] is True
+    assert result.details["state_delta"]["terminated"] is True
+    assert result.details["diagnostics"][0]["code"] == "remote_episode_terminated"
+    assert result.details["diagnostics"][0]["failure_class"] == "environment_terminal"
+    assert "already terminated" in result.content
+    assert "do not retry" in result.content
 
 
 def test_move_to_proxy_converts_world_rotation_matrix_to_mcp_euler_angles() -> None:
@@ -1371,12 +1412,12 @@ def test_move_to_proxy_preserves_transport_success_but_marks_target_miss_operati
     assert result.details["diagnostics"][0]["code"] == "simulator_mcp_collision"
     assert result.details["diagnostics"][0]["position_error_m"] == pytest.approx(0.18)
     assert {item["action"] for item in result.details["recovery_options"]} == {
-        "classify_named_collision_before_replanning",
+        "classify_collision_visually_before_replanning",
         "plan_ik_checked_raised_or_lateral_detour",
         "replan_from_actual_pose",
     }
     assert "stopped for collision" in result.content
-    assert "Collision detected at step 3" in result.content
+    assert "host-private checker" in result.content
     motion = result.details["outputs"]["response"]["motion_summary"]
     assert motion["collision"]["detected"] is True
     assert motion["reached_target"] is False
@@ -1442,6 +1483,11 @@ def test_move_to_promotes_structured_controller_boundary_failure() -> None:
         "change_wrist_orientation_or_candidate",
         "exit_reported_controller_boundary",
     }
+    assert "Recommended recovery: exit_reported_controller_boundary" in result.content
+    assert '"preserve_current_orientation":true' in result.content
+    serialized = json.dumps(result.details)
+    assert "current_minimum_distance_m" not in serialized
+    assert "predicted_minimum_distance_m" not in serialized
 
 
 def test_move_to_exposes_tentative_attachment_refresh_to_agent() -> None:
@@ -1669,8 +1715,14 @@ def test_zero_step_attached_collision_is_promoted_to_top_level_content(tmp_path:
 
     result = tools.call("move_to", {"target_pose": {"xyz": [0.0, 0.0, 0.25]}})
 
-    assert "Attached object bottle_1 would collide with box_1" in result.content
+    assert "host-private checker" in result.content
     assert "No controller step executed" in result.content
+    assert "bottle_1" not in json.dumps(result.details)
+    assert "box_1" not in json.dumps(result.details)
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    artifact_text = response_path.read_text(encoding="utf-8")
+    assert "bottle_1" not in artifact_text
+    assert "box_1" not in artifact_text
     assert not any(
         item.get("code") == "collision_coverage_incomplete"
         for item in result.details["diagnostics"]
@@ -1684,7 +1736,12 @@ def test_zero_step_attached_collision_is_promoted_to_top_level_content(tmp_path:
         "preserve_current_orientation": True,
         "enable_collision_check": True,
     }
-    assert escape["evidence"]["collision_geometry"] == ["bottle_1", "box_1"]
+    assert escape["evidence"] == {
+        "collision_detected": True,
+        "collision_class": "attached_object_world",
+        "steps_executed": 0,
+        "feedback_scope": "host_private_geometry_withheld",
+    }
     assert "Re-segmenting the same object does not move the robot" in recovery[
         "consume_returned_motion_evidence"
     ]["reason"]
@@ -1725,12 +1782,19 @@ def test_partial_motion_collision_recommends_checked_detour_from_actual_pose(
     result = tools.call("move_to", {"target_pose": {"xyz": [0.12, -0.08, 0.18]}})
 
     recovery = {item["action"]: item for item in result.details["recovery_options"]}
-    classify = recovery["classify_named_collision_before_replanning"]
-    assert classify["evidence"]["collision_geometry"] == [
-        "robot0_link7_collision",
-        "tomato_sauce_1_g4",
-    ]
+    classify = recovery["classify_collision_visually_before_replanning"]
+    assert classify["evidence"]["collision_detected"] is True
+    assert classify["evidence"]["feedback_scope"] == (
+        "host_private_geometry_withheld"
+    )
     assert classify["evidence"]["actual_eef_xyz"] == [0.08, -0.04, 0.24]
+    serialized = json.dumps(result.details)
+    assert "robot0_link7_collision" not in serialized
+    assert "tomato_sauce_1_g4" not in serialized
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    artifact_text = response_path.read_text(encoding="utf-8")
+    assert "robot0_link7_collision" not in artifact_text
+    assert "tomato_sauce_1_g4" not in artifact_text
     detour = recovery["plan_ik_checked_raised_or_lateral_detour"]
     assert detour["parameters"] == {
         "start_from_actual_eef_xyz": [0.08, -0.04, 0.24],
@@ -2326,6 +2390,55 @@ def test_gripper_control_selects_open_or_close_mcp_tool(tmp_path: Path) -> None:
     close_receipt = close_result.details["outputs"]["attachment_proxy_receipt"]
     assert close_receipt["status"] == "not_armed"
     assert close_receipt["reason"] == "no_active_contact_authorization"
+
+
+def test_gripper_close_exposes_stationary_settle_receipt(tmp_path: Path) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "cameras": [],
+            "robot": {"gripper_state": {"openness": 0.42}},
+            "gripper_actuation_receipt": {
+                "schema_version": "openeta.gripper_actuation_receipt.v1",
+                "command": "close",
+                "command_latched": True,
+                "steps_executed": 60,
+                "settling_policy": "stationary_continuous_position_hold",
+                "measured_open_fraction": 0.42,
+            },
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "tentative",
+                "reason": "non_empty_close_near_bound_target",
+                "target_object_name": "milk_1",
+                "measured_open_fraction": 0.42,
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-settle",
+            handle="env-settle",
+            image_output_root=tmp_path,
+        ),
+        tool_names=("gripper_control",),
+    )
+
+    result = tools.call("gripper_control", {"position": 0})
+
+    receipt = result.details["outputs"]["gripper_actuation_receipt"]
+    assert receipt["steps_executed"] == 60
+    assert receipt["command_latched"] is True
+    assert result.details["outputs"]["attachment_proxy_receipt"]["reason"] == (
+        "non_empty_close_with_tentative_safety_proxy"
+    )
+    assert "stationary_settle_steps=60" in result.content
+    assert "milk_1" not in result.content
+    assert "milk_1" not in json.dumps(result.details)
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    assert "milk_1" not in response_path.read_text(encoding="utf-8")
 
 
 def test_missing_remote_attachment_receipt_is_explicit_and_refreshes_on_lift() -> None:

@@ -100,6 +100,11 @@ def rebase_camera_grasp_candidate(
         3,
         "candidate.gripper_tip_position_xyz",
     )
+    source_execution_center = _vector(
+        candidate.get("execution_contact_center_xyz", source_translation),
+        3,
+        "candidate.execution_contact_center_xyz",
+    )
     world_from_source, world_source_position = _opencv_camera_to_world(
         source_camera_extrinsics
     )
@@ -119,9 +124,23 @@ def rebase_camera_grasp_candidate(
         return _matvec3(target_from_world, relative_world)
 
     rebased = json.loads(json.dumps(dict(candidate), ensure_ascii=False))
-    rebased["translation_xyz"] = _round_vector(rebase_point(source_translation))
+    rebased_translation = _round_vector(rebase_point(source_translation))
+    rebased_rotation = _round_matrix(target_rotation)
+    rebased["translation_xyz"] = rebased_translation
     rebased["gripper_tip_position_xyz"] = _round_vector(rebase_point(source_tip))
-    rebased["rotation_matrix"] = _round_matrix(target_rotation)
+    rebased["execution_contact_center_xyz"] = _round_vector(
+        rebase_point(source_execution_center)
+    )
+    rebased["rotation_matrix"] = rebased_rotation
+    if "transform_matrix" in rebased:
+        rebased["transform_matrix"] = [
+            [*rebased_rotation[row], rebased_translation[row]] for row in range(3)
+        ] + [[0.0, 0.0, 0.0, 1.0]]
+    # This nested pose uses the estimator's native grasp basis in the original
+    # source camera.  It is rendering provenance, not executable geometry, and
+    # retaining it after a cross-camera rebase would publish contradictory
+    # coordinate frames inside one candidate.
+    rebased.pop("model_native_grasp_pose", None)
     rebased["frame"] = "camera"
     rebased["camera_frame"] = "opencv"
     return rebased
@@ -226,6 +245,13 @@ def build_compile_grasp_seed_handler(
             and refinement.get("recommended") is True
             else ""
         )
+        strategy_note = (
+            "; the explicitly selected strategy remains the active contact branch; "
+            "a later wrist estimate is separate raw evidence and must not silently "
+            "replace or inherit it"
+            if outputs.get("strategy_selection") == "explicit"
+            else ""
+        )
         return make_tool_result(
             context,
             success=True,
@@ -235,6 +261,7 @@ def build_compile_grasp_seed_handler(
                 "move_to tolerance=0.005 m and inspect the returned actual pose plus "
                 "fresh wrist image before closing"
                 + refinement_note
+                + strategy_note
             ),
             outputs=outputs,
         )
@@ -282,8 +309,12 @@ def build_wrist_alignment_handler(
                 context,
                 success=True,
                 content=(
-                    "wrist alignment requires a better near-field view; the geometry "
-                    "calculation completed but produced no executable poses"
+                    "wrist alignment is non-executable; the geometry calculation "
+                    "produced no motion pose. Do not repeat SAM3 on unchanged wrist "
+                    "pixels. If the selected target mask is usable and the target is "
+                    "visible, consume the ready wrist grasp_pose_estimate bundle for "
+                    "a full 6-DoF re-estimate now. Reposition only when the target is "
+                    "clipped/out of view or that bundle is unavailable"
                 ),
                 outputs=outputs,
                 diagnostics=[
@@ -299,18 +330,20 @@ def build_wrist_alignment_handler(
                 semantic_outcome="requires_better_view",
                 recovery_options=[
                     {
-                        "action": "gather_fresh_near_field_wrist_view",
+                        "action": "run_full_wrist_grasp_estimate",
                         "reason": (
-                            "move by an Agent-chosen safe route near the compiled "
-                            "clearance reference, observe fresh wrist RGB-D, and segment "
-                            "the same target instance again"
+                            "reuse the already selected fresh wrist mask through the "
+                            "host-resolved grasp bundle when orientation, approach "
+                            "direction, axial depth, or a clamped correction is uncertain; "
+                            "do not segment the unchanged image again"
                         ),
                     },
                     {
-                        "action": "run_full_wrist_grasp_estimate",
+                        "action": "gather_fresh_near_field_wrist_view",
                         "reason": (
-                            "use a fresh wrist-view grasp estimate when orientation, "
-                            "approach direction, or axial contact depth is uncertain"
+                            "only when current evidence is clipped, out of view, or has "
+                            "no ready full-estimate bundle, choose a new safe target-facing "
+                            "view and then ground the same target instance"
                         ),
                     },
                 ],
@@ -488,7 +521,19 @@ def compile_grasp_seed(
         )
 
     r_camera_grasp = _rotation(candidate.get("rotation_matrix"), "camera_pose.rotation_matrix")
-    p_camera_grasp = _vector(candidate.get("translation_xyz"), 3, "camera_pose.translation_xyz")
+    # AnyGrasp and GraspGenX expose different native origins. The normalized
+    # candidate resolves the physical grip-site contact point explicitly.
+    execution_reference_point = str(
+        candidate.get("execution_reference_point") or "translation_xyz"
+    )
+    p_camera_grasp = _vector(
+        candidate.get(
+            "execution_contact_center_xyz",
+            candidate.get(execution_reference_point),
+        ),
+        3,
+        "camera_pose.execution_contact_center_xyz",
+    )
     r_world_cv, p_world_camera = _opencv_camera_to_world(extrinsics)
 
     transform = _mapping(profile.get("T_grasp_eef"), "T_grasp_eef")
@@ -550,6 +595,7 @@ def compile_grasp_seed(
     refinement_reasons: list[str] = []
     if (
         not source_is_wrist
+        and strategy is None
         and mask_area_fraction is not None
         and mask_area_fraction < 0.02
     ):
@@ -562,6 +608,7 @@ def compile_grasp_seed(
     )
     if (
         not source_is_wrist
+        and strategy is None
         and str(selection_advice.get("status") or "") == "skipped_single_candidate"
     ):
         refinement_reasons.append(
@@ -577,6 +624,19 @@ def compile_grasp_seed(
             "grasp_candidate_count",
         ),
         "agent_discretion": True,
+        "active_strategy_id": (
+            strategy.get("strategy_id") if strategy is not None else None
+        ),
+        "strategy_continuity": (
+            "This explicitly selected strategy remains the active contact branch. "
+            "A later wrist grasp estimate is separate raw evidence: it neither "
+            "inherits nor silently replaces this strategy. If the observed object "
+            "posture still satisfies the strategy geometry, explicitly pass the "
+            "same strategy_id when compiling a wrist candidate; otherwise abandon "
+            "or change the strategy using fresh visual evidence."
+            if strategy is not None
+            else None
+        ),
         "suggested_actions": [
             {
                 "tool": "compute_wrist_alignment",
@@ -650,6 +710,7 @@ def compile_grasp_seed(
         "target_geometry_family": target_geometry_family,
         **({"approach_mode": approach_mode} if approach_mode else {}),
         "calibration_id": calibration_id,
+        "execution_reference_point": execution_reference_point,
         "calibration_status": str(profile.get("status") or ""),
         "not_validated": profile.get("status") != "validated",
         "profile_sha256": profile_sha256,
@@ -751,6 +812,16 @@ def camera_optical_forward_world(camera_extrinsics: Mapping[str, Any]) -> list[f
     return _normalise([r_world_cv[row][2] for row in range(3)], "camera optical forward")
 
 
+def world_up_direction_camera(camera_extrinsics: Mapping[str, Any]) -> list[float]:
+    """Express world +Z in the source camera's OpenCV coordinate frame."""
+
+    r_world_cv, _ = _opencv_camera_to_world(camera_extrinsics)
+    return _normalise(
+        [r_world_cv[2][column] for column in range(3)],
+        "world up in camera frame",
+    )
+
+
 def grasp_refinement_hover_pose(
     camera_pose: Mapping[str, Any],
     camera_extrinsics: Mapping[str, Any],
@@ -803,12 +874,15 @@ def assess_target_mask_quality(
     depth_path: str | Path | None = None,
     minimum_valid_depth_pixels: int = 5,
     minimum_depth_coverage: float = 0.5,
+    minimum_border_clearance_fraction: float = 0.02,
 ) -> JsonDict:
     """Assess whether a selected mask is complete enough for targeted geometry.
 
-    The verdict intentionally treats image-boundary contact as a hard visibility
-    failure.  Area and depth statistics remain explicit so callers and the Agent
-    can distinguish a clipped view from a tiny or depth-poor target.
+    The verdict treats image-boundary contact or only a sliver of border margin
+    as a hard visibility failure. A nearly full-frame mask can otherwise include
+    foreground gripper/table pixels while appearing technically unclipped. Area
+    and depth statistics remain explicit so callers and the Agent can distinguish
+    a clipped view from a tiny or depth-poor target.
     """
 
     try:
@@ -851,6 +925,7 @@ def assess_target_mask_quality(
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     border_clearance = min(min_x, min_y, width - 1 - max_x, height - 1 - max_y)
+    border_clearance_fraction = border_clearance / max(1, min(width, height))
     valid_depth_count: int | None = None
     depth_coverage: float | None = None
     if resolved_depth is not None:
@@ -869,13 +944,15 @@ def assess_target_mask_quality(
     failed_checks: list[str] = []
     if border_clearance <= 0:
         failed_checks.append("mask_not_clipped")
+    elif border_clearance_fraction < minimum_border_clearance_fraction:
+        failed_checks.append("minimum_border_clearance")
     if valid_depth_count is not None and valid_depth_count < minimum_valid_depth_pixels:
         failed_checks.append("minimum_valid_depth_pixels")
     if depth_coverage is not None and depth_coverage < minimum_depth_coverage:
         failed_checks.append("minimum_depth_coverage")
     status = (
         "clipped_mask"
-        if "mask_not_clipped" in failed_checks
+        if {"mask_not_clipped", "minimum_border_clearance"}.intersection(failed_checks)
         else "insufficient_depth"
         if failed_checks
         else "usable"
@@ -896,7 +973,10 @@ def assess_target_mask_quality(
         ),
         "border_clearance_px": border_clearance,
         "border_clearance_fraction": round(
-            border_clearance / max(1, min(width, height)), 8
+            border_clearance_fraction, 8
+        ),
+        "minimum_border_clearance_fraction": round(
+            minimum_border_clearance_fraction, 8
         ),
         "touches_image_boundary": border_clearance <= 0,
         "valid_depth_pixel_count": valid_depth_count,

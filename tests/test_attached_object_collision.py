@@ -106,7 +106,12 @@ def test_attached_object_collision_blocks_rim_but_allows_centered_entry() -> Non
     assert rim_collision is True
     assert info["collision_type"] == "attached_object_world"
     assert info["obstacle"] == "basket_1"
-    assert "Raise or reroute" in info["message"]
+    assert "interior placement corridor" in info["message"]
+    assert info["receptacle_corridor"]["feasible_xy"] is True
+    assert info["receptacle_corridor"]["required_center_delta_xy_m"] == [
+        0.0,
+        0.035,
+    ]
 
     centered_collision, _ = check_attached_object_collision(
         attachment,
@@ -114,6 +119,33 @@ def test_attached_object_collision_blocks_rim_but_allows_centered_entry() -> Non
         [0.0, 0.255, 0.24],
     )
     assert centered_collision is False
+
+
+def test_receptacle_collision_reports_actionable_signed_xy_correction() -> None:
+    attachment = {
+        "status": "confirmed",
+        "object_name": "milk_1",
+        "relative_xyz": [-0.01307555808434628, 0.00620764220187614, -0.0351563108411757],
+        "dims": [0.05250003081168726, 0.053072748337936015, 0.13119110669014367],
+    }
+    basket = {
+        "name": "basket_1",
+        "category": "basket",
+        "aabb_min": [-0.07720006982701846, 0.1632584433574326, -0.000015065859717966826],
+        "aabb_max": [0.08013789382661385, 0.33277768483579234, 0.1414481195329717],
+    }
+
+    collision, info = check_attached_object_collision(
+        attachment,
+        [basket],
+        [-0.050743106658, 0.251175048781, 0.22],
+    )
+
+    assert collision is True
+    correction = info["receptacle_corridor"]["required_center_delta_xy_m"]
+    assert 0.017 < correction[0] < 0.019
+    assert correction[1] == 0.0
+    assert "world-frame XY delta [+0.0179, +0.0000] m" in info["message"]
 
 
 def test_attached_object_collision_allows_only_monotonic_escape_from_initial_overlap() -> None:

@@ -278,14 +278,17 @@ def check_attached_object_collision(
         if not _aabb_intersects(held_min, held_max, obstacle_min, obstacle_max):
             continue
         category = str(obstacle.get("category") or "").strip().lower()
-        if category in _RECEPTACLE_CATEGORIES and _inside_receptacle_corridor(
-            held_center,
-            held_dims,
-            obstacle_min,
-            obstacle_max,
-            margin_m=margin_m,
-        ):
-            continue
+        receptacle_corridor = None
+        if category in _RECEPTACLE_CATEGORIES:
+            receptacle_corridor = _receptacle_corridor_assessment(
+                held_center,
+                held_dims,
+                obstacle_min,
+                obstacle_max,
+                margin_m=margin_m,
+            )
+            if receptacle_corridor["inside_xy"]:
+                continue
         obstacle_name = str(obstacle.get("name") or category or "scene obstacle")
         predicted_overlap = _aabb_overlap_volume(
             held_min,
@@ -310,6 +313,30 @@ def check_attached_object_collision(
         if baseline_overlap > 0.0 and predicted_overlap < baseline_overlap - 1e-12:
             egress_obstacles.append(obstacle_name)
             continue
+        obstacle_description = obstacle_name
+        recovery_message = (
+            f"Attached object {attached_name or '<unknown>'} would collide with "
+            f"{obstacle_description}. Raise or reroute the carry waypoint."
+        )
+        if receptacle_corridor is not None:
+            if receptacle_corridor["feasible_xy"]:
+                correction = receptacle_corridor["required_center_delta_xy_m"]
+                recovery_message = (
+                    f"Attached object {attached_name or '<unknown>'} is outside "
+                    f"{obstacle_description}'s interior placement corridor. At a "
+                    "collision-clear height, shift the rigidly held object by at "
+                    "least world-frame XY delta "
+                    f"[{correction[0]:+.4f}, {correction[1]:+.4f}] m, add a small "
+                    "planner margin, then recheck the descent. The EEF may use the "
+                    "same XY delta while the grasp remains rigid."
+                )
+            else:
+                recovery_message = (
+                    f"Attached object {attached_name or '<unknown>'} cannot fit "
+                    f"inside {obstacle_description}'s conservative XY corridor at "
+                    "its current orientation. Raise it and change orientation or "
+                    "choose a different safe release strategy."
+                )
         return True, {
             "available": True,
             "world_collision": True,
@@ -324,12 +351,12 @@ def check_attached_object_collision(
             "overlap_volume_m3": predicted_overlap,
             "baseline_overlap_volume_m3": baseline_overlap,
             "new_or_worsened": True,
-            "message": (
-                f"Attached object {attached_name or '<unknown>'} would collide with "
-                f"{obstacle_name}. Raise or reroute the carry waypoint; for a "
-                "receptacle, centre the object inside its placement corridor before "
-                "descending."
+            **(
+                {"receptacle_corridor": receptacle_corridor}
+                if receptacle_corridor is not None
+                else {}
             ),
+            "message": recovery_message,
         }
     return False, {
         "available": True,
@@ -431,20 +458,42 @@ def _aabb_overlap_volume(
     return overlaps[0] * overlaps[1] * overlaps[2]
 
 
-def _inside_receptacle_corridor(
+def _receptacle_corridor_assessment(
     held_center: list[float],
     held_dims: list[float],
     receptacle_min: list[float],
     receptacle_max: list[float],
     *,
     margin_m: float,
-) -> bool:
+) -> dict:
+    centre_min_xy: list[float] = []
+    centre_max_xy: list[float] = []
+    required_delta_xy: list[float] = []
+    feasible = True
     for axis in (0, 1):
         lower = receptacle_min[axis] + held_dims[axis] / 2.0 + margin_m
         upper = receptacle_max[axis] - held_dims[axis] / 2.0 - margin_m
-        if lower > upper or not lower <= held_center[axis] <= upper:
-            return False
-    return True
+        centre_min_xy.append(lower)
+        centre_max_xy.append(upper)
+        if lower > upper:
+            feasible = False
+            required_delta_xy.append(0.0)
+        elif held_center[axis] < lower:
+            required_delta_xy.append(lower - held_center[axis])
+        elif held_center[axis] > upper:
+            required_delta_xy.append(upper - held_center[axis])
+        else:
+            required_delta_xy.append(0.0)
+    inside = feasible and all(abs(value) <= 1e-12 for value in required_delta_xy)
+    return {
+        "schema_version": "openeta.receptacle_corridor_check.v1",
+        "inside_xy": inside,
+        "feasible_xy": feasible,
+        "held_center_xy_m": [float(held_center[0]), float(held_center[1])],
+        "valid_center_xy_min_m": centre_min_xy,
+        "valid_center_xy_max_m": centre_max_xy,
+        "required_center_delta_xy_m": required_delta_xy,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════

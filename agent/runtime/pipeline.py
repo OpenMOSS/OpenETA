@@ -250,6 +250,79 @@ class ActionPipeline:
                             ),
                         },
                     )
+            elif (
+                request.name == "ik_preview_check"
+                and isinstance(request.parameters.get("compiled_grasp_id"), str)
+                and "path_fraction" in request.parameters
+            ):
+                reference_kind = "compiled_grasp_path_sample"
+                try:
+                    if memory is None:
+                        raise ValueError("runtime memory is unavailable")
+                    if "target_pose" in request.parameters or "waypoint_role" in request.parameters:
+                        raise ValueError(
+                            "provide compiled_grasp_id + path_fraction without target_pose "
+                            "or waypoint_role; the host resolves the path sample"
+                        )
+                    if request.parameters.get("preserve_current_orientation") is True:
+                        raise ValueError(
+                            "compiled path samples preserve the grasp's explicit full "
+                            "orientation; preserve_current_orientation is not compatible"
+                        )
+                    resolution = memory.resolve_compiled_grasp_path_sample_reference(
+                        compiled_grasp_id=str(
+                            request.parameters.get("compiled_grasp_id") or ""
+                        ),
+                        path_fraction=request.parameters.get("path_fraction"),
+                    )
+                    resolved = resolution.get("parameters")
+                    if not isinstance(resolved, dict):
+                        raise ValueError(
+                            "compiled grasp path-sample resolver returned invalid parameters"
+                        )
+                    resolved_parameters = {
+                        **resolved,
+                        **{
+                            key: request.parameters[key]
+                            for key in (
+                                "position_tolerance_m",
+                                "orientation_tolerance_rad",
+                                "check_endpoint_collision",
+                            )
+                            if key in request.parameters
+                        },
+                    }
+                    bundle_resolution = resolution
+                except (TypeError, ValueError) as exc:
+                    reason = f"ik_preview_check path sample resolution failed: {exc}"
+                    tool_call = _skipped_tool_call(
+                        request.name,
+                        request.parameters,
+                        reason=reason,
+                    )
+                    return CommandPipelinePlan(
+                        request=request,
+                        status=PipelineStatus.BLOCKED,
+                        tool_calls=[tool_call],
+                        metadata={
+                            "interface": self.interfaces.descriptor(
+                                request.kind, request.name
+                            ),
+                            "planner_metadata": decision.metadata,
+                            "execution_rule": _tool_execution_rule(tool_call, tools),
+                            "reference_resolution_gate": {
+                                "blocked": True,
+                                "reference_kind": reference_kind,
+                                "reason": str(exc),
+                            },
+                            "repair_bundle": self._gate_repair_bundle(
+                                memory,
+                                code="invalid_compiled_grasp_path_sample",
+                                reason=reason,
+                                request=request,
+                            ),
+                        },
+                    )
             elif request.name == "ik_preview_check" and isinstance(
                 request.parameters.get("compiled_grasp_id"), str
             ):
@@ -1622,6 +1695,7 @@ def _compiled_grasp_gate_code(reason: str) -> str:
             "compiled_grasp_adjustment_",
             "compiled_clearance_",
             "compiled_contact_",
+            "attached_release_",
         )
     ):
         return reason.split(":", 1)[0]

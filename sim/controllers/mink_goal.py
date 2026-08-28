@@ -584,8 +584,12 @@ def execute_libero_mink_goal(
                     ),
                     "recovery": (
                         "The projected fallback step still could not satisfy the active "
-                        "collision/joint constraints. Use the actual EEF pose and the "
-                        "reported joint-limit diagnostics to choose a materially different "
+                        "collision/joint constraints. First use the actual EEF pose and "
+                        "fresh dual-view evidence to preview a short translation that "
+                        "increases separation with preserve_current_orientation=true; "
+                        "execute it only with collision checking. Rotate toward a new "
+                        "candidate only after leaving the boundary. If no monotonic short "
+                        "retreat is visually supported, choose a materially different "
                         "orientation or waypoint; replaying the same target is not useful."
                     ),
                 }

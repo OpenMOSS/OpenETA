@@ -9,7 +9,9 @@ from adapter.protocol import CameraFrame, EnvAction, EnvObservation, RobotState
 from agent.runtime.actions import PipelineStatus
 from agent.runtime.memory import (
     ARTICULATED_ATTACHMENT_PROBE_KEY,
+    ATTACHMENT_EVIDENCE_KEY,
     AgentMemory,
+    GRIPPER_COMMAND_STATE_KEY,
     GRASP_PROVENANCE_KEY,
     ROBOT_MOTION_EPOCH_KEY,
 )
@@ -203,6 +205,74 @@ def test_compiled_grasp_waypoint_is_host_resolved_for_ik_preview() -> None:
 
     assert plan.status is PipelineStatus.EXECUTED
     assert dispatched[0]["target_pose"] == pose
+    assert dispatched[0]["check_endpoint_collision"] is True
+    assert "target_pose" not in plan.request.parameters
+
+
+def test_agent_chosen_compiled_path_sample_preserves_full_grasp_pose() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    rotation = [
+        [0.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ]
+    memory.save_artifact(
+        "compiled-path-ref",
+        {
+            "type": "compiled_grasp",
+            "compiled_grasp_id": "compiled-path-ref",
+            "scene_epoch": 0,
+            "hover_pose": {
+                "frame": "world",
+                "xyz": [0.1, 0.2, 0.3],
+                "rotation_matrix": rotation,
+                "compiled_grasp_id": "compiled-path-ref",
+                "waypoint_role": "grasp_clearance",
+            },
+            "contact_pose": {
+                "frame": "world",
+                "xyz": [0.2, 0.1, 0.1],
+                "rotation_matrix": rotation,
+                "compiled_grasp_id": "compiled-path-ref",
+                "waypoint_role": "grasp_contact",
+            },
+        },
+        source="compile_grasp_seed",
+    )
+    tools = build_default_tool_registry()
+    dispatched: list[dict] = []
+    tools.bind_handler(
+        "ik_preview_check",
+        lambda context: dispatched.append(dict(context.parameters)) or ToolResult(True),
+    )
+
+    plan = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="ik_preview_check",
+            parameters={
+                "compiled_grasp_id": "compiled-path-ref",
+                "path_fraction": 0.8,
+                "position_tolerance_m": 0.005,
+                "orientation_tolerance_rad": 0.1,
+                "check_endpoint_collision": True,
+            },
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert plan.status is PipelineStatus.EXECUTED
+    target = dispatched[0]["target_pose"]
+    assert target["xyz"] == [0.18, 0.12, 0.14]
+    assert target["rotation_matrix"] == rotation
+    assert target["waypoint_role"] == "grasp_path_sample"
+    assert target["path_fraction"] == 0.8
+    assert target["segment_start_role"] == "grasp_clearance"
+    assert target["segment_end_role"] == "grasp_contact"
     assert dispatched[0]["check_endpoint_collision"] is True
     assert "target_pose" not in plan.request.parameters
 
@@ -888,6 +958,7 @@ def _record_target_selection(
     rgb: str = "/session/rgb.png",
     depth: str = "/session/depth.png",
     mask: str = "/session/mask.png",
+    extrinsics: dict | None = None,
 ) -> None:
     if artifact_root is not None:
         rgb_path = artifact_root / "rgb.png"
@@ -934,6 +1005,11 @@ def _record_target_selection(
                                             "cy": 0.5,
                                             "scale": 1000,
                                         },
+                                        **(
+                                            {"extrinsics": extrinsics}
+                                            if extrinsics is not None
+                                            else {}
+                                        ),
                                     },
                                     "detection_count": 1,
                                     "detections": [
@@ -1121,6 +1197,32 @@ def test_grasp_bundle_preserves_host_depth_compatibility_hint(tmp_path: Path) ->
 
     assert resolved["parameters"]["hints"]["depth_cutoff_factor"] == 1.333333
     assert resolved["parameters"]["hints"]["max_gripper_width_m"] == 0.08
+    assert resolved["parameters"]["hints"]["execution_reference_point"] == (
+        "translation_xyz"
+    )
+
+
+def test_grasp_bundle_derives_packet_owned_camera_up_direction(tmp_path: Path) -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    _record_target_selection(
+        memory,
+        artifact_root=tmp_path,
+        extrinsics={
+            "camera_frame": "opengl",
+            "frame_transform": "camera_to_world",
+            "matrix_layout": "row_major",
+            "pos": [0.0, 0.0, 0.0],
+            "mat": [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0],
+        },
+    )
+
+    public = memory.grasp_input_bundle()
+    resolved = memory.resolve_grasp_input_bundle(public["bundle_id"])
+
+    assert resolved["parameters"]["hints"]["up_direction_camera"] == pytest.approx(
+        [0.0, -1.0, 0.0]
+    )
 
 
 def test_grasp_bundle_rejects_clipped_target_mask_with_view_recovery(
@@ -1209,7 +1311,7 @@ def test_pipeline_resolves_molmopoint_packet_sources_without_model_paths(
     assert captured[0]["_source_observations"][0]["packet_id"] == "packet-4"
 
 
-def test_molmopoint_same_view_recovery_rejects_silent_packet_refresh(
+def test_same_view_recovery_allows_identical_refresh_and_rejects_changed_pixels(
     tmp_path: Path,
 ) -> None:
     rgb = tmp_path / "rgb.png"
@@ -1276,8 +1378,9 @@ def test_molmopoint_same_view_recovery_rejects_silent_packet_refresh(
     memory.add_observation(refreshed)
     tools = build_default_tool_registry()
     tools.bind_handler("molmopoint", lambda _context: ToolResult(True))
+    tools.bind_handler("sam3", lambda _context: ToolResult(True))
 
-    blocked = ActionPipeline().compile(
+    identical = ActionPipeline().compile(
         PlannerDecision(
             action_type="tool_call",
             action="molmopoint",
@@ -1292,6 +1395,36 @@ def test_molmopoint_same_view_recovery_rejects_silent_packet_refresh(
             },
         ),
         observation=refreshed,
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert identical.status is PipelineStatus.EXECUTED
+
+    changed_rgb = tmp_path / "changed-rgb.png"
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(changed_rgb)
+    changed = _observation()
+    for artifact in changed.metadata["image_artifacts"]:
+        artifact["packet_id"] = "packet-6"
+        artifact["path"] = str(changed_rgb if artifact["kind"] == "rgb" else depth)
+    memory.add_observation(changed)
+
+    blocked = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="molmopoint",
+            parameters={
+                "sources": [
+                    {
+                        "source_packet_id": "packet-6",
+                        "camera_frame_id": "agentview",
+                    }
+                ],
+                "prompt": "Point to the cube in Image 1.",
+            },
+        ),
+        observation=changed,
         tools=tools,
         skills=build_default_skill_registry(),
         memory=memory,
@@ -1314,7 +1447,7 @@ def test_molmopoint_same_view_recovery_rejects_silent_packet_refresh(
             action="molmopoint",
             parameters=exact["parameters"],
         ),
-        observation=refreshed,
+        observation=changed,
         tools=tools,
         skills=build_default_skill_registry(),
         memory=memory,
@@ -1330,14 +1463,14 @@ def test_molmopoint_same_view_recovery_rejects_silent_packet_refresh(
             action_type="tool_call",
             action="sam3",
             parameters={
-                "source_packet_id": "packet-5",
+                "source_packet_id": "packet-6",
                 "camera_frame_id": "agentview",
                 "mode": "points",
                 "points": [{"x": 4, "y": 4, "label": 1}],
                 "evidence_role": "target_object",
             },
         ),
-        observation=refreshed,
+        observation=changed,
         tools=tools,
         skills=build_default_skill_registry(),
         memory=memory,
@@ -2236,7 +2369,7 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
     reason = blocked.tool_calls[0].reason
     assert "reached_target=false" in reason
     assert "actual_eef_xyz=[0.1, 0.2, 0.16]" in reason
-    assert "position_error_m=0.06 (limit=0.005)" in reason
+    assert "position_error_m=0.06 (limit=0.01)" in reason
     assert "Collision diagnostics from the preceding arm motion do not block" in reason
 
     memory.add_action(
@@ -2244,9 +2377,9 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
             reached=False,
             steps=17,
             actual_xyz=[0.1003, 0.2002, 0.1001],
-            position_error_m=0.0004,
-            max_axis_position_error_m=0.0003,
-            orientation_error_rad=0.155,
+            position_error_m=0.0088,
+            max_axis_position_error_m=0.0063,
+            orientation_error_rad=0.019,
             collision={
                 "detected": True,
                 "geom1_name": "robot0_link7_collision",
@@ -2255,8 +2388,8 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         )
     )
     near_contact_receipt = memory.latest_compiled_contact_execution()
-    assert near_contact_receipt["max_axis_position_error_m"] == 0.0003
-    assert near_contact_receipt["orientation_error_rad"] == 0.155
+    assert near_contact_receipt["max_axis_position_error_m"] == 0.0063
+    assert near_contact_receipt["orientation_error_rad"] == 0.019
     collision_does_not_block_finger_close = pipeline.compile(
         PlannerDecision(
             action_type="tool_call",
@@ -2380,6 +2513,283 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
     )
 
 
+def test_release_is_blocked_after_failed_attached_motion_with_actionable_evidence() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="place the milk in the basket")
+    memory.save_fact(
+        GRIPPER_COMMAND_STATE_KEY,
+        {"position": 0, "state": "closed", "latched": True},
+        source="test",
+    )
+    memory.save_fact(
+        ATTACHMENT_EVIDENCE_KEY,
+        {"verdict": "PASS", "compiled_grasp_id": "compiled-milk"},
+        source="test",
+    )
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {"kind": "tool_call", "name": "move_to", "parameters": {}},
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": {},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "semantic_outcome": "target_not_reached",
+                                "outputs": {
+                                    "motion_summary": {
+                                        "stop_reason": "collision_detected",
+                                        "reached_target": False,
+                                        "collision": {
+                                            "detected": True,
+                                            "geom1_name": "milk_1_g1",
+                                            "geom2_name": "basket_1_g4",
+                                        },
+                                    },
+                                    "pose_feedback": {
+                                        "actual_xyz": [-0.05, 0.26, 0.25],
+                                        "requested_xyz": [-0.07, 0.39, 0.14],
+                                        "reached_target": False,
+                                    },
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    tools = build_default_tool_registry()
+    tools.bind_handler("gripper_control", lambda _context: ToolResult(True))
+
+    blocked = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 1},
+        ),
+        observation=_observation(),
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+
+    assert blocked.status is PipelineStatus.BLOCKED
+    assert blocked.metadata["repair_bundle"]["code"] == (
+        "attached_release_after_failed_motion"
+    )
+    reason = blocked.tool_calls[0].reason or ""
+    assert "actual_eef_xyz=[-0.05, 0.26, 0.25]" in reason
+    assert "milk_1_g1" in reason and "basket_1_g4" in reason
+    assert "successful subsequent carrying motion clears this check" in reason
+
+
+def test_camera_pose_to_world_reference_remains_in_world_evidence() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="place the milk in the basket")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "camera_pose_to_world",
+                    "parameters": {
+                        "placement_result_id": "anyplace-result:test",
+                        "candidate_id": "placement_000",
+                    },
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "camera_pose_to_world",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "placement_result_id": "anyplace-result:test",
+                                    "candidate_id": "placement_000",
+                                    "world_pose": {
+                                        "frame": "world",
+                                        "translation_xyz": [-0.07, 0.39, 0.135],
+                                        "rotation_matrix": [
+                                            [1.0, 0.0, 0.0],
+                                            [0.0, 1.0, 0.0],
+                                            [0.0, 0.0, 1.0],
+                                        ],
+                                    },
+                                    "placement_reference": {
+                                        "schema_version": (
+                                            "openeta.placement_world_reference.v1"
+                                        ),
+                                        "semantic_role": "low_release_geometric_reference",
+                                        "execution_authorized": False,
+                                        "required_before_motion": ["agent_authored_waypoint"],
+                                        "agent_release_options": [
+                                            {
+                                                "mode": (
+                                                    "gravity_assisted_open_container_drop"
+                                                )
+                                            }
+                                        ],
+                                    },
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    reference = memory.placement_world_reference()
+    assert reference is not None
+    assert reference["world_pose"]["translation_xyz"] == [-0.07, 0.39, 0.135]
+    assert reference["agent_release_options"][0]["mode"] == (
+        "gravity_assisted_open_container_drop"
+    )
+    projected = memory.planning_context()["world_evidence"]
+    assert projected["placement_world_reference"]["value"]["candidate_id"] == (
+        "placement_000"
+    )
+
+
+def test_compiled_contact_rejects_cross_axis_sweep_without_requiring_a_stage() -> None:
+    contact_pose = {
+        "frame": "world",
+        "compiled_grasp_id": "compiled-corridor",
+        "source_grasp_id": "candidate-0",
+        "waypoint_role": "grasp_contact",
+        "xyz": [0.15, 0.0, 0.10],
+    }
+    compiled = {
+        "type": "compiled_grasp",
+        "compiled_grasp_id": "compiled-corridor",
+        "scene_epoch": 0,
+        "approach_world_xyz": [1.0, 0.0, 0.0],
+        "hover_pose": {
+            "frame": "world",
+            "compiled_grasp_id": "compiled-corridor",
+            "waypoint_role": "grasp_clearance",
+            "xyz": [0.0, 0.0, 0.10],
+        },
+        "contact_pose": dict(contact_pose),
+    }
+
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    observation = _observation()
+    observation.robot.end_effector_pose = {"xyz": [0.0, 0.08, 0.25]}
+    memory.add_observation(observation)
+    memory.save_artifact("compiled-corridor", compiled, source="compile_grasp_seed")
+
+    blocked = memory.compiled_grasp_target_gate_error(
+        tool_name="move_to",
+        parameters={"target_pose": dict(contact_pose)},
+    )
+
+    assert blocked is not None
+    assert blocked.startswith("compiled_contact_approach_misaligned:")
+    assert "current_eef_xyz=[0.0, 0.08, 0.25]" in blocked
+    assert "lateral_offset_m=" in blocked
+    assert "not a required hover/descend task stage" in blocked
+
+    aligned_memory = AgentMemory()
+    aligned_memory.start_session(task="pick the cube")
+    aligned_observation = _observation()
+    aligned_observation.robot.end_effector_pose = {"xyz": [0.0, 0.0, 0.10]}
+    aligned_memory.add_observation(aligned_observation)
+    aligned_memory.save_artifact(
+        "compiled-corridor", compiled, source="compile_grasp_seed"
+    )
+    assert aligned_memory.compiled_grasp_target_gate_error(
+        tool_name="move_to",
+        parameters={"target_pose": dict(contact_pose)},
+    ) is None
+
+    near_memory = AgentMemory()
+    near_memory.start_session(task="pick the cube")
+    near_observation = _observation()
+    near_observation.robot.end_effector_pose = {"xyz": [0.13, 0.025, 0.10]}
+    near_memory.add_observation(near_observation)
+    near_memory.save_artifact(
+        "compiled-corridor", compiled, source="compile_grasp_seed"
+    )
+    assert near_memory.compiled_grasp_target_gate_error(
+        tool_name="move_to",
+        parameters={"target_pose": dict(contact_pose)},
+    ) is None
+
+
+def test_compiled_contact_rejects_large_pending_rotation_without_task_stage() -> None:
+    contact_pose = {
+        "frame": "world",
+        "compiled_grasp_id": "compiled-orientation-entry",
+        "source_grasp_id": "candidate-0",
+        "waypoint_role": "grasp_contact",
+        "xyz": [0.15, 0.0, 0.10],
+        "rotation_matrix": [
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+    }
+    compiled = {
+        "type": "compiled_grasp",
+        "compiled_grasp_id": "compiled-orientation-entry",
+        "scene_epoch": 0,
+        "approach_world_xyz": [1.0, 0.0, 0.0],
+        "contact_pose": dict(contact_pose),
+    }
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    observation = _observation()
+    observation.robot.end_effector_pose = {
+        "xyz": [0.0, 0.0, 0.10],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    memory.add_observation(observation)
+    memory.save_artifact(
+        "compiled-orientation-entry",
+        compiled,
+        source="compile_grasp_seed",
+    )
+
+    blocked = memory.compiled_grasp_target_gate_error(
+        tool_name="move_to",
+        parameters={"target_pose": dict(contact_pose)},
+    )
+
+    assert blocked is not None
+    assert blocked.startswith("compiled_contact_orientation_misaligned:")
+    assert "orientation_delta_rad=1.5708 (limit=0.30)" in blocked
+    assert "not a required alignment stage" in blocked
+
+    contact_pose["rotation_matrix"] = [
+        [0.98006658, -0.19866933, 0.0],
+        [0.19866933, 0.98006658, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+    aligned_memory = AgentMemory()
+    aligned_memory.start_session(task="pick the cube")
+    aligned_memory.add_observation(observation)
+    aligned_memory.save_artifact(
+        "compiled-orientation-entry",
+        {**compiled, "contact_pose": dict(contact_pose)},
+        source="compile_grasp_seed",
+    )
+    assert aligned_memory.compiled_grasp_target_gate_error(
+        tool_name="move_to",
+        parameters={"target_pose": dict(contact_pose)},
+    ) is None
+
+
 def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
@@ -2411,7 +2821,12 @@ def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> Non
         source="compile_grasp_seed",
     )
 
-    def clearance_action(*, reached: bool) -> EnvAction:
+    def clearance_action(
+        *,
+        reached: bool,
+        position_error_m: float = 0.04,
+        orientation_error_rad: float = 0.45,
+    ) -> EnvAction:
         details = {
             "operational_success": reached,
             "outputs": {
@@ -2421,8 +2836,10 @@ def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> Non
                     "stop_reason": "target_reached" if reached else "iteration_limit",
                     "start": {"xyz": [0.0, 0.0, 0.2]},
                     "end": {"xyz": [0.098, 0.203, 0.247]},
-                    "position_error_m": 0.004,
-                    "orientation_error_rad": 0.15 if not reached else 0.05,
+                    "position_error_m": position_error_m,
+                    "orientation_error_rad": (
+                        orientation_error_rad if not reached else 0.05
+                    ),
                 }
             },
             "diagnostics": (
@@ -2482,7 +2899,8 @@ def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> Non
     reason = blocked.tool_calls[0].reason
     assert "reached_target=false" in reason
     assert "actual_eef_xyz=[0.098, 0.203, 0.247]" in reason
-    assert "orientation_error_rad=0.15" in reason
+    assert "orientation_error_rad=0.45" in reason
+    assert "position<=0.010m and orientation<=0.30rad" in reason
     assert blocked.metadata["repair_bundle"]["execution_evidence"][
         "latest_compiled_clearance_execution"
     ]["stop_reason"] == "iteration_limit"
@@ -2490,6 +2908,83 @@ def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> Non
     memory.add_action(clearance_action(reached=True))
     assert (
         memory.compiled_grasp_target_gate_error(
+            tool_name="move_to",
+            parameters={"target_pose": dict(contact_pose)},
+        )
+        is None
+    )
+
+
+def test_near_clearance_residual_allows_agent_chosen_contact_without_stage() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    compiled_id = "compiled-near-clearance"
+    clearance_pose = {
+        "frame": "world",
+        "compiled_grasp_id": compiled_id,
+        "source_grasp_id": "grasp-0",
+        "waypoint_role": "grasp_clearance",
+        "xyz": [0.1, 0.2, 0.25],
+    }
+    contact_pose = {
+        "frame": "world",
+        "compiled_grasp_id": compiled_id,
+        "source_grasp_id": "grasp-0",
+        "waypoint_role": "grasp_contact",
+        "xyz": [0.1, 0.2, 0.1],
+    }
+    memory.save_artifact(
+        compiled_id,
+        {
+            "type": "compiled_grasp",
+            "compiled_grasp_id": compiled_id,
+            "candidate_id": "grasp-0",
+            "scene_epoch": 0,
+            "hover_pose": dict(clearance_pose),
+            "contact_pose": dict(contact_pose),
+        },
+        source="compile_grasp_seed",
+    )
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": {"target_pose": dict(clearance_pose)},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "executed",
+                        "parameters": {"target_pose": dict(clearance_pose)},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "operational_success": False,
+                                "outputs": {
+                                    "motion_summary": {
+                                        "reached_target": False,
+                                        "steps_executed": 100,
+                                        "stop_reason": "iteration_limit",
+                                        "start": {"xyz": [0.0, 0.0, 0.2]},
+                                        "end": {"xyz": [0.098, 0.203, 0.247]},
+                                        "position_error_m": 0.0052,
+                                        "orientation_error_rad": 0.253,
+                                    }
+                                },
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert (
+        memory._compiled_contact_clearance_gate_error(
             tool_name="move_to",
             parameters={"target_pose": dict(contact_pose)},
         )

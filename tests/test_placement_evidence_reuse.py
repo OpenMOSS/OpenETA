@@ -333,6 +333,55 @@ def test_anyplace_rebases_from_durable_fixed_grasp_before_first_anyplace_call() 
         == "grasp:fixed-history"
     )
 
+    # Unrelated actions must not recursively rebase this bundle onto itself and
+    # change its content-addressed identity.
+    bundle_id = public["bundle_id"]
+    memory.add_action(EnvAction(action_type="response", command={}))
+    assert memory.anyplace_input_bundle()["bundle_id"] == bundle_id
+
+    # A successful result is frozen against the exact requested bundle and
+    # remains resolvable after the normal post-action bundle refresh.
+    result_id = "anyplace-result:wrist-rebase-stable"
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "anyplace",
+                    "parameters": {"bundle_id": bundle_id},
+                },
+                "tool_calls": [
+                    {
+                        "name": "anyplace",
+                        "parameters": {"bundle_id": bundle_id},
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {
+                                    "result_id": result_id,
+                                    "placement_candidates": [
+                                        {
+                                            "id": "placement_000",
+                                            "place_grasp_pose": _candidate(),
+                                        }
+                                    ],
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+    assert memory.anyplace_input_bundle()["materialized_result_id"] == result_id
+    resolved = memory.resolve_placement_candidate_input(
+        placement_result_id=result_id,
+        candidate_id="placement_000",
+    )
+    assert resolved["placement_result_id"] == result_id
+
 
 def test_grasp_candidate_identity_tolerates_json_float_noise_only() -> None:
     original = _candidate()

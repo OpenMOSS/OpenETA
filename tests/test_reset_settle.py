@@ -55,6 +55,25 @@ def test_settle_holds_latched_gripper(monkeypatch):
         assert c["action"][-1] == 1.0, "settle must keep clamping a closed gripper"
 
 
+def test_reset_establishes_and_settles_with_open_gripper_latch(monkeypatch):
+    calls = _make_recorder(monkeypatch)
+    meta = {
+        "backend": "libero",
+        "_gripper_cmd": 1.0,
+        "_attachment_proxy": {"status": "confirmed"},
+    }
+    monkeypatch.setattr(s, "_session_envs", {"test": {"h": meta}})
+    monkeypatch.setattr(s, "_touch_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(s, "_proxy_reset", lambda *_args, **_kwargs: {"reset": True})
+
+    s.reset_env.__wrapped__(handle="h", session_id="test")
+
+    assert meta["_gripper_cmd"] == -1.0
+    assert "_attachment_proxy" not in meta
+    assert calls
+    assert all(call["action"][-1] == -1.0 for call in calls)
+
+
 def test_settle_renders_only_final_step(monkeypatch):
     calls = _make_recorder(monkeypatch)
     meta = {"backend": "libero"}

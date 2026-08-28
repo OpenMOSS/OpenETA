@@ -35,6 +35,10 @@ from agent.tools.grasp_pose_advisor import (
     GraspPoseAdvisor,
     build_grasp_selection_bundle,
 )
+from agent.tools.grasp_strategies import (
+    compatible_explicit_grasp_strategies,
+    load_grasp_strategies,
+)
 from agent.tools.registry import (
     GRASP_POSE_BACKENDS,
     ToolExecutionContext,
@@ -1116,6 +1120,8 @@ def build_grasp_pose_estimate_handler(
     graspgenx_up_direction_camera: Sequence[float] = (0.0, 0.0, -1.0),
     advisor: GraspPoseAdvisor | None = None,
     selection_output_root: str | Path = DEFAULT_GRASP_SELECTION_OUTPUT_ROOT,
+    grasp_strategy_root: str | Path | None = None,
+    grasp_calibration_id: str = "",
 ) -> ToolHandler:
     """Build one agent-facing grasp estimator over independent backend handlers."""
 
@@ -1177,6 +1183,9 @@ def build_grasp_pose_estimate_handler(
         scene_epoch = parameters.get("scene_epoch")
         hints_value = parameters.get("hints")
         hints = dict(hints_value) if isinstance(hints_value, Mapping) else {}
+        target_geometry_family = _string_param(
+            parameters.get("target_geometry_family")
+        ).lower()
         excluded_value = hints.get("excluded_backends")
         excluded_backends = {
             str(value)
@@ -1290,7 +1299,7 @@ def build_grasp_pose_estimate_handler(
                     hints=hints,
                 )
                 if normalized.success:
-                    return _attach_grasp_selection_advice(
+                    advised = _attach_grasp_selection_advice(
                         _attach_grasp_backend_policy(normalized, backend_policy),
                         advisor=advisor,
                         task=(
@@ -1302,6 +1311,12 @@ def build_grasp_pose_estimate_handler(
                             selection_output_root,
                             artifact_session_id(context.metadata),
                         ),
+                    )
+                    return _attach_explicit_grasp_strategy_options(
+                        advised,
+                        strategy_root=grasp_strategy_root,
+                        calibration_id=grasp_calibration_id,
+                        target_geometry_family=target_geometry_family,
                     )
                 reason = _grasp_backend_failure_reason(normalized)
                 attempt["status"] = "failed"
@@ -1435,6 +1450,43 @@ def _attach_grasp_backend_policy(
     return result
 
 
+def _attach_explicit_grasp_strategy_options(
+    result: ToolResult,
+    *,
+    strategy_root: str | Path | None,
+    calibration_id: str,
+    target_geometry_family: str,
+) -> ToolResult:
+    """Expose compatible candidate strategies without selecting one for the Agent."""
+
+    if not result.success or strategy_root is None:
+        return result
+    try:
+        options = compatible_explicit_grasp_strategies(
+            load_grasp_strategies(strategy_root),
+            calibration_id=calibration_id,
+            target_geometry_family=target_geometry_family,
+        )
+    except (OSError, ValueError):
+        return result
+    if not options:
+        return result
+    details = result.details if isinstance(result.details, dict) else {}
+    details["explicit_grasp_strategy_options"] = options
+    result.details = details
+    ids = "; ".join(str(item["strategy_id"]) for item in options)
+    result.content = (
+        f"{result.content} Compatible experimental strategy option(s): {ids}. "
+        "None was applied. The main Agent should compare the raw recommendation with "
+        "these task-agnostic geometry options before the first close, and may explicitly "
+        "choose one by passing its strategy_id to compile_grasp_seed with the chosen "
+        "estimator candidate. Task-specific rollout provenance is retained for host "
+        "audit but is not exposed here. An option remains an experimental prior, not "
+        "an automatic activation or motion authorization."
+    )
+    return result
+
+
 def _attach_grasp_selection_advice(
     result: ToolResult,
     *,
@@ -1534,6 +1586,19 @@ def _attach_grasp_selection_advice(
             f"with confidence {float(advice.get('confidence') or 0.0):.2f}; "
             f"{reason_summary}the main Agent must still choose and call "
             "compile_grasp_seed explicitly."
+        )
+    elif status in {"completed", "skipped_single_candidate"}:
+        reasons = advice.get("reasons")
+        reason = (
+            str(reasons[0]).strip()
+            if isinstance(reasons, list) and reasons and str(reasons[0]).strip()
+            else "the available previews do not support a stable comparison"
+        )
+        result.content = (
+            f"{result.content} Read-only grasp advisor abstained; reason: {reason}. "
+            "Do not silently choose rank 0 or the least-bad candidate. Inspect the "
+            "persisted preview evidence and, when all contacts are unstable, obtain "
+            "a different viewpoint or candidate set before compiling a grasp."
         )
     elif status == "unavailable":
         result.content = (
@@ -2571,6 +2636,20 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
                 ),
             )
 
+    execution_center_value = camera_pose.get("execution_contact_center_xyz")
+    execution_center = None
+    if execution_center_value is not None:
+        execution_center = _finite_vector(execution_center_value, length=3)
+        if execution_center is None:
+            return _camera_pose_transform_failure(
+                context,
+                reason="invalid_execution_contact_center",
+                content=(
+                    "camera_pose_to_world failed: "
+                    "camera_pose.execution_contact_center_xyz must be 3 finite floats."
+                ),
+            )
+
     parsed_extrinsics = _parse_camera_extrinsics(extrinsics)
     if parsed_extrinsics is None:
         return _camera_pose_transform_failure(
@@ -2617,11 +2696,22 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
             source_frame=input_camera_frame,
             target_frame=camera_to_world_frame,
         )
+    if execution_center is not None:
+        execution_center = _convert_camera_vector(
+            execution_center,
+            source_frame=input_camera_frame,
+            target_frame=camera_to_world_frame,
+        )
     if convention == "camera_to_world_row_major":
         world_translation = _mat3_vec3(camera_rotation, translation)
         world_translation = _vec3_add(world_translation, camera_position)
         world_rotation = _mat3_mat3(camera_rotation, rotation) if rotation is not None else None
         world_tip = _vec3_add(_mat3_vec3(camera_rotation, tip), camera_position) if tip else None
+        world_execution_center = (
+            _vec3_add(_mat3_vec3(camera_rotation, execution_center), camera_position)
+            if execution_center
+            else None
+        )
     else:
         inverse_rotation = _transpose3(camera_rotation)
         offset_translation = (
@@ -2638,6 +2728,23 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
                 world_tip = _vec3_add(world_tip, camera_position)
         else:
             world_tip = None
+        if execution_center is not None:
+            offset_execution_center = (
+                execution_center
+                if source_format == "pos_mat"
+                else _vec3_sub(execution_center, camera_position)
+            )
+            world_execution_center = _mat3_vec3(
+                inverse_rotation,
+                offset_execution_center,
+            )
+            if source_format == "pos_mat":
+                world_execution_center = _vec3_add(
+                    world_execution_center,
+                    camera_position,
+                )
+        else:
+            world_execution_center = None
 
     world_pose: JsonDict = dict(camera_pose)
     world_pose["frame"] = "world"
@@ -2648,6 +2755,10 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
         world_pose["rotation_matrix"] = _round_matrix(world_rotation)
     if world_tip is not None:
         world_pose["gripper_tip_position_xyz"] = _round_vector(world_tip)
+    if world_execution_center is not None:
+        world_pose["execution_contact_center_xyz"] = _round_vector(
+            world_execution_center
+        )
 
     placement_reference = (
         {
@@ -2663,6 +2774,29 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
                 "trajectory_and_attached_object_collision_check",
                 "fresh_attachment_and_receptacle_visual_evidence",
             ],
+            "agent_release_options": [
+                {
+                    "mode": "controlled_descent",
+                    "when": (
+                        "fresh geometry supports a collision-clear vertical corridor "
+                        "to an Agent-chosen release endpoint"
+                    ),
+                },
+                {
+                    "mode": "gravity_assisted_open_container_drop",
+                    "when": (
+                        "the receptacle is visibly open, the held non-fragile object "
+                        "fits the opening with useful margin, and rim-safe descent is "
+                        "less certain than a bounded stationary drop"
+                    ),
+                    "constraints": (
+                        "Agent chooses and exact-IK-checks a centred raised endpoint, "
+                        "requires successful collision-checked arrival plus fresh "
+                        "attachment/receptacle evidence, stops lateral motion before "
+                        "release, and keeps drop height visually bounded"
+                    ),
+                },
+            ],
             "unreachable_reference_recovery": (
                 "Use IK residuals and fresh visual evidence to propose a distinct safe "
                 "world-frame waypoint; do not treat this low reference as a direct "
@@ -2676,8 +2810,10 @@ def _camera_pose_to_world_handler(context: ToolExecutionContext) -> ToolResult:
     if placement_reference is not None:
         content += (
             "; this AnyPlace pose is a low release geometric reference, not motion "
-            "authorization. Propose and IK-check safe carry/descent waypoints from "
-            "current visual and EEF evidence before execution"
+            "authorization. Propose and IK-check safe carry waypoints plus an "
+            "Agent-chosen release geometry from current visual and EEF evidence. "
+            "For a visibly open container, a bounded stationary raised drop is an "
+            "alternative to a rim-risky descent when the object clearly fits"
         )
     return make_tool_result(
         context,
@@ -4393,7 +4529,7 @@ def _grasp_pose_backend_parameters(
     }
     if backend == "graspgenx":
         up_direction = _normalise_graspgenx_up_direction(
-            list(graspgenx_up_direction_camera)
+            hints.get("up_direction_camera", list(graspgenx_up_direction_camera))
         )
         if not graspgenx_gripper_name or up_direction is None:
             return None
@@ -4646,6 +4782,36 @@ def _normalise_grasp_pose_estimate_result(
                 "score_scope": "backend_local",
             }
         )
+        # Candidate origin must match the calibrated controller site.  The
+        # LIBERO Panda controller tracks ``gripper0_grip_site``, which the
+        # robot XML places at the centre of the finger pads, so its profile uses
+        # AnyGrasp/GraspGenX ``translation_xyz`` (grasp centre).  Deployments
+        # whose controller origin is a physical gripper tip can explicitly
+        # select ``gripper_tip_position_xyz`` in their calibration profile.
+        execution_reference_point = str(
+            hints.get("execution_reference_point") or "translation_xyz"
+        )
+        if execution_reference_point not in {
+            "translation_xyz",
+            "gripper_tip_position_xyz",
+        }:
+            return _grasp_pose_estimate_failure(
+                "invalid_execution_reference_point",
+                attempts=attempts,
+                retryable=False,
+            )
+        execution_contact_center = _finite_vector(
+            candidate.get(execution_reference_point),
+            length=3,
+        )
+        if execution_contact_center is None:
+            return _grasp_pose_estimate_failure(
+                "inconsistent_grasp_outputs",
+                attempts=attempts,
+                retryable=True,
+            )
+        candidate["execution_reference_point"] = execution_reference_point
+        candidate["execution_contact_center_xyz"] = execution_contact_center
         if "depth" not in candidate and "gripper_depth" in candidate:
             candidate["depth"] = candidate["gripper_depth"]
         width = _finite_float(candidate.get("width"))
@@ -6142,8 +6308,14 @@ def _scale_anyplace_grasp_candidate(candidate: JsonDict, factor: float) -> JsonD
     scaled = dict(candidate)
     for key in ("depth", "width", "height"):
         scaled[key] = float(scaled[key]) / factor
-    for key in ("translation_xyz", "gripper_tip_position_xyz"):
-        scaled[key] = [float(component) / factor for component in scaled[key]]
+    for key in (
+        "translation_xyz",
+        "gripper_tip_position_xyz",
+        "execution_contact_center_xyz",
+    ):
+        vector = scaled.get(key)
+        if isinstance(vector, list) and len(vector) == 3:
+            scaled[key] = [float(component) / factor for component in vector]
     return scaled
 
 
@@ -6177,7 +6349,11 @@ def _restore_anyplace_length_scale(response: JsonDict, factor: float) -> JsonDic
             for key in ("depth", "width", "height"):
                 if key in place:
                     place[key] = float(place[key]) * factor
-            for key in ("translation_xyz", "gripper_tip_position_xyz"):
+            for key in (
+                "translation_xyz",
+                "gripper_tip_position_xyz",
+                "execution_contact_center_xyz",
+            ):
                 vector = place.get(key)
                 if isinstance(vector, list) and len(vector) == 3:
                     place[key] = [float(component) * factor for component in vector]

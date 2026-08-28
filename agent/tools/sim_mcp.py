@@ -548,6 +548,7 @@ class SimulatorMcpToolProxy:
         )
         if incomplete_motion_receipt:
             success = False
+        agent_feedback = _agent_visible_simulator_response(raw_response)
         normalized = self._normalize_response(
             raw_response,
             agent_tool=agent_tool,
@@ -614,7 +615,7 @@ class SimulatorMcpToolProxy:
             normalized["outputs"]["attachment_proxy_receipt"] = receipt
             normalized["outputs"]["response"]["attachment_proxy_receipt"] = receipt
         collision_coverage = _collision_coverage_receipt(
-            raw_response,
+            agent_feedback,
             agent_tool=agent_tool,
             requested_collision_check=context.parameters.get(
                 "enable_collision_check",
@@ -625,13 +626,13 @@ class SimulatorMcpToolProxy:
             normalized["outputs"]["collision_coverage"] = collision_coverage
             normalized["outputs"]["response"]["collision_coverage"] = collision_coverage
         if agent_tool in {"move_to", "follow_eef_trajectory"}:
-            pose_feedback = _pose_feedback(context.parameters, raw_response)
+            pose_feedback = _pose_feedback(context.parameters, agent_feedback)
             if pose_feedback:
                 normalized["outputs"]["pose_feedback"] = pose_feedback
         if agent_tool == "move_to":
             evidence_handoff = _post_motion_evidence_handoff(
                 context.parameters,
-                raw_response,
+                agent_feedback,
             )
             if evidence_handoff:
                 normalized["outputs"]["post_motion_evidence_handoff"] = (
@@ -768,14 +769,14 @@ class SimulatorMcpToolProxy:
                         if incomplete_motion_receipt
                         else "simulator_mcp_action_receipt_unavailable"
                     ),
-                    "message": _brief_response_error(raw_response),
+                    "message": _brief_response_error(agent_feedback),
                     "candidate_rejection": False,
                     "failure_class": "action_outcome_unknown",
                 }
             ]
         else:
             diagnostics = (
-                _response_diagnostics(raw_response)
+                _response_diagnostics(agent_feedback)
                 if not success or motion_target_not_reached
                 else []
             )
@@ -792,7 +793,6 @@ class SimulatorMcpToolProxy:
                     "coverage_status": collision_coverage["coverage_status"],
                     "trajectory_checked": collision_coverage["trajectory_checked"],
                     "world_checked": collision_coverage["world_checked"],
-                    "world_object_count": collision_coverage["world_object_count"],
                 }
             )
         if attachment_contract_missing:
@@ -826,9 +826,9 @@ class SimulatorMcpToolProxy:
         recovery_options = (
             _attachment_contract_recovery_options()
             if attachment_contract_missing
-            else _motion_target_miss_recovery_options(raw_response)
+            else _motion_target_miss_recovery_options(agent_feedback)
             if motion_target_not_reached
-            else _motion_noop_recovery_options(raw_response)
+            else _motion_noop_recovery_options(agent_feedback)
             if motion_already_within_tolerance
             else (
                 _ik_recovery_options(ik_receipt)
@@ -867,13 +867,33 @@ class SimulatorMcpToolProxy:
         )
         if execution_receipt:
             details["host_execution_receipt"] = execution_receipt
+        result_content = _response_content(
+            normalized["outputs"]["response"],
+            mcp_tool=mcp_tool,
+            success=success,
+        )
+        # Recovery options are structured in details for auditing, but the
+        # planner's compact tool-result projection is content-first. Surface
+        # the primary executable repair inline so a large response artifact is
+        # not required just to learn how to leave a collision boundary.
+        if motion_target_not_reached and recovery_options:
+            primary_recovery = recovery_options[0]
+            action = str(primary_recovery.get("action") or "").strip()
+            reason = str(primary_recovery.get("reason") or "").strip()
+            parameters = primary_recovery.get("parameters")
+            parameter_note = (
+                "; suggested_parameters="
+                + json.dumps(parameters, ensure_ascii=False, separators=(",", ":"))
+                if isinstance(parameters, Mapping) and parameters
+                else ""
+            )
+            result_content = (
+                f"{result_content} Recommended recovery: {action}{parameter_note}. "
+                f"{reason}"
+            ).strip()
         return ToolResult(
             success,
-            content=_response_content(
-                normalized["outputs"]["response"],
-                mcp_tool=mcp_tool,
-                success=success,
-            ),
+            content=result_content,
             details=details,
         )
 
@@ -1074,6 +1094,11 @@ class SimulatorMcpToolProxy:
             payload = bundle.payload
             artifacts = [image.to_dict() for image in bundle.images]
         payload = _with_anygrasp_camera_intrinsics(payload)
+        # The transport response is trusted host input.  From this point on the
+        # payload is Agent-owned: it enters ToolResult, memory/context, and a JSON
+        # artifact readable through python_exec.  Project simulator-only safety
+        # geometry once at this boundary so no later representation can revive it.
+        payload = _agent_visible_simulator_response(payload)
         observation_snapshot = build_observation_snapshot(
             payload,
             image_artifacts=artifacts,
@@ -1114,7 +1139,11 @@ class SimulatorMcpToolProxy:
             summary = response_ref.get(key)
             if isinstance(summary, dict):
                 outputs[key] = summary
-        for key in ("attachment_proxy_receipt", "contact_authorization"):
+        for key in (
+            "attachment_proxy_receipt",
+            "gripper_actuation_receipt",
+            "contact_authorization",
+        ):
             value = payload.get(key)
             if isinstance(value, dict):
                 outputs[key] = dict(value)
@@ -2160,6 +2189,191 @@ def _mcp_error_failure_class(message: str, *, is_error: bool) -> str:
     return "mcp_tool_error" if is_error else "invalid_mcp_response"
 
 
+_SIMULATOR_PRIVATE_SAFETY_KEYS = frozenset(
+    {
+        "attached_object",
+        "binding_source",
+        "contact_authorization",
+        "constraint_boundary_recovery",
+        "current_minimum_distance_m",
+        "dims",
+        "eef_to_target_distance_m",
+        "geom1_name",
+        "geom2_name",
+        "geometry_names",
+        "minimum_distance_m",
+        "object_name",
+        "obstacle",
+        "pairs",
+        "predicted_minimum_distance_m",
+        "receptacle_aabb",
+        "relative_xyz",
+        "target_anchor_world_xyz",
+        "target_object_name",
+        "valid_center_xy",
+        "world_object_count",
+    }
+)
+
+
+def _agent_visible_simulator_response(response: JsonDict) -> JsonDict:
+    """Project a trusted simulator response into non-privileged Agent evidence.
+
+    The simulator may use object poses, collision geometry names, signed distances,
+    or object extents internally.  Those values have no real-robot analogue and must
+    not enter ToolResult, memory, planner context, or Agent-readable artifacts.
+    Robot proprioception and requested/actual EEF poses remain visible.
+    """
+
+    def project(value: object, *, key: str = "") -> object:
+        if isinstance(value, list):
+            if key == "objects":
+                return []
+            return [project(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if key == "collision":
+            return _agent_visible_collision_receipt(value)
+        if key == "attachment_proxy_receipt":
+            return _agent_visible_attachment_proxy_receipt(value)
+        if key == "controller_failure":
+            return _agent_visible_controller_failure(value)
+        public: JsonDict = {}
+        for raw_key, item in value.items():
+            field = str(raw_key)
+            if field in _SIMULATOR_PRIVATE_SAFETY_KEYS:
+                continue
+            if field == "objects":
+                public[field] = []
+                continue
+            public[field] = project(item, key=field)
+        return public
+
+    projected = project(response)
+    public = projected if isinstance(projected, dict) else {}
+    collision = response.get("collision")
+    controller_failure = response.get("controller_failure")
+    attachment = response.get("attachment_proxy_receipt")
+    if isinstance(collision, dict) and collision.get("detected") is True:
+        public.pop("content", None)
+        public["message"] = (
+            "Motion was stopped by a host-private safety check. Inspect the fresh "
+            "agentview/wrist evidence and replan from the reported actual EEF pose."
+        )
+    elif isinstance(controller_failure, dict):
+        public.pop("content", None)
+        public["message"] = (
+            "The controller could not safely reach the requested pose. Inspect the "
+            "fresh visual evidence and choose a materially different checked waypoint."
+        )
+    elif isinstance(attachment, dict):
+        # Backend prose around the proxy commonly embeds the simulator instance name.
+        public.pop("content", None)
+        if isinstance(public.get("message"), str):
+            public.pop("message", None)
+    public["safety_feedback_projection"] = {
+        "schema_version": "openeta.agent_safe_safety_feedback.v1",
+        "privileged_geometry_exposed": False,
+        "retained_evidence": (
+            "safety verdict, checked scope, controller outcome, and robot proprioception"
+        ),
+    }
+    return public
+
+
+def _agent_visible_collision_receipt(collision: JsonDict) -> JsonDict:
+    public: JsonDict = {}
+    for field in (
+        "available",
+        "checked",
+        "detected",
+        "new_or_worsened",
+        "self_checked",
+        "self_collision",
+        "world_collision",
+        "endpoint_checked",
+        "check_endpoint_collision",
+        "trajectory_checked",
+        "path_checked",
+        "world_checked",
+        "scene_checked",
+    ):
+        if isinstance(collision.get(field), bool):
+            public[field] = collision[field]
+    collision_type = str(collision.get("collision_type") or "").strip()
+    public["collision_class"] = (
+        collision_type
+        if collision_type
+        in {"self_collision", "robot_world", "attached_object_world", "endpoint"}
+        else "unspecified_contact"
+        if public.get("detected") is True
+        else "none"
+    )
+    public["feedback_scope"] = "verdict_and_recovery_class_only"
+    return public
+
+
+def _agent_visible_attachment_proxy_receipt(receipt: JsonDict) -> JsonDict:
+    public: JsonDict = {}
+    for field in (
+        "schema_version",
+        "status",
+        "attachment_proven",
+        "collision_proxy_active",
+        "contact_authorization_forwarded",
+        "source_tool",
+    ):
+        value = receipt.get(field)
+        if isinstance(value, str | bool) or value is None:
+            public[field] = value
+    for field in (
+        "measured_open_fraction",
+        "eef_displacement_m",
+        "eef_displacement_since_close_m",
+    ):
+        value = receipt.get(field)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            public[field] = value
+    reason = str(receipt.get("reason") or "").strip()
+    allowed_reasons = {
+        "awaiting_independent_co_motion_evidence",
+        "aperture_collapsed_to_empty_close",
+        "empty_close_or_no_measurable_contact",
+        "eef_pose_unavailable",
+        "no_active_contact_authorization",
+        "remote_attachment_proxy_receipt_missing",
+        "remote_attachment_proxy_refresh_receipt_missing",
+        "visual_attachment_not_proven",
+    }
+    public_reason_aliases = {
+        "authorized_target_outside_contact_envelope": (
+            "close_not_supported_by_host_contact_envelope"
+        ),
+        "non_empty_close_near_bound_target": "non_empty_close_with_tentative_safety_proxy",
+    }
+    public["reason"] = (
+        reason
+        if reason in allowed_reasons
+        else public_reason_aliases.get(reason, "host_safety_proxy_update")
+    )
+    public["feedback_scope"] = "proxy_status_without_simulator_object_geometry"
+    return public
+
+
+def _agent_visible_controller_failure(failure: JsonDict) -> JsonDict:
+    public: JsonDict = {}
+    for field in ("schema_version", "code", "failure_class"):
+        value = failure.get(field)
+        if isinstance(value, str):
+            public[field] = value
+    public["recovery"] = (
+        "Use the actual EEF pose and fresh visual evidence to choose a materially "
+        "different checked waypoint or orientation; do not replay the rejected target."
+    )
+    public["feedback_scope"] = "controller_failure_class_without_private_geometry"
+    return public
+
+
 def _response_success(response: JsonDict) -> bool:
     if response.get("success") is False:
         return False
@@ -2199,12 +2413,6 @@ def _collision_coverage_receipt(
         endpoint_checked = explicit_bool("checked")
     trajectory_checked = explicit_bool("trajectory_checked", "path_checked")
     world_checked = explicit_bool("world_checked", "scene_checked")
-    world_count_value = collision.get("world_object_count")
-    world_object_count = (
-        int(world_count_value)
-        if isinstance(world_count_value, int) and not isinstance(world_count_value, bool)
-        else None
-    )
     detected = collision.get("detected") if isinstance(collision.get("detected"), bool) else None
     if trajectory_checked and world_checked:
         status = "trajectory_and_world"
@@ -2236,7 +2444,6 @@ def _collision_coverage_receipt(
         "endpoint_checked": endpoint_checked,
         "trajectory_checked": trajectory_checked,
         "world_checked": world_checked,
-        "world_object_count": world_object_count,
         "collision_detected": detected,
         "interpretation": (
             "No collision was reported, but the remote receipt does not prove full "
@@ -2246,7 +2453,11 @@ def _collision_coverage_receipt(
             if not coverage_complete and detected is not True
             else "Collision coverage is explicit for this request."
             if coverage_complete
-            else "The remote service reported a collision; replan from the named evidence."
+            else (
+                "The host-private safety checker reported a collision. Inspect fresh "
+                "visual evidence and replan from the actual robot pose; simulator "
+                "geometry names and distances are intentionally withheld."
+            )
         ),
     }
 
@@ -2297,14 +2508,6 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
             },
         ]
     if steps == 0 and collision.get("detected") is True:
-        geometry_names = [
-            str(collision.get(key))
-            for key in ("geom1_name", "geom2_name", "attached_object", "obstacle")
-            if collision.get(key)
-        ]
-        minimum_distance = collision.get("minimum_distance_m")
-        boundary = collision.get("constraint_boundary_recovery")
-        boundary = boundary if isinstance(boundary, dict) else {}
         return [
             {
                 "action": "escape_current_collision_boundary",
@@ -2314,13 +2517,14 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
                     "enable_collision_check": True,
                 },
                 "evidence": {
-                    "collision_geometry": geometry_names,
-                    "minimum_distance_m": minimum_distance,
-                    "boundary_recovery_policy": boundary.get("policy"),
+                    "collision_detected": True,
+                    "collision_class": collision.get("collision_class"),
+                    "steps_executed": 0,
+                    "feedback_scope": "host_private_geometry_withheld",
                 },
                 "reason": (
                     "No controller step executed because the current configuration is "
-                    "already on or beyond the named collision boundary. Inspect the "
+                    "already on or beyond a safety boundary. Inspect the "
                     "returned agentview/wrist images, choose a short retreat from "
                     "actual_eef_xyz that increases separation, preview it, and execute "
                     "it with the current orientation and collision checking. The "
@@ -2332,7 +2536,7 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
                 "action": "consume_returned_motion_evidence",
                 "reason": (
                     "The tool already returned a fresh observation, the unchanged actual "
-                    "EEF pose, and named collision geometry. Re-segmenting the same object "
+                    "EEF pose, and a collision verdict. Re-segmenting the same object "
                     "does not move the robot or clear this boundary unless the image shows "
                     "that the object itself moved."
                 ),
@@ -2346,24 +2550,21 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
             },
         ]
     if collision.get("detected") is True:
-        geometry_names = [
-            str(collision.get(key))
-            for key in ("geom1_name", "geom2_name", "attached_object", "obstacle")
-            if collision.get(key)
-        ]
         target = motion.get("target")
         requested_xyz = _motion_xyz(target) if isinstance(target, dict) else None
         return [
             {
-                "action": "classify_named_collision_before_replanning",
+                "action": "classify_collision_visually_before_replanning",
                 "evidence": {
-                    "collision_geometry": geometry_names,
+                    "collision_detected": True,
+                    "collision_class": collision.get("collision_class"),
                     "actual_eef_xyz": actual_xyz,
                     "requested_target_xyz": requested_xyz,
                     "steps_executed": steps,
+                    "feedback_scope": "host_private_geometry_withheld",
                 },
                 "reason": (
-                    "Use the returned agentview/wrist images and named geometry to "
+                    "Use the returned agentview/wrist images to "
                     "distinguish transit clutter from intended target contact. A raised "
                     "transit detour does not repair a bad near-contact corridor or a "
                     "target that moved."
@@ -2477,6 +2678,12 @@ def _attachment_contract_recovery_options() -> list[JsonDict]:
 
 
 def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> str:
+    if _response_reports_remote_episode_terminated(response):
+        return (
+            "Simulator MCP reports that the remote episode is already terminated. "
+            "No controller action was executed; do not retry or replan another "
+            "world-mutating action in this environment."
+        )
     content = response.get("content")
     if isinstance(content, str) and content.strip():
         # Preserve enough semantic feedback for the Agent to diagnose and
@@ -2554,14 +2761,22 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
     response_path = response.get("response_path")
     attachment_receipt = response.get("attachment_proxy_receipt")
     if mcp_tool == "gripper_close" and isinstance(attachment_receipt, dict):
+        actuation_receipt = response.get("gripper_actuation_receipt")
+        actuation_receipt = (
+            actuation_receipt if isinstance(actuation_receipt, dict) else {}
+        )
         status = str(attachment_receipt.get("status") or "unknown")
-        target = str(attachment_receipt.get("target_object_name") or "")
         reason = str(attachment_receipt.get("reason") or "unspecified")
         aperture = attachment_receipt.get("measured_open_fraction")
         facts = [
             "binary close command is latched",
+            (
+                f"stationary_settle_steps={int(actuation_receipt['steps_executed'])}"
+                if isinstance(actuation_receipt.get("steps_executed"), int)
+                and not isinstance(actuation_receipt.get("steps_executed"), bool)
+                else ""
+            ),
             f"attachment_proxy_status={status}",
-            f"target_object={target}" if target else "",
             f"reason={reason}",
             (
                 f"measured_open_fraction={float(aperture):.4f}"
@@ -2602,13 +2817,9 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
     if isinstance(attachment_receipt, dict):
         attachment_status = str(attachment_receipt.get("status") or "unknown")
         attachment_reason = str(attachment_receipt.get("reason") or "unspecified")
-        attachment_target = str(
-            attachment_receipt.get("target_object_name") or ""
-        )
         attachment_note = (
             " Carried-object proxy feedback: "
             f"status={attachment_status}; reason={attachment_reason}; "
-            + (f"target_object={attachment_target}; " if attachment_target else "")
             + "attachment_proven=false. Use fresh dual-view evidence for the "
             "attachment verdict."
         )
@@ -2617,20 +2828,18 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
     if not isinstance(collision, dict) and isinstance(compact_motion, dict):
         collision = compact_motion.get("collision")
     if _collision_rejects_motion(collision):
-        message = str(
-            collision.get("message")
-            or "Simulator collision check stopped motion before the requested target."
-        )
         steps = compact_motion.get("steps_executed") if isinstance(compact_motion, dict) else None
         stop_note = (
             " No controller step executed; choose a checked waypoint that reduces or "
-            "escapes this named collision instead of replaying the motion."
+            "escapes the visually observed contact instead of replaying the motion."
             if steps == 0
             else ""
         )
         suffix = f" Full response saved to {response_path}" if response_path else ""
         return (
-            f"Simulator MCP tool stopped for collision: {message}{stop_note}"
+            "Simulator MCP tool stopped for collision. The host-private checker "
+            "withholds simulator object names, geometry, and exact clearance values; "
+            f"use the fresh dual-view images and actual EEF pose for recovery.{stop_note}"
             f"{attachment_note}{suffix}"
         )
     motion = (
@@ -2677,16 +2886,6 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
             (
                 f"controller_failure={controller_failure.get('code')}"
                 if controller_failure.get("code")
-                else ""
-            ),
-            (
-                f"current_minimum_distance_m={controller_failure.get('current_minimum_distance_m')}"
-                if controller_failure.get("current_minimum_distance_m") is not None
-                else ""
-            ),
-            (
-                f"predicted_minimum_distance_m={controller_failure.get('predicted_minimum_distance_m')}"
-                if controller_failure.get("predicted_minimum_distance_m") is not None
                 else ""
             ),
         ]
@@ -3234,6 +3433,13 @@ def _response_assigned_task(response: JsonDict) -> str:
 
 
 def _brief_response_error(response: JsonDict) -> str:
+    if _response_reports_remote_episode_terminated(response):
+        return str(
+            response.get("error")
+            or response.get("message")
+            or response.get("content")
+            or "Remote simulator episode is terminated."
+        )
     collision = response.get("collision")
     if _collision_rejects_motion(collision):
         return str(collision.get("message") or "Simulator motion collided before reaching target.")
@@ -3344,6 +3550,15 @@ def _move_response_lacks_completion_receipt(response: JsonDict) -> bool:
 
 
 def _response_diagnostics(response: JsonDict) -> list[JsonDict]:
+    if _response_reports_remote_episode_terminated(response):
+        return [
+            {
+                "code": "remote_episode_terminated",
+                "message": _brief_response_error(response),
+                "candidate_rejection": False,
+                "failure_class": "environment_terminal",
+            }
+        ]
     reachability = build_reachability_summary(response)
     if reachability.get("status") == "unreachable":
         return [
@@ -3415,6 +3630,8 @@ def _state_delta_from_response(response: JsonDict) -> JsonDict:
         delta["reward"] = response.get("reward")
     if "terminated" in response:
         delta["terminated"] = response.get("terminated")
+    elif _response_reports_remote_episode_terminated(response):
+        delta["terminated"] = True
     if "truncated" in response:
         delta["truncated"] = response.get("truncated")
     observation = build_observation_summary(response)
@@ -3454,6 +3671,12 @@ def _build_environment_receipt(
     for key in ("reward", "terminated", "truncated", "scene_epoch"):
         if key in response:
             receipt[key] = response.get(key)
+    if _response_reports_remote_episode_terminated(response):
+        # A worker can discover the horizon boundary only when the next action
+        # is attempted.  The explicit remote error is authoritative evidence
+        # that this environment can no longer accept world-mutating actions,
+        # even when the failing response omitted a boolean terminal field.
+        receipt["terminated"] = True
     motion = build_motion_summary(response)
     if motion:
         receipt["motion"] = motion
@@ -3747,6 +3970,26 @@ def _latest_action_termination_reason(action: EnvAction) -> str:
         if any(marker in str(message or "").lower() for marker in markers for message in messages):
             return "remote_episode_terminated"
     return ""
+
+
+def _response_reports_remote_episode_terminated(response: Mapping[str, object]) -> bool:
+    """Recognize a worker response that explicitly reports a terminal episode."""
+
+    markers = (
+        "executing action in terminated episode",
+        "episode is terminated",
+        "episode already terminated",
+    )
+    messages = (
+        response.get("error"),
+        response.get("message"),
+        response.get("content"),
+    )
+    return any(
+        marker in str(message or "").lower()
+        for marker in markers
+        for message in messages
+    )
 
 
 def _extract_xyz(

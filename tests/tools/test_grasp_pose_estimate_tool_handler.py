@@ -119,9 +119,10 @@ def test_tool_spec_exposes_only_backend_neutral_inputs() -> None:
         "scene_epoch",
         "hints",
     }
-    assert "AnyGrasp" in spec.description
-    assert "GraspGenX" in spec.description
-    assert "Contact-GraspNet" not in spec.description
+    backend_description = str(spec.parameters["backend_preference"])
+    assert "anygrasp" in backend_description
+    assert "graspgenx" in backend_description
+    assert "contact" not in backend_description.lower()
 
 
 def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
@@ -163,10 +164,26 @@ def test_falls_back_and_normalizes_backend_provenance(tmp_path: Path) -> None:
     ]
     assert candidates[0]["source_tool"] == "grasp_pose_estimate"
     assert candidates[0]["source_backend"] == "graspgenx"
+    assert candidates[0]["execution_reference_point"] == "translation_xyz"
+    assert candidates[0]["execution_contact_center_xyz"] == [0.1, 0.2, 0.3]
     assert result.details["source"]["scene_epoch"] == 4
     assert result.details["source"]["camera_frame_id"] == "agentview"
     assert result.details["target_mask_quality"]["area_fraction"] == 0.008
     assert result.details["source"]["target_mask_quality"]["status"] == "usable"
+
+
+def test_calibration_can_explicitly_select_gripper_tip_reference(tmp_path: Path) -> None:
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["execution_reference_point"] = "gripper_tip_position_xyz"
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": lambda _context: _success(_candidate("grasp-0", score=0.9))},
+        backend_order=("anygrasp",),
+    )(_context(parameters))
+
+    assert result.success is True
+    candidate = result.details["grasp_candidates"][0]
+    assert candidate["execution_reference_point"] == "gripper_tip_position_xyz"
+    assert candidate["execution_contact_center_xyz"] == [0.13, 0.2, 0.3]
 
 
 def test_graspgenx_receives_depth_cutoff_factor_from_unified_hints(
@@ -188,6 +205,26 @@ def test_graspgenx_receives_depth_cutoff_factor_from_unified_hints(
     assert result.success is True
     assert calls[0]["depth_cutoff_factor"] == 1.25
     assert calls[0]["intrinsics"] == INTRINSICS
+
+
+def test_graspgenx_prefers_packet_owned_up_direction_hint(tmp_path: Path) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def graspgenx(context: ToolExecutionContext) -> ToolResult:
+        calls.append(dict(context.parameters))
+        return _success(_candidate("graspgenx-native-0", score=0.8))
+
+    parameters = _parameters(tmp_path)
+    parameters["hints"]["up_direction_camera"] = [0.0, -1.0, 0.0]
+    result = build_grasp_pose_estimate_handler(
+        {"graspgenx": graspgenx},
+        backend_order=("graspgenx",),
+        graspgenx_gripper_name="franka_panda",
+        graspgenx_up_direction_camera=(0.0, 0.0, -1.0),
+    )(_context(parameters))
+
+    assert result.success is True
+    assert calls[0]["up_direction_camera"] == [0.0, -1.0, 0.0]
 
 
 def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> None:
@@ -247,6 +284,68 @@ def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> Non
     assert "must still choose" in result.content
 
 
+def test_advisor_abstention_is_prominent_in_tool_feedback(tmp_path: Path) -> None:
+    parameters = _parameters(tmp_path)
+    Image.new("RGB", (16, 16), (50, 60, 70)).save(parameters["rgb"])
+    Image.new("I;16", (16, 16), 500).save(parameters["depth"])
+    Image.new("L", (16, 16), 255).save(parameters["object_mask"]["mask_ref"])
+
+    class Advisor:
+        def advise(self, selection_bundle, *, task):
+            return {
+                "schema_version": "openeta.grasp_selection_advice.v1",
+                "status": "completed",
+                "decision": "abstain",
+                "recommended_candidate_id": "",
+                "alternatives": [],
+                "confidence": 0.4,
+                "reasons": ["all contacts lie on the tapered top shoulder"],
+                "rejected": {},
+                "uncertainties": [],
+                "bundle_id": selection_bundle["bundle_id"],
+                "advisor_role": "read_only_grasp_pose_advisor",
+            }
+
+    result = build_grasp_pose_estimate_handler(
+        {
+            "anygrasp": lambda _context: _success(
+                _candidate("one", score=0.8),
+                _candidate("two", score=0.7),
+            )
+        },
+        backend_order=("anygrasp",),
+        advisor=Advisor(),
+        selection_output_root=tmp_path / "selection",
+    )(_context(parameters))
+
+    assert result.success is True
+    assert "advisor abstained" in result.content
+    assert "all contacts lie on the tapered top shoulder" in result.content
+    assert "Do not silently choose rank 0" in result.content
+
+
+def test_estimator_surfaces_compatible_strategy_without_applying_it(tmp_path: Path) -> None:
+    parameters = _parameters(tmp_path)
+    parameters["target_geometry_family"] = "boxed_item"
+    result = build_grasp_pose_estimate_handler(
+        {"anygrasp": lambda _context: _success(_candidate("one", score=0.8))},
+        backend_order=("anygrasp",),
+        grasp_strategy_root=Path(__file__).parents[2] / "agent" / "strategies" / "grasp",
+        grasp_calibration_id="graspnet-eef-panda-p8",
+    )(_context(parameters))
+
+    assert result.success is True
+    options = result.details["explicit_grasp_strategy_options"]
+    assert options[0]["strategy_id"] == "top-down-vertical-panda-p8"
+    assert options[0]["activation"] == "explicit_agent_choice_required"
+    assert "evidence_summary" not in options[0]
+    assert "milk" not in result.content.lower()
+    assert "None was applied" in result.content
+    assert "compare the raw recommendation" in result.content
+    assert "Task-specific rollout provenance" in result.content
+    assert result.details["grasp_candidates"][0].get("strategy_id") is None
+
+
 def test_host_excluded_backend_is_skipped(tmp_path: Path) -> None:
     calls: list[str] = []
 
@@ -294,6 +393,9 @@ def test_agent_backend_preference_reorders_facade_and_keeps_fallback(
     assert result.success is True
     assert calls == ["graspgenx", "anygrasp"]
     assert result.details["selected_backend"] == "anygrasp"
+    candidate = result.details["grasp_candidates"][0]
+    assert candidate["execution_reference_point"] == "translation_xyz"
+    assert candidate["execution_contact_center_xyz"] == [0.1, 0.2, 0.3]
     assert result.details["backend_policy"] == {
         "schema_version": "openeta.grasp_backend_policy.v1",
         "agent_control_scope": "attempt_order_only",

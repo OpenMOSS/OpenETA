@@ -75,13 +75,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         clearance = [object_start[0], object_start[1], object_start[2] + 0.19]
         precontact = [object_start[0], object_start[1], object_start[2] + 0.105]
         contact = [
-            object_start[0],
-            object_start[1],
+            object_start[0] + args.contact_x_offset_m,
+            object_start[1] + args.contact_y_offset_m,
             object_start[2] + args.contact_z_offset_m,
         ]
         lift = [contact[0], contact[1], contact[2] + args.lift_distance_m]
 
         opened = transport.call_tool("gripper_open", common, timeout_s=args.timeout_s)
+
+        explicit_orientation = all(
+            value is not None for value in (args.roll, args.pitch, args.yaw)
+        )
+        if any(value is not None for value in (args.roll, args.pitch, args.yaw)) and not (
+            explicit_orientation
+        ):
+            raise ValueError("--roll, --pitch, and --yaw must be supplied together")
+
+        def orientation_parameters() -> dict[str, Any]:
+            if not explicit_orientation:
+                return {"preserve_current_orientation": True}
+            return {
+                "roll": args.roll,
+                "pitch": args.pitch,
+                "yaw": args.yaw,
+                "preserve_current_orientation": False,
+                "orientation_tolerance_rad": args.orientation_tolerance_rad,
+            }
 
         def preview(xyz: list[float]) -> dict[str, Any]:
             return transport.call_tool(
@@ -91,7 +110,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "x": xyz[0],
                     "y": xyz[1],
                     "z": xyz[2],
-                    "preserve_current_orientation": True,
+                    **orientation_parameters(),
                     "position_tolerance_m": args.tolerance_m,
                     "check_endpoint_collision": False,
                 },
@@ -111,7 +130,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "num_steps": args.max_steps,
                 "tolerance": args.tolerance_m,
                 "enable_collision_check": True,
+                **orientation_parameters(),
             }
+            if explicit_orientation:
+                payload["ori_tolerance"] = args.orientation_tolerance_rad
             if authorization is not None:
                 payload["contact_authorization"] = authorization
             return transport.call_tool("move_to", payload, timeout_s=args.timeout_s)
@@ -263,6 +285,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "contact": contact,
                 "lift": lift,
             },
+            "orientation": {
+                "policy": (
+                    "explicit_rpy" if explicit_orientation else "preserve_current"
+                ),
+                "roll_pitch_yaw": (
+                    [args.roll, args.pitch, args.yaw]
+                    if explicit_orientation
+                    else None
+                ),
+            },
             "create": _summary(created),
             "previews": {name: _summary(value) for name, value in previews.items()},
             "motions": {
@@ -312,7 +344,13 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument("--target-category", default="salad_dressing")
     parser.add_argument("--image-size", type=int, default=256)
+    parser.add_argument("--contact-x-offset-m", type=float, default=0.0)
+    parser.add_argument("--contact-y-offset-m", type=float, default=0.0)
     parser.add_argument("--contact-z-offset-m", type=float, default=0.02)
+    parser.add_argument("--roll", type=float)
+    parser.add_argument("--pitch", type=float)
+    parser.add_argument("--yaw", type=float)
+    parser.add_argument("--orientation-tolerance-rad", type=float, default=0.1)
     parser.add_argument("--lift-distance-m", type=float, default=0.12)
     parser.add_argument("--tolerance-m", type=float, default=0.004)
     parser.add_argument("--max-steps", type=int, default=80)

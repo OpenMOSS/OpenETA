@@ -117,6 +117,29 @@ def test_camera_pose_to_world_preserves_resolved_placement_identity() -> None:
             "trajectory_and_attached_object_collision_check",
             "fresh_attachment_and_receptacle_visual_evidence",
         ],
+        "agent_release_options": [
+            {
+                "mode": "controlled_descent",
+                "when": (
+                    "fresh geometry supports a collision-clear vertical corridor "
+                    "to an Agent-chosen release endpoint"
+                ),
+            },
+            {
+                "mode": "gravity_assisted_open_container_drop",
+                "when": (
+                    "the receptacle is visibly open, the held non-fragile object "
+                    "fits the opening with useful margin, and rim-safe descent is "
+                    "less certain than a bounded stationary drop"
+                ),
+                "constraints": (
+                    "Agent chooses and exact-IK-checks a centred raised endpoint, "
+                    "requires successful collision-checked arrival plus fresh "
+                    "attachment/receptacle evidence, stops lateral motion before "
+                    "release, and keeps drop height visually bounded"
+                ),
+            },
+        ],
         "unreachable_reference_recovery": (
             "Use IK residuals and fresh visual evidence to propose a distinct safe "
             "world-frame waypoint; do not treat this low reference as a direct "
@@ -124,6 +147,7 @@ def test_camera_pose_to_world_preserves_resolved_placement_identity() -> None:
         ),
     }
     assert "not motion authorization" in result.content
+    assert "bounded stationary raised drop" in result.content
 
 
 def test_camera_pose_to_world_transforms_sim_pos_mat_row_major_opengl_payload() -> None:

@@ -109,10 +109,22 @@ def load_grasp_calibration_capabilities(
         ) from exc
     if not math.isfinite(max_width) or not 0.0 < max_width <= 0.2:
         raise ValueError("grasp calibration max_gripper_width_m must be in (0, 0.2]")
+    execution_reference_point = str(
+        payload.get("execution_reference_point") or "translation_xyz"
+    )
+    if execution_reference_point not in {
+        "translation_xyz",
+        "gripper_tip_position_xyz",
+    }:
+        raise ValueError(
+            "grasp calibration execution_reference_point must be "
+            "translation_xyz or gripper_tip_position_xyz"
+        )
     return {
         "calibration_id": str(payload.get("calibration_id") or ""),
         "profile_path": str(resolved),
         "max_gripper_width_m": max_width,
+        "execution_reference_point": execution_reference_point,
     }
 
 

@@ -615,6 +615,7 @@ def _conversation_tool_output_projection(tool: str, outputs: JsonDict) -> JsonDi
         "collision_coverage",
         "pose_feedback",
         "attachment_proxy_receipt",
+        "gripper_actuation_receipt",
         "observation_summary",
         "response_path",
         "raw_output_ref",

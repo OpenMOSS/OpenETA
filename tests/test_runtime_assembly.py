@@ -15,12 +15,17 @@ from agent.runtime.parallel import ParallelEpisodeSpec
 from agent.runtime.runtime_assembly import (
     ENVIRONMENT_PLACEHOLDER_TOOLS,
     MAIN_PLANNER_MAX_OUTPUT_TOKENS,
+    VDM_MAX_OUTPUT_TOKENS,
     REMOTE_PLACEHOLDER_TOOLS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
     assemble_runtime,
     resolve_runtime_mcp_endpoints,
 )
+from agent.runtime.reference_localization import (
+    REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS,
+)
+from agent.tools.grasp_pose_advisor import GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS
 from agent.runtime.session_workspace import SessionWorkspace
 from agent.runtime.supervision import SupervisionPolicy
 from agent.tools.sim_mcp import SimulatorMcpToolProxyConfig
@@ -253,7 +258,7 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
         "max_vision_images": 9,
     } in calls
     assert {
-        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_tokens": VDM_MAX_OUTPUT_TOKENS,
         "max_vision_images": 2,
     } in calls
     assert {
@@ -261,6 +266,14 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
         "max_vision_images": 4,
     } in calls
     assert {"max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS} in calls
+    assert REASONING_SUBAGENT_MAX_OUTPUT_TOKENS >= 8192
+    assert GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS >= 8192
+    assert REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS >= 8192
+    assert VDM_MAX_OUTPUT_TOKENS >= 4096
+    assert (
+        assembly.runtime.planner.context_config.reserved_output_tokens
+        == MAIN_PLANNER_MAX_OUTPUT_TOKENS
+    )
     assert assembly.runtime.visual_history.backend is not assembly.runtime.planner.backend
 
 

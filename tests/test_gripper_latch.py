@@ -126,3 +126,54 @@ def test_gripper_action_polarity():
     assert open_[-1] == -1.0
     # only the gripper dim is actuated
     assert close[:-1] == [0.0] * 6
+
+
+def test_gripper_tools_use_distinct_actuation_and_contact_settle_horizons(monkeypatch):
+    meta = {"backend": "libero"}
+    calls = []
+
+    monkeypatch.setattr(s, "_session_envs", {"test": {"h": meta}})
+    monkeypatch.setattr(s, "_touch_session", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        s,
+        "make_gripper_action",
+        lambda *_args, open_gripper, **_kwargs: [-1.0 if open_gripper else 1.0],
+    )
+
+    def fake_step(_meta, action, *, num_steps):
+        calls.append((list(action), num_steps))
+        openness = 1.0 if action[-1] < 0 else 0.35
+        return {
+            "observation": {
+                "robot": {"gripper_state": {"openness": openness}}
+            }
+        }
+
+    monkeypatch.setattr(s, "_proxy_step", fake_step)
+
+    opened = s.gripper_open.__wrapped__(handle="h", session_id="test")
+    closed = s.gripper_close.__wrapped__(handle="h", session_id="test")
+
+    assert calls == [
+        ([-1.0], s._GRIPPER_OPEN_STEPS),
+        ([1.0], s._GRIPPER_CLOSE_STEPS),
+    ]
+    assert opened["gripper_actuation_receipt"] == {
+        "schema_version": "openeta.gripper_actuation_receipt.v1",
+        "command": "open",
+        "command_latched": True,
+        "steps_executed": s._GRIPPER_OPEN_STEPS,
+        "settling_policy": "stationary_position_actuation",
+        "measured_open_fraction": 1.0,
+        "interpretation": (
+            "The binary command remained applied for the reported stationary "
+            "physics horizon. Aperture is contact evidence, not attachment proof."
+        ),
+    }
+    assert closed["gripper_actuation_receipt"]["command"] == "close"
+    assert closed["gripper_actuation_receipt"]["steps_executed"] == 60
+    assert closed["gripper_actuation_receipt"]["settling_policy"] == (
+        "stationary_continuous_position_hold"
+    )
+    assert closed["gripper_actuation_receipt"]["measured_open_fraction"] == 0.35
+    assert meta["_gripper_cmd"] == 1.0

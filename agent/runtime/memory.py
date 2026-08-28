@@ -45,6 +45,7 @@ from agent.tools.grasp_geometry import (
     assess_target_mask_quality,
     rebase_camera_direction,
     rebase_camera_grasp_candidate,
+    world_up_direction_camera,
 )
 
 
@@ -72,14 +73,36 @@ GRASP_PROVENANCE_KEY = "grasp_provenance"
 GRASP_INPUT_BUNDLES_KEY = "grasp_input_bundles"
 WRIST_ALIGNMENT_BUNDLES_KEY = "wrist_alignment_bundles"
 ANYPLACE_INPUT_BUNDLES_KEY = "anyplace_input_bundles"
+PLACEMENT_WORLD_REFERENCE_KEY = "placement_world_reference"
 GRASP_ADJUSTMENT_BUDGET_KEY = "grasp_adjustment_budget"
 TRANSITION_LEDGER_KEY = "transition_ledger"
 TOOL_HEALTH_KEY = "tool_health"
 ACTIVE_ENVIRONMENT_TASK_KEY = "active_environment_task"
 LATEST_COMPILED_CONTACT_EXECUTION_KEY = "latest_compiled_contact_execution"
 LATEST_COMPILED_CLEARANCE_EXECUTION_KEY = "latest_compiled_clearance_execution"
-COMPILED_CONTACT_CLOSE_POSITION_TOLERANCE_M = 0.005
+# Closing is a finger-only action and the Agent receives fresh dual-view evidence
+# after contact motion.  Keep an independent residual envelope, but do not make
+# it tighter than the centimetre-scale execution accuracy of the supported
+# controllers; an overly strict 5 mm veto prevented visually valid closes after
+# otherwise safe contact reaches.
+COMPILED_CONTACT_CLOSE_POSITION_TOLERANCE_M = 0.01
 COMPILED_CONTACT_CLOSE_ORIENTATION_TOLERANCE_RAD = 0.30
+# A clearance point is a geometric route anchor, not the final contact pose.  A
+# controller receipt that misses only inside this envelope can still support a
+# subsequent approach-corridor check; larger misses remain explicit failures.
+COMPILED_CLEARANCE_POSITION_TOLERANCE_M = 0.01
+COMPILED_CLEARANCE_ORIENTATION_TOLERANCE_RAD = 0.30
+# A long contact move must enter along the estimator's approach axis.  This is
+# a geometric safety/evidence invariant, not a grasp-stage requirement: the
+# Agent remains free to choose any number and meaning of preceding waypoints.
+COMPILED_CONTACT_NEAR_FIELD_RADIUS_M = 0.04
+COMPILED_CONTACT_APPROACH_CORRIDOR_RADIUS_M = 0.025
+COMPILED_CONTACT_APPROACH_MIN_COSINE = 0.94
+# Entering the object while the wrist is still making a large rotation can let
+# an open finger or palm push the target away even when the Cartesian approach
+# corridor is correct.  This is a pose-envelope invariant, not a task stage:
+# the Agent remains free to align at any safe waypoint or choose another grasp.
+COMPILED_CONTACT_ENTRY_ORIENTATION_TOLERANCE_RAD = 0.30
 GRASP_REFERENCE_POSITION_TOLERANCE_M = 0.05
 GRASP_REFERENCE_ORIENTATION_TOLERANCE_DEG = 20.0
 GRASP_ADJUSTMENT_STEP_LIMIT_M = 0.02
@@ -111,6 +134,27 @@ INFRASTRUCTURE_FAILURE_CODES = frozenset(
         "service_unavailable",
     }
 )
+
+
+def _paths_have_identical_content(left: object, right: object) -> bool:
+    """Compare immutable local artifacts without trusting packet-id churn."""
+
+    left_value = str(left or "").strip()
+    right_value = str(right or "").strip()
+    if not left_value or not right_value:
+        return False
+    try:
+        left_path = Path(left_value).resolve(strict=True)
+        right_path = Path(right_value).resolve(strict=True)
+        if left_path == right_path:
+            return True
+        if left_path.stat().st_size != right_path.stat().st_size:
+            return False
+        return hashlib.sha256(left_path.read_bytes()).digest() == hashlib.sha256(
+            right_path.read_bytes()
+        ).digest()
+    except OSError:
+        return False
 
 
 class MemoryStore(Protocol):
@@ -722,8 +766,14 @@ class AgentMemory:
         grasp_provenance_updated = self._capture_grasp_provenance(action)
         grasp_input_bundle_updated = self._refresh_grasp_input_bundle()
         wrist_alignment_bundle_updated = self._refresh_wrist_alignment_bundle()
-        anyplace_bundle_updated = self._refresh_anyplace_input_bundle()
+        # Freeze an AnyPlace result against the exact bundle that authorized
+        # the completed call before deriving any newer host bundle.  Refreshing
+        # first can advance active_bundle_id and make a valid result look
+        # unrelated to its own request, leaving the artifact on disk but absent
+        # from the session resolver index.
         anyplace_bundle_materialized = self._capture_anyplace_bundle_materialization(action)
+        anyplace_bundle_updated = self._refresh_anyplace_input_bundle()
+        placement_reference_updated = self._capture_placement_world_reference(action)
         grasp_adjustment_budget_updated = self._capture_grasp_adjustment_budget(action)
         ik_preview_updated = self._capture_ik_preview_receipt(action)
         world_mutated = self._record_world_mutation(action)
@@ -750,6 +800,7 @@ class AgentMemory:
             or wrist_alignment_bundle_updated
             or anyplace_bundle_updated
             or anyplace_bundle_materialized
+            or placement_reference_updated
             or grasp_adjustment_budget_updated
             or ik_preview_updated
             or clearance_execution_updated
@@ -1127,10 +1178,10 @@ class AgentMemory:
         """Reject a silent packet refresh inside active same-view recovery.
 
         Packet ids can advance on read-only turns even when the physical camera
-        view is unchanged.  A SAM3 no-detection handoff nevertheless binds the
-        exact immutable pixels on which point grounding is supposed to operate.
-        Using another camera remains Agent-owned; reusing the same camera with a
-        different packet must be explicit rather than silently losing provenance.
+        view is unchanged.  A SAM3 no-detection handoff binds immutable pixels,
+        not the spelling of one packet id: a later same-camera packet is valid
+        when its RGB bytes are identical.  Changed pixels still require the exact
+        handoff packet (or an Agent-owned switch to another camera).
         """
 
         no_detection = self.sam3_no_detection()
@@ -1169,6 +1220,14 @@ class AgentMemory:
             for source in same_frame
         ):
             return None
+        expected_rgb = str(
+            source_observation.get("rgb") or no_detection.get("source_image") or ""
+        ).strip()
+        if expected_rgb and any(
+            _paths_have_identical_content(expected_rgb, source.get("rgb"))
+            for source in same_frame
+        ):
+            return None
         supplied = sorted(
             {
                 str(source.get("packet_id") or "")
@@ -1180,7 +1239,8 @@ class AgentMemory:
             "Same-view point grounding must include the exact SAM3 no-detection "
             f"source packet {expected_packet!r} for camera {expected_frame!r}; "
             f"received same-camera packet(s) {supplied!r}. Copy the immutable "
-            "handoff id instead of substituting the newest read-only packet."
+            "handoff id instead of substituting a packet whose pixels changed. "
+            "A byte-identical read-only packet refresh is accepted automatically."
         )
 
     def _store_sam3_no_detection(
@@ -1961,6 +2021,9 @@ class AgentMemory:
     def attachment_evidence(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(ATTACHMENT_EVIDENCE_KEY))
 
+    def placement_world_reference(self) -> JsonDict | None:
+        return _memory_fact_value(self.facts.get(PLACEMENT_WORLD_REFERENCE_KEY))
+
     def motion_reconciliation(self) -> JsonDict | None:
         return _memory_fact_value(self.facts.get(MOTION_RECONCILIATION_KEY))
 
@@ -2024,6 +2087,73 @@ class AgentMemory:
             "compiled_grasp_id": compiled_id,
             "waypoint_role": requested_role,
             "parameters": {"target_pose": dict(pose)},
+        }
+
+    def resolve_compiled_grasp_path_sample_reference(
+        self,
+        *,
+        compiled_grasp_id: str,
+        path_fraction: float,
+    ) -> JsonDict:
+        """Resolve an Agent-chosen sample on a compiled clearance-contact line.
+
+        This is deterministic geometry expansion, not a task phase: the Agent
+        decides whether samples are useful, how many to request, and their
+        fractions. Every returned pose still requires an independent IK preview.
+        """
+
+        compiled_id = str(compiled_grasp_id or "").strip()
+        if not compiled_id:
+            raise ValueError("compiled_grasp_id is required")
+        if isinstance(path_fraction, bool) or not isinstance(path_fraction, int | float):
+            raise ValueError("path_fraction must be a finite number strictly between 0 and 1")
+        fraction = float(path_fraction)
+        if not math.isfinite(fraction) or not 0.0 < fraction < 1.0:
+            raise ValueError("path_fraction must be a finite number strictly between 0 and 1")
+        compiled = self._compiled_grasp_artifact(compiled_id)
+        if not isinstance(compiled, dict):
+            raise ValueError(f"compiled grasp {compiled_id!r} does not exist")
+        artifact_epoch = _optional_int(compiled.get("scene_epoch"), default=-1)
+        if artifact_epoch != self.object_scene_epoch():
+            raise ValueError(
+                f"compiled grasp {compiled_id!r} belongs to object_scene_epoch "
+                f"{artifact_epoch}, current={self.object_scene_epoch()}"
+            )
+        clearance = _compiled_grasp_reference_pose(compiled, role="clearance")
+        contact = _compiled_grasp_reference_pose(compiled, role="contact")
+        if not isinstance(clearance, dict) or not isinstance(contact, dict):
+            raise ValueError(
+                f"compiled grasp {compiled_id!r} lacks clearance/contact endpoints"
+            )
+        clearance_xyz = clearance.get("xyz")
+        contact_xyz = contact.get("xyz")
+        if not _finite_xyz(clearance_xyz) or not _finite_xyz(contact_xyz):
+            raise ValueError(
+                f"compiled grasp {compiled_id!r} has non-finite path endpoints"
+            )
+        pose = dict(contact)
+        pose.update(
+            {
+                "xyz": [
+                    round(
+                        float(clearance_xyz[index])
+                        + fraction
+                        * (float(contact_xyz[index]) - float(clearance_xyz[index])),
+                        12,
+                    )
+                    for index in range(3)
+                ],
+                "waypoint_role": "grasp_path_sample",
+                "path_fraction": fraction,
+                "segment_start_role": "grasp_clearance",
+                "segment_end_role": "grasp_contact",
+            }
+        )
+        return {
+            "schema_version": "openeta.compiled_grasp_path_sample_resolution.v1",
+            "compiled_grasp_id": compiled_id,
+            "path_fraction": fraction,
+            "parameters": {"target_pose": pose},
         }
 
     def resolve_attachment_probe_waypoint(
@@ -2483,6 +2613,11 @@ class AgentMemory:
             ("target_identity_anchor", TARGET_IDENTITY_ANCHOR_KEY, "identity_anchor"),
             ("gripper_command", GRIPPER_COMMAND_STATE_KEY, "commanded_state"),
             ("attachment_verdict", ATTACHMENT_EVIDENCE_KEY, "verifier_result"),
+            (
+                "placement_world_reference",
+                PLACEMENT_WORLD_REFERENCE_KEY,
+                "tool_geometry_reference",
+            ),
             ("motion_reconciliation", MOTION_RECONCILIATION_KEY, "safety_constraint"),
             ("ik_preview_receipts", IK_PREVIEW_RECEIPTS_KEY, "safety_evidence"),
             ("environment_receipt", "latest_environment_receipt", "trusted_receipt"),
@@ -2650,12 +2785,33 @@ class AgentMemory:
     ) -> str | None:
         """Protect contact/close provenance without imposing a task phase."""
 
+        release_error = self._failed_attached_motion_release_gate_error(
+            tool_name=tool_name,
+            parameters=parameters,
+        )
+        if release_error:
+            return release_error
+
         clearance_error = self._compiled_contact_clearance_gate_error(
             tool_name=tool_name,
             parameters=parameters,
         )
         if clearance_error:
             return clearance_error
+
+        approach_error = self._compiled_contact_approach_gate_error(
+            tool_name=tool_name,
+            parameters=parameters,
+        )
+        if approach_error:
+            return approach_error
+
+        orientation_error = self._compiled_contact_orientation_gate_error(
+            tool_name=tool_name,
+            parameters=parameters,
+        )
+        if orientation_error:
+            return orientation_error
 
         adjustment_error = self._compiled_grasp_adjustment_gate_error(
             tool_name=tool_name,
@@ -2775,6 +2931,16 @@ class AgentMemory:
             return None
         if receipt.get("reached_target") is True:
             return None
+        position_error = receipt.get("position_error_m")
+        orientation_error = receipt.get("orientation_error_rad")
+        if (
+            _finite_number(position_error)
+            and _finite_number(orientation_error)
+            and float(position_error) <= COMPILED_CLEARANCE_POSITION_TOLERANCE_M
+            and float(orientation_error)
+            <= COMPILED_CLEARANCE_ORIENTATION_TOLERANCE_RAD
+        ):
+            return None
         return (
             "compiled_clearance_not_reached: contact motion was rejected because "
             f"the current clearance execution for {compiled_id!r} explicitly reports "
@@ -2783,12 +2949,168 @@ class AgentMemory:
             f"actual_eef_xyz={receipt.get('actual_xyz')!r}, "
             f"position_error_m={receipt.get('position_error_m')!r}, "
             f"orientation_error_rad={receipt.get('orientation_error_rad')!r}. "
+            "The clearance residual acceptance envelope is "
+            f"position<={COMPILED_CLEARANCE_POSITION_TOLERANCE_M:.3f}m and "
+            f"orientation<={COMPILED_CLEARANCE_ORIENTATION_TOLERANCE_RAD:.2f}rad. "
             "A failed execution receipt cannot serve as a successful prerequisite. "
             "Inspect the fresh agentview/wrist images and this receipt, then adjust "
             "the waypoint/orientation, choose another candidate, or deliberately "
             "replan from the measured EEF pose. Clearance is not a mandatory task "
             "stage; this rejection only preserves the causal meaning of the "
             "Agent-chosen failed waypoint."
+        )
+
+    def _compiled_contact_approach_gate_error(
+        self,
+        *,
+        tool_name: str,
+        parameters: JsonDict,
+    ) -> str | None:
+        """Reject a long, cross-axis sweep into a compiled contact anchor.
+
+        Endpoint IK and collision checks cannot establish that the final motion
+        enters an object between the fingers. A controller can reach the exact
+        contact xyz while the palm or one finger first pushes the object away.
+        For motions already inside the near-field radius, Agent-authored visual
+        corrections remain unrestricted by this check. Longer motions only need
+        to start inside a tube behind the contact pose along the compiled approach
+        vector; no semantic waypoint or task phase is required.
+        """
+
+        if tool_name != "move_to":
+            return None
+        target_pose = parameters.get("target_pose")
+        if (
+            not isinstance(target_pose, dict)
+            or _compiled_grasp_pose_role(target_pose) != "contact"
+        ):
+            return None
+        compiled_id = str(target_pose.get("compiled_grasp_id") or "")
+        compiled = self._compiled_grasp_artifact(compiled_id)
+        if not compiled_id or not isinstance(compiled, dict):
+            return None
+        current_xyz = self._latest_observed_eef_xyz()
+        target_xyz = target_pose.get("xyz")
+        approach = compiled.get("approach_world_xyz")
+        if (
+            not _finite_xyz(current_xyz)
+            or not _finite_xyz(target_xyz)
+            or not _finite_xyz(approach)
+        ):
+            return None
+
+        direction = [float(value) for value in approach[:3]]
+        direction_norm = math.sqrt(sum(value * value for value in direction))
+        if direction_norm <= 1e-9:
+            return None
+        direction = [value / direction_norm for value in direction]
+        delta = [
+            float(target_xyz[index]) - float(current_xyz[index]) for index in range(3)
+        ]
+        travel = math.sqrt(sum(value * value for value in delta))
+        if travel <= COMPILED_CONTACT_NEAR_FIELD_RADIUS_M:
+            return None
+        axial = sum(delta[index] * direction[index] for index in range(3))
+        lateral = math.sqrt(max(0.0, travel * travel - axial * axial))
+        cosine = axial / travel if travel > 1e-9 else 1.0
+        if (
+            axial > 0.0
+            and lateral <= COMPILED_CONTACT_APPROACH_CORRIDOR_RADIUS_M
+            and cosine >= COMPILED_CONTACT_APPROACH_MIN_COSINE
+        ):
+            return None
+
+        hover_pose = compiled.get("hover_pose")
+        hover_xyz = hover_pose.get("xyz") if isinstance(hover_pose, dict) else None
+        return (
+            "compiled_contact_approach_misaligned: the long final contact motion was "
+            "rejected because endpoint reachability and collision clearance do not "
+            "prove safe object-relative entry. "
+            f"current_eef_xyz={_rounded_xyz(current_xyz)}, "
+            f"contact_xyz={_rounded_xyz(target_xyz)}, "
+            f"approach_world_xyz={_rounded_xyz(direction)}, travel_m={travel:.4f}, "
+            f"axial_progress_m={axial:.4f}, lateral_offset_m={lateral:.4f} "
+            f"(limit={COMPILED_CONTACT_APPROACH_CORRIDOR_RADIUS_M:.3f}), "
+            f"direction_cosine={cosine:.4f} "
+            f"(minimum={COMPILED_CONTACT_APPROACH_MIN_COSINE:.2f}). "
+            "Move first to any IK- and collision-checked waypoint inside the approach "
+            "corridor behind the contact pose, observe there, then execute the contact; "
+            f"the compiled clearance reference is {_rounded_xyz(hover_xyz)}. This is a "
+            "geometric corridor contract, not a required hover/descend task stage. "
+            "If the current view invalidates this approach, choose or compile a better "
+            "candidate instead of forcing the endpoint."
+        )
+
+    def _latest_observed_eef_xyz(self) -> list[float] | None:
+        """Read event-derived measured EEF xyz, not host task progress."""
+
+        for event in reversed(self.events):
+            if event.event_type != "observation":
+                continue
+            robot = event.payload.get("robot")
+            eef_pose = robot.get("end_effector_pose") if isinstance(robot, dict) else None
+            xyz = eef_pose.get("xyz") if isinstance(eef_pose, dict) else None
+            if _finite_xyz(xyz):
+                return [float(value) for value in xyz[:3]]
+        return None
+
+    def _compiled_contact_orientation_gate_error(
+        self,
+        *,
+        tool_name: str,
+        parameters: JsonDict,
+    ) -> str | None:
+        """Reject contact entry while a large wrist rotation is still pending.
+
+        The check is purely geometric.  It does not require a named alignment
+        waypoint or remember task progress; it compares the latest measured EEF
+        orientation with the exact contact orientation that the Agent chose.
+        """
+
+        if tool_name != "move_to":
+            return None
+        target_pose = parameters.get("target_pose")
+        if (
+            not isinstance(target_pose, dict)
+            or _compiled_grasp_pose_role(target_pose) != "contact"
+        ):
+            return None
+        current_pose: JsonDict | None = None
+        for event in reversed(self.events):
+            if event.event_type != "observation":
+                continue
+            robot = event.payload.get("robot")
+            eef_pose = (
+                robot.get("end_effector_pose") if isinstance(robot, dict) else None
+            )
+            if isinstance(eef_pose, dict):
+                current_pose = eef_pose
+                break
+        if current_pose is None:
+            return None
+        current_rotation = _ik_orientation_rotation_matrix(current_pose)
+        target_rotation = _ik_orientation_rotation_matrix(target_pose)
+        delta_deg = _rotation_delta_deg(current_rotation, target_rotation)
+        if delta_deg is None:
+            return None
+        delta_rad = math.radians(delta_deg)
+        if delta_rad <= COMPILED_CONTACT_ENTRY_ORIENTATION_TOLERANCE_RAD:
+            return None
+
+        compiled_id = str(target_pose.get("compiled_grasp_id") or "")
+        return (
+            "compiled_contact_orientation_misaligned: contact motion was rejected "
+            "because the gripper would enter the object while a large wrist rotation "
+            "is still pending. "
+            f"compiled_grasp_id={compiled_id!r}, "
+            f"current_eef_quat_xyzw={current_pose.get('quat_xyzw')!r}, "
+            f"orientation_delta_rad={delta_rad:.4f} "
+            f"(limit={COMPILED_CONTACT_ENTRY_ORIENTATION_TOLERANCE_RAD:.2f}). "
+            "At any Agent-chosen collision-clear waypoint outside contact, preview and "
+            "execute the compiled orientation (or another compatible full pose), then "
+            "re-observe and retry contact. If that orientation is infeasible, select a "
+            "different candidate or perform a full wrist-view grasp re-estimate. This "
+            "is an object-entry geometry check, not a required alignment stage."
         )
 
     def _compiled_contact_close_gate_error(
@@ -2898,6 +3220,72 @@ class AgentMemory:
             "Collision diagnostics from the preceding arm motion do not block the "
             "finger-only close command. Inspect the fresh dual-view evidence, then adjust "
             "or re-estimate only when the current EEF contact geometry is inadequate."
+        )
+
+    def _failed_attached_motion_release_gate_error(
+        self,
+        *,
+        tool_name: str,
+        parameters: JsonDict,
+    ) -> str | None:
+        """Do not treat a failed carrying motion as a reached release pose."""
+
+        if tool_name != "gripper_control":
+            return None
+        try:
+            opening = int(parameters.get("position")) == 1
+        except (TypeError, ValueError):
+            return None
+        if not opening:
+            return None
+        commanded = self.gripper_command_state() or {}
+        attachment = self.attachment_evidence() or {}
+        if commanded.get("position") != 0 or attachment.get("verdict") != "PASS":
+            return None
+        latest_motion: JsonDict | None = None
+        for row in reversed(self.transition_ledger()):
+            if row.get("tool") not in {"move_to", "follow_eef_trajectory"}:
+                continue
+            latest_motion = row
+            break
+        if not isinstance(latest_motion, dict) or latest_motion.get("verdict") != "FAIL":
+            return None
+        motion_evidence: JsonDict = {}
+        for event in reversed(self.events):
+            if event.event_type != "action":
+                continue
+            command = event.payload.get("command")
+            request = command.get("request") if isinstance(command, dict) else None
+            if not isinstance(request, dict) or request.get("name") not in {
+                "move_to",
+                "follow_eef_trajectory",
+            }:
+                continue
+            calls = command.get("tool_calls")
+            call = calls[0] if isinstance(calls, list) and calls else None
+            result = call.get("result") if isinstance(call, dict) else None
+            details = result.get("details") if isinstance(result, dict) else None
+            outputs = details.get("outputs") if isinstance(details, dict) else None
+            motion_evidence = dict(outputs) if isinstance(outputs, dict) else {}
+            break
+        motion_summary = motion_evidence.get("motion_summary")
+        motion_summary = motion_summary if isinstance(motion_summary, dict) else {}
+        collision = motion_summary.get("collision")
+        collision = collision if isinstance(collision, dict) else {}
+        pose_feedback = motion_evidence.get("pose_feedback")
+        pose_feedback = pose_feedback if isinstance(pose_feedback, dict) else {}
+        actual_xyz = pose_feedback.get("actual_xyz")
+        return (
+            "attached_release_after_failed_motion: gripper open was rejected because "
+            "independent evidence says the object is attached, while the latest carrying "
+            "motion explicitly failed and did not reach its requested endpoint. "
+            f"motion_tool={latest_motion.get('tool')!r}, "
+            f"motion_verdict={latest_motion.get('verdict')!r}, "
+            f"actual_eef_xyz={actual_xyz!r}, "
+            f"collision_geometry={[collision.get('geom1_name'), collision.get('geom2_name')]!r}. "
+            "Plan and execute a distinct collision-free pose from the actual EEF position "
+            "before releasing; a successful subsequent carrying motion clears this check. "
+            "The Agent remains free to choose the new waypoint and release pose."
         )
 
     def _compiled_grasp_adjustment_gate_error(
@@ -4865,6 +5253,30 @@ class AgentMemory:
                 ) is not True:
                     parameters = None
                 else:
+                    calibration_capabilities = (
+                        self._active_grasp_calibration_capabilities()
+                    )
+                    hints = {
+                        "depth_cutoff_factor": target_depth_cutoff_factor(
+                            depth_path=depth,
+                            mask_path=mask_ref,
+                            intrinsics=intrinsics,
+                        ),
+                        "max_gripper_width_m": float(
+                            calibration_capabilities["max_gripper_width_m"]
+                        ),
+                        "execution_reference_point": str(
+                            calibration_capabilities["execution_reference_point"]
+                        ),
+                    }
+                    source_extrinsics = source.get("extrinsics")
+                    if isinstance(source_extrinsics, dict) and source_extrinsics:
+                        try:
+                            hints["up_direction_camera"] = world_up_direction_camera(
+                                source_extrinsics
+                            )
+                        except GraspGeometryError:
+                            pass
                     parameters = {
                         "mode": "targeted",
                         "source_packet_id": source.get("packet_id")
@@ -4881,19 +5293,13 @@ class AgentMemory:
                         "intrinsics": dict(intrinsics),
                         "camera_frame_id": frame_id,
                         "scene_epoch": selected_epoch,
-                        "hints": {
-                            "depth_cutoff_factor": target_depth_cutoff_factor(
-                                depth_path=depth,
-                                mask_path=mask_ref,
-                                intrinsics=intrinsics,
-                            ),
-                            "max_gripper_width_m": float(
-                                self._active_grasp_calibration_capabilities()[
-                                    "max_gripper_width_m"
-                                ]
-                            ),
-                        },
+                        "hints": hints,
                     }
+                    geometry_family = str(
+                        selected.get("target_geometry_family") or ""
+                    ).strip()
+                    if geometry_family:
+                        parameters["target_geometry_family"] = geometry_family
                 if parameters is not None and selected.get("dense_grasp_retry_required") is True:
                     parameters["hints"]["dense_sampling"] = True
                 if parameters is None:
@@ -4952,6 +5358,9 @@ class AgentMemory:
                         "bundle_id": active_bundle_id,
                         "call_parameters": {"bundle_id": active_bundle_id},
                         "target_evidence_id": target_evidence_id,
+                        "target_geometry_family": selected.get(
+                            "target_geometry_family"
+                        ),
                     }
                 )
         state = {
@@ -5328,6 +5737,39 @@ class AgentMemory:
 
         current_object_epoch = self.object_scene_epoch()
         fixed_sources: list[tuple[JsonDict, JsonDict]] = []
+        # The Agent may choose near-field refinement before it has segmented a
+        # receptacle or materialized AnyPlace.  Compile events retain the full
+        # host-owned provenance off-context, so the earlier same-target fixed
+        # camera can still supply aligned object geometry without prescribing
+        # an action order. Prefer this canonical grasp lineage over a derived
+        # AnyPlace bundle: using the latest bundle as its own rebase source
+        # recursively changed source_bundle_id and therefore the next bundle's
+        # content-addressed identity after every unrelated action.
+        for event in reversed(self.events):
+            if event.event_type != "grasp_provenance_bound":
+                continue
+            historical = event.payload.get("provenance")
+            if (
+                not isinstance(historical, dict)
+                or historical.get("target_identity_anchor_id") != anchor_id
+                or historical.get("object_scene_epoch") != current_object_epoch
+            ):
+                continue
+            target_source = historical.get("source")
+            if not isinstance(target_source, dict):
+                continue
+            fixed_sources.append(
+                (
+                    target_source,
+                    {
+                        "source_bundle_id": None,
+                        "source_grasp_evidence_id": historical.get("evidence_id"),
+                    },
+                )
+            )
+
+        # Retained bundles remain a fallback when no durable fixed-camera grasp
+        # provenance is available (for example, restored legacy sessions).
         for bundle_id, prior in reversed(list(bundles.items())):
             if (
                 not isinstance(prior, dict)
@@ -5355,34 +5797,6 @@ class AgentMemory:
                     {
                         "source_bundle_id": bundle_id,
                         "source_grasp_evidence_id": prior.get("grasp_evidence_id"),
-                    },
-                )
-            )
-
-        # The Agent may choose near-field refinement before it has segmented a
-        # receptacle or materialized AnyPlace.  Compile events retain the full
-        # host-owned provenance off-context, so the earlier same-target fixed
-        # camera can still supply aligned object geometry without prescribing
-        # an action order.
-        for event in reversed(self.events):
-            if event.event_type != "grasp_provenance_bound":
-                continue
-            historical = event.payload.get("provenance")
-            if (
-                not isinstance(historical, dict)
-                or historical.get("target_identity_anchor_id") != anchor_id
-                or historical.get("object_scene_epoch") != current_object_epoch
-            ):
-                continue
-            target_source = historical.get("source")
-            if not isinstance(target_source, dict):
-                continue
-            fixed_sources.append(
-                (
-                    target_source,
-                    {
-                        "source_bundle_id": None,
-                        "source_grasp_evidence_id": historical.get("evidence_id"),
                     },
                 )
             )
@@ -5878,6 +6292,61 @@ class AgentMemory:
         )
         return True
 
+    def _capture_placement_world_reference(self, action: EnvAction) -> bool:
+        """Retain the latest transformed placement pose as compact tool evidence."""
+
+        call = _successful_tool_call(action, "camera_pose_to_world")
+        if call is None:
+            return False
+        outputs = _tool_call_outputs(call)
+        placement = outputs.get("placement_reference")
+        world_pose = outputs.get("world_pose")
+        if (
+            not isinstance(placement, dict)
+            or placement.get("schema_version")
+            != "openeta.placement_world_reference.v1"
+            or not isinstance(world_pose, dict)
+            or not _finite_xyz(world_pose.get("translation_xyz"))
+        ):
+            return False
+        value = {
+            "schema_version": "openeta.placement_world_reference.v1",
+            "semantic_role": placement.get("semantic_role"),
+            "execution_authorized": False,
+            "placement_result_id": outputs.get("placement_result_id"),
+            "candidate_id": outputs.get("candidate_id"),
+            "world_pose": {
+                "frame": "world",
+                "translation_xyz": [
+                    float(component)
+                    for component in world_pose["translation_xyz"][:3]
+                ],
+                **(
+                    {"rotation_matrix": world_pose.get("rotation_matrix")}
+                    if isinstance(world_pose.get("rotation_matrix"), list)
+                    else {}
+                ),
+            },
+            "required_before_motion": placement.get("required_before_motion"),
+            "agent_release_options": placement.get("agent_release_options"),
+            "object_scene_epoch": self.object_scene_epoch(),
+            "updated_at_s": time.time(),
+        }
+        previous = self.placement_world_reference()
+        if isinstance(previous, dict):
+            comparable_previous = dict(previous)
+            comparable_previous.pop("updated_at_s", None)
+            comparable_value = dict(value)
+            comparable_value.pop("updated_at_s", None)
+            if comparable_previous == comparable_value:
+                return False
+        self.facts[PLACEMENT_WORLD_REFERENCE_KEY] = _memory_fact_entry(
+            value,
+            source="camera_pose_to_world",
+        )
+        self.record("placement_world_reference_updated", dict(value))
+        return True
+
     def _capture_ik_preview_receipt(self, action: EnvAction) -> bool:
         call = _pipeline_call(action, "ik_preview_check")
         if not isinstance(call, dict):
@@ -5936,6 +6405,7 @@ class AgentMemory:
         for field_name in (
             "compiled_grasp_id",
             "waypoint_role",
+            "path_fraction",
             "probe_id",
             "waypoint_index",
             "viewpoint_proposal_id",
@@ -6761,6 +7231,7 @@ class AgentMemory:
             "articulated_attachment_probe": self.articulated_attachment_probe(),
             "gripper_command_state": self.gripper_command_state(),
             "attachment_evidence": self.attachment_evidence(),
+            "placement_world_reference": self.placement_world_reference(),
             "motion_reconciliation": self.motion_reconciliation(),
             "ik_preview_receipts": self.ik_preview_receipts(),
             "controller_capabilities": self.controller_capabilities(),
@@ -6796,6 +7267,7 @@ class AgentMemory:
                         ARTICULATED_ATTACHMENT_PROBE_KEY,
                         GRIPPER_COMMAND_STATE_KEY,
                         ATTACHMENT_EVIDENCE_KEY,
+                        PLACEMENT_WORLD_REFERENCE_KEY,
                         MOTION_RECONCILIATION_KEY,
                         IK_PREVIEW_RECEIPTS_KEY,
                         OBSERVED_OBJECT_SCENE_CHANGE_KEY,

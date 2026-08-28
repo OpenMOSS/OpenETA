@@ -133,11 +133,15 @@ SkillApproval = Callable[[str], bool]
 
 MAIN_PLANNER_AUX_IMAGE_RESERVE = 4
 # Strong reasoning models may account hidden reasoning tokens against the
-# OpenAI-compatible completion limit. A 512-token cap can therefore yield an
-# otherwise valid response with no JSON content. This matches the established
-# experiment entry budget while still allowing normal responses to finish early.
-MAIN_PLANNER_MAX_OUTPUT_TOKENS = 4096
-VDM_MAX_OUTPUT_TOKENS = 2048
+# OpenAI-compatible completion limit. Live DeepSeek V4 evidence showed a
+# planner turns consuming entire 4096- and 8192-token budgets as hidden
+# reasoning and returning no JSON content (finish_reason=length). Keep enough
+# headroom for the small structured action after reasoning; normal responses
+# still finish early and are charged only for tokens actually generated.
+MAIN_PLANNER_MAX_OUTPUT_TOKENS = 16384
+# VDM is also an isolated reasoning-capable VLM call.  Its response is compact,
+# but hidden reasoning shares the OpenAI-compatible completion budget.
+VDM_MAX_OUTPUT_TOKENS = 4096
 DEFAULT_PERCEPTION_TOOL_TIMEOUT_S = 120.0
 # MolmoPoint deployments may need roughly three minutes to cold-load their
 # resident model after a service restart.  Keep that recovery budget separate
@@ -388,6 +392,8 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         grasp_pose_advisor_enabled=config.grasp_pose_advisor_enabled,
         timeout_s=config.perception_tool_timeout_s,
         molmopoint_timeout_s=config.molmopoint_tool_timeout_s,
+        grasp_strategy_root=workspace.grasp_strategy_root,
+        grasp_calibration_id=str(staged_profile.get("calibration_id") or ""),
     )
     tool_contract_catalog = build_default_tool_contract_catalog(tools.list())
     config.tool_contract_policy.ensure_valid(tool_contract_catalog)
@@ -406,6 +412,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         context_config=PlannerContextConfig(
             context_window_tokens=config.provider.context_window_tokens,
             token_estimator_model=config.provider.model,
+            reserved_output_tokens=MAIN_PLANNER_MAX_OUTPUT_TOKENS,
             visual_history=config.visual_history,
         ),
         tool_contract_catalog=tool_contract_catalog,
@@ -581,6 +588,8 @@ def bind_runtime_perception_tools(
     grasp_pose_advisor_enabled: bool = True,
     timeout_s: float = DEFAULT_PERCEPTION_TOOL_TIMEOUT_S,
     molmopoint_timeout_s: float = DEFAULT_MOLMOPOINT_TOOL_TIMEOUT_S,
+    grasp_strategy_root: str | Path | None = None,
+    grasp_calibration_id: str = "",
 ) -> DepthPriorPrefetchCoordinator | None:
     if timeout_s <= 0:
         raise ValueError("perception tool timeout must be positive")
@@ -731,6 +740,8 @@ def bind_runtime_perception_tools(
                 grasp_backends,
                 advisor=advisor,
                 selection_output_root=artifact_root / "grasp_selection",
+                grasp_strategy_root=grasp_strategy_root,
+                grasp_calibration_id=grasp_calibration_id,
             ),
             replace=True,
         )

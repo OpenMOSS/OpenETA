@@ -391,10 +391,13 @@ def reset_env(handle: str, *, seed: int | None = None, session_id: str = "") -> 
     meta = _session_envs.get(sid, {}).get(handle)
     if not meta:
         return {"error": f"Unknown: {handle}"}
-    # A reset re-opens the gripper and starts a fresh episode, so drop any
-    # latched gripper command: subsequent motion steps go back to not forcing
-    # the gripper dim until the user explicitly calls gripper_open/close again.
-    meta.pop("_gripper_cmd", None)
+    # A reset starts a fresh episode with the gripper explicitly OPEN.  LIBERO
+    # uses -1 for open and +1 for close; leaving the action dimension at the
+    # neutral value 0 does *not* hold the fingers open and allowed them to drift
+    # closed during ordinary move_to calls before the Agent requested any
+    # gripper action.  Hold OPEN through settling and later arm motions until
+    # gripper_close establishes the opposite latch.
+    meta["_gripper_cmd"] = -1.0
     meta.pop("_attachment_proxy", None)
     reset_obs = _proxy_reset(meta, seed=seed)
     # Let physics settle before returning — objects can spawn hovering /
@@ -988,7 +991,7 @@ def ik_preview_check(
 @_serialized_env_control
 def move_to(handle: str, x: float, y: float, z: float, *,
             roll: float | None = None, pitch: float | None = None, yaw: float | None = None,
-            num_steps: int = 100, tolerance: float = 0.002, ori_tolerance: float = 0.05,
+            num_steps: int = 150, tolerance: float = 0.002, ori_tolerance: float = 0.05,
             session_id: str = "",
             enable_collision_check: bool = True,
             contact_authorization: dict | None = None,
@@ -1011,7 +1014,9 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             If all three are provided, orientation control is enabled.
             Only supported on ``libero`` and ``maniskill`` backends
             (MetaWorld has no rotation control).
-        num_steps: Maximum total steps (default 100).
+        num_steps: Maximum total steps (default 150). The controller stops early
+            when the requested pose tolerance is reached; the larger ceiling
+            accommodates safe, continuously converging full-pose rotations.
         tolerance: Stop when |pos_err| < tolerance on all axes (default 0.002 m
             = 2 mm).  Measured residual at this setting is sub-mm to ~1 mm and
             it converges in ~12-15 steps.  Loosen to ~0.01 for coarse reaches.
@@ -1944,18 +1949,52 @@ def follow_eef_trajectory(
     }
 
 
-# Steps issued per gripper open/close call.  The gripper closes gradually
-# (position control), and the open/closed flag only flips once the fingers
-# pass the halfway detection threshold.  From a fully-open start it takes ~7
-# steps to cross that threshold, so 5 steps left the gripper still reporting
-# "open" — a single close call must fully actuate.  10 gives margin.
-_GRIPPER_STEPS = 10
+# The position-controlled fingers need two different horizons.  Opening only
+# needs enough time to clear the next approach.  Closing also needs stationary
+# physics steps for opposing contacts and object dynamics to settle before the
+# Agent receives its post-close observation.  Ten steps merely crossed the
+# legacy binary threshold and could return while a marginal grasp was still
+# squeezing/slipping.  These horizons match the mature LIBERO adapter used by
+# CaP-X and do not prescribe any task-level action sequence.
+_GRIPPER_OPEN_STEPS = 40
+_GRIPPER_CLOSE_STEPS = 60
+
+
+def _gripper_actuation_receipt(
+    result: dict,
+    *,
+    command: str,
+    steps_executed: int,
+) -> dict:
+    state = _extract_gripper_state_from_result(result)
+    openness = state.get("openness")
+    measured = (
+        float(openness)
+        if isinstance(openness, (int, float)) and not isinstance(openness, bool)
+        else None
+    )
+    return {
+        "schema_version": "openeta.gripper_actuation_receipt.v1",
+        "command": command,
+        "command_latched": True,
+        "steps_executed": steps_executed,
+        "settling_policy": (
+            "stationary_continuous_position_hold"
+            if command == "close"
+            else "stationary_position_actuation"
+        ),
+        "measured_open_fraction": measured,
+        "interpretation": (
+            "The binary command remained applied for the reported stationary "
+            "physics horizon. Aperture is contact evidence, not attachment proof."
+        ),
+    }
 
 
 @_blocking_tool
 @_serialized_env_control
 def gripper_open(handle: str, *, session_id: str = "") -> dict:
-    """Open the gripper (10 steps).
+    """Open the gripper and let the position actuator settle.
 
     Args:
         handle: Environment handle from create_env.
@@ -1977,7 +2016,13 @@ def gripper_open(handle: str, *, session_id: str = "") -> dict:
         act = make_gripper_action(meta, open_gripper=True, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    return _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    result = _proxy_step(meta, act, num_steps=_GRIPPER_OPEN_STEPS)
+    result["gripper_actuation_receipt"] = _gripper_actuation_receipt(
+        result,
+        command="open",
+        steps_executed=_GRIPPER_OPEN_STEPS,
+    )
+    return result
 
 
 @_blocking_tool
@@ -1988,7 +2033,7 @@ def gripper_close(
     session_id: str = "",
     contact_authorization: dict | None = None,
 ) -> dict:
-    """Close the gripper (10 steps).
+    """Close the gripper and settle physical contacts before returning.
 
     Args:
         handle: Environment handle from create_env.
@@ -2039,7 +2084,12 @@ def gripper_close(
         act = make_gripper_action(meta, open_gripper=False, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    result = _proxy_step(meta, act, num_steps=_GRIPPER_STEPS)
+    result = _proxy_step(meta, act, num_steps=_GRIPPER_CLOSE_STEPS)
+    result["gripper_actuation_receipt"] = _gripper_actuation_receipt(
+        result,
+        command="close",
+        steps_executed=_GRIPPER_CLOSE_STEPS,
+    )
     result["attachment_proxy_receipt"] = _arm_attachment_proxy(
         meta,
         result,
@@ -2148,9 +2198,9 @@ def _make_action_for_step(meta: dict, delta_xyz: tuple[float, float, float], bac
     If the user has explicitly latched a gripper command (via gripper_open/close),
     that ±1.0 command is overlaid onto the gripper slot(s) so the fingers keep
     holding their open/closed state throughout the motion instead of relaxing to
-    zero force.  Until the first explicit gripper call (and after every reset)
-    no gripper command is present, so the motion action leaves the gripper
-    slot(s) untouched — matching each backend's plain Cartesian action contract.
+    zero force.  If a caller constructs metadata without a latch, the motion
+    action leaves the gripper slot(s) untouched.  Normal environment resets
+    always establish an explicit OPEN latch before settling.
 
     The gripper slot is backend-specific (RoboCasa slot 6, others the last slot),
     so we reuse the codec's own gripper encoder to place the value rather than

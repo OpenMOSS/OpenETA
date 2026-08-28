@@ -47,6 +47,10 @@ from agent.runtime.token_counting import (
     estimate_text_tokens,
 )
 from agent.tools.handlers import bind_dummy_tool_handlers
+from agent.tools.contracts import (
+    build_default_tool_contract_catalog,
+    project_agent_tool_contract,
+)
 from agent.tools.registry import (
     TOOL_RESULT_SCHEMA_VERSION,
     ToolExecutionContext,
@@ -770,12 +774,16 @@ def test_noop_response_is_not_planner_facing() -> None:
     assert "Unsupported response name" in decision.parameters["validation_errors"][0]
 
 
-def test_default_planner_prompt_uses_first_class_simulator_creation_tool() -> None:
+def test_environment_lifecycle_interface_belongs_to_tool_contract() -> None:
     prompt = _agent_owned_tool_planner_system_prompt()
+    tools = build_default_tool_registry()
+    catalog = build_default_tool_contract_catalog(tools.list())
+    create_tool = project_agent_tool_contract(catalog.get("create_simulator_env"))
+    close_tool = project_agent_tool_contract(catalog.get("close_simulator_env"))
 
-    assert "create_simulator_env" in prompt
-    assert "only environment-creation path" in prompt
-    assert "never invoke create_env or close_env through python_exec or code_policy" in prompt
+    assert "create_simulator_env" not in prompt
+    assert "exclusive_environment_creation_path" in create_tool["semantic_limits"]
+    assert "exclusive_environment_cleanup_path" in close_tool["semantic_limits"]
 
 
 
@@ -1046,9 +1054,9 @@ def test_sam3_point_validation_rejects_molmopoint_fields_then_accepts_xy() -> No
 def test_planner_prompt_explains_molmopoint_to_sam3_point_mapping() -> None:
     prompt = build_default_skill_registry().get("pick").content
 
-    assert "Copy its original-image positive" in prompt
-    assert "points unchanged into SAM3" in prompt
-    assert "do not append category guesses" in prompt
+    assert "point-grounding capability" in prompt
+    assert "original scene" in prompt
+    assert "Do not add category guesses" in prompt
 
 
 def test_anygrasp_validation_rejects_placeholder_mask_and_incomplete_intrinsics() -> None:
@@ -1477,7 +1485,7 @@ def test_agent_visible_tools_use_contract_schema_and_keep_host_only_audit() -> N
     }
     gripper = available["gripper_control"]
     assert context["agent_context"]["available_tools_schema_version"] == (
-        "openeta.agent_tool_contract.v1"
+        "openeta.agent_tool_contract.v2"
     )
     assert gripper["parameters"]["required"] == ["position"]
     assert gripper["parameters"]["properties"]["position"]["enum"] == [
@@ -1519,7 +1527,7 @@ def test_skill_references_are_text_guidance_not_required_tool_macros() -> None:
     assert context["schema_version"] == "openeta.planner_context.v1"
     assert "content" not in pick
     assert "content" in selected_pick
-    assert "Recommended Tool Sequence" in selected_pick["content"]
+    assert "## Grasp estimation and selection" in selected_pick["content"]
     assert "allowed_tools" in pick
     assert "required_tools" not in pick
     assert "safety_checks" not in pick
@@ -1530,7 +1538,8 @@ def test_skill_references_are_text_guidance_not_required_tool_macros() -> None:
         selected_pick["allowed_tools"]
     )
     assert pick["available_allowed_tools"] == []
-    assert "availability receipt" in pick["tool_availability_rule"]
+    assert "tool_availability_rule" not in pick
+    assert "unbound tool" in context["skill_usage"]["tool_availability_rule"]
     assert {skill["name"] for skill in context["skill_references"]} == {
         skill["name"] for skill in context["selected_skill_guidance"]
     }
@@ -1676,7 +1685,7 @@ def test_truncated_skill_guidance_requires_explicit_inspection() -> None:
     assert context["skill_usage"]["inspection_required"] == ["pick"]
 
 
-def test_pick_skill_declares_a_complete_default_context_exception() -> None:
+def test_pick_skill_fits_complete_default_context_without_exception() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick cube")
     observation = _observation()
@@ -1692,7 +1701,7 @@ def test_pick_skill_declares_a_complete_default_context_exception() -> None:
 
     selected = context["selected_skill_guidance"][0]
     assert selected["name"] == "pick"
-    assert selected["content_char_count"] > 8000
+    assert selected["content_char_count"] <= 8000
     assert selected["content_truncated"] is False
     assert context["skill_usage"]["inspection_required"] == []
 
@@ -1876,7 +1885,7 @@ def test_calibration_tools_require_explicit_embodiment_explore_scope() -> None:
     assert allowed.action == "propose_calibration_profile"
 
 
-def test_truncated_current_sim_skill_requires_explicit_inspection() -> None:
+def test_compact_current_sim_skill_needs_no_forced_inspection() -> None:
     memory = AgentMemory()
     memory.start_session(task="请帮我创建一个libero仿真环境")
     observation = _observation()
@@ -1891,8 +1900,8 @@ def test_truncated_current_sim_skill_requires_explicit_inspection() -> None:
 
     selected = context["selected_skill_guidance"][0]
     assert selected["name"] == "sim_mcp"
-    assert selected["content_truncated"] is True
-    assert context["skill_usage"]["inspection_required"] == ["sim_mcp"]
+    assert selected["content_truncated"] is False
+    assert context["skill_usage"]["inspection_required"] == []
 
 
 def test_planner_context_only_exposes_tools_with_executable_handlers() -> None:
@@ -1958,7 +1967,7 @@ def test_planner_rejects_registered_tool_without_handler() -> None:
     ]
 
 
-def test_current_sim_creation_task_inspects_truncated_skill_before_mutation() -> None:
+def test_current_sim_creation_task_can_use_complete_projected_skill() -> None:
     planner = ToolCallingPlanner(
         StaticPlannerBackend(
             {
@@ -1981,12 +1990,10 @@ def test_current_sim_creation_task_inspects_truncated_skill_before_mutation() ->
     )
 
     assert decision.action_type == "tool_call"
-    assert decision.action == "skill_call"
-    assert decision.parameters["skill"] == "sim_mcp"
+    assert decision.action == "create_simulator_env"
+    assert decision.parameters["env_id"] == "openeta/libero_libero_10_task0-v0"
     assert decision.metadata["validation_attempts"] == 1
-    assert "must be inspected" in decision.metadata["validation_attempt_history"][0][
-        "validation_errors"
-    ][0]
+    assert decision.metadata["validation_attempt_history"][0]["validation_errors"] == []
 
 
 def test_planner_context_compacts_previous_action_metadata() -> None:
@@ -2063,25 +2070,18 @@ def test_pick_skill_is_loaded_from_markdown_guidance() -> None:
     pick = skills.get("pick")
 
     assert pick.source == "markdown:skills/pick.md"
-    assert "Call `observe`" in pick.content
-    assert "Normalize the task target" in pick.content
-    assert "Call `sam3`" in pick.content
-    assert "牛奶盒" in pick.content
-    assert "can" in pick.content
-    assert "Do not pass a non-English user phrase directly to `sam3`" in pick.content
-    assert "Stop after `sam3`; dependent batched calls do not pass outputs" in pick.content
-    assert "do not" in pick.content.lower()
-    assert "default to `detections[0]`" in pick.content
-    assert "static post-close image is not evidence" in pick.content.lower()
-    assert "exact task asset name" in pick.content
-    assert "do not append category guesses" in pick.content
-    assert "use the\n`embodiment_explore` skill" in pick.content
-    assert "does not silently recalibrate one" in pick.content
-    assert "grasp candidate list" in pick.content
-    assert "## Near-field Wrist Refinement" in pick.content
-    assert "only lateral contact placement looks wrong" in pick.content
-    assert "does not move, change grasp orientation" in pick.content
-    assert "full wrist-view re-estimation" in pick.content
+    assert "concise English visual phrase" in pick.content
+    assert "Scores rank proposals but do not prove identity" in pick.content
+    assert "## Grasp estimation and selection" in pick.content
+    assert "## Approach and near-field refinement" in pick.content
+    assert "transport stability" in pick.content
+    assert "wrist-view grasp estimate" in pick.content
+    assert "co-motion plus vacancy at the source location" in pick.content
+    assert "live tool contracts exclusively define" in pick.content
+    assert "source_packet_id" not in pick.content
+    assert "bundle_id" not in pick.content
+    assert "ik_receipt_id" not in pick.content
+    assert "LIBERO" not in pick.content
     assert pick.allowed_tools[:7] == (
         "observe",
         "retrieve_asset_reference",
@@ -2092,6 +2092,7 @@ def test_pick_skill_is_loaded_from_markdown_guidance() -> None:
         "grasp_pose_estimate",
     )
     assert "move_to" in pick.allowed_tools
+    assert "follow_eef_trajectory" in pick.allowed_tools
 
 
 def test_builtin_task_skills_are_loaded_from_markdown_guidance() -> None:
@@ -2104,18 +2105,19 @@ def test_builtin_task_skills_are_loaded_from_markdown_guidance() -> None:
         assert skill.version == "v1"
         assert skill.task_patterns
         assert skill.allowed_tools
-        assert "text guidance only" in skill.content
+        assert "guidance" in skill.content.lower()
         assert "executable" in skill.content
+        assert "macro" in skill.content
 
 
-def test_planner_prompt_guards_pick_against_direct_motion_and_localizes_sam3_prompt() -> None:
+def test_pick_skill_keeps_domain_guidance_without_tool_interface_copy() -> None:
     prompt = build_default_skill_registry().get("pick").content
 
-    assert "Normalize the task target to a concise English visual phrase" in prompt
-    assert "Score ranks candidates but does not prove identity" in prompt
-    assert "no host task phase chooses it" in prompt
-    assert "ordinary collision-clearance waypoint" in prompt
-    assert "not an implicit" in prompt
+    assert "concise English visual phrase" in prompt
+    assert "Scores rank proposals but do not prove identity" in prompt
+    assert "host-owned task phases" in prompt
+    assert "ordinary geometric" in prompt
+    assert "live tool contracts exclusively define" in prompt
 
 
 def test_skill_selection_smoke_includes_relevant_markdown_guidance() -> None:
@@ -2145,9 +2147,9 @@ def test_skill_selection_smoke_includes_relevant_markdown_guidance() -> None:
     selected = context["selected_skill_guidance"]
     place = next(skill for skill in selected if skill["name"] == "place")
     assert place["source"] == "markdown:skills/place.md"
-    assert "Recommended Tool Sequence" in place["content"]
-    assert "Never run grasp estimation on the receptacle" in place["content"]
-    assert "Call `gripper_control`" in place["content"]
+    assert "## Plan placement evidence early" in place["content"]
+    assert "Never substitute a grasp pose on the receptacle" in place["content"]
+    assert "Stop lateral motion before release" in place["content"]
     assert "move_to" in place["allowed_tools"]
     assert "anyplace" in place["allowed_tools"]
     assert "content" not in next(

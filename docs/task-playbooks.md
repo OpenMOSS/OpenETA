@@ -6,7 +6,10 @@ replace, these layers:
 
 - `agent/calibrations/`: embodiment and frame calibration.
 - `agent/strategies/grasp/`: geometry-family grasp constraints.
-- `agent/skills/`: reusable task workflows and safety rules.
+- `agent/skills/`: reusable task workflows and domain decision heuristics.
+- `agent/prompts/`: task-agnostic planner and closed-loop invariants.
+- AgentTool contracts: exact request/output, receipt, bundle, validity, and
+  repair semantics.
 - `agent/task_playbooks/`: exact environment, suite, task index, and normalized
   task-text experience.
 
@@ -18,6 +21,11 @@ and any declared calibration ID match. Guidance is a prior: the agent must
 re-observe the current scene and retain segmentation, safety, attachment,
 placement, and official-reward gates. Stored world poses, `move_to` parameters,
 and candidate ranks are rejected by schema validation.
+
+The exact scope is the conjunction of environment ID, suite, task index,
+normalized task-text SHA-256, and any declared calibration ID. A mismatch in
+any one field yields no playbook; similar objects or language never trigger a
+cross-task fallback.
 
 ## Learning Contract
 

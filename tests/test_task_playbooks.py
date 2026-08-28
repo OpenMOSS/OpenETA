@@ -7,7 +7,7 @@ import pytest
 
 from adapter.protocol import EnvObservation, RobotState
 from agent.runtime.memory import AgentMemory
-from agent.runtime.planner import _matched_task_playbook
+from agent.runtime.planner import _matched_task_playbook, build_tool_context
 from agent.runtime.task_playbooks import (
     DEFAULT_TASK_PLAYBOOK_ROOT,
     TaskPlaybookError,
@@ -17,6 +17,8 @@ from agent.runtime.task_playbooks import (
     task_text_sha256,
     validate_task_playbook,
 )
+from agent.runtime.skills import build_default_skill_registry
+from agent.tools.registry import build_default_tool_registry
 
 
 def test_default_playbook_matches_exact_task_and_calibration() -> None:
@@ -64,6 +66,31 @@ def test_playbook_does_not_match_changed_task_or_calibration() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("environment_id", "suite", "task_index"),
+    [
+        ("openeta/libero_libero_object_task1-v0", "libero_object", 0),
+        ("openeta/libero_libero_object_task0-v0", "libero_goal", 0),
+        ("openeta/libero_libero_object_task0-v0", "libero_object", 1),
+    ],
+)
+def test_playbook_never_cross_matches_another_task_scope(
+    environment_id: str,
+    suite: str,
+    task_index: int,
+) -> None:
+    selected = select_task_playbook(
+        load_task_playbooks(),
+        environment_id=environment_id,
+        suite=suite,
+        task_index=task_index,
+        task="pick up the alphabet soup and place it in the basket",
+        calibration_id="graspnet-eef-panda-p8",
+    )
+
+    assert selected is None
+
+
 def test_planner_context_match_uses_workspace_playbook_registry() -> None:
     task = "pick up the alphabet soup and place it in the basket"
     memory = AgentMemory()
@@ -96,6 +123,15 @@ def test_planner_context_match_uses_workspace_playbook_registry() -> None:
 
     assert selected is not None
     assert selected["playbook_id"] == "libero-object-task0-alphabet-soup"
+
+    context = build_tool_context(
+        observation=observation,
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+    projected = context["agent_context"]["task_playbook"]
+    assert projected["playbook_id"] == "libero-object-task0-alphabet-soup"
 
 
 def test_playbook_rejects_executable_world_pose_guidance() -> None:

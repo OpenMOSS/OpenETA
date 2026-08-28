@@ -920,6 +920,7 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
             "target_pose": "object",
             "compiled_grasp_id": "string",
             "waypoint_role": "string",
+            "path_fraction": "number",
             "viewpoint_proposal_id": "string",
             "candidate_id": "string",
             "probe_id": "string",
@@ -940,6 +941,7 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
         "one_of_required": (
             ("target_pose",),
             ("compiled_grasp_id", "waypoint_role"),
+            ("compiled_grasp_id", "path_fraction"),
             ("viewpoint_proposal_id", "candidate_id"),
             ("probe_id", "waypoint_index"),
         ),
@@ -2009,73 +2011,27 @@ def _invalid_decision(errors: list[str]) -> PlannerDecision:
 
 
 def _agent_owned_tool_planner_system_prompt() -> str:
-    """Return the production prompt without host-authored task phases."""
+    """Return the task-agnostic planner role and response contract.
+
+    Closed-loop invariants are appended from ``embodied_closed_loop.md``.
+    Task procedures belong to selected skills/playbooks, while exact request,
+    result, receipt, and bundle semantics belong to the live tool contracts.
+    """
 
     return (
         "You are the OpenETA closed-loop embodied planner. Return exactly one JSON "
         "object with fields kind, name, parameters, and reasoning. Valid kinds are "
         "tool_call and response. For tool_call choose exactly one executable atomic "
         "tool from available_tools; tool_references is only a legacy name index. For "
-        "response use ask_human, talk, "
-        "or task_complete. create_simulator_env is the only environment-creation path; "
-        "never invoke create_env or close_env through python_exec or code_policy. "
+        "response use ask_human, talk, or task_complete. "
         "You own task decomposition, progress assessment, recovery choice, and the next "
         "task action. The host does not provide a task phase or required next action. "
-        "Use decision_state as the compact operational index: it names the current "
-        "observation packet, active host bundles, unresolved hard obligations, last "
-        "action effect, and currently available tools. Query full artifacts or memory "
-        "only when this bounded index is insufficient. Exact current camera intrinsics "
-        "and extrinsics are in decision_state.current_observation_packet.camera_calibrations; "
-        "do not search session files for calibration already present there. "
-        "Use save_memory to maintain concise plans, hypotheses, attempted alternatives, "
-        "and open questions in agent_working_state; revise them when newer evidence "
-        "contradicts them. Do not invent a phase that is absent from observable evidence. "
-        "Inspect current_observation and its labelled current_scene images before using "
-        "memory. Current visual evidence outranks stale world_evidence and summaries. "
-        "Cite evidence ids that support visually grounded reasoning. Treat freshness "
-        "labels literally: object_scene_epoch invalidates object-relative evidence, while "
-        "robot_motion_epoch records EEF/camera motion without by itself invalidating a "
-        "world-frame target pose. stale_scene_epoch is historical, commanded_not_observed is "
-        "not a sensed state, and an acknowledged close command is not proof of attachment. "
-        "Use the recent action/result conversation and recent_transitions observation "
-        "or recovery evidence to connect the last atomic action to the current scene. "
-        "If visual evidence is missing or ambiguous, observe or ask_human instead of "
-        "pretending the state is known. Perform at most one world-mutating tool call, "
-        "then inspect a fresh observation before further control. A transport-unknown "
-        "result requires observing and reconciling the same environment before any new "
-        "world mutation; never resend an uncertain partial motion. "
-        "Skills are editable guidance, not executable macros. If "
-        "skill_usage.inspection_required is non-empty, inspect the named skill with "
-        "skill_call before world mutation. Runtime tool schemas and returned docstrings "
-        "are authoritative over examples. Preserve exact artifact paths, frame ids, "
-        "scene epochs, matrices, mask refs, candidate ids, and tool-result provenance; "
-        "never invent placeholders such as latest_mask. For sam3, copy the short exact "
-        "source_packet_id from observation evidence and let the host resolve local RGB-D "
-        "paths and source_observation; never send an image path to sam3. Resolve "
-        "open_questions.target_selection by visually checking the current original image "
-        "and candidate evidence, then call select_sam3_detection or "
-        "reject_sam3_detections with exact ids. Scores rank proposals but do not prove "
-        "identity. Never use web content as embodied observation. "
-        "Task-domain procedures belong to relevant_skills. Treat those skills as "
-        "inspectable advice, not a host-authored script or mandatory phase machine; adapt "
-        "or reject a suggested step when current evidence supports a better safe action. "
-        "Host-resolved input bundles are immutable convenience handles for aligned tool "
-        "inputs, not instructions to invoke a particular tool. When you choose a bundled "
-        "tool, use its exact bundle_id rather than reconstructing paths, masks, camera "
-        "calibration, scene epochs, or provenance. Tool outputs, semantic outcomes, "
-        "artifact paths, diagnostics, and recovery options are direct evidence: inspect "
-        "them, record useful hypotheses in Agent memory, and do not repeat a call unless "
-        "you can state what input or observation changed. A new observation packet id "
-        "created after a read-only tool is not by itself a semantic change: reuse a "
-        "result whose validity epochs and geometry identity remain unchanged. "
-        "Infrastructure failure is not "
-        "task or candidate failure. If unresolved_obligations.provenance_integrity says "
-        "a compiled grasp was superseded by newer target evidence, safe retreat and "
-        "clearance motion remain available, but re-estimate and compile before contact "
-        "or gripper close. Preserve evidence identity and obey deterministic "
-        "safety, collision, workspace, permission, and supervision checks. "
-        "task_complete is valid only when a trusted same-episode environment receipt or "
-        "official reward establishes success; tool-call success alone is insufficient."
+        "Use the supplied current-state projection as an index and query durable artifacts "
+        "or memory only when it is insufficient. Relevant skills are reusable task-domain "
+        "guidance; an exact-task playbook, when present, is only a prior. Neither is an "
+        "executable macro or host-authored phase machine. Live tool contracts exclusively "
+        "define request fields, structured outputs, opaque references, receipts, bundles, "
+        "and repair payloads."
     )
 
 
@@ -2948,12 +2904,13 @@ def _build_agent_decision_context(
             "compact_summary": working.get("compact_summary", ""),
         },
         "artifacts": artifacts,
+        "task_playbook": runtime_context.get("task_playbook"),
         "relevant_skills": runtime_context.get("selected_skill_guidance", []),
         "skill_usage": runtime_context.get("skill_usage", {}),
         # Full schemas remain in the canonical context once. The provider backend
         # moves this cache-stable block ahead of growing conversation history; the
         # legacy tool_references field stays a name-only compatibility index.
-        "available_tools_schema_version": "openeta.agent_tool_contract.v1",
+        "available_tools_schema_version": "openeta.agent_tool_contract.v2",
         "available_tools": runtime_context.get("tool_references", []),
         "tool_references": [
             {"name": reference.get("name")}
@@ -3809,6 +3766,7 @@ def _project_latest_tool_outputs(tool: str, outputs: JsonDict) -> object:
         "collision_coverage",
         "pose_feedback",
         "attachment_proxy_receipt",
+        "gripper_actuation_receipt",
         "observation_summary",
         "response_path",
         "raw_output_ref",
@@ -4792,7 +4750,6 @@ def _selected_skill_reference(skill: JsonDict) -> JsonDict:
             "allowed_tools",
             "available_allowed_tools",
             "unavailable_allowed_tools",
-            "tool_availability_rule",
             "source",
             "version",
             "editable",
@@ -4830,13 +4787,6 @@ def _annotate_skill_tool_availability(
     skill["unavailable_allowed_tools"] = [
         name for name in declared if name not in executable_tool_names
     ]
-    skill["tool_availability_rule"] = (
-        "allowed_tools is static skill guidance, not an availability receipt. "
-        "Call only tools listed in available_allowed_tools and the current "
-        "tool_references. If a required capability is unavailable, use an "
-        "explicitly documented executable alternative or report the capability "
-        "gap; never retry the unbound tool."
-    )
 
 
 def _selected_skill_guidance(
@@ -4925,6 +4875,11 @@ def _skill_usage_guidance(selected_skill_guidance: list[JsonDict], memory: Agent
         "inspected_skills": sorted(inspected),
         "inspection_recommended": inspection_recommended,
         "inspection_required": inspection_required,
+        "tool_availability_rule": (
+            "A skill's allowed_tools is authoring guidance. Call only its "
+            "available_allowed_tools that also appear in current tool_references; "
+            "report an unavailable capability instead of retrying an unbound tool."
+        ),
         "rule": (
             "If inspection_required is non-empty, call tool_call::skill_call for "
             "the first listed skill before world-mutating control because the "

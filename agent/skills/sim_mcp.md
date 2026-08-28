@@ -24,174 +24,53 @@ allowed_tools:
   - compute_wrist_alignment
   - prepare_attachment_probe
   - camera_pose_to_world
+  - ik_preview_check
   - move_to
   - gripper_control
 ---
 # Simulator MCP
 
-Use this skill as boundary guidance only. Do not treat it as an executable
-macro, schema reference, or source of exact MCP parameter names.
+Use this as simulator-domain guidance, not an executable macro or interface
+reference. Live AgentTool contracts exclusively define parameters, returns,
+semantic limits, receipts, opaque references, and repair payloads.
 
-The simulator boundary is MCP-only. Do not call REST endpoints or raw simulator
-APIs from the agent loop. The planner must choose one atomic `tool_call` at a
-time, inspect the result, and then decide the next tool call.
+## Episode boundary
 
-Use `create_simulator_env` as the only environment-creation operation. It owns
-the simulator MCP `create_env -> reset_env` sequence, default render resolution,
-artifact materialization, and active handle/session synchronization. Do not call
-`create_env` through `python_exec`, raw MCP clients, REST, or `code_policy`.
+- Use the environment lifecycle capabilities once at the episode boundaries.
+  Continue from the initial observation instead of resetting redundantly, and
+  release a planner-created environment when the episode is finished.
+- Use registered atomic capabilities for perception and world mutation. Use
+  Python for analysis and derived artifacts, not as an alternative robot-control
+  path. A missing or incompatible capability is an infrastructure problem to
+  report, not a reason to invent a private interface.
+- Treat live structured results as the current execution evidence. If the remote
+  deployment disagrees with the advertised capability, preserve the physical
+  hypothesis and report the adapter or deployment mismatch.
 
-Use `close_simulator_env` as the only environment-cleanup operation. It closes
-the currently bound handle and clears runtime state atomically. Do not route
-`close_env` through `python_exec` or ask the planner to rediscover the handle.
+## Geometry and control
 
-The MCP server's live catalog, tool docstrings, and input schemas are
-authoritative, but Simulator MCP access is host-owned and exposed to the planner
-only through stable AgentTools. `python_exec` does not expose an MCP client. If
-this skill conflicts with the MCP catalog/docstring/schema, follow the MCP
-documentation and update the corresponding stable AgentTool adapter.
-If a simulator MCP call fails, first inspect the saved error response and the
-relevant MCP catalog/docstring/schema before changing parameters or retrying.
-`remote_capability_missing` means the configured server does not expose the
-required MCP tool. It is not a grasp-candidate rejection: do not retry the
-same action or advance to another grasp candidate. Stop the workflow until a
-compatible simulator MCP deployment is available.
+- Keep frame semantics explicit and use current matching calibration before
+  treating camera-frame geometry as a world reference. Compile normalized grasp
+  candidates through the embodiment geometry layer before robot motion.
+- Check chosen motion geometry, then reason from the actual execution result and
+  fresh observation. Endpoint feasibility alone is not evidence of controller
+  convergence or a clear path.
+- The Agent owns route geometry. Use short observable edges near contact and
+  route around named obstacles when a straight path fails. Do not disable
+  safety checks or replay unchanged geometry without new evidence.
+- Use fresh visual co-motion evidence before treating an object as attached and
+  planning transport around its full extent.
 
-When `observe`, `move_to`, or `gripper_control` has a
-registered handler, call that stable atom tool directly. Do not route those
-operations through `python_exec`; direct atom tools preserve structured
-observation, motion, collision, and memory artifacts for the next planner turn.
+## Operational use
 
-Use `python_exec` as a session-local analysis tool. It can read all files in the
-current Agent session, including complete structured tool outputs, and can write
-derived files only below the session sandbox. It has no Simulator MCP or network
-capability. The restricted coding globals include:
-
-```python
-artifacts.describe()
-artifacts.list_files(pattern="*.json", limit=100)
-artifacts.list_images(limit=20)
-artifacts.read_json(path)
-artifacts.read_text(path, max_chars=200000)
-artifacts.grep_text(path, pattern, max_matches=20)
-```
-
-Set a JSON-serializable `result` variable before the code exits. Use sandboxed
-execution by default. `outside_sandbox` is a general-purpose, separately
-approved host subprocess; it does not receive in-process AgentTool or artifact
-helpers. Do not pass base64 images through planner context. Use materialized
-paths and artifact references instead.
-
-The current simulator MCP camera calibration contract for MuJoCo-backed
-MetaWorld/LIBERO observations is `pos + mat`:
-
-- `pos`: camera position in world coordinates, metres, not relative to the end
-  effector.
-- `mat`: camera-to-world rotation flattened row-major:
-  `[m00, m01, m02, m10, m11, m12, m20, m21, m22]`.
-- Columns are camera-local axes expressed in world coordinates. This payload
-  uses OpenGL-style camera axes: `+X` right, `+Y` up, and the camera looks along
-  local `-Z`, so world look direction is `-col2`.
-- Transform formula: `p_world = mat @ p_cam + pos`.
-
-ManiSkill/SAPIEN camera metadata may use `pos + quat_xyzw` from
-`CameraConfig.pose`; follow the live MCP docstring/schema for the exact fields.
-
-If a non-grasp perception tool returns a camera-frame pose, treat it as OpenCV
-camera frame unless the result says otherwise and use `camera_pose_to_world` with
-the matching current camera calibration. A normalized `grasp_pose_estimate`
-candidate is a stricter case: pass its complete camera-frame candidate to
-`compile_grasp_seed`, which combines the
-camera transform with the staged GraspNet-to-Panda-EEF calibration and, when
-applicable, a session-local task-family strategy. Calibration selection is based
-on environment/robot identity and is not an object-class allowlist. If no strategy
-matches an honestly reported geometry family, compilation preserves the estimator
-orientation and approach under the physical gripper limits. Do not send a normalized
-grasp pose directly to `camera_pose_to_world` or simulator control tools.
-
-Agent-authored simulator targets submitted to `ik_preview_check` must be in the
-world frame. `move_to` accepts the returned `ik_receipt_id`, not a copied
-`target_pose`; the host expands the exact checked pose before calling the MCP
-server.
-
-`reachable` is a kinematic classification, not proof that a local controller will
-converge cleanly. Inspect `execution_seed_quality`, joint margin, and solver search
-summary. When risk is elevated or critical, prefer a different waypoint,
-orientation, or grasp candidate when available; if the motion fails, use the actual
-EEF/controller receipt and do not replay the same target.
-
-For normalized grasps, the Agent owns the execution sequence. It should normally
-use a hover at least 0.15 m opposite world-frame `approach_world_xyz` (not fixed
-world `+Z`) and binary latched close (`gripper_control position=0`). Alignment,
-contact, probe, and attachment verification are separate observed steps, not a
-host-authored required-next-action state machine.
-For portable objects, the Agent proposes a small lift and uses fresh dual-view
-co-motion evidence to decide whether to continue. Articulated handles use
-`prepare_attachment_probe(compiled_grasp_id=...)` to freeze a 5 cm linear or arc
-path; preview every returned frozen waypoint, execute by the resulting receipt id
-or ordered receipt ids, and assess it by `probe_id`. Each edge
-remains one ordinary control call. Compiled poses are anchors. Fresh dual-view
-evidence may justify xyz adjustment; preview that adjusted pose and execute it by
-`ik_receipt_id`, preserving provenance.
-The host caps derived residual changes at 2 cm/call and 10 cm total. Frozen
-attachment-probe paths and gripper parameters remain exact. The 2 cm cap measures
-offset from the compiled anchor, not EEF travel to it: call an exact compiled pose
-directly instead of dividing the approach into 2 cm steps. A separate far transit
-waypoint must omit compiled provenance fields and remain outside contact.
-For goal-directed `move_to`, normally omit `num_steps` so the server can use its
-closed-loop default budget. A small explicit `num_steps` intentionally caps the
-controller early; the raw-action “3-5 steps for visible motion” hint belongs to
-`step_env` and does not promise target attainment. Never advance a manipulation
-edge when the receipt reports `reached_target=false`.
-A close acknowledgement or numeric openness cannot replace post-probe co-motion
-evidence. Close stays latched until binary `position=1`.
-A transport timeout requires observation on the same handle before retry.
-
-Classify failures before retrying:
-
-- Transport timeout means unknown world state: observe and reconcile.
-- Structured `reached_target=false` is motion evidence and may reject the
-  linked candidate.
-- Empty mask or no grasp candidates is a perception/planning outcome and may
-  use the bounded fallback sequence in the active task skill.
-- `model_inference_failed`, OOM, unavailable model, or incompatible deployment
-  is infrastructure failure. Let `grasp_pose_estimate` perform structured
-  backend fallback; do not invoke or retry a concrete estimator directly.
-
-Never convert infrastructure failure into candidate rejection, and never spend
-the episode turn budget repeatedly calling an unchanged failing backend.
-
-When creating a simulator environment, call `create_simulator_env` with an
-explicit `env_id`. It defaults camera renders to 512x512 and seed 0, then resets
-the new handle and returns `initial_observation`. Use that result as the first
-observation frame. If a genuinely new episode is required, use the stable
-environment lifecycle tools to close the current environment and create the
-requested episode; do not bypass them with a raw reset operation.
-
-If the user asks for local execution result image paths, inspect the latest MCP
-tool result or list materialized images:
-
-```python
-images = artifacts.list_images(limit=10)
-result = {
-    "image_count": images["image_count"],
-    "latest_image_path": images["latest_image_path"],
-    "paths": images["paths"],
-}
-```
-
-Do not run package installation commands from `python_exec`. If an import fails,
-report the missing dependency to the user in natural language or switch to an
-already configured dedicated tool/server. Heavy simulator or robotics
-dependencies such as LIBERO, robosuite, torch, or OpenCV should live in their
-own simulator/tool runtime rather than inside the lightweight planner sandbox.
-
-## Cleanup
-
-When a planner-created simulator environment is no longer needed, release it
-with `close_simulator_env`. Remote MCP environments must not be left open waiting
-for TTL cleanup.
+- A remote capability error, model outage, OOM, or incompatible deployment is an
+  infrastructure failure. Preserve the current physical hypothesis and report
+  the missing capability after bounded configured fallback.
+- When execution returns an unknown transport outcome, reconcile the same remote
+  environment before any retry or new mutation.
+- Do not install heavy simulator or robotics dependencies inside the lightweight
+  planner sandbox. They belong in the simulator or dedicated model service.
 
 For explicit robot, controller, sensor, or environment characterization, use
-the `embodiment_explore` skill. Normal simulator tasks consume the active
-validated profile and must not silently recalibrate it.
+the `embodiment_explore` skill. Normal episodes consume the active validated
+profile and do not silently recalibrate it.

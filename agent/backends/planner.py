@@ -325,6 +325,13 @@ OpenAICompatibleTransport = Callable[[str, JsonDict, dict[str, str], float], Jso
 # normal short reviewer responses still stop early.
 REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 8192
 
+# Capacity failures usually outlive the ordinary sub-second retry interval. A
+# provider that reports overload/concurrency exhaustion needs a real cooldown;
+# otherwise all configured attempts are consumed while the same hot backend is
+# still rejecting work. Keep ordinary network/protocol retries responsive and
+# apply this floor only to errors explicitly classified as capacity-related.
+PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S = 15.0
+
 
 @dataclass(slots=True)
 class OpenAICompatiblePlannerBackendConfig:
@@ -715,7 +722,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         provider_role,
                         provider_exchanges,
                     )
-                delay_s = max(0.0, self.config.retry_backoff_s) * (2 ** (attempt - 1))
+                delay_s = _provider_retry_delay_s(
+                    exc,
+                    configured_backoff_s=self.config.retry_backoff_s,
+                    attempt=attempt,
+                )
                 retry_errors.append(
                     {
                         "attempt": attempt,
@@ -1358,6 +1369,22 @@ def _provider_error_reports_capacity(exc: Exception) -> bool:
             "暂时不可用",
         )
     )
+
+
+def _provider_retry_delay_s(
+    exc: Exception,
+    *,
+    configured_backoff_s: float,
+    attempt: int,
+) -> float:
+    """Return exponential retry delay with a capacity-specific cooldown floor."""
+
+    exponent = max(0, int(attempt) - 1)
+    configured_delay_s = max(0.0, float(configured_backoff_s)) * (2**exponent)
+    if not _provider_error_reports_capacity(exc):
+        return configured_delay_s
+    capacity_delay_s = PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S * (2**exponent)
+    return max(configured_delay_s, capacity_delay_s)
 
 
 def _chat_completions_url(api_base: str) -> str:

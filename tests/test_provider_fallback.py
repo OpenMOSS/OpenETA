@@ -8,6 +8,7 @@ from agent.backends.planner import (
     OpenAICompatiblePlannerBackend,
     OpenAICompatiblePlannerBackendConfig,
     PlannerBackendRequest,
+    PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S,
     ProviderHttpError,
     _planner_user_prompt,
 )
@@ -282,6 +283,7 @@ def test_backend_fails_over_after_provider_overload() -> None:
             fallback=_fallback(),
         ),
         transport=overloaded_primary_transport,
+        sleep=lambda _delay_s: None,
     )
 
     result = backend.decide(_request())
@@ -389,6 +391,7 @@ def test_backend_fails_over_for_capacity_error_reported_as_http_500() -> None:
             fallback=_fallback(),
         ),
         transport=capacity_error_transport,
+        sleep=lambda _delay_s: None,
     )
 
     result = backend.decide(_request())
@@ -423,6 +426,7 @@ def test_backend_fails_over_for_temporarily_unavailable_http_500() -> None:
             fallback=_fallback(),
         ),
         transport=unavailable_transport,
+        sleep=lambda _delay_s: None,
     )
 
     result = backend.decide(_request())
@@ -435,6 +439,41 @@ def test_backend_fails_over_for_temporarily_unavailable_http_500() -> None:
     assert result.details["provider_role"] == "fallback"
     assert result.details["provider_failover"] is True
     assert result.details["retry_errors"][0]["next_provider_role"] == "fallback"
+
+
+def test_backend_applies_capacity_cooldown_floor_before_retrying() -> None:
+    delays: list[float] = []
+    calls = 0
+
+    def overloaded_transport(url, body, headers, timeout_s):
+        nonlocal calls
+        del url, body, headers, timeout_s
+        calls += 1
+        if calls < 3:
+            raise ProviderHttpError(500, "model concurrency capacity overloaded")
+        return _success_response()
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="primary-model",
+            api_base="https://primary.example.test",
+            api_key="primary-key",
+            max_attempts=3,
+            retry_backoff_s=0.5,
+            fallback=_fallback(),
+        ),
+        transport=overloaded_transport,
+        sleep=delays.append,
+    )
+
+    result = backend.decide(_request())
+
+    assert result.status.value == "planned"
+    assert delays == [
+        PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S,
+        PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S * 2,
+    ]
+    assert [entry["retry_delay_s"] for entry in result.details["retry_errors"]] == delays
 
 
 def test_backend_retries_and_fails_over_for_incomplete_http_body() -> None:

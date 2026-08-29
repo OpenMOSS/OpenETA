@@ -1285,6 +1285,7 @@ class AgentMemory:
             isinstance(provenance, dict)
             and _fact_epoch_value(provenance.get("object_scene_epoch"))
             == self.object_scene_epoch()
+            and not provenance.get("contact_geometry_invalidated_at_s")
         ):
             candidate = provenance.get("candidate")
             source = provenance.get("source")
@@ -1876,6 +1877,9 @@ class AgentMemory:
                 _fact_epoch_value(grasp.get("object_scene_epoch"))
                 == self.object_scene_epoch()
             )
+            contact_geometry_invalidated = bool(
+                grasp.get("contact_geometry_invalidated_at_s")
+            )
             nodes.append(
                 {
                     "evidence_id": grasp_id,
@@ -1888,12 +1892,16 @@ class AgentMemory:
                     "object_scene_epoch": grasp.get("object_scene_epoch"),
                     "robot_motion_epoch": grasp.get("robot_motion_epoch"),
                     "freshness": (
-                        "superseded_target_evidence"
-                        if target_superseded
+                        "invalidated_contact_geometry"
+                        if contact_geometry_invalidated
                         else (
-                            "current_object_scene"
-                            if object_scene_current
-                            else "stale_object_scene"
+                            "superseded_target_evidence"
+                            if target_superseded
+                            else (
+                                "current_object_scene"
+                                if object_scene_current
+                                else "stale_object_scene"
+                            )
                         )
                     ),
                     **(
@@ -1917,6 +1925,19 @@ class AgentMemory:
                         "recovery": (
                             "use the current grasp_pose_estimate bundle, choose a new "
                             "candidate, and compile it before contact or gripper close"
+                        ),
+                    }
+                )
+            if contact_geometry_invalidated:
+                inconsistencies.append(
+                    {
+                        "code": "compiled_grasp_contact_geometry_invalidated",
+                        "compiled_grasp_id": grasp.get("compiled_grasp_id"),
+                        "grasp_evidence_id": grasp_id,
+                        "invalidated_by": grasp.get("contact_geometry_invalidated_by"),
+                        "recovery": (
+                            "use fresh target evidence, choose a current grasp candidate, "
+                            "and compile new contact geometry before close or probe"
                         ),
                     }
                 )
@@ -3134,6 +3155,15 @@ class AgentMemory:
         compiled_id = str(provenance.get("compiled_grasp_id") or "")
         if not compiled_id:
             return None
+        if provenance.get("contact_geometry_invalidated_at_s"):
+            return (
+                "compiled_contact_geometry_invalidated: gripper close was rejected "
+                f"because active compiled grasp {compiled_id!r} was invalidated by "
+                f"{provenance.get('contact_geometry_invalidated_by')!r}. Re-observe, "
+                "select a current grasp candidate, compile new contact geometry, and "
+                "execute its contact before closing. Identity lineage remains available, "
+                "but released or abandoned contact coordinates are not authorization."
+            )
         receipt = self.latest_compiled_contact_execution()
         if not isinstance(receipt, dict):
             return (
@@ -3528,6 +3558,12 @@ class AgentMemory:
             raise ValueError(
                 f"compiled grasp {compiled_id!r} is not the active grasp provenance"
             )
+        if provenance.get("contact_geometry_invalidated_at_s"):
+            raise ValueError(
+                f"compiled grasp {compiled_id!r} contact geometry was invalidated by "
+                f"{provenance.get('contact_geometry_invalidated_by')!r}; compile a new "
+                "candidate before contact, close, or attachment probing"
+            )
         return {
             "schema_version": "openeta.contact_authorization.v1",
             "compiled_grasp_id": compiled_id,
@@ -3549,6 +3585,8 @@ class AgentMemory:
 
         provenance = _memory_fact_value(self.facts.get(GRASP_PROVENANCE_KEY))
         if not isinstance(provenance, dict):
+            return None
+        if provenance.get("contact_geometry_invalidated_at_s"):
             return None
         active_compiled_id = str(provenance.get("compiled_grasp_id") or "").strip()
         receipt = self.latest_compiled_contact_execution()
@@ -6868,10 +6906,29 @@ class AgentMemory:
         )
         if position is None:
             return False
-        self._set_gripper_command_state(position, source="acknowledged_gripper_command")
+        outputs = _tool_call_outputs(call)
+        proxy_value = outputs.get("attachment_proxy_receipt")
+        proxy = dict(proxy_value) if isinstance(proxy_value, dict) else None
+        previous = self.gripper_command_state() or {}
+        if position == 1 and previous.get("position") == 0:
+            self._invalidate_active_contact_geometry(
+                reason="gripper_reopened_after_close",
+            )
+            self.facts.pop(ATTACHMENT_EVIDENCE_KEY, None)
+        self._set_gripper_command_state(
+            position,
+            source="acknowledged_gripper_command",
+            attachment_proxy_receipt=proxy,
+        )
         return True
 
-    def _set_gripper_command_state(self, position: int, *, source: str) -> None:
+    def _set_gripper_command_state(
+        self,
+        position: int,
+        *,
+        source: str,
+        attachment_proxy_receipt: JsonDict | None = None,
+    ) -> None:
         state = {
             "schema_version": "openeta.gripper_command_state.v1",
             "position": position,
@@ -6880,8 +6937,37 @@ class AgentMemory:
             "scene_epoch": self.scene_epoch(),
             "updated_at_s": time.time(),
         }
+        if position == 0 and isinstance(attachment_proxy_receipt, dict):
+            state["attachment_proxy_receipt"] = dict(attachment_proxy_receipt)
         self.facts[GRIPPER_COMMAND_STATE_KEY] = _memory_fact_entry(state, source=source)
         self.record("gripper_command_state_changed", dict(state))
+
+    def _invalidate_active_contact_geometry(self, *, reason: str) -> bool:
+        provenance = _memory_fact_value(self.facts.get(GRASP_PROVENANCE_KEY))
+        if not isinstance(provenance, dict):
+            return False
+        if provenance.get("contact_geometry_invalidated_at_s"):
+            return False
+        invalidated = dict(provenance)
+        invalidated.update(
+            {
+                "contact_geometry_invalidated_at_s": time.time(),
+                "contact_geometry_invalidated_by": reason,
+            }
+        )
+        self.facts[GRASP_PROVENANCE_KEY] = _memory_fact_entry(
+            invalidated,
+            source="contact_geometry_evidence_invalidation",
+        )
+        self.record(
+            "compiled_grasp_contact_geometry_invalidated",
+            {
+                "compiled_grasp_id": invalidated.get("compiled_grasp_id"),
+                "evidence_id": invalidated.get("evidence_id"),
+                "reason": reason,
+            },
+        )
+        return True
 
     def _capture_articulated_attachment_assessment(self, action: EnvAction) -> bool:
         call = _successful_tool_call(action, "assess_attachment_probe")

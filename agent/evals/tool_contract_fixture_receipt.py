@@ -1573,7 +1573,7 @@ def _assess_attachment_probe_fixture(root: Path) -> JsonDict:
             CameraFrame("agentview", [], role="scene_primary"),
             CameraFrame("wrist", [], role="wrist_primary"),
         ],
-        robot=RobotState(),
+        robot=RobotState(gripper_state={"open": False, "openness": 0.4}),
         metadata={
             "image_artifacts": [
                 {"kind": "rgb", "frame_id": "agentview", "role": "scene_primary", "path": str(after_agent)},
@@ -1595,6 +1595,14 @@ def _assess_attachment_probe_fixture(root: Path) -> JsonDict:
         "supervision_context": {
             "memory": {
                 "scene_epoch": 4,
+                "gripper_command_state": {
+                    "position": 0,
+                    "state": "closed",
+                    "attachment_proxy_receipt": {
+                        "status": "tentative",
+                        "reason": "non_empty_close_with_tentative_safety_proxy",
+                    },
+                },
                 "articulated_attachment_probe": probe,
             }
         },
@@ -1651,7 +1659,8 @@ def _prepare_attachment_probe_fixture(root: Path) -> JsonDict:
             end_effector_pose={
                 "xyz": [0.45, 0.0, 0.25],
                 "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
-            }
+            },
+            gripper_state={"open": False, "openness": 0.4},
         ),
         metadata={
             "step_idx": 0,
@@ -1674,6 +1683,14 @@ def _prepare_attachment_probe_fixture(root: Path) -> JsonDict:
     supervision_context = {
         "memory": {
             "scene_epoch": 3,
+            "gripper_command_state": {
+                "position": 0,
+                "state": "closed",
+                "attachment_proxy_receipt": {
+                    "status": "tentative",
+                    "reason": "non_empty_close_with_tentative_safety_proxy",
+                },
+            },
             "provenance_evidence_graph": {
                 "nodes": [
                     {

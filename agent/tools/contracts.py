@@ -494,11 +494,11 @@ _AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "prepare_attachment_probe": (
         "Validate and freeze one Agent-proposed attachment probe against a current "
-        "compiled grasp."
+        "compiled grasp and a tentative non-empty close receipt."
     ),
     "assess_attachment_probe": (
         "Assess attachment by independently comparing a frozen probe's before/after "
-        "scene and wrist images."
+        "scene and wrist images while measured gripper evidence remains compatible."
     ),
     "move_to": (
         "Move the end effector to the exact host-resolved pose frozen by one current IK receipt."

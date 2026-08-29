@@ -3193,6 +3193,122 @@ def test_contact_authorization_is_resolved_from_active_host_grasp_evidence() -> 
     assert memory.resolve_active_attachment_candidate() == authorization
 
 
+def test_gripper_reopen_invalidates_contact_geometry_but_preserves_identity_lineage() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    compiled_id = "compiled-contact-retired"
+    memory.save_artifact(
+        compiled_id,
+        {
+            "type": "compiled_grasp",
+            "compiled_grasp_id": compiled_id,
+            "scene_epoch": 0,
+            "target_anchor_world_xyz": [0.1, 0.2, 0.12],
+            "contact_pose": {
+                "frame": "world",
+                "xyz": [0.1, 0.2, 0.16],
+                "compiled_grasp_id": compiled_id,
+                "waypoint_role": "grasp_contact",
+            },
+        },
+        source="compile_grasp_seed",
+    )
+    memory.save_fact(
+        GRASP_PROVENANCE_KEY,
+        {
+            "schema_version": "openeta.grasp_provenance.v1",
+            "evidence_id": "grasp:retired",
+            "compiled_grasp_id": compiled_id,
+            "target_evidence_id": "sam3:result:target",
+            "target_identity_anchor_id": "target-anchor-1",
+            "candidate": {"id": "candidate-retired"},
+            "source": {"mode": "targeted"},
+            "object_scene_epoch": 0,
+        },
+        source="host_provenance_bundle_resolver",
+    )
+    memory.save_fact(
+        GRIPPER_COMMAND_STATE_KEY,
+        {"position": 0, "state": "closed", "latched": True},
+        source="test",
+    )
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "gripper_control",
+                    "parameters": {"position": 1},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "gripper_control",
+                        "status": "executed",
+                        "parameters": {"position": 1},
+                        "result": {"success": True, "details": {"outputs": {}}},
+                    }
+                ],
+            },
+        )
+    )
+
+    assert memory.retained_targeted_grasp() is None
+    graph = memory.provenance_evidence_graph()
+    node = next(item for item in graph["nodes"] if item["kind"] == "compiled_targeted_grasp")
+    assert node["freshness"] == "invalidated_contact_geometry"
+    assert node["target_identity_anchor_id"] == "target-anchor-1"
+    assert memory.resolve_active_attachment_candidate() is None
+    with pytest.raises(ValueError, match="contact geometry was invalidated"):
+        memory.resolve_compiled_contact_authorization(
+            {
+                "frame": "world",
+                "xyz": [0.1, 0.2, 0.16],
+                "compiled_grasp_id": compiled_id,
+                "waypoint_role": "grasp_contact",
+            }
+        )
+
+
+def test_gripper_close_state_retains_tentative_proxy_receipt_for_probe_gate() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="pick the cube")
+    receipt = {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "tentative",
+        "reason": "non_empty_close_with_tentative_safety_proxy",
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {
+                    "kind": "tool_call",
+                    "name": "gripper_control",
+                    "parameters": {"position": 0},
+                },
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "gripper_control",
+                        "status": "executed",
+                        "parameters": {"position": 0},
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "outputs": {"attachment_proxy_receipt": receipt}
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    assert memory.gripper_command_state()["attachment_proxy_receipt"] == receipt
+
+
 def test_feasible_full_pose_ik_receipt_resolves_private_execution_seed() -> None:
     memory = AgentMemory()
     memory.start_session(task="reach the target")

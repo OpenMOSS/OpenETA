@@ -29,7 +29,8 @@ def _observation() -> EnvObservation:
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-            }
+            },
+            gripper_state={"open": False, "openness": 0.4},
         ),
         metadata={
             "image_artifacts": [
@@ -78,6 +79,15 @@ def _memory_context(*, freshness: str = "current_object_scene") -> dict:
     return {
         "memory": {
             "scene_epoch": 4,
+            "gripper_command_state": {
+                "position": 0,
+                "state": "closed",
+                "attachment_proxy_receipt": {
+                    "schema_version": "openeta.attachment_proxy_receipt.v1",
+                    "status": "tentative",
+                    "reason": "non_empty_close_with_tentative_safety_proxy",
+                },
+            },
             "provenance_evidence_graph": {
                 "schema_version": "openeta.provenance_evidence_graph.v1",
                 "nodes": [
@@ -262,6 +272,34 @@ def test_prepare_probe_requires_scene_and_wrist_rgb() -> None:
         )
 
 
+def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
+    parameters = {
+        "compiled_grasp_id": "compiled-1",
+        "motion_type": "linear",
+        "direction_world_xyz": [0, 0, 1],
+    }
+    opened = _observation()
+    opened.robot.gripper_state = {"open": True, "openness": 0.998}
+    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
+        prepare_attachment_probe(
+            parameters,
+            observation=opened,
+            supervision_context=_memory_context(),
+        )
+
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"]["attachment_proxy_receipt"] = {
+        "status": "not_armed",
+        "reason": "empty_close_or_no_measurable_contact",
+    }
+    with pytest.raises(AttachmentProbeError, match="tentative non-empty close receipt"):
+        prepare_attachment_probe(
+            parameters,
+            observation=_observation(),
+            supervision_context=memory,
+        )
+
+
 def _assessment_context(probe: dict, observation: EnvObservation) -> ToolExecutionContext:
     memory = _memory_context()["memory"]
     memory["articulated_attachment_probe"] = {**probe, "status": "completed"}
@@ -325,4 +363,19 @@ def test_assessment_rejects_wrong_probe_id_and_missing_after_view() -> None:
         assess_attachment_probe(
             context,
             backend=StaticPlannerBackend({"verdict": "PASS", "reason": "unused"}),
+        )
+
+
+def test_assessment_rejects_visual_pass_when_gripper_is_measured_open() -> None:
+    probe = _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]})
+    after = _observation()
+    after.robot.gripper_state = {"open": True, "openness": 0.998}
+    context = _assessment_context(probe, after)
+
+    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
+        assess_attachment_probe(
+            context,
+            backend=StaticPlannerBackend(
+                {"verdict": "PASS", "reason": "must not override proprioception"}
+            ),
         )

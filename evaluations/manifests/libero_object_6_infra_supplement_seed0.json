@@ -1,0 +1,70 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-0-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task0-v0",
+      "task": "pick up the alphabet soup and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 0, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    },
+    {
+      "episode_id": "libero-object-3-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task3-v0",
+      "task": "pick up the bbq sauce and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 3, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    },
+    {
+      "episode_id": "libero-object-4-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task4-v0",
+      "task": "pick up the ketchup and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 4, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    },
+    {
+      "episode_id": "libero-object-5-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task5-v0",
+      "task": "pick up the tomato sauce and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 5, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    },
+    {
+      "episode_id": "libero-object-7-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task7-v0",
+      "task": "pick up the milk and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 7, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    },
+    {
+      "episode_id": "libero-object-8-pass1-infra-supplement",
+      "env_id": "openeta/libero_libero_object_task8-v0",
+      "task": "pick up the chocolate pudding and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 8, "pass_at_k": 1, "supplements_infrastructure_failure": true}
+    }
+  ]
+}

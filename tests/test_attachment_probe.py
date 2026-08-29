@@ -300,6 +300,24 @@ def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
         )
 
 
+def test_prepare_probe_prefers_continuous_aperture_over_coarse_open_flag() -> None:
+    observation = _observation()
+    observation.robot.gripper_state = {"open": True, "openness": 0.5258}
+
+    result = prepare_attachment_probe(
+        {
+            "compiled_grasp_id": "compiled-1",
+            "motion_type": "linear",
+            "direction_world_xyz": [0, 0, 1],
+        },
+        observation=observation,
+        supervision_context=_memory_context(),
+    )
+
+    assert result["gripper_evidence"]["measured_open"] is True
+    assert result["gripper_evidence"]["measured_openness"] == pytest.approx(0.5258)
+
+
 def _assessment_context(probe: dict, observation: EnvObservation) -> ToolExecutionContext:
     memory = _memory_context()["memory"]
     memory["articulated_attachment_probe"] = {**probe, "status": "completed"}

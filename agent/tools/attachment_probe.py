@@ -458,11 +458,17 @@ def _require_probe_gripper_evidence(
     measured = dict(measured_value) if isinstance(measured_value, Mapping) else {}
     is_open = measured.get("open")
     openness = measured.get("openness")
-    definitely_open = is_open is True or (
+    has_numeric_openness = (
         isinstance(openness, (int, float))
         and not isinstance(openness, bool)
         and math.isfinite(float(openness))
-        and float(openness) >= 0.8
+    )
+    # Continuous aperture is the more informative signal. Some simulator
+    # adapters label a partially obstructed grasp as ``open=True`` even when
+    # the measured aperture is far below fully open. Fall back to the coarse
+    # boolean only when no finite aperture measurement is available.
+    definitely_open = (
+        float(openness) >= 0.8 if has_numeric_openness else is_open is True
     )
     if definitely_open:
         raise AttachmentProbeError(

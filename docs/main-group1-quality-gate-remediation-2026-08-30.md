@@ -69,3 +69,20 @@ review before regenerating authority canaries or promotion decisions.
 
 The next evidence step is a small live probe-rejection canary followed by a new
 fixed-seed Object 10 pass@1 Group 1 quality gate.
+
+## Live aperture-semantics correction
+
+The first remediation run
+`libero-object-10-main-group1-attachment-remediation-20260830-r01` was stopped
+during task 1 and is invalid for aggregate scoring. It exposed a second,
+narrower contract detail: the simulator can report coarse `open=true` while a
+continuous aperture measurement around `0.526` and a tentative close receipt
+show that an object is obstructing closure. The initial remediation incorrectly
+treated the boolean as authoritative and rejected a valid probe.
+
+The corrected verifier uses finite continuous `openness` as the primary
+measurement (`>=0.8` is definitely open) and falls back to the boolean only when
+continuous aperture is absent. The original false-positive case remains
+rejected because it reported `openness≈0.998`. A dedicated regression test now
+covers the mixed `open=true, openness≈0.526` case. After this correction the
+full suite reports 1508 passed and 12 skipped.

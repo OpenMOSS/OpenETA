@@ -595,6 +595,21 @@ _AGENT_TOOL_SEMANTIC_LIMITS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Non-normative annotations for compact planner-visible request schemas.  The
+# canonical ToolContract remains the validation/authority source; these notes
+# make otherwise ambiguous enum direction explicit without changing the
+# reviewed catalog hash.
+_AGENT_TOOL_PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "gripper_control": {
+        "position": (
+            "Required binary command: 0 or false closes the gripper; 1 or true "
+            "opens it. This is a commanded latch state, not a measured aperture "
+            "or fractional opening."
+        ),
+    },
+}
+
+
 def project_agent_tool_contract(contract: ToolContract) -> JsonDict:
     """Project one ToolContract into the compact schema shown to the Agent.
 
@@ -607,10 +622,31 @@ def project_agent_tool_contract(contract: ToolContract) -> JsonDict:
     return {
         "name": contract.name,
         "description": _AGENT_TOOL_DESCRIPTIONS.get(contract.name, contract.description),
-        "parameters": dict(contract.request_schema),
+        "parameters": _project_agent_parameters(contract),
         "returns": _project_agent_returns(contract),
         "semantic_limits": _project_agent_semantic_limits(contract),
     }
+
+
+def _project_agent_parameters(contract: ToolContract) -> JsonDict:
+    """Copy the canonical request schema and add planner-only field notes."""
+
+    projected = dict(contract.request_schema)
+    properties = contract.request_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return projected
+    projected_properties: JsonDict = {
+        str(name): dict(schema) if isinstance(schema, Mapping) else schema
+        for name, schema in properties.items()
+    }
+    for name, description in _AGENT_TOOL_PARAMETER_DESCRIPTIONS.get(
+        contract.name, {}
+    ).items():
+        schema = projected_properties.get(name)
+        if isinstance(schema, dict):
+            schema["description"] = description
+    projected["properties"] = projected_properties
+    return projected
 
 
 def _project_agent_returns(contract: ToolContract) -> JsonDict:

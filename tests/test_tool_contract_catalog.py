@@ -464,6 +464,16 @@ def test_request_conformance_checks_nested_types_bounds_and_extra_fields() -> No
     }
 
 
+def test_agent_projection_preserves_gripper_command_direction() -> None:
+    catalog = build_default_tool_contract_catalog(build_default_tool_registry().list())
+
+    projected = project_agent_tool_contract(catalog.get("gripper_control"))
+
+    position = projected["parameters"]["properties"]["position"]
+    assert "0 or false closes" in position["description"]
+    assert "1 or true opens" in position["description"]
+
+
 def test_request_conformance_checks_exactly_one_request_branch() -> None:
     catalog = build_default_tool_contract_catalog(build_default_tool_registry().list())
     contract = catalog.get("ik_preview_check")
@@ -523,7 +533,10 @@ def test_agent_tool_projection_uses_contract_request_schema() -> None:
         "returns",
         "semantic_limits",
     }
-    assert projection["parameters"] == contract.request_schema
+    parameters_without_annotations = json.loads(json.dumps(projection["parameters"]))
+    parameters_without_annotations["properties"]["position"].pop("description")
+    assert parameters_without_annotations == contract.request_schema
+    assert "description" not in contract.request_schema["properties"]["position"]
     assert projection["parameters"]["required"] == ["position"]
     assert projection["parameters"]["properties"]["position"]["enum"] == [
         0,

@@ -113,6 +113,7 @@ def test_structured_decision_endpoint_serializes_typed_nested_parameters() -> No
             base + "/v1/chat/completions",
             {
                 "model": "human-vlm",
+                "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": "choose a tool"}],
             },
         )
@@ -151,8 +152,8 @@ def test_structured_decision_endpoint_serializes_typed_nested_parameters() -> No
         assert status == 200
         provider_thread.join(timeout=2)
 
-        xml = completion["body"]["choices"][0]["message"]["content"]
-        parsed, errors = _parse_backend_payload(xml)
+        content = completion["body"]["choices"][0]["message"]["content"]
+        parsed, errors = _parse_backend_payload(content)
         assert errors == []
         assert parsed == decision
     finally:

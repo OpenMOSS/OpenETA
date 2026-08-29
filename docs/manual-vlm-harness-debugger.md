@@ -64,8 +64,9 @@ behavior:
   validation errors;
 - extracting `available_tools` and normalizing parameter descriptions;
 - exposing `talk`, `ask_human`, and `task_complete` actions;
-- converting the console's generic structured intent into typed `<decision>`
-  XML.
+- converting the console's generic structured intent into the response format
+  declared by the provider request: compact JSON for the current planner or
+  typed `<decision>` XML for an XML planner.
 
 This repository selects the adapter by default through
 `tools/manual_vlm_config.json`, so the normal command is:
@@ -103,9 +104,11 @@ parameter:
 - **使用默认值** sends the default documented by the tool descriptor.
 
 The browser submits a protocol-neutral intent. It never asks the operator to
-write XML and does not generate XML itself. The OpenETA adapter performs the
-encoding on the server. Isolated JSON planners use the raw response composer
-because their output contracts are role-specific.
+write JSON or XML and does not generate either encoding itself. The OpenETA
+adapter follows the provider request's response contract on the server. Main
+planner requests retain the structured composer in both formats; isolated JSON
+planners use the raw response composer because their output contracts are
+role-specific.
 
 ## Views
 

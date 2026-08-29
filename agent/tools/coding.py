@@ -95,6 +95,33 @@ class PythonExecConfig:
     workspace_root: str | None = None
 
 
+def _compile_agent_code(code: str) -> Any:
+    """Compile agent code, tolerating over-escaped JSON string payloads.
+
+    Some planner providers emit the ``code`` argument with literal ``\\n`` or
+    ``\\t`` two-character sequences instead of real control characters. Only
+    retry with a repaired variant when the verbatim snippet fails to compile,
+    so valid Python string escapes keep their original meaning.
+    """
+
+    try:
+        return compile(code, "<openeta-python-exec>", "exec")
+    except SyntaxError:
+        if "\\n" not in code and "\\t" not in code:
+            raise
+        repaired = (
+            code.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+        )
+        repaired = repaired.rstrip()
+        if repaired.endswith("\\") and not repaired.endswith("\\\\"):
+            repaired = repaired[:-1].rstrip()
+        if repaired == code:
+            raise
+        return compile(repaired, "<openeta-python-exec>", "exec")
+
+
 class PythonExecRuntime:
     """Execute small agent-generated Python snippets with a narrow API surface."""
 
@@ -155,7 +182,7 @@ class PythonExecRuntime:
         stdout = io.StringIO()
         try:
             with redirect_stdout(stdout):
-                exec(compile(code, "<openeta-python-exec>", "exec"), safe_globals, safe_globals)
+                exec(_compile_agent_code(code), safe_globals, safe_globals)
         except Exception as exc:  # noqa: BLE001 - agent feedback must stay structured.
             outputs = {
                 "stdout": stdout.getvalue(),

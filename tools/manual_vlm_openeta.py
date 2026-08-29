@@ -1,7 +1,9 @@
 """Optional OpenETA protocol adapter for :mod:`tools.manual_vlm_proxy`.
 
 This is the only manual-console module that understands OpenETA schemas,
-operator semantics, tool descriptors, or typed decision XML.
+operator semantics, tool descriptors, or typed planner decisions. It follows
+the request's declared response mode so the console works during JSON-to-XML
+planner migrations without coupling the generic proxy to either encoding.
 """
 
 from __future__ import annotations
@@ -668,7 +670,7 @@ class OpenETAProtocolAdapter:
             ]
         )
         response_mode = classification["response_mode"]
-        if response_mode == "json":
+        if response_mode == "json" and classification["type"] != "main_planner":
             composer: JsonObject = {
                 "kind": "raw",
                 "label": "JSON response",
@@ -741,5 +743,8 @@ class OpenETAProtocolAdapter:
                 }
             else:
                 raise ValueError("intent.type must be tool_call or action")
-        content = serialize_decision_xml(decision)
+        if detect_response_mode(body) == "json":
+            content = json.dumps(decision, ensure_ascii=False, separators=(",", ":"))
+        else:
+            content = serialize_decision_xml(decision)
         return EncodedResponse(message={"role": "assistant", "content": content})

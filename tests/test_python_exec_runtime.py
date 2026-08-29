@@ -58,6 +58,25 @@ def test_python_exec_exposes_set_builtin() -> None:
     }
 
 
+def test_python_exec_recovers_over_escaped_newlines() -> None:
+    runtime = PythonExecRuntime()
+
+    code = 'a = 1\\nresult = {"value": a + 2}\\'
+    result = runtime.handler(_context(code))
+
+    assert result.success is True
+    assert result.details["outputs"]["result"] == {"value": 3}
+
+
+def test_python_exec_preserves_intended_string_escapes() -> None:
+    runtime = PythonExecRuntime()
+
+    result = runtime.handler(_context('result = {"text": "l1\\nl2"}'))
+
+    assert result.success is True
+    assert result.details["outputs"]["result"] == {"text": "l1\nl2"}
+
+
 def test_python_exec_materializes_large_structured_result_with_clear_path(
     tmp_path: Path,
 ) -> None:

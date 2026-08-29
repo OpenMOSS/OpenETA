@@ -534,7 +534,11 @@ class ManualVLMHandler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", "Request not found.")
             return
         if tail == "":
-            self._send_json(HTTPStatus.OK, self.server.store.public_detail(request_id) or {})
+            detail = self.server.store.public_detail(request_id)
+            if detail is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", "Request not found.")
+                return
+            self._send_json(HTTPStatus.OK, detail)
         elif tail == "raw":
             self._send_json(HTTPStatus.OK, request.body)
         elif tail.startswith("images/"):

@@ -1,0 +1,45 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-10-pass1-static-reduction-20260828",
+  "description": "Matched-seed pass@1 evaluation over all ten LIBERO Object tasks after reducing duplicated static planner, skill, and tool-contract context.",
+  "episode_manifest": "manifests/libero_object_10_pass1_seed0.json",
+  "variants": [
+    {
+      "variant_id": "static_reduction_current_harness",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "674b27d93713490879dd2afd832c2cae95eb410d"
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260828},
+  "execution": {
+    "concurrency": 2,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 10,
+    "metric": "pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "baseline_run_id": "libero-40-pass1-luna-20260826-r03",
+    "purpose": "measure success, latency, and context-cost impact of static prompt and skill deduplication"
+  }
+}

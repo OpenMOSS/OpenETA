@@ -19,7 +19,7 @@
       "metadata": {
         "planner_model": "gpt-5.6-luna",
         "rollouts_per_task": 1,
-        "code_commit": "c8536e37f0ae82c8f59d6b97b7a57885f6d01e66"
+        "code_commit": "02a3d26eb188e904b1329fbfff88f5b80cf70832"
       }
     }
   ],
@@ -44,7 +44,7 @@
     "supplements_run_id": "libero-object-10-main-group1-20260829-r01",
     "supplemented_task_indices": [0, 3, 4, 5, 7, 8],
     "aggregation_policy": "replace only original infrastructure terminals; retain original valid task outcomes",
-    "feature_group": "python exec fixes, human VLM operator console, and capacity-specific provider retry cooldown",
+    "feature_group": "python exec fixes, human VLM operator console, capacity-specific provider retry cooldown, and explicit planner-visible gripper command direction",
     "provider_capacity_retry_delays_s": [15, 30],
     "simulator_concurrency_policy": "single local LIBERO MCP environment; do not overlap episode handles"
   }

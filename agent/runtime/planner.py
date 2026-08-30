@@ -649,6 +649,12 @@ _XML_STRING_LEAF_NAMES = frozenset(
 # if they do not match the requested ToolContract schema.
 _XML_LIST_ITEM_NAMES = frozenset({"item", "call"})
 
+# Some single-item arrays are naturally emitted as an XML object without an
+# extra ``<item>`` wrapper. Keep this vocabulary deliberately narrow: these
+# are wire-level collection fields whose element object is unambiguous. The
+# downstream ToolContract validator remains the authority for the contents.
+_XML_SINGLE_OBJECT_ARRAY_NAMES = frozenset({"points"})
+
 _XML_TOKEN_PATTERN = re.compile(
     r"<!\[CDATA\[.*?\]\]>|<!--.*?-->|<[^>]+>",
     re.DOTALL,
@@ -783,6 +789,12 @@ def _xml_element_to_value(element: ET.Element) -> object:
     child_tags = {child.tag for child in children}
     if declared == "array" or child_tags & _XML_LIST_ITEM_NAMES:
         return [_xml_element_to_value(child) for child in children]
+    if element.tag in _XML_SINGLE_OBJECT_ARRAY_NAMES:
+        if len(child_tags) == 1 and next(iter(child_tags)) in {"point"}:
+            return [_xml_element_to_value(child) for child in children]
+        return [
+            {child.tag: _xml_element_to_value(child) for child in children}
+        ]
 
     result: JsonDict = {}
     for child in children:
@@ -791,7 +803,14 @@ def _xml_element_to_value(element: ET.Element) -> object:
 
 
 def _coerce_xml_scalar(element: ET.Element) -> object:
-    """Coerce one XML leaf while preserving free text and CDATA verbatim."""
+    """Coerce one XML leaf while preserving free text and CDATA verbatim.
+
+    Explicit XML ``type`` attributes remain authoritative, while the natural
+    scalar spellings ``true``, ``false``, and ``null`` are also inferred. This
+    keeps planner XML equivalent to the former JSON wire format when a model
+    omits a redundant type attribute. Reserved free-text fields are checked
+    first and therefore remain strings even when they contain those words.
+    """
 
     raw = element.text if element.text is not None else ""
     declared = (element.get("type") or "").strip().lower()
@@ -817,6 +836,13 @@ def _coerce_xml_scalar(element: ET.Element) -> object:
     stripped = raw.strip()
     if stripped == "":
         return raw
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
     try:
         return int(stripped)
     except ValueError:

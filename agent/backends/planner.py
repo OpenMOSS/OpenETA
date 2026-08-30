@@ -902,8 +902,10 @@ def _planner_user_prompt(
                 "kind/name/parameters. Repair every item in validation_errors using "
                 "exact values already present in tool_context; do not invent references. "
                 "Return only one XML <decision> element with child elements kind, "
-                "name, parameters, and reasoning. Wrap code or multi-line text in "
-                "CDATA. Do not include markdown."
+                "name, parameters, and reasoning. Use plain true/false/null for "
+                "typed scalars and encode arrays as a container with type=\"array\" "
+                "and <item> children. Wrap code, multi-line text, or text containing "
+                "XML punctuation in CDATA. Do not include markdown."
             )
         )
     else:
@@ -914,7 +916,10 @@ def _planner_user_prompt(
             else (
                 "Choose exactly one next OpenETA action. Return only one XML <decision> "
                 "element with child elements kind, name, parameters, and reasoning. "
-                "Wrap code or multi-line text in CDATA. Do not include markdown."
+                "Use plain true/false/null for typed scalars and encode arrays as a "
+                "container with type=\"array\" and <item> children. Wrap code, "
+                "multi-line text, or text containing XML punctuation in CDATA. Do not "
+                "include markdown."
             )
         )
     payload = {

@@ -108,20 +108,65 @@ def test_sam3_point_array_has_numeric_types_and_string_packet_id() -> None:
     assert payload["parameters"]["source_packet_id"] == "obs:3:agentview"
 
 
-def test_boolean_and_null_require_explicit_types() -> None:
+def test_sam3_single_point_object_is_promoted_to_array() -> None:
+    payload, errors = _parse_backend_payload(
+        "<decision><kind>tool_call</kind><name>sam3</name>"
+        "<reasoning>one point</reasoning><parameters>"
+        "<mode>points</mode><points><x>272</x><y>152</y><label>1</label>"
+        "</points></parameters></decision>"
+    )
+
+    assert errors == []
+    assert payload["parameters"]["points"] == [{"x": 272, "y": 152, "label": 1}]
+
+
+def test_sam3_named_point_children_decode_as_array() -> None:
+    payload, errors = _parse_backend_payload(
+        "<decision><kind>tool_call</kind><name>sam3</name>"
+        "<reasoning>two points</reasoning><parameters><points>"
+        "<point><x>10</x><y>20</y><label>1</label></point>"
+        "<point><x>30</x><y>40</y><label>0</label></point>"
+        "</points></parameters></decision>"
+    )
+
+    assert errors == []
+    assert payload["parameters"]["points"] == [
+        {"x": 10, "y": 20, "label": 1},
+        {"x": 30, "y": 40, "label": 0},
+    ]
+
+
+def test_boolean_and_null_support_explicit_and_natural_scalars() -> None:
     payload, errors = _parse_backend_payload(
         "<decision><kind>tool_call</kind><name>demo_tool</name>"
         "<reasoning>types</reasoning><parameters>"
-        '<flag type="boolean">true</flag><missing type="null"/>'
-        "<label>true</label></parameters></decision>"
+        '<explicit_flag type="boolean">true</explicit_flag>'
+        '<explicit_missing type="null"/><flag>true</flag>'
+        '<disabled>false</disabled><missing>null</missing>'
+        "</parameters></decision>"
     )
 
     assert errors == []
     assert payload["parameters"] == {
+        "explicit_flag": True,
+        "explicit_missing": None,
         "flag": True,
         "missing": None,
-        "label": "true",
+        "disabled": False,
     }
+
+
+def test_reserved_text_fields_do_not_infer_boolean_or_null() -> None:
+    payload, errors = _parse_backend_payload(
+        "<decision><kind>response</kind><name>talk</name>"
+        "<reasoning>false</reasoning><parameters>"
+        "<message>null</message><prompt>true</prompt>"
+        "</parameters></decision>"
+    )
+
+    assert errors == []
+    assert payload["reasoning"] == "false"
+    assert payload["parameters"] == {"message": "null", "prompt": "true"}
 
 
 def test_tool_batch_calls_decode_as_list() -> None:

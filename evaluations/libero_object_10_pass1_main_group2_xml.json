@@ -19,13 +19,14 @@
       "metadata": {
         "planner_model": "gpt-5.6-luna",
         "rollouts_per_task": 1,
-        "code_commit": "1bcbe3729b7cef99c9bcbadfb7e70856413d67dd",
+        "code_commit": "f1af1424306bd5631d6ec7d0b68195720119025f",
         "integration_invariants": [
           "main planner emits strict XML decisions",
           "isolated sub-agents retain JSON response contracts",
           "cache-stable system context precedes growing conversation history",
           "ToolContract request and receipt authority is unchanged",
-          "provider retry, failover, timeout, and token budgets are unchanged"
+          "provider retry, failover, timeout, and token budgets are unchanged",
+          "unambiguous omitted XML list-container end tags are repaired with a recorded host receipt"
         ]
       }
     }

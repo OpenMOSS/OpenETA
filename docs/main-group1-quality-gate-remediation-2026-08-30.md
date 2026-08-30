@@ -86,3 +86,62 @@ continuous aperture is absent. The original false-positive case remains
 rejected because it reported `openness≈0.998`. A dedicated regression test now
 covers the mixed `open=true, openness≈0.526` case. After this correction the
 full suite reports 1508 passed and 12 skipped.
+
+## Completed Group 1 quality gate
+
+The fixed-seed remediation run
+`libero-object-10-main-group1-attachment-remediation-20260830-r02` completed all
+ten jobs on `gpt-5.6-luna` at commit `1fad13f`:
+
+- objective pass@1: **3/10 (30%)**, above the frozen 2/10 baseline;
+- valid outcomes: 10/10, with no infrastructure-invalid jobs or retries;
+- failures: seven `agent_failure` outcomes at the episode layer;
+- provider concurrency: one, 1,707 requests, zero queue timeouts; and
+- wall clock: 31,386.563 seconds.
+
+Task indices 1, 3, and 6 succeeded with official environment reward at 128,
+128, and 101 turns respectively. Tasks 2, 4, 5, 7, 8, and 9 exhausted the
+160-turn budget. Task 0 ended at turn 105 with a valid
+`remote_episode_terminated` agent failure. The successful task 6 recovered from
+an initial failed grasp and completed a second grasp/transport/place branch,
+which is positive evidence that the repair did not introduce a host-maintained
+manipulation-stage machine.
+
+The live run directly exercised the Group 1 Python capability. On Object task
+0 the Agent used `python_exec` to read the immutable grasp-candidate artifact,
+compare the complete candidate bank, and choose a materially different pose.
+The call completed successfully; its 2,838-character stdout was materialized as
+an artifact and returned with an explicit path and preview. This validates the
+large-result handoff rather than merely unit-testing the sandbox.
+
+The attachment repair also behaved as intended across multiple tasks:
+
+- a mixed `open=true, openness≈0.526` tentative close was allowed to proceed to
+  a probe instead of being falsely rejected;
+- deterministic empty-close receipts caused the Agent to reopen and rebuild the
+  grasp branch; and
+- successful probe chains enabled transport and placement on three distinct
+  Object tasks.
+
+## Observed follow-up issues outside the Group 1 regression
+
+Two costly behaviors predate the Group 1 commits and are retained as review
+evidence rather than folded into this migration:
+
+1. `attached_release_after_failed_motion` can retain an earlier PASS attachment
+   after a failed carry motion even when fresh images suggest the object is back
+   on the surface. The gate gives an actionable recovery—execute a distinct
+   successful carrying motion before release—and the Agent used it, but the
+   detour is expensive. `git blame` traces this gate to `aca54cd`, before Group
+   1.
+2. When AnyPlace receives an invalid placement bundle, the repair envelope can
+   point to a `grasp:*` bundle that is valid for `grasp_pose_estimate` but still
+   not a placement-ready AnyPlace input. In task 3 the Agent first fabricated a
+   `grasp-selection:*` id, then retried AnyPlace with the suggested `grasp:*`
+   id, and only later rebuilt a valid placement bundle. The task nevertheless
+   succeeded, but the repair response should eventually identify an acceptable
+   AnyPlace bundle or state exactly which evidence must be regenerated.
+
+Neither issue changes the Group 1 acceptance result or the reviewed canonical
+ToolContract catalog. They remain candidates for a separately reviewed harness
+repair.

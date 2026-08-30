@@ -349,7 +349,16 @@ class OpenAICompatiblePlannerBackendConfig:
     # providers may count hidden reasoning against this same completion budget.
     max_tokens: int = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     context_window_tokens: int | None = None
+    # Structured JSON mode remains useful for isolated reviewers, which keep
+    # their existing JSON contracts. The main embodied planner uses XML.
     use_json_response_format: bool = True
+    # Optional Qwen-style provider switch. None omits the provider-specific
+    # field; isolated roles such as VDM may explicitly disable hidden thinking.
+    enable_thinking: bool | None = None
+    # Some chat templates permit only one leading system message. Collapsing
+    # retains the exact system -> stable context -> summary byte order, so the
+    # cache-stable prefix stays before all growing conversation history.
+    collapse_leading_system_messages: bool = True
     enable_vision: bool = True
     max_vision_images: int = 2
     max_vision_image_bytes: int = 8 * 1024 * 1024
@@ -370,6 +379,12 @@ class OpenAICompatiblePlannerBackendConfig:
             max_attempts=config.max_attempts,
             retry_backoff_s=config.retry_backoff_s,
             context_window_tokens=config.context_window_tokens,
+            enable_thinking=_metadata_optional_bool(metadata, "enable_thinking"),
+            collapse_leading_system_messages=_metadata_bool(
+                metadata,
+                "collapse_leading_system_messages",
+                default=True,
+            ),
             enable_vision=_metadata_bool(metadata, "enable_vision", default=True),
             max_vision_images=_metadata_positive_int(
                 metadata,
@@ -410,6 +425,8 @@ class OpenAICompatiblePlannerBackendConfig:
             "max_tokens": self.max_tokens,
             "context_window_tokens": self.context_window_tokens,
             "use_json_response_format": self.use_json_response_format,
+            "enable_thinking": self.enable_thinking,
+            "collapse_leading_system_messages": self.collapse_leading_system_messages,
             "enable_vision": self.enable_vision,
             "max_vision_images": self.max_vision_images,
             "max_vision_image_bytes": self.max_vision_image_bytes,
@@ -481,26 +498,23 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             self.config,
             prompt_tool_context=prompt_dynamic_context,
         )
-        messages: list[JsonDict] = [
-            {"role": "system", "content": request.system_prompt},
-        ]
+        system_segments: list[str] = [request.system_prompt]
         if stable_context_prompt:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": stable_context_prompt,
-                }
-            )
+            system_segments.append(stable_context_prompt)
         if request.conversation_summary.strip():
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "Earlier OpenETA execution summary from the current session:\n"
-                        + request.conversation_summary.strip()
-                    ),
-                }
+            system_segments.append(
+                "Earlier OpenETA execution summary from the current session:\n"
+                + request.conversation_summary.strip()
             )
+        if self.config.collapse_leading_system_messages:
+            messages: list[JsonDict] = [
+                {"role": "system", "content": "\n\n".join(system_segments)}
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": segment}
+                for segment in system_segments
+            ]
         messages.extend(_validated_conversation_messages(request.conversation_messages))
         messages.append({"role": "user", "content": user_content})
         body: JsonDict = {
@@ -509,8 +523,13 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
-        if self.config.use_json_response_format:
+        isolated_role = request.metadata.get("isolated_context") is True
+        if self.config.use_json_response_format and isolated_role:
             body["response_format"] = {"type": "json_object"}
+        if self.config.enable_thinking is not None:
+            body["chat_template_kwargs"] = {
+                "enable_thinking": self.config.enable_thinking
+            }
 
         (
             response,
@@ -882,8 +901,9 @@ def _planner_user_prompt(
                 "action for the current attempt and do not repeat the same rejected "
                 "kind/name/parameters. Repair every item in validation_errors using "
                 "exact values already present in tool_context; do not invent references. "
-                "Return only JSON with fields: kind, name, parameters, reasoning. Do "
-                "not include markdown."
+                "Return only one XML <decision> element with child elements kind, "
+                "name, parameters, and reasoning. Wrap code or multi-line text in "
+                "CDATA. Do not include markdown."
             )
         )
     else:
@@ -892,8 +912,9 @@ def _planner_user_prompt(
             "JSON object requested by that prompt, without markdown."
             if isolated
             else (
-                "Choose exactly one next OpenETA action. Return only JSON with "
-                "fields: kind, name, parameters, reasoning. Do not include markdown."
+                "Choose exactly one next OpenETA action. Return only one XML <decision> "
+                "element with child elements kind, name, parameters, and reasoning. "
+                "Wrap code or multi-line text in CDATA. Do not include markdown."
             )
         )
     payload = {
@@ -1253,6 +1274,11 @@ def _usage_estimation_body(body: JsonDict) -> JsonDict:
 def _metadata_bool(metadata: JsonDict, key: str, *, default: bool) -> bool:
     value = metadata.get(key)
     return value if isinstance(value, bool) else default
+
+
+def _metadata_optional_bool(metadata: JsonDict, key: str) -> bool | None:
+    value = metadata.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _metadata_positive_int(metadata: JsonDict, key: str, *, default: int) -> int:

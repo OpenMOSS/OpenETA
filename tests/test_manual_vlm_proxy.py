@@ -113,8 +113,13 @@ def test_structured_decision_endpoint_serializes_typed_nested_parameters() -> No
             base + "/v1/chat/completions",
             {
                 "model": "human-vlm",
-                "response_format": {"type": "json_object"},
-                "messages": [{"role": "user", "content": "choose a tool"}],
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Return exactly one XML <decision> element.",
+                    },
+                    {"role": "user", "content": "choose a tool"},
+                ],
             },
         )
         completion.update({"status": status, "body": body})

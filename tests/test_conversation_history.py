@@ -684,6 +684,7 @@ def test_backend_places_cache_stable_context_before_growing_history() -> None:
             api_base="https://api.example.test",
             api_key="secret-key",
             enable_vision=False,
+            collapse_leading_system_messages=False,
         ),
         transport=fake_transport,
     )
@@ -778,6 +779,70 @@ def test_backend_places_cache_stable_context_before_growing_history() -> None:
     assert layout["stable_context_sha256"] == second_result.details["prompt_layout"][
         "stable_context_sha256"
     ]
+    assert "response_format" not in captured["bodies"][0]
+
+
+def test_backend_collapses_leading_system_messages_without_moving_static_prefix() -> None:
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": (
+                            "<decision><kind>response</kind><name>talk</name>"
+                            "<reasoning>ok</reasoning><parameters/></decision>"
+                        )
+                    },
+                }
+            ],
+            "usage": {"total_tokens": 12},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="test-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+            enable_vision=False,
+        ),
+        transport=fake_transport,
+    )
+    backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "current_observation": {"step_idx": 1},
+                "available_tools": [{"name": "move_to"}],
+            },
+            system_prompt="return xml",
+            conversation_summary="Earlier move_to calls completed.",
+            conversation_messages=[
+                {"role": "user", "content": "pick milk"},
+                {"role": "assistant", "content": "<decision/>"},
+            ],
+        )
+    )
+
+    messages = captured["body"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    merged_system = messages[0]["content"]
+    assert merged_system.startswith("return xml")
+    assert "openeta.planner_static_context.v1" in merged_system
+    assert "Earlier move_to calls completed." in merged_system
+    assert merged_system.index("openeta.planner_static_context.v1") < merged_system.index(
+        "Earlier move_to calls completed."
+    )
+    assert "response_format" not in captured["body"]
 
 
 def test_backend_keeps_isolated_context_in_one_user_message() -> None:
@@ -802,6 +867,7 @@ def test_backend_keeps_isolated_context_in_one_user_message() -> None:
             api_base="https://api.example.test",
             api_key="secret-key",
             enable_vision=False,
+            enable_thinking=False,
         ),
         transport=fake_transport,
     )
@@ -823,3 +889,5 @@ def test_backend_keeps_isolated_context_in_one_user_message() -> None:
         {"name": "move_to"}
     ]
     assert result.details["prompt_layout"]["cache_stable_prefix_enabled"] is False
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}

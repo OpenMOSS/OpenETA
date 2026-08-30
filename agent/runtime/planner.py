@@ -7,6 +7,7 @@ import math
 import re
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 from hashlib import sha256
 from abc import ABC, abstractmethod
@@ -617,31 +618,128 @@ def _parse_backend_payload(payload: JsonDict | str) -> tuple[JsonDict, list[str]
         return dict(payload), []
 
     if not isinstance(payload, str):
-        return {}, [f"Planner backend payload must be dict or JSON string, got {type(payload)}."]
+        return {}, [f"Planner backend payload must be dict or XML string, got {type(payload)}."]
 
-    text = _strip_json_code_fence(payload)
+    return _parse_xml_decision(payload)
+
+
+# Leaf element names whose text must remain verbatim. This prevents identifiers
+# and code-like text from being inferred as numbers merely because they happen
+# to contain a numeric-looking value.
+_XML_STRING_LEAF_NAMES = frozenset(
+    {
+        "camera_frame_id",
+        "code",
+        "kind",
+        "message",
+        "name",
+        "prompt",
+        "query",
+        "reasoning",
+        "skill",
+        "source_packet_id",
+        "target_mask",
+        "tool",
+        "url",
+    }
+)
+
+# These child names are the explicit list vocabulary used by the planner wire
+# contract. Other repeated child tags are objects and are rejected downstream
+# if they do not match the requested ToolContract schema.
+_XML_LIST_ITEM_NAMES = frozenset({"item", "call"})
+
+
+def _parse_xml_decision(payload: str) -> tuple[JsonDict, list[str]]:
+    """Parse one main-planner ``<decision>`` into the existing decision shape.
+
+    Host-generated failure payloads remain dictionaries and bypass this parser.
+    Main-model strings are intentionally XML-only so a malformed or stale JSON
+    response is visible to the existing validation-retry loop instead of being
+    silently accepted through a compatibility path.
+    """
+
+    text = _strip_code_fence(payload)
+    start = text.find("<decision")
+    end = text.rfind("</decision>")
+    if start == -1 or end == -1:
+        return {}, ["Planner backend returned text without a <decision> element."]
+    document = text[start : end + len("</decision>")]
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end <= start:
-            return {}, ["Planner backend returned text without a JSON object."]
+        root = ET.fromstring(document)
+    except ET.ParseError as exc:
+        return {}, [f"Planner backend returned invalid XML: {exc}"]
+    if root.tag != "decision":
+        return {}, [f"Planner backend XML root must be <decision>, got <{root.tag}>."]
+
+    value = _xml_element_to_value(root)
+    if not isinstance(value, dict):
+        return {}, ["Planner backend <decision> must decode to an object."]
+    return value, []
+
+
+def _xml_element_to_value(element: ET.Element) -> object:
+    """Convert the XML wire vocabulary into JSON-equivalent Python values."""
+
+    declared = (element.get("type") or "").strip().lower()
+    children = list(element)
+    if not children:
+        if declared == "object":
+            return {}
+        if declared == "array":
+            return []
+        if element.tag == "parameters" and (element.text or "").strip() == "":
+            return {}
+        return _coerce_xml_scalar(element)
+
+    child_tags = {child.tag for child in children}
+    if declared == "array" or child_tags & _XML_LIST_ITEM_NAMES:
+        return [_xml_element_to_value(child) for child in children]
+
+    result: JsonDict = {}
+    for child in children:
+        result[child.tag] = _xml_element_to_value(child)
+    return result
+
+
+def _coerce_xml_scalar(element: ET.Element) -> object:
+    """Coerce one XML leaf while preserving free text and CDATA verbatim."""
+
+    raw = element.text if element.text is not None else ""
+    declared = (element.get("type") or "").strip().lower()
+    if declared == "null":
+        return None
+    if declared == "boolean":
+        return raw.strip().lower() in {"true", "1", "yes"}
+    if declared == "string":
+        return raw
+    if declared == "integer":
         try:
-            parsed = json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            return {}, [f"Planner backend returned invalid JSON: {exc}"]
+            return int(raw.strip())
+        except ValueError:
+            return raw
+    if declared == "number":
+        try:
+            return float(raw.strip())
+        except ValueError:
+            return raw
+    if element.tag in _XML_STRING_LEAF_NAMES:
+        return raw
 
-    if not isinstance(parsed, dict):
-        return {}, ["Planner backend JSON must decode to an object."]
-    if isinstance(parsed.get("decision"), dict):
-        return dict(parsed["decision"]), []
-    if isinstance(parsed.get("action"), dict):
-        return dict(parsed["action"]), []
-    return dict(parsed), []
+    stripped = raw.strip()
+    if stripped == "":
+        return raw
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        return raw
 
 
-def _strip_json_code_fence(text: str) -> str:
+def _strip_code_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```") and stripped.endswith("```"):
         lines = stripped.splitlines()
@@ -2019,11 +2117,23 @@ def _agent_owned_tool_planner_system_prompt() -> str:
     """
 
     return (
-        "You are the OpenETA closed-loop embodied planner. Return exactly one JSON "
-        "object with fields kind, name, parameters, and reasoning. Valid kinds are "
-        "tool_call and response. For tool_call choose exactly one executable atomic "
-        "tool from available_tools; tool_references is only a legacy name index. For "
-        "response use ask_human, talk, or task_complete. "
+        "You are the OpenETA closed-loop embodied planner. Return exactly one XML "
+        "<decision> element with child elements kind, name, reasoning, and parameters. "
+        "kind must be tool_call or response. name is the executable tool name for a "
+        "tool_call, or ask_human, talk, or task_complete for a response. Put tool "
+        "arguments inside <parameters> as named child elements and use an empty "
+        "<parameters/> when there are none. Encode arrays as repeated <item> children "
+        "and nested objects as named child elements. Wrap code and all multi-line or "
+        "quoted text in CDATA so literal newlines survive; do not encode them as "
+        "backslash-n. Numbers may use type=\"integer\" or type=\"number\"; booleans "
+        "and nulls require type=\"boolean\" and type=\"null\". A tool_batch encodes "
+        "<calls> with repeated <call> children, each containing name and parameters. "
+        "Example: <decision><kind>tool_call</kind><name>python_exec</name>"
+        "<reasoning>Inspect an artifact.</reasoning><parameters><code><![CDATA["
+        "\nresult = artifacts.read_json('/workspace/result.json')\n"
+        "]]></code></parameters></decision>. "
+        "For tool_call choose exactly one executable atomic "
+        "tool from available_tools; tool_references is only a legacy name index. "
         "You own task decomposition, progress assessment, recovery choice, and the next "
         "task action. The host does not provide a task phase or required next action. "
         "Use the supplied current-state projection as an index and query durable artifacts "

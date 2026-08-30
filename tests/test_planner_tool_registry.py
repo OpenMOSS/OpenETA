@@ -1402,21 +1402,23 @@ def test_tool_handler_exception_is_structured_result() -> None:
     assert result.details["diagnostics"][0]["error_type"] == "RuntimeError"
 
 
-def test_callable_planner_backend_accepts_json_string_payload() -> None:
+def test_callable_planner_backend_accepts_xml_string_payload() -> None:
     def model_wrapper(request: PlannerBackendRequest) -> str:
         assert "tool_references" in request.tool_context
         return """
-        ```json
-        {"kind": "tool_call", "name": "get_memory",
-         "parameters": {"namespace": "all"},
-         "reasoning": "Need a reference pose."}
+        ```xml
+        <decision>
+          <kind>tool_call</kind><name>get_memory</name>
+          <parameters><namespace>all</namespace></parameters>
+          <reasoning>Need a reference pose.</reasoning>
+        </decision>
         ```
         """
 
     tools = build_default_tool_registry()
     tools.bind_handler("get_memory", lambda context: {"content": "memory read"})
     planner = ToolCallingPlanner(
-        CallablePlannerBackend(model_wrapper, provider="unit", model="json-string")
+        CallablePlannerBackend(model_wrapper, provider="unit", model="xml-string")
     )
     runtime = OpenEtaAgentRuntime(planner=planner, tools=tools)
     runtime.start_session(task="pick cube")

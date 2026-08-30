@@ -424,6 +424,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
             backend=config.backend_factory(
                 max_tokens=VDM_MAX_OUTPUT_TOKENS,
                 max_vision_images=2,
+                enable_thinking=False,
             ),
         )
         if config.visual_history.enabled

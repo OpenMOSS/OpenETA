@@ -1,0 +1,37 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-1-group2-remediation",
+      "env_id": "openeta/libero_libero_object_task1-v0",
+      "task": "pick up the cream cheese and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 1, "pass_at_k": 1}
+    },
+    {
+      "episode_id": "libero-object-3-group2-remediation",
+      "env_id": "openeta/libero_libero_object_task3-v0",
+      "task": "pick up the bbq sauce and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 3, "pass_at_k": 1}
+    },
+    {
+      "episode_id": "libero-object-6-group2-remediation",
+      "env_id": "openeta/libero_libero_object_task6-v0",
+      "task": "pick up the butter and place it in the basket",
+      "seed": 0,
+      "max_turns": 160,
+      "max_tool_calls": 320,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {"benchmark": "LIBERO", "suite": "libero_object", "task_index": 6, "pass_at_k": 1}
+    }
+  ]
+}

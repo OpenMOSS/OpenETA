@@ -154,6 +154,43 @@ def test_nested_pose_array_decodes_to_floats() -> None:
     assert payload["parameters"]["target_pose"]["xyz"] == [0.4, 0.1, 0.25]
 
 
+def test_unclosed_list_container_is_repaired_before_its_sibling() -> None:
+    payload, errors = _parse_backend_payload(
+        "<decision><kind>tool_call</kind><name>ik_preview_check</name>"
+        "<reasoning>preview</reasoning><parameters><target_pose>"
+        "<frame>world</frame><xyz>"
+        '<item type="number">0.04</item><item type="number">0.23</item>'
+        '<item type="number">0.30</item>'
+        "<quat_xyzw>"
+        '<item type="number">1.0</item><item type="number">0.0</item>'
+        '<item type="number">0.0</item><item type="number">0.0</item>'
+        "</quat_xyzw></target_pose></parameters></decision>"
+    )
+
+    assert errors == []
+    target = payload["parameters"]["target_pose"]
+    assert target["xyz"] == [0.04, 0.23, 0.30]
+    assert target["quat_xyzw"] == [1.0, 0.0, 0.0, 0.0]
+    assert payload["_xml_wire_repair"] == {
+        "schema_version": "openeta.planner_xml_repair.v1",
+        "kind": "close_unclosed_list_container",
+        "inserted_closing_tags": ["xyz"],
+        "count": 1,
+    }
+
+
+def test_non_list_tag_mismatch_is_not_repaired() -> None:
+    payload, errors = _parse_backend_payload(
+        "<decision><kind>tool_call</kind><name>ik_preview_check</name>"
+        "<reasoning>preview</reasoning><parameters><target_pose>"
+        "<frame>world<xyz><item>0.1</item></xyz>"
+        "</target_pose></parameters></decision>"
+    )
+
+    assert payload == {}
+    assert errors and "invalid XML" in errors[0]
+
+
 def test_fenced_xml_and_surrounding_prose_are_tolerated() -> None:
     payload, errors = _parse_backend_payload(
         "```xml\nHere is the result:\n"

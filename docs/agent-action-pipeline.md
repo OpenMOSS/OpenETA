@@ -140,6 +140,35 @@ This is valid because both tools are read-only or planning helpers. A batch that
 contains a world-mutating tool such as `lower_body_control_policy` is compiled
 as `blocked`.
 
+The `EnvAction`/`AgentCommand` JSON above is the internal, post-parse logging
+shape. The live main-planner wire format is XML:
+
+```xml
+<decision>
+  <kind>tool_call</kind>
+  <name>python_exec</name>
+  <reasoning>Inspect the persisted result.</reasoning>
+  <parameters>
+    <code><![CDATA[
+result = artifacts.read_json('/workspace/result.json')
+]]></code>
+  </parameters>
+</decision>
+```
+
+The response must contain exactly one `<decision>` with `kind`, `name`,
+`reasoning`, and `parameters`. Tool arguments are named children of
+`parameters`; an argument-free call uses `<parameters/>`. Repeated `<item>`
+children encode lists and named children encode nested objects. Scalars may use
+`type="integer"`, `type="number"`, `type="boolean"`, or `type="null"`.
+Multi-line code and quoted text should use CDATA. `tool_batch` uses repeated
+`<call>` children under `<calls>`, each with its own `name` and `parameters`.
+
+`ToolCallingPlanner` converts XML to the existing internal decision dict before
+schema validation and rollout recording. Host-generated failure payloads and
+deterministic test fixtures may still provide an already-parsed dict. Isolated
+sub-agents retain their explicit JSON contracts and JSON response mode.
+
 ## Pipeline Stages
 
 The default runtime stages are:
@@ -148,12 +177,14 @@ The default runtime stages are:
 2. `ToolCallingPlanner`: builds bounded `tool_context` from the current
    observation, session task, memory summary, tool references, skill metadata,
    selected markdown skill guidance, and execution rules.
-3. `PlannerBackend`: returns one JSON decision payload from a placeholder,
+3. `PlannerBackend`: returns one decision payload from a placeholder,
    deterministic fixture, callable SDK/API wrapper, future commercial API, or
-   local LLM/VLM backend.
-4. Backend validation: `ToolCallingPlanner` parses JSON, validates command
-   kind, tool/skill names, parameters, and bounded code-policy requirements,
-   then retries with validation feedback before falling back to
+   local LLM/VLM backend. The live main planner emits XML; fixture backends may
+   return the parsed dict directly.
+4. Backend validation: `ToolCallingPlanner` parses XML into the internal
+   `{kind, name, parameters, reasoning}` shape, validates command kind,
+   tool/skill names, parameters, and bounded code-policy requirements, then
+   retries with validation feedback before falling back to
    `response::ask_human`.
 5. `ActionPipeline`: normalizes that decision into a `CommandRequest`.
 6. Compilation: registered tool handlers may execute immediately and return a
@@ -613,8 +644,12 @@ from agent.runtime.planner import ToolCallingPlanner
 
 
 def call_model(request: PlannerBackendRequest) -> str:
-    # Replace this with provider SDK/API code. Return JSON text or a dict.
-    return '{"kind": "response", "name": "talk", "parameters": {"message": "demo"}, "reasoning": "demo"}'
+    # Replace this with provider SDK/API code. Return main-planner XML or a dict.
+    return (
+        "<decision><kind>response</kind><name>talk</name>"
+        "<reasoning>demo</reasoning>"
+        "<parameters><message>demo</message></parameters></decision>"
+    )
 
 
 planner = ToolCallingPlanner(CallablePlannerBackend(call_model, provider="local"))

@@ -1,0 +1,60 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-10-pass1-main-group3-sim-collision-20260831",
+  "description": "Fixed-seed Object10 post-integration measurement for Group 3 simulator collision, carry-sweep, and backend robustness changes. Group 2 was promoted by explicit human review despite a 1/10 formal result because the observed failures were not attributable to its XML decision transport; this run tests whether Group 3 improves those physical execution failures.",
+  "episode_manifest": "manifests/libero_object_10_pass1_seed0.json",
+  "variants": [
+    {
+      "variant_id": "main_group3_sim_collision",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "f7a0a87",
+        "integration_invariants": [
+          "main planner retains the Group 2 XML decision transport",
+          "ToolContract request, receipt, bundle, and provenance authority remain unchanged",
+          "LIBERO retains the reviewed Mink controller path",
+          "arm-versus-world collision checks use the active obstacle geometry",
+          "tentative and confirmed carried objects receive conservative swept-volume checks",
+          "gripper aperture is attachment evidence rather than proof of attachment",
+          "RobotState joint_names is an optional additive field and legacy states remain valid",
+          "base_control remains a simulator backend capability and is not added to the planner tool surface"
+        ]
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260831},
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 10,
+    "metric": "pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "baseline_run_id": "libero-object-10-static-reduction-20260828-r02",
+    "baseline_objective_success": "2/10",
+    "group2_run_id": "libero-object-10-main-group2-xml-remediation-20260831-r01",
+    "group2_objective_success": "1/10",
+    "group2_gate_decision": "promoted by explicit human review; the numeric decline was accepted as likely stochastic and the observed failures were not attributed to Group 2",
+    "quality_gate": "post-integration evidence review against both the 2/10 frozen baseline and the human-approved 1/10 Group 2 run; do not attribute stochastic physical outcomes to Group 3 without rollout evidence",
+    "feature_group": "simulator collision restoration, carried-object sweep checks, backend robustness, and optional named-joint state"
+  }
+}

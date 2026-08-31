@@ -624,13 +624,15 @@ class CollisionChecker:
         has no obstacles, cuRobo would error on the query, so we short-circuit
         to 0.0 (nothing to collide with).
         """
-        import torch  # noqa: F401 — parity with caller's device/dtype
-
         # Nothing loaded → nothing to penetrate.  Keyed on the count we recorded
         # rather than ``collision_types["primitive"]``, which stays True after an
-        # empty update and would send an empty world through the ESDF query.
+        # empty update and would send an empty world through the ESDF query.  Keep
+        # this dependency-free so an empty-world check does not require torch or
+        # a fully provisioned cuRobo runtime.
         if self._obstacle_count == 0:
             return 0.0
+
+        import torch  # noqa: F401 — parity with caller's device/dtype
 
         from curobo.geom.sdf.world import CollisionQueryBuffer
 

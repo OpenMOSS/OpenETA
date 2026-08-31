@@ -47,6 +47,7 @@ include = ["adapter*", "agent*", "logger*", "real*", "scripts*", "sim*", "tools*
 "agent.skills" = ["*.md"]
 "agent.prompts" = ["*.md"]
 "real" = ["*.md"]
+"tools" = ["*.html", "*.js", "*.json"]
 
 [tool.ruff]
 line-length = 100

@@ -518,6 +518,7 @@ def test_attached_object_rotation_prediction_exposes_obstacle_collision() -> Non
 
 def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> None:
     mujoco = pytest.importorskip("mujoco")
+    mink = pytest.importorskip("mink")
     model = mujoco.MjModel.from_xml_string(
         """
         <mujoco>
@@ -534,9 +535,9 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
         </mujoco>
         """
     )
-    data = mujoco.MjData(model)
     half_angle = math.pi / 4.0
-    data.qpos[:7] = [
+    qpos = model.qpos0.copy()
+    qpos[:7] = [
         0.0,
         0.0,
         0.0,
@@ -545,7 +546,9 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
         0.0,
         math.sin(half_angle),
     ]
-    mujoco.mj_forward(model, data)
+    configuration = mink.Configuration(model, q=qpos)
+    data = configuration.data
+    assert data.ncon == 0
     held = mujoco.mj_name2id(
         model,
         mujoco.mjtObj.mjOBJ_GEOM,
@@ -557,17 +560,6 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
         "obstacle_geom",
     )
 
-    matching_contacts = [
-        float(data.contact[index].dist)
-        for index in range(data.ncon)
-        if {
-            int(data.contact[index].geom1),
-            int(data.contact[index].geom2),
-        }
-        == {held, obstacle}
-    ]
-    assert matching_contacts
-    assert min(matching_contacts) < -0.01
     fromto = np.empty(6, dtype=np.float64)
     raw_distance = float(
         mujoco.mj_geomDistance(model, data, held, obstacle, 0.02, fromto)
@@ -577,7 +569,6 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
         # through OpenETA's -1 mm hard stop.
         assert raw_distance == pytest.approx(0.0)
 
-    configuration = SimpleNamespace(model=model, data=data)
     report = mink_goal._collision_distance_report(
         configuration,
         [(held, obstacle)],
@@ -587,7 +578,18 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
         configuration,
         [(held, obstacle)],
     )
+    matching_contacts = [
+        float(data.contact[index].dist)
+        for index in range(data.ncon)
+        if {
+            int(data.contact[index].geom1),
+            int(data.contact[index].geom2),
+        }
+        == {held, obstacle}
+    ]
 
+    assert matching_contacts
+    assert min(matching_contacts) < -0.01
     assert report["detected"] is True
     assert report["minimum_distance_m"] == pytest.approx(
         min(raw_distance, *matching_contacts)
@@ -595,6 +597,148 @@ def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> N
     assert pair_distances[(held, obstacle)] == pytest.approx(
         report["minimum_distance_m"]
     )
+
+
+def test_mink_goal_rejects_orthogonal_attached_collision_before_actuation(
+    monkeypatch,
+) -> None:
+    mujoco = pytest.importorskip("mujoco")
+    mink = pytest.importorskip("mink")
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <compiler angle="radian"/>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <body name="robot">
+              <joint name="robot_joint" type="hinge" axis="0 0 1" range="-2 2"/>
+              <geom type="sphere" size="0.01" contype="0" conaffinity="0"/>
+              <site name="grip_site"/>
+            </body>
+            <body name="held">
+              <freejoint name="held_free"/>
+              <geom name="held_geom" type="box" size="0.10 0.01 0.01"/>
+            </body>
+            <body name="obstacle" pos="0 0.08 0">
+              <geom name="obstacle_geom" type="box" size="0.02 0.02 0.02"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    live_data = mujoco.MjData(model)
+    mujoco.mj_forward(model, live_data)
+    held = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "held_geom",
+    )
+    obstacle = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "obstacle_geom",
+    )
+    held_free = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        "held_free",
+    )
+    attached_qpos_adr = int(model.jnt_qposadr[held_free])
+    raw = SimpleNamespace(
+        sim=SimpleNamespace(
+            model=SimpleNamespace(_model=model),
+            data=live_data,
+        ),
+        env=SimpleNamespace(control_freq=20),
+    )
+    robot = SimpleNamespace(
+        robot_joints=["robot_joint"],
+        _ref_joint_vel_indexes=[0],
+        _ref_joint_pos_indexes=[0],
+        controller=SimpleNamespace(output_max=np.ones(1)),
+        gripper=SimpleNamespace(important_sites={"grip_site": "grip_site"}),
+        robot_model=SimpleNamespace(eef_name="robot"),
+    )
+    environment = SimpleNamespace(
+        _env=SimpleNamespace(_controller="JOINT_VELOCITY")
+    )
+    collision_policy = {
+        "limit": object(),
+        "protected_pairs": [],
+        "hard_stop_distance_m": -0.001,
+        "minimum_distance_from_collisions_m": 0.003,
+        "minimum_distance_m": math.inf,
+        "minimum_attached_object_distance_m": math.inf,
+        "world_geom_count": 2,
+        "world_object_count": 2,
+        "robot_geom_count": 0,
+        "protected_pair_count": 0,
+        "authorized_target_object": "held",
+        "authorized_target_geom_count": 1,
+        "contact_authorization": {},
+        "attachment_proxy": {"status": "confirmed", "object_name": "held"},
+        "attached_object_pairs": [(held, obstacle)],
+        "attached_object_qpos_adr": attached_qpos_adr,
+        "attached_object_geom_count": 1,
+        "attached_object_world_geom_count": 1,
+    }
+    identity_quat = np.asarray([0.0, 0.0, 0.0, 1.0])
+    target_quat = np.asarray(
+        [0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)]
+    )
+    callback_actions: list[np.ndarray] = []
+
+    monkeypatch.setattr(mink_goal, "_libero_runtime", lambda _env: (raw, robot))
+    monkeypatch.setattr(
+        mink_goal,
+        "_eef_pose",
+        lambda _raw, _robot: (np.zeros(3), identity_quat.copy()),
+    )
+    monkeypatch.setattr(mink_goal, "_site_rotation", lambda *_args: np.eye(3))
+    monkeypatch.setattr(mink_goal, "_body_rotation", lambda *_args: np.eye(3))
+    monkeypatch.setattr(
+        mink_goal,
+        "_configuration_eef_pose",
+        lambda *_args: (np.zeros(3), target_quat.copy()),
+    )
+    monkeypatch.setattr(
+        mink_goal,
+        "_libero_collision_policy",
+        lambda *_args, **_kwargs: collision_policy,
+    )
+    monkeypatch.setattr(
+        mink_goal,
+        "_fixed_nonrobot_velocity_limit",
+        lambda *_args: object(),
+    )
+    monkeypatch.setattr(
+        mink,
+        "solve_ik",
+        lambda *_args, **_kwargs: np.zeros(model.nv),
+    )
+
+    result = mink_goal.execute_libero_mink_goal(
+        environment,
+        target_xyz=[0.0, 0.0, 0.0],
+        target_quat_xyzw=target_quat.tolist(),
+        preserve_current_orientation=False,
+        max_steps=1,
+        position_tolerance_m=0.002,
+        orientation_tolerance_rad=0.05,
+        gripper_command=0.0,
+        enable_collision_check=True,
+        contact_authorization=None,
+        attachment_proxy={"status": "confirmed", "object_name": "held"},
+        ik_execution_seed=None,
+        step_callback=lambda action, _render: callback_actions.append(action) or {},
+    )
+
+    assert callback_actions == []
+    assert result["steps_executed"] == 0
+    assert result["stop_reason"] == "collision_detected"
+    assert result["collision"]["detected"] is True
+    assert result["collision"]["collision_type"] == "attached_object_world"
+    assert result["collision"]["minimum_distance_m"] == pytest.approx(-0.015)
 
 
 def test_attached_object_collision_receipt_reports_per_step_geometry_coverage() -> None:

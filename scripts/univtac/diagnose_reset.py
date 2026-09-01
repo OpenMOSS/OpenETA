@@ -75,6 +75,8 @@ def _load_config(path: Path) -> dict[str, Any]:
 
 def _load_task_profile(task_root: Path, relative_path: str) -> dict[str, Any]:
     path = (task_root / relative_path).resolve()
+    if not path.is_relative_to(task_root.resolve()):
+        raise ValueError(f"task profile escapes canonical task root: {path}")
     if not path.is_file():
         raise FileNotFoundError(f"task profile is missing: {path}")
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -91,6 +93,7 @@ def _configure_task(
     config_profile: str,
     native_root: Path,
     device: str | None,
+    launcher_mode: str,
 ):
     profile = _load_task_profile(task_root, str(config["task_config"]))
     env_cfg = task_module.TaskCfg()
@@ -117,6 +120,13 @@ def _configure_task(
         env_cfg.render_frequency = 0
     else:
         raise ValueError(f"unsupported config profile: {config_profile}")
+    render_override = (
+        None
+        if launcher_mode == "ftp1-exact"
+        else config.get("runtime_render_frequency_override")
+    )
+    if render_override is not None:
+        env_cfg.render_frequency = int(render_override)
     if device:
         env_cfg.sim.device = device
     return env_cfg
@@ -130,7 +140,15 @@ def _array_metadata(value: Any) -> dict[str, Any]:
     if hasattr(value, "numpy"):
         value = value.numpy()
     array = np.asarray(value)
-    return {"shape": list(array.shape), "dtype": str(array.dtype)}
+    finite = array[np.isfinite(array)] if np.issubdtype(array.dtype, np.number) else array
+    value_range = None
+    if finite.size:
+        value_range = [float(finite.min()), float(finite.max())]
+    return {
+        "shape": list(array.shape),
+        "dtype": str(array.dtype),
+        "range": value_range,
+    }
 
 
 def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -218,9 +236,25 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         "task": args.task,
         "task_mode": args.task_mode,
         "config_profile": args.config_profile,
+        "launcher_mode": args.launcher_mode,
         "candidate_order": seeds,
         "source_root": str(task_root),
+        "source_commit_expected": config.get(
+            "canonical_source_commit", config.get("canonical_commit")
+        ),
+        "task_config": str((task_root / str(config["task_config"])).resolve()),
         "asset_root_requested": str(asset_root),
+        "runtime_render_frequency_override": (
+            None
+            if args.launcher_mode == "ftp1-exact"
+            else config.get("runtime_render_frequency_override")
+        ),
+        "ftp1_model_loaded": False,
+        "openpi_imported": False,
+        "openeta_imported": False,
+        "planner_behavior_modified": False,
+        "reached_task_construction": False,
+        "reached_reset": False,
         "started_at": _utc_now(),
         "ended_at": None,
         "status": "starting",
@@ -254,7 +288,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         )
         runtime_manifest = collect_runtime_manifest(
             repo_root=REPO_ROOT,
-            current_task_root=DEFAULT_SOURCE_ROOT,
+            current_task_root=task_root,
             context=context,
             task_name=args.task,
         )
@@ -270,8 +304,10 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             config_profile=args.config_profile,
             native_root=Path(runtime_directory.name) / "native",
             device=getattr(args, "device", None),
+            launcher_mode=args.launcher_mode,
         )
         task = task_module.Task(env_cfg, mode=args.task_mode)
+        run_state["reached_task_construction"] = True
         recorder = PlannerDiagnosticRecorder(task)
         recorder.install()
         run_state["status"] = "running"
@@ -290,9 +326,14 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             rgb_marker_valid = False
             failure_stage: str | None = None
             cleanup_ok = False
+            reset_started_at = _utc_now()
+            reset_returned = False
             reset_started = time.perf_counter()
             try:
+                run_state["reached_reset"] = True
+                write_json(output_root / "diagnostic_run.json", run_state)
                 task.reset(seed=seed)
+                reset_returned = True
                 plan_success = task.plan_success is True
                 if not plan_success:
                     failure_stage = "reset_pre_move_planner"
@@ -328,6 +369,8 @@ def run_diagnostic(args: argparse.Namespace) -> int:
                 reset_exception_payload = write_exception(seed_dir / "exception.json", exc)
             reset_elapsed = time.perf_counter() - reset_started
             planner_failure = recorder.planner_failure()
+            if reset_exception and planner_failure is not None:
+                failure_stage = "reset_pre_move_planner"
             if planner_failure is not None:
                 write_json(seed_dir / "planner_failure.json", planner_failure)
             _write_jsonl(seed_dir / "planner_calls.jsonl", recorder.planning_calls)
@@ -356,6 +399,17 @@ def run_diagnostic(args: argparse.Namespace) -> int:
                 "task": args.task,
                 "task_mode": args.task_mode,
                 "config_profile": args.config_profile,
+                "launcher_mode": args.launcher_mode,
+                "source_commit_expected": config.get(
+                    "canonical_source_commit", config.get("canonical_commit")
+                ),
+                "task_module_realpath": str(Path(task_module.__file__).resolve()),
+                "task_config_realpath": str(
+                    (task_root / str(config["task_config"])).resolve()
+                ),
+                "asset_root": str(context.asset_root),
+                "reset_started": reset_started_at,
+                "reset_returned": reset_returned,
                 "reset_elapsed_seconds": reset_elapsed,
                 "reset_exception": reset_exception,
                 "reset_exception_summary": (
@@ -386,6 +440,10 @@ def run_diagnostic(args: argparse.Namespace) -> int:
                 ),
                 "planner_calls_path": f"seed_{seed}/planner_calls.jsonl",
                 "cleanup_ok": cleanup_ok,
+                "ftp1_model_loaded": False,
+                "openpi_imported": False,
+                "openeta_imported": False,
+                "planner_behavior_modified": False,
             }
             write_json(seed_dir / "reset_diagnostic.json", diagnostic)
             if cleanup_ok:
@@ -467,6 +525,11 @@ def main() -> int:
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--source-root", default=str(DEFAULT_SOURCE_ROOT))
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument(
+        "--launcher-mode",
+        choices=("diagnostic-default", "ftp1-exact", "ftp1-protocol-headless-parity"),
+        default="diagnostic-default",
+    )
 
     assert_task_not_imported("insert_hole")
     from isaaclab.app import AppLauncher
@@ -475,6 +538,11 @@ def main() -> int:
     args = parser.parse_args()
     args.enable_cameras = True
     args.num_envs = 1
+    if args.launcher_mode == "ftp1-exact":
+        args.livestream = 2
+    elif args.launcher_mode == "ftp1-protocol-headless-parity":
+        args.headless = True
+        args.livestream = 0
     return run_diagnostic(args)
 
 

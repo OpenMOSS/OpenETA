@@ -25,6 +25,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from sim.envs.univtac.contract import UniVTACContractError
 from sim.envs.univtac.observation import capture_snapshot
+from sim.envs.univtac.runtime import (
+    assert_task_not_imported,
+    import_task_after_launcher,
+)
 from sim.envs.univtac.trace import (
     build_transition,
     verify_artifacts,
@@ -93,8 +97,10 @@ def _load_config(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _load_vendor_task_config(relative_path: str) -> dict[str, Any]:
-    path = (REPO_ROOT / relative_path).resolve()
+def _load_vendor_task_config(relative_path: str, task_root: Path) -> dict[str, Any]:
+    path = (task_root / relative_path).resolve()
+    if not path.is_relative_to(task_root.resolve()):
+        raise UniVTACContractError(f"task config escapes task source root: {path}")
     if not path.is_file():
         raise UniVTACContractError(f"vendored task config does not exist: {path}")
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -227,8 +233,14 @@ def _write_summary(output_root: Path, summary: dict[str, Any]) -> None:
     write_json(output_root / "summary.json", summary)
 
 
-def _configure_task(task_module: Any, config: dict[str, Any], native_root: Path, device: str | None):
-    vendor_config = _load_vendor_task_config(config["vendor_task_config"])
+def _configure_task(
+    task_module: Any,
+    config: dict[str, Any],
+    native_root: Path,
+    device: str | None,
+    task_root: Path,
+):
+    vendor_config = _load_vendor_task_config(config["vendor_task_config"], task_root)
     env_cfg = task_module.TaskCfg()
     env_cfg.save_dir = str(native_root)
     env_cfg.worker_name = "direct_smoke"
@@ -238,6 +250,8 @@ def _configure_task(task_module: Any, config: dict[str, Any], native_root: Path,
     env_cfg.save_frequency = 0
     env_cfg.video_frequency = 0
     env_cfg.render_frequency = 0
+    if config.get("runtime_render_frequency_override") is not None:
+        env_cfg.render_frequency = int(config["runtime_render_frequency_override"])
     env_cfg.random_texture = False
     env_cfg.tactile_sensor_type = str(vendor_config.get("sensor_type", "gsmini"))
     if device:
@@ -248,6 +262,10 @@ def _configure_task(task_module: Any, config: dict[str, Any], native_root: Path,
 def run_smoke(args: argparse.Namespace) -> int:
     config_path = Path(args.config).resolve()
     output_root = Path(args.output_root).resolve()
+    task_root = Path(args.source_root).expanduser().resolve()
+    asset_root_requested = (
+        Path(args.asset_root).expanduser().resolve() if args.asset_root else None
+    )
     config = _load_config(config_path)
     if output_root.exists() and any(output_root.iterdir()):
         raise RuntimeError(f"output directory is not empty: {output_root}")
@@ -266,6 +284,7 @@ def run_smoke(args: argparse.Namespace) -> int:
         "config_path": config_path.relative_to(REPO_ROOT).as_posix(),
         "output_root": output_root.relative_to(REPO_ROOT).as_posix(),
         "config": config,
+        "task_source_root": str(task_root),
         "started_at": _utc_now(),
         "ended_at": None,
         "status": "starting",
@@ -287,7 +306,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     overall_error = False
     cleanup_abort = False
     try:
-        _assert_vendor_task_not_imported()
+        assert_task_not_imported(str(config["task"]))
         from isaaclab.app import AppLauncher
 
         app_launcher = AppLauncher(args)
@@ -298,16 +317,16 @@ def run_smoke(args: argparse.Namespace) -> int:
         run_manifest["status"] = "importing_vendor_task"
         write_json(output_root / "run_manifest.json", run_manifest)
 
-        vendor_root = REPO_ROOT / "third_party" / "ftp1-policy" / "UniVTAC"
-        os.chdir(vendor_root)
-        task_module, asset_root = _import_task_after_launcher(
-            simulation_app,
-            vendor_root,
-            str(config["task"]),
-            Path(native_runtime.name),
+        os.chdir(task_root)
+        task_module, runtime_context = import_task_after_launcher(
+            simulation_app=simulation_app,
+            task_root=task_root,
+            task_name=str(config["task"]),
+            runtime_root=Path(native_runtime.name),
+            asset_root=asset_root_requested,
         )
         run_manifest["vendor_task_imported_after_app_launcher"] = True
-        run_manifest["tacex_asset_root"] = str(asset_root)
+        run_manifest["tacex_asset_root"] = str(runtime_context.asset_root)
         run_manifest["status"] = "running"
         write_json(output_root / "run_manifest.json", run_manifest)
 
@@ -316,6 +335,7 @@ def run_smoke(args: argparse.Namespace) -> int:
             config,
             Path(native_runtime.name),
             getattr(args, "device", None),
+            task_root,
         )
         task = task_module.Task(env_cfg, mode="eval")
         displacement_mm = tuple(float(value) for value in config["probe_delta_mm"])
@@ -587,8 +607,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+    parser.add_argument(
+        "--source-root",
+        default=str(REPO_ROOT / "third_party/ftp1-policy/UniVTAC"),
+    )
+    parser.add_argument("--asset-root", default=None)
 
-    _assert_vendor_task_not_imported()
+    assert_task_not_imported("insert_hole")
     from isaaclab.app import AppLauncher
 
     AppLauncher.add_app_launcher_args(parser)

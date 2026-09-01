@@ -5,4 +5,4 @@ probe_time_dilation_factor: 0.2
 save_host_only: true
 strict_two_tactile_sensors: true
 fail_on_missing_rgb_marker: true
-vendor_task_config: third_party/ftp1-policy/UniVTAC/task_config/demo.yml
+vendor_task_config: task_config/demo.yml

@@ -108,49 +108,11 @@ function bindViewEvents() {
 }
 function toolForms() { return state.detail?.presentation?.composer?.tools || []; }
 function selectedForm() { return toolForms().find(tool => tool.name === state.selectedTool); }
-function normalizedToolSearch(value) { return String(value || "").trim().toLowerCase(); }
-function toolSearchScore(tool, rawQuery) {
-  const query = normalizedToolSearch(rawQuery);
-  if (!query) return 1;
-  const tokens = query.split(/\s+/).filter(Boolean);
-  const name = normalizedToolSearch(tool.name), readableName = name.replace(/[_-]+/g, " ");
-  const nameHasQuery = name.includes(query) || readableName.includes(query);
-  const nameHasTokens = tokens.every(token => name.includes(token) || readableName.includes(token));
-  if (name === query || readableName === query) return 600000 - name.length;
-  if (name.startsWith(query) || readableName.startsWith(query)) return 500000 - name.length;
-  if (nameHasQuery) return 400000 - name.indexOf(query);
-  if (nameHasTokens) return 300000 + tokens.length;
-  const description = normalizedToolSearch(tool.description);
-  if (description.includes(query) || tokens.every(token => description.includes(token))) return 200000 + tokens.length;
-  const fields = tool.fields || [];
-  const parameterNameMatch = fields.some(field => {
-    const fieldName = normalizedToolSearch(field.name), readableFieldName = fieldName.replace(/[_-]+/g, " ");
-    return fieldName.includes(query) || readableFieldName.includes(query) || tokens.every(token => fieldName.includes(token) || readableFieldName.includes(token));
-  });
-  if (parameterNameMatch) return 100000 + tokens.length;
-  const parameterDescriptionMatch = fields.some(field => {
-    const fieldDescription = normalizedToolSearch(field.description);
-    return fieldDescription.includes(query) || tokens.every(token => fieldDescription.includes(token));
-  });
-  return parameterDescriptionMatch ? 50000 + tokens.length : 0;
-}
-function rankedToolForms(forms, query) {
-  if (!normalizedToolSearch(query)) return forms;
-  return forms.map((tool, index) => ({tool, index, score: toolSearchScore(tool, query)}))
-    .filter(item => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map(item => item.tool);
-}
 function displayValue(value) { return typeof value === "string" ? value : JSON.stringify(value, null, 2); }
-function initialField(field) {
-  return {mode: field.required === true ? "custom" : "omit", value: ""};
-}
-function initializeTool(name) {
+function initialField(field) { return {mode: field.has_default ? "default" : (field.required === true ? "custom" : "omit"), value: field.has_default ? displayValue(field.default) : ""}; }
+function selectTool(name) {
   state.selectedTool = name; state.parameters = {};
   (selectedForm()?.fields || []).forEach(field => state.parameters[field.name] = initialField(field));
-}
-function selectTool(name) {
-  initializeTool(name);
   renderComposer();
 }
 function parseField(field, raw) {
@@ -177,25 +139,20 @@ function fieldInput(field, current) {
   const type = ["integer", "number"].includes(field.value_type) ? "number" : "text", step = field.value_type === "integer" ? "1" : "any";
   return `<input class="form-input" type="${type}" step="${step}" data-value="${esc(field.name)}" value="${esc(current.value)}">`;
 }
-function exclusiveParameterActive(form) {
-  const name = form?.exclusive_parameter;
-  if (!name) return false;
-  const field = (form.fields || []).find(item => item.name === name), current = state.parameters[name] || (field ? initialField(field) : {mode: "omit", value: ""});
-  if (current.mode === "omit") return false;
-  if (current.mode === "default") return field?.has_default === true;
-  return String(current.value ?? "").trim() !== "";
-}
-function parameterHtml(field, form) {
+function parameterHtml(field) {
   const current = state.parameters[field.name] || initialField(field);
-  const resolvedByExclusive = exclusiveParameterActive(form) && field.name !== form.exclusive_parameter;
-  return `<div class="parameter"><div><div class="parameter-key">${esc(field.name)}</div><div class="parameter-description">${esc(field.description || "No description")}</div><span class="chip">${field.required === true ? "必填" : "可选"}</span> <span class="chip">${esc(field.value_type)}</span></div>${resolvedByExclusive ? `<div class="parameter-description">由 ${esc(form.exclusive_parameter)} 原子解析，不会发送此参数。</div>` : `<div><label class="form-label">处理方式</label><select class="form-select" data-mode="${esc(field.name)}">${modeOptions(field, current.mode)}</select></div><div><label class="form-label">Value</label>${fieldInput(field, current)}</div>`}</div>`;
+  return `<div class="parameter"><div><div class="parameter-key">${esc(field.name)}</div><div class="parameter-description">${esc(field.description || "No description")}</div><span class="chip">${field.required === true ? "必填" : "可选"}</span> <span class="chip">${esc(field.value_type)}</span></div><div><label class="form-label">处理方式</label><select class="form-select" data-mode="${esc(field.name)}">${modeOptions(field, current.mode)}</select></div><div><label class="form-label">Value</label>${fieldInput(field, current)}</div></div>`;
 }
 function renderToolComposer(composer) {
   const forms = composer.tools || [];
-  const shown = rankedToolForms(forms, state.toolQuery);
-  if (shown.length && !shown.some(tool => tool.name === state.selectedTool)) initializeTool(shown[0].name);
-  const form = shown.length ? selectedForm() : null;
-  return `<div class="tool-picker"><div class="tool-sidebar"><div class="tool-search-wrap"><input id="toolSearch" class="tool-search" value="${esc(state.toolQuery)}" placeholder="搜索工具名、描述或参数…" autocomplete="off"><span class="tool-count">${shown.length}/${forms.length}</span></div><div class="tool-list">${shown.map(tool => `<button class="tool-button ${tool.name === state.selectedTool ? "active" : ""}" data-tool="${esc(tool.name)}"><div class="tool-name">${esc(tool.name)}</div><div class="tool-description">${esc(tool.description || "")}</div></button>`).join("") || '<div class="parameter-description">没有匹配的工具。</div>'}</div></div><div class="tool-form">${form ? `<b>${esc(form.name)}</b>${(form.fields || []).map(field => parameterHtml(field, form)).join("") || '<div class="parameter-description">此工具没有参数。</div>'}<div class="reasoning"><label class="form-label">Reasoning（可留空）</label><input id="reasoning" class="form-input" value="${esc(state.reasoning)}"></div>` : '<div class="parameter-description">请选择工具。</div>'}</div></div>`;
+  if (!state.selectedTool && forms.length) {
+    state.selectedTool = forms[0].name;
+    (forms[0].fields || []).forEach(field => state.parameters[field.name] = initialField(field));
+  }
+  const form = selectedForm();
+  const query = state.toolQuery.trim().toLowerCase();
+  const shown = forms.filter(tool => !query || JSON.stringify(tool).toLowerCase().includes(query));
+  return `<div class="tool-picker"><div class="tool-sidebar"><div class="tool-search-wrap"><input id="toolSearch" class="tool-search" value="${esc(state.toolQuery)}" placeholder="搜索工具名、描述或参数…" autocomplete="off"><span class="tool-count">${shown.length}/${forms.length}</span></div><div class="tool-list">${shown.map(tool => `<button class="tool-button ${tool.name === state.selectedTool ? "active" : ""}" data-tool="${esc(tool.name)}"><div class="tool-name">${esc(tool.name)}</div><div class="tool-description">${esc(tool.description || "")}</div></button>`).join("") || '<div class="parameter-description">没有匹配的工具。</div>'}</div></div><div class="tool-form">${form ? `<b>${esc(form.name)}</b>${(form.fields || []).map(parameterHtml).join("") || '<div class="parameter-description">此工具没有参数。</div>'}<div class="reasoning"><label class="form-label">Reasoning（可留空）</label><input id="reasoning" class="form-input" value="${esc(state.reasoning)}"></div>` : '<div class="parameter-description">请选择工具。</div>'}</div></div>`;
 }
 function renderActionComposer(composer) {
   const actions = composer.actions || [];
@@ -249,8 +206,7 @@ function buildSubmission() {
   }
   const form = selectedForm(); if (!form) return {error: "请选择工具"};
   const values = {}, errors = [];
-  const fields = exclusiveParameterActive(form) ? (form.fields || []).filter(field => field.name === form.exclusive_parameter) : (form.fields || []);
-  fields.forEach(field => {
+  (form.fields || []).forEach(field => {
     const current = state.parameters[field.name] || initialField(field);
     if (current.mode === "omit") { if (field.required === true) errors.push(`${field.name} 是必填参数`); return; }
     if (current.mode === "default") { if (field.has_default) values[field.name] = field.default; else errors.push(`${field.name} 没有 default`); return; }

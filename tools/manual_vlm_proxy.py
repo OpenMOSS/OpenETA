@@ -258,11 +258,7 @@ class RequestStore:
             "request_options": {
                 key: value for key, value in request.body.items() if key != "messages"
             },
-            "presentation": self.adapter.presentation(
-                request.body,
-                request_id=request_id,
-                audit_records=audit_records,
-            ),
+            "presentation": self.adapter.presentation(request.body, request_id=request_id),
             "audit_records": audit_records,
             "wire_audit": build_wire_audit(request.body),
             "response_text": request.response_text,
@@ -538,7 +534,11 @@ class ManualVLMHandler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", "Request not found.")
             return
         if tail == "":
-            self._send_json(HTTPStatus.OK, self.server.store.public_detail(request_id) or {})
+            detail = self.server.store.public_detail(request_id)
+            if detail is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", "Request not found.")
+                return
+            self._send_json(HTTPStatus.OK, detail)
         elif tail == "raw":
             self._send_json(HTTPStatus.OK, request.body)
         elif tail.startswith("images/"):

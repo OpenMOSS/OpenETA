@@ -42,13 +42,7 @@ class ProtocolAdapter(Protocol):
     def attempt(self, body: JsonObject) -> int:
         """Return the protocol retry attempt used for lineage inference."""
 
-    def presentation(
-        self,
-        body: JsonObject,
-        *,
-        request_id: str,
-        audit_records: list[JsonObject] | None = None,
-    ) -> JsonObject:
+    def presentation(self, body: JsonObject, *, request_id: str) -> JsonObject:
         """Return the data-driven operator view and composer specification."""
 
     def audit_records(self, body: JsonObject) -> list[JsonObject]:
@@ -97,14 +91,7 @@ class GenericProtocolAdapter:
     def attempt(self, body: JsonObject) -> int:
         return 1
 
-    def presentation(
-        self,
-        body: JsonObject,
-        *,
-        request_id: str,
-        audit_records: list[JsonObject] | None = None,
-    ) -> JsonObject:
-        del audit_records
+    def presentation(self, body: JsonObject, *, request_id: str) -> JsonObject:
         messages = body.get("messages")
         messages = messages if isinstance(messages, list) else []
         latest = ""

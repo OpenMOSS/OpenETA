@@ -570,6 +570,7 @@ def _safe_globals(
         "print": print,
         "range": range,
         "round": round,
+        "set": set,
         "sorted": sorted,
         "str": str,
         "sum": sum,

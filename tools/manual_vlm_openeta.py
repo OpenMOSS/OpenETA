@@ -130,15 +130,6 @@ def _parameter_value_type(name: str, description: str, declared: str = "") -> st
         return normalized
     if normalized in {"array", "object"}:
         return "json"
-    normalized_name = name.strip().lower()
-    if (
-        normalized_name.endswith(("_id", "_path", "_ref"))
-        or normalized_name
-        in {"code", "depth", "image", "mode", "prompt", "rgb", "url"}
-    ):
-        return "string"
-    if normalized_name in {"hints", "intrinsics", "object_mask"}:
-        return "json"
     text = f"{name} {description}".lower()
     if any(marker in text for marker in ("boolean", "toggle", "true or false")):
         return "boolean"
@@ -222,7 +213,6 @@ def _normalize_parameter_field(name: str, spec: Any) -> JsonObject:
         default = spec.get("default")
         raw_choices = spec.get("enum") or spec.get("choices") or []
         choices = [str(value) for value in raw_choices] if isinstance(raw_choices, list) else []
-        exclusive = spec.get("exclusive") is True
     else:
         description = str(spec or "")
         declared_type = ""
@@ -231,17 +221,9 @@ def _normalize_parameter_field(name: str, spec: Any) -> JsonObject:
         has_default = default_match is not None
         default = default_match.group(1).strip() if default_match else None
         choices = _parameter_choices(description)
-        lowered_description = description.lower()
-        exclusive = (
-            "when supplied" in lowered_description
-            and re.search(r"\bhost\s+(?:atomically\s+)?resolves?\b", lowered_description)
-            is not None
-        )
     lowered = description.lower()
     if isinstance(explicit_required, bool):
         required: bool | None = explicit_required
-    elif re.search(r"\brequired\s+(?:for|when|if|in)\b", lowered):
-        required = False
     elif re.search(r"\brequired\b", lowered):
         required = True
     elif re.search(r"\boptional\b|\bomitt?\b", lowered) or has_default:
@@ -257,182 +239,24 @@ def _normalize_parameter_field(name: str, spec: Any) -> JsonObject:
         "has_default": has_default,
         "default": _coerce_documented_default(default, value_type) if has_default else None,
         "choices": choices,
-        "exclusive": exclusive,
     }
-
-
-def _move_to_profile(context: JsonObject) -> str:
-    """Choose the operator-facing move form from current environment evidence."""
-
-    objective = context.get("objective")
-    objective = objective if isinstance(objective, dict) else {}
-    active = objective.get("active_environment_task")
-    active = active if isinstance(active, dict) else {}
-    env_id = str(active.get("env_id") or "").lower()
-    if "behavior" in env_id or "b1k" in env_id:
-        return "bimanual"
-
-    current = context.get("current_observation")
-    current = current if isinstance(current, dict) else {}
-    summary = current.get("summary")
-    summary = summary if isinstance(summary, dict) else {}
-    robot = summary.get("robot")
-    robot = robot if isinstance(robot, dict) else {}
-    metadata = robot.get("metadata")
-    metadata = metadata if isinstance(metadata, dict) else {}
-    arms = metadata.get("arms")
-    if isinstance(arms, dict) and {"left", "right"}.issubset(arms):
-        return "bimanual"
-    return "single"
-
-
-def _move_to_fields(profile: str) -> list[JsonObject]:
-    def field(
-        name: str,
-        description: str,
-        *,
-        required: bool = False,
-        default: Any = ...,
-        value_type: str = "number",
-    ) -> JsonObject:
-        spec: JsonObject = {
-            "type": value_type,
-            "description": description,
-            "required": required,
-        }
-        if default is not ...:
-            spec["default"] = default
-        return _normalize_parameter_field(name, spec)
-
-    if profile == "bimanual":
-        fields = [
-            field(f"{arm}_{axis}", f"Required {arm} EEF world-frame {axis.upper()} in metres.", required=True)
-            for arm in ("left", "right")
-            for axis in ("x", "y", "z")
-        ]
-        fields.extend(
-            field(
-                f"{arm}_{axis}",
-                f"Optional {arm} EEF {axis} in degrees; provide roll, pitch, and yaw together.",
-            )
-            for arm in ("left", "right")
-            for axis in ("roll", "pitch", "yaw")
-        )
-        fields.extend(
-            [
-                field("tolerance", "Position tolerance in metres.", default=0.01),
-                field(
-                    "orientation_tolerance",
-                    "Orientation tolerance in radians.",
-                    default=0.05,
-                ),
-                field(
-                    "max_ticks",
-                    "Maximum coordinated playback ticks.",
-                    default=800,
-                    value_type="integer",
-                ),
-            ]
-        )
-        return fields
-
-    return [
-        field(axis, f"Required EEF world-frame {axis.upper()} in metres.", required=True)
-        for axis in ("x", "y", "z")
-    ] + [
-        field(axis, f"Optional EEF {axis} in degrees; provide roll, pitch, and yaw together.")
-        for axis in ("roll", "pitch", "yaw")
-    ] + [
-        field("num_steps", "Maximum closed-loop controller iterations.", value_type="integer"),
-        field("tolerance", "Position tolerance in metres."),
-        field("ori_tolerance", "Orientation tolerance in radians."),
-        field(
-            "enable_collision_check",
-            "Whether to enable simulator collision checking.",
-            value_type="boolean",
-        ),
-    ]
-
-
-def _normalize_move_to_submission(body: JsonObject, parameters: JsonObject) -> JsonObject:
-    """Turn the single-arm primitive form back into OpenETA's stable pose contract."""
-
-    payload = _planner_wire_payload(body)
-    context = payload.get("tool_context")
-    context = context if isinstance(context, dict) else {}
-    if _move_to_profile(context) == "bimanual" or "target_pose" in parameters:
-        return parameters
-    if not all(axis in parameters for axis in ("x", "y", "z")):
-        return parameters
-
-    resolved = context.get("host_resolved_inputs")
-    resolved = resolved if isinstance(resolved, dict) else {}
-    move_input = resolved.get("move_to")
-    move_input = move_input if isinstance(move_input, dict) else {}
-    host_parameters = move_input.get("call_parameters")
-    host_parameters = host_parameters if isinstance(host_parameters, dict) else {}
-    host_pose = host_parameters.get("target_pose")
-    pose = dict(host_pose) if isinstance(host_pose, dict) else {"frame": "world"}
-    pose["xyz"] = [parameters[axis] for axis in ("x", "y", "z")]
-
-    orientation = [parameters.get(axis) for axis in ("roll", "pitch", "yaw")]
-    if any(value is not None for value in orientation):
-        if not all(value is not None for value in orientation):
-            raise ValueError("move_to roll, pitch, and yaw must be provided together")
-        pose["euler_xyz_deg"] = orientation
-
-    normalized = {
-        key: value
-        for key, value in parameters.items()
-        if key not in {"x", "y", "z", "roll", "pitch", "yaw"}
-    }
-    normalized["target_pose"] = pose
-    return normalized
 
 
 def build_tool_form_catalog(body: JsonObject) -> list[JsonObject]:
-    payload = _planner_wire_payload(body)
-    context = payload.get("tool_context")
-    context = context if isinstance(context, dict) else {}
     output: list[JsonObject] = []
-    catalog = extract_tool_catalog(body)
-    if not any(str(tool.get("name") or "") == "move_to" for tool in catalog):
-        backend_move = next(
-            (tool for tool in catalog if str(tool.get("name") or "") == "move_eefs"),
-            None,
-        )
-        if backend_move is not None:
-            alias = dict(backend_move)
-            alias["name"] = "move_to"
-            catalog.append(alias)
-    for tool in catalog:
+    for tool in extract_tool_catalog(body):
         raw_parameters = tool.get("parameters")
         raw_parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
-        name = str(tool.get("name") or "")
-        if name == "move_eefs":
-            continue
-        profile = _move_to_profile(context) if name == "move_to" else ""
-        fields = (
-            _move_to_fields(profile)
-            if name == "move_to"
-            else [
-                _normalize_parameter_field(str(parameter_name), spec)
-                for parameter_name, spec in raw_parameters.items()
-            ]
+        output.append(
+            {
+                "name": tool.get("name"),
+                "description": tool.get("description") or tool.get("category") or "",
+                "fields": [
+                    _normalize_parameter_field(str(name), spec)
+                    for name, spec in raw_parameters.items()
+                ],
+            }
         )
-        form: JsonObject = {
-            "name": name,
-            "description": tool.get("description") or tool.get("category") or "",
-            "fields": fields,
-        }
-        if profile:
-            form["control_profile"] = profile
-        exclusive_fields = [
-            str(field["name"]) for field in fields if field.get("exclusive") is True
-        ]
-        if len(exclusive_fields) == 1:
-            form["exclusive_parameter"] = exclusive_fields[0]
-        output.append(form)
     return output
 
 
@@ -573,272 +397,6 @@ def extract_tool_audit_records(body: JsonObject) -> list[JsonObject]:
     return records
 
 
-def _nested_field(value: Any, *names: str) -> Any:
-    """Return the first shallowest non-empty field from a nested tool result."""
-
-    queue = [value]
-    while queue:
-        current = queue.pop(0)
-        if isinstance(current, dict):
-            for name in names:
-                candidate = current.get(name)
-                if candidate is not None and candidate != "":
-                    return candidate
-            queue.extend(current.values())
-        elif isinstance(current, list):
-            queue.extend(current)
-    return None
-
-
-def _latest_tool_record(
-    audit_records: list[JsonObject],
-    name: str,
-) -> JsonObject | None:
-    matches = [
-        (index, record)
-        for index, record in enumerate(audit_records)
-        if isinstance(record, dict) and record.get("title") == name
-    ]
-    if not matches:
-        return None
-
-    def order(item: tuple[int, JsonObject]) -> tuple[int, int, int]:
-        index, record = item
-        turn = record.get("last_seen_turn")
-        message = record.get("result_message_index")
-        return (
-            turn if isinstance(turn, int) else -1,
-            message if isinstance(message, int) else -1,
-            index,
-        )
-
-    return max(matches, key=order)[1]
-
-
-def _compact_tool_state(
-    audit_records: list[JsonObject],
-    name: str,
-) -> JsonObject:
-    record = _latest_tool_record(audit_records, name)
-    if record is None:
-        return {"status": "not_run"}
-    result = record.get("result")
-    result = result if isinstance(result, dict) else {}
-    outputs = result.get("outputs")
-    outputs = outputs if isinstance(outputs, dict) else result
-    arguments = record.get("arguments")
-    arguments = arguments if isinstance(arguments, dict) else {}
-    state: JsonObject = {
-        "status": record.get("status") or "unknown",
-        "success": record.get("success"),
-    }
-    turn = record.get("last_seen_turn")
-    if isinstance(turn, int):
-        state["turn"] = turn
-
-    if name == "observe":
-        reason = arguments.get("reason")
-        if reason:
-            state["reason"] = reason
-        return state
-
-    if name == "sam3":
-        fields = {
-            "result_id": _nested_field(outputs, "result_id"),
-            "source_packet_id": arguments.get("source_packet_id")
-            or _nested_field(outputs, "source_packet_id"),
-            "camera_frame_id": arguments.get("camera_frame_id")
-            or _nested_field(outputs, "camera_frame_id"),
-            "mode": arguments.get("mode") or _nested_field(outputs, "mode"),
-            "prompt": arguments.get("prompt") or _nested_field(outputs, "prompt"),
-            "evidence_role": arguments.get("evidence_role")
-            or _nested_field(outputs, "evidence_role"),
-            "detection_count": _nested_field(outputs, "detection_count"),
-        }
-    else:
-        fields = {
-            "result_id": _nested_field(outputs, "result_id"),
-            "input_bundle_id": arguments.get("bundle_id"),
-            "source_packet_id": _nested_field(outputs, "source_packet_id", "packet_id"),
-            "camera_frame_id": _nested_field(outputs, "camera_frame_id", "frame_id"),
-            "source_backend": _nested_field(outputs, "source_backend", "backend"),
-            "candidate_count": _nested_field(outputs, "candidate_count"),
-        }
-    state.update(
-        {key: value for key, value in fields.items() if value is not None and value != ""}
-    )
-    return state
-
-
-def _latest_context_artifact(context: JsonObject, tool: str) -> JsonObject | None:
-    artifacts = context.get("artifacts")
-    artifacts = artifacts if isinstance(artifacts, dict) else {}
-    candidates = [
-        value
-        for value in artifacts.values()
-        if isinstance(value, dict) and value.get("tool") == tool
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda value: (
-            float(value.get("timestamp_s"))
-            if isinstance(value.get("timestamp_s"), (int, float))
-            else -1.0
-        ),
-    )
-
-
-def _fallback_tool_state(
-    context: JsonObject,
-    name: str,
-    state: JsonObject,
-) -> JsonObject:
-    decision_state = context.get("decision_state")
-    decision_state = decision_state if isinstance(decision_state, dict) else {}
-    effect = decision_state.get("last_action_effect")
-    effect = effect if isinstance(effect, dict) else {}
-    if effect.get("tool") == name:
-        synthetic = {
-            "title": name,
-            "status": effect.get("status"),
-            "success": effect.get("operational_success"),
-            "result": {"outputs": effect.get("outputs") or {}},
-        }
-        # The wire audit projection intentionally keeps tool results compact. The
-        # current decision state may carry useful fields such as result_id that were
-        # omitted there, so fill holes without replacing session/turn provenance.
-        state = {**_compact_tool_state([synthetic], name), **state}
-    if state.get("status") != "not_run":
-        return state
-
-    artifact = _latest_context_artifact(context, name)
-    if artifact is None:
-        return state
-    projected: JsonObject = {"status": "available_from_context"}
-    for key in (
-        "result_id",
-        "candidate_count",
-        "detection_count",
-        "source_backend",
-        "source_packet_id",
-        "camera_frame_id",
-    ):
-        value = _nested_field(artifact, key)
-        if value is not None and value != "":
-            projected[key] = value
-    return projected
-
-
-def build_latest_state(
-    body: JsonObject,
-    *,
-    audit_records: list[JsonObject] | None = None,
-) -> JsonObject:
-    """Project persistent session state without conflating live and frozen packets."""
-
-    payload = _planner_wire_payload(body)
-    context = payload.get("tool_context")
-    context = context if isinstance(context, dict) else {}
-    decision_state = context.get("decision_state")
-    decision_state = decision_state if isinstance(decision_state, dict) else {}
-    packet = decision_state.get("current_observation_packet")
-    packet = packet if isinstance(packet, dict) else {}
-    current = context.get("current_observation")
-    current = current if isinstance(current, dict) else {}
-    summary = current.get("summary")
-    summary = summary if isinstance(summary, dict) else {}
-    metadata = summary.get("metadata")
-    metadata = metadata if isinstance(metadata, dict) else {}
-
-    packet_ids = packet.get("packet_ids")
-    packet_ids = packet_ids if isinstance(packet_ids, list) else []
-    camera_artifacts = packet.get("camera_artifacts")
-    camera_artifacts = camera_artifacts if isinstance(camera_artifacts, list) else []
-    camera_frame_ids = list(
-        dict.fromkeys(
-            str(item.get("frame_id"))
-            for item in camera_artifacts
-            if isinstance(item, dict) and item.get("frame_id")
-        )
-    )
-    if not camera_frame_ids:
-        raw_camera_ids = summary.get("camera_ids")
-        if isinstance(raw_camera_ids, list):
-            camera_frame_ids = [str(value) for value in raw_camera_ids]
-
-    records = audit_records if audit_records is not None else extract_tool_audit_records(body)
-    resolved = context.get("host_resolved_inputs")
-    resolved = resolved if isinstance(resolved, dict) else {}
-    grasp_input = resolved.get("grasp_pose_estimate")
-    grasp_input = grasp_input if isinstance(grasp_input, dict) else {}
-    grasp_input_resolution = {
-        "status": grasp_input.get("status") or "unavailable",
-        "bundle_id": grasp_input.get("bundle_id"),
-        "source_packet_id": grasp_input.get("source_packet_id"),
-        "sam3_result_id": grasp_input.get("sam3_result_id"),
-        "detection_id": grasp_input.get("detection_id"),
-    }
-    grasp_input_resolution = {
-        key: value
-        for key, value in grasp_input_resolution.items()
-        if value is not None and value != ""
-    }
-    anyplace_input = resolved.get("anyplace")
-    anyplace_input = anyplace_input if isinstance(anyplace_input, dict) else {}
-    anyplace_resolution = {
-        key: anyplace_input.get(key)
-        for key in (
-            "status",
-            "bundle_id",
-            "materialized_result_id",
-            "grasp_evidence_id",
-            "placement_evidence_id",
-            "repair_call",
-            "recovery",
-        )
-        if anyplace_input.get(key) is not None
-        and anyplace_input.get(key) != ""
-    }
-    resource_catalog = context.get("resource_catalog")
-    resource_catalog = (
-        resource_catalog if isinstance(resource_catalog, dict) else {}
-    )
-    latest_observe = _fallback_tool_state(
-        context, "observe", _compact_tool_state(records, "observe")
-    )
-    latest_sam3 = _fallback_tool_state(
-        context, "sam3", _compact_tool_state(records, "sam3")
-    )
-    latest_grasp = _fallback_tool_state(
-        context,
-        "grasp_pose_estimate",
-        _compact_tool_state(records, "grasp_pose_estimate"),
-    )
-    return {
-        "current_observation_packet": {
-            "step": packet.get("step_idx", metadata.get("step_idx")),
-            "packet_ids": packet_ids,
-            "camera_frame_ids": camera_frame_ids,
-        },
-        "latest_observe": latest_observe,
-        "latest_sam3": latest_sam3,
-        "latest_grasp_pose_estimate": latest_grasp,
-        "grasp_input_resolution": grasp_input_resolution,
-        "anyplace_resolution": anyplace_resolution,
-        "active_selections": resource_catalog.get("selections") or {},
-        "retained_results": {
-            key: resource_catalog.get(key) or []
-            for key in (
-                "detection_results",
-                "grasp_results",
-                "placement_results",
-            )
-        },
-    }
-
-
 def _compact_latest_action(context: JsonObject, observation: JsonObject) -> JsonObject:
     decision_state = context.get("decision_state")
     decision_state = decision_state if isinstance(decision_state, dict) else {}
@@ -962,7 +520,6 @@ def build_operator_summary(body: JsonObject, *, request_id: str) -> JsonObject:
         "latest_action": _compact_latest_action(context, observation),
         "unresolved_obligations": decision_state.get("unresolved_obligations") or {},
         "open_questions": context.get("open_questions") or {},
-        "host_resolved_inputs": context.get("host_resolved_inputs") or {},
         "skills": [
             {"name": item.get("name"), "description": item.get("description")}
             for item in skills
@@ -1057,13 +614,7 @@ class OpenETAProtocolAdapter:
                     return attempt
         return 1
 
-    def presentation(
-        self,
-        body: JsonObject,
-        *,
-        request_id: str,
-        audit_records: list[JsonObject] | None = None,
-    ) -> JsonObject:
+    def presentation(self, body: JsonObject, *, request_id: str) -> JsonObject:
         operator = build_operator_summary(body, request_id=request_id)
         classification = operator["classification"]
         sections: list[JsonObject] = []
@@ -1078,15 +629,6 @@ class OpenETAProtocolAdapter:
             )
         sections.extend(
             [
-                {
-                    "type": "json",
-                    "title": "Latest state",
-                    "value": build_latest_state(
-                        body,
-                        audit_records=audit_records,
-                    ),
-                    "column": "side",
-                },
                 {
                     "type": "json",
                     "title": "Current observation",
@@ -1115,12 +657,6 @@ class OpenETAProtocolAdapter:
                     "type": "json",
                     "title": "Questions / output contract",
                     "value": operator["open_questions"] or operator["required_output"] or {},
-                    "column": "side",
-                },
-                {
-                    "type": "json",
-                    "title": "Host-resolved inputs",
-                    "value": operator["host_resolved_inputs"],
                     "column": "side",
                 },
                 {
@@ -1205,10 +741,5 @@ class OpenETAProtocolAdapter:
                 }
             else:
                 raise ValueError("intent.type must be tool_call or action")
-        if decision.get("kind") == "tool_call" and decision.get("name") == "move_to":
-            parameters = decision.get("parameters")
-            if isinstance(parameters, dict):
-                decision = dict(decision)
-                decision["parameters"] = _normalize_move_to_submission(body, parameters)
         content = serialize_decision_xml(decision)
         return EncodedResponse(message={"role": "assistant", "content": content})

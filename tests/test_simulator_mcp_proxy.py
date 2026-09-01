@@ -1842,6 +1842,85 @@ def test_ik_proxy_preserves_configuration_collision_scope() -> None:
     assert result.details["diagnostics"][-1]["code"] == "collision_coverage_incomplete"
 
 
+def test_ik_proxy_fails_world_coverage_closed_on_world_update_error() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "status": "reachable",
+            "feasible": True,
+            "collision": {
+                "available": True,
+                "checked": True,
+                "detected": False,
+                "world_checked": True,
+                "world_update_error": "synthetic cuRobo update failure",
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-ik-world-error",
+            handle="env-ik-world-error",
+        ),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+    )
+
+    coverage = result.details["outputs"]["collision_coverage"]
+    assert coverage["endpoint_checked"] is True
+    assert coverage["world_checked"] is False
+    assert coverage["coverage_complete"] is False
+    assert coverage["coverage_status"] == "endpoint_only"
+    assert result.details["diagnostics"][-1]["code"] == "collision_coverage_incomplete"
+
+
+@pytest.mark.parametrize(
+    "failure_fields",
+    [
+        {"error": "synthetic collision backend error"},
+        {"available": False},
+        {"collision": {"available": False}},
+        {"success": False},
+    ],
+)
+def test_collision_coverage_fails_closed_on_failed_receipt(
+    failure_fields: JsonDict,
+) -> None:
+    response: JsonDict = {
+        "success": True,
+        "collision": {
+            "available": True,
+            "checked": True,
+            "endpoint_checked": True,
+            "trajectory_checked": True,
+            "world_checked": True,
+            "detected": False,
+        },
+    }
+    for key, value in failure_fields.items():
+        if key == "collision" and isinstance(value, dict):
+            response["collision"].update(value)
+        else:
+            response[key] = value
+
+    coverage = sim_mcp._collision_coverage_receipt(
+        response,
+        agent_tool="move_to",
+        requested_collision_check=True,
+    )
+
+    assert coverage["endpoint_checked"] is False
+    assert coverage["trajectory_checked"] is False
+    assert coverage["world_checked"] is False
+    assert coverage["coverage_complete"] is False
+
+
 def test_simulator_proxy_uses_immutable_artifact_paths_per_call(tmp_path: Path) -> None:
     transport = FakeSimulatorMcpTransport({"task": "first", "cameras": [], "robot": {}})
     tools = bind_simulator_mcp_tool_handlers(

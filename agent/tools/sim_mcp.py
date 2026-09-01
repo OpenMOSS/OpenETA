@@ -615,7 +615,7 @@ class SimulatorMcpToolProxy:
             normalized["outputs"]["attachment_proxy_receipt"] = receipt
             normalized["outputs"]["response"]["attachment_proxy_receipt"] = receipt
         collision_coverage = _collision_coverage_receipt(
-            agent_feedback,
+            raw_response,
             agent_tool=agent_tool,
             requested_collision_check=context.parameters.get(
                 "enable_collision_check",
@@ -2417,6 +2417,23 @@ def _collision_coverage_receipt(
     trajectory_checked = explicit_bool("trajectory_checked", "path_checked")
     world_checked = explicit_bool("world_checked", "scene_checked")
     detected = collision.get("detected") if isinstance(collision.get("detected"), bool) else None
+    receipt_failed = (
+        response.get("success") is False
+        or response.get("ok") is False
+        or response.get("available") is False
+        or collision.get("available") is False
+        or bool(response.get("error"))
+        or bool(collision.get("error"))
+    )
+    world_update_failed = bool(
+        response.get("world_update_error") or collision.get("world_update_error")
+    )
+    if receipt_failed:
+        endpoint_checked = False
+        trajectory_checked = False
+        world_checked = False
+    elif world_update_failed:
+        world_checked = False
     if trajectory_checked and world_checked:
         status = "trajectory_and_world"
     elif trajectory_checked:

@@ -686,7 +686,6 @@ class CollisionChecker:
         ))
         if obj_hash == self._last_objects_hash:
             return False
-        self._last_objects_hash = obj_hash
 
         rw = self._robot_world
         if rw is None:
@@ -695,18 +694,19 @@ class CollisionChecker:
         wc = _build_world_config(objects)
         if wc is None:
             # No usable geometry → drop every obstacle rather than keep the
-            # previous world.  Recording the count as 0 is what actually makes
-            # the next query safe: cuRobo leaves the primitive collision type
-            # registered after an empty update, so its own state cannot tell us
-            # the world is empty.
-            self._obstacle_count = 0
+            # previous world.  Commit the bookkeeping only after cuRobo accepts
+            # the update; otherwise an identical retry would be skipped while
+            # the old world remained resident.
             from curobo.geom.types import WorldConfig as CuroboWorldConfig
 
             rw.update_world(CuroboWorldConfig())
+            self._obstacle_count = 0
+            self._last_objects_hash = obj_hash
             return True
 
         rw.update_world(wc)
         self._obstacle_count = len(getattr(wc, "cuboid", None) or [])
+        self._last_objects_hash = obj_hash
         return True
 
     # ── penetration query ──────────────────────────────────────────
@@ -770,8 +770,8 @@ class CollisionChecker:
         coverage = {
             "check_mode": "post_step_configuration",
             "trajectory_checked": False,
-            "self_checked": bool(self._available),
-            "world_checked": bool(self._available and objects),
+            "self_checked": False,
+            "world_checked": False,
             "world_object_count": len(objects),
         }
         if not self._available:
@@ -795,7 +795,8 @@ class CollisionChecker:
                            **coverage}
 
         if not joint_positions:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": "No joint positions in observation",
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
@@ -813,7 +814,8 @@ class CollisionChecker:
                                "max_self_penetration": 0.0,
                                "world_collision": False, "self_collision": False}
         elif len(joint_positions) < self._arm_dof:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": f"Need >= {self._arm_dof} joint positions, got {len(joint_positions)}",
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
@@ -824,7 +826,11 @@ class CollisionChecker:
             rw = self._ensure_robot_world()
         except Exception as exc:
             _logger.error("Failed to create cuRobo RobotWorld: %s", exc)
-            return False, {"available": False, "reason": f"RobotWorld init failed: {exc}"}
+            return False, {
+                **coverage,
+                "available": False,
+                "reason": f"RobotWorld init failed: {exc}",
+            }
 
         # Update world obstacles.  Called unconditionally — an empty list must
         # reach _update_world_if_changed so it can clear stale geometry.
@@ -840,7 +846,8 @@ class CollisionChecker:
         if q_arm is None:
             q_arm = joint_positions[:self._arm_dof]
         if len(q_arm) < self._arm_dof:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": f"Expected {self._arm_dof} arm joints, got {len(q_arm)}"}
 
         import torch
@@ -886,6 +893,7 @@ class CollisionChecker:
         # unconditional ``detected: False`` reads as a safety guarantee that
         # was never actually evaluated.
         info = {
+            **coverage,
             "available": True,
             "world_checked": self._obstacle_count > 0 and not world_update_error,
             "self_checked": True,
@@ -894,7 +902,6 @@ class CollisionChecker:
             "max_self_penetration": d_self_val,
             "world_collision": world_coll,
             "self_collision": self_coll,
-            **coverage,
         }
         if world_update_error:
             info["world_update_error"] = world_update_error

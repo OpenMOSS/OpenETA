@@ -1,0 +1,4 @@
+[submodule "source/tacex_uipc/libuipc"]
+	path = source/tacex_uipc/libuipc
+	url = https://github.com/DH-Ng/libuipc.git
+	branch = tacex

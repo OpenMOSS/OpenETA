@@ -1,0 +1,73 @@
+seed: 42
+
+# Models are instantiated using skrl's model instantiator utility
+# https://skrl.readthedocs.io/en/latest/api/utils/model_instantiators.html
+models: #! model cfg not used yet in train_sac.py
+  separate: True
+  policy:  # see skrl.utils.model_instantiators.torch.gaussian_model for parameter details
+    class: GaussianMixin
+    clip_actions: False
+    clip_log_std: True
+    initial_log_std: 0
+    min_log_std: -20.0
+    max_log_std: 2.0
+    network:
+    - name: net
+      input: "Shape.STATES"
+      layers: [256, 128, 64]
+      activations: ["elu", "elu", "elu"]
+    output: ACTIONS
+  value:  # see skrl.utils.model_instantiators.torch.deterministic_model for parameter details
+    class: DeterministicMixin
+    clip_actions: False
+    network:
+      - name: net
+        input: STATES
+        layers: [256, 128, 64]
+        activations: ["elu", "elu", "elu"]
+    output: ONE
+
+memory_size: 15625
+
+# SAC agent configuration (field names are from SAC_DEFAULT_CONFIG)
+# https://skrl.readthedocs.io/en/latest/api/agents/sac.html#configuration-and-hyperparameters
+agent:
+  class: SAC
+  gradient_steps": 1            # gradient steps
+  batch_size": 4096               # training batch size
+  discount_factor": 0.99        # discount factor (gamma)
+  polyak": 0.005                # soft update hyperparameter (tau)
+  actor_learning_rate": 1e-3    # actor learning rate
+  critic_learning_rate": 1e-3   # critic learning rate
+  learning_rate_scheduler": None        # learning rate scheduler class (see torch.optim.lr_scheduler)
+  learning_rate_scheduler_kwargs": {}   # learning rate scheduler's kwargs (e.g. {"step_size": 1e-3})
+  state_preprocessor": RunningStandardScaler             # state preprocessor class (see skrl.resources.preprocessors)
+  state_preprocessor_kwargs": {"size": env.observation_space, "device": device}        # state preprocessor's kwargs (e.g. {"size": env.observation_space})
+  random_timesteps": 0          # random exploration steps
+  learning_starts": 0           # learning starts after this many steps
+  grad_norm_clip": 0            # clipping coefficient for the norm of the gradients
+  learn_entropy": True          # learn entropy
+  entropy_learning_rate": 1e-3  # entropy learning rate
+  initial_entropy_value": 0.2   # initial entropy value
+  target_entropy": None         # target entropy
+  rewards_shaper": None         # rewards shaping function: Callable(reward, timestep, timesteps) -> reward
+
+  # logging and checkpoint
+  experiment:
+    directory: "ball_rolling_rigid"
+    experiment_name: "sac"
+    write_interval: 120
+    checkpoint_interval: auto
+    wandb: True             # whether to use Weights & Biases
+    wandb_kwargs: {
+      "sync_tensorboard": True,
+      "project": "ball_rolling"
+    }          # wandb kwargs (see https://docs.wandb.ai/ref/python/init)
+
+
+
+# Sequential trainer
+# https://skrl.readthedocs.io/en/latest/api/trainers/sequential.html
+trainer:
+  timesteps: 2400000
+  environment_info: "log"

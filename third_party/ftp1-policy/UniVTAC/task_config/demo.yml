@@ -1,0 +1,20 @@
+save_dir: ./data
+
+decimation: 1
+
+save_frequency: 2
+video_frequency: 2
+render_frequency: 0 # set to 1 to one IsaacSim App window
+
+random_texture: false # set to true to enable random texture
+
+use_seed: true
+episode_num: 50
+
+sensor_type: gsmini
+
+observations:
+  camera: ['rgb']
+  tactile: ['rgb', 'rgb_marker', 'marker', 'depth', 'pose']
+  embodiment: ['joint', 'ee']
+  actor: true

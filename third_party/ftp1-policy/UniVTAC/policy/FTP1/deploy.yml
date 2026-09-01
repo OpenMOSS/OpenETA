@@ -1,0 +1,27 @@
+policy_name: FTP1
+
+# Required
+checkpoint_dir: /path/to/ftp1/checkpoint/7999
+domain_name: YourDomainName
+
+# Optional
+device: cuda
+num_inference_steps: 10
+chunk_len: 16
+action_rep: auto  # auto | relative | absolute | mix
+
+# Tactile config (must match your checkpoint tactile config)
+tactile_key: right_tactile_gripper
+tactile_sensor: GelSightMini
+
+# UniVTAC / parse_data_univtac convention
+gripper_slot_idx: 28
+
+# If your FTP1 action_dim is legacy/custom (e.g. 91) and cannot be inferred,
+# specify explicit mapping:
+# arm_slice: "9:16"          # 7 dims
+# gripper_index: 44          # scalar index in action vector
+
+# Instruction settings (optional, used by UniVTAC/scripts/eval_policy.py)
+instruction_type: seen
+instuction_file: null

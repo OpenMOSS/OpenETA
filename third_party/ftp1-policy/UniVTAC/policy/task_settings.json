@@ -1,0 +1,42 @@
+{
+    "insert_HDMI": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "lift_bottle": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "lift_can": {
+        "camera_type": "all",
+        "downsample": 1
+    },
+    "pull_out_key": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "put_bottle_in_shelf": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "insert_card": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "insert_hole": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "insert_lean": {
+        "camera_type": "head",
+        "downsample": 1
+    },
+    "insert_tube": {
+        "camera_type": "all",
+        "downsample": 1
+    },
+    "grasp_classify": {
+        "camera_type": "head",
+        "downsample": 1
+    }
+}

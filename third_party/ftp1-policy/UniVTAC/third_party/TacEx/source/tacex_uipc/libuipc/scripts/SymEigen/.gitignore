@@ -1,0 +1,3 @@
+# ignore pycache files
+__pycache__/
+Playground/

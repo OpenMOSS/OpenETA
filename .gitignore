@@ -46,3 +46,9 @@ CLAUDE.md
 
 # Local external simulator and model checkouts
 third_party/
+!third_party/
+third_party/*
+!third_party/ftp1-policy/
+third_party/ftp1-policy/*
+!third_party/ftp1-policy/UniVTAC/
+!third_party/ftp1-policy/UniVTAC/**

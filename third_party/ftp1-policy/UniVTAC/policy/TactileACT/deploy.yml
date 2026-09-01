@@ -1,0 +1,68 @@
+# Basic experiment configuration
+policy_name: TactileACT
+task_name: insert_lean
+task_config: demo
+seed: 0
+
+# Model checkpoint settings
+ckpt_setting: demo-50  # Corresponds to {task_config}-{expert_data_num} from train.sh
+
+# ACT-specific arguments
+state_dim: 8  # TacArena single arm 8D (7 DOF + 1 gripper)
+chunk_size: 20
+kl_weight: 10
+hidden_dim: 512
+dim_feedforward: 3200
+temporal_agg: true
+device: cuda:0
+
+# Camera settings
+camera_names:
+  - head
+  - left_gsmini
+  - right_gsmini
+
+# DETR backbone settings
+backbone: resnet18
+enc_layers: 4
+dec_layers: 7
+nheads: 8
+dropout: 0.1
+position_embedding: sine
+
+# Instruction settings
+instruction_type: seen
+instuction_file: insert_lean
+
+# TactileACT result
+eval: false
+checkpoint: "policy_best"
+onscreen_render: false
+save_dir: "./"
+name: "insert_lean"
+policy_class: "ACT"
+batch_size: 1
+seed: 0
+num_epochs: 6000
+lr: 0.00001
+kl_weight: 10.0
+start_kl_epoch: 0
+kl_scale_epochs: 0
+chunk_size: 20
+hidden_dim: 512
+dim_feedforward: 3200
+temporal_agg: true
+z_dimension: 32
+gpu: -1
+lr_backbone: 1e-5
+weight_decay: 1e-4
+backbone: "clip_backbone"
+dilation: false
+position_embedding: "sine"
+enc_layers: 4
+dec_layers: 7
+dropout: 0.025
+nheads: 8
+pre_norm: false
+masks: false
+clip_backbone_path: "clip_models/lift_bottle_v3/0/epoch_1499"

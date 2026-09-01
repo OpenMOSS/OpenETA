@@ -1,0 +1,38 @@
+# FTP1 inference deps to install **into an existing Isaac Sim env**.
+# Do NOT install/upgrade torch: use Isaac's torch 2.5.1.
+# Install via: bash UniVTAC/scripts/shell/install_ftp1_infer_into_isaacsim.sh (from ftp1 repo root)
+#
+# For CPU-only JAX: replace "jax[cuda12]" with "jax" before running.
+
+# Core (no torch - keep Isaac Sim's torch 2.5.1)
+safetensors
+numpy>=1.22.4,<2.0.0
+typing-extensions>=4.12.2
+
+# Model (Gemma / PaliGemma)
+transformers==4.53.2
+
+# Tokenizer
+sentencepiece>=0.2.0
+fsspec[gcs]>=2024.6.0
+filelock>=3.16.1
+tqdm-loggable>=0.2
+
+# openpi.models.model (Observation), tokenizer
+jax[cuda12]==0.5.3
+jaxtyping==0.2.36
+flax==0.10.2
+orbax-checkpoint==0.11.13
+chex
+einops>=0.8.0
+augmax>=0.3.4
+dm-tree>=0.1.8
+
+# FTP1 model (timm, preprocessing, normalization)
+timm
+pillow>=11.0.0
+opencv-python>=4.10.0.84
+zarr
+beartype==0.19.0
+protobuf==3.20.3
+transforms3d>=0.4.2

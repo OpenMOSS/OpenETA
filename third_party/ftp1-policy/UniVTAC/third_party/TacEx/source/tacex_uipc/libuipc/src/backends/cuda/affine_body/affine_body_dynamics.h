@@ -1,0 +1,539 @@
+#pragma once
+#include <sim_system.h>
+#include <muda/buffer/device_buffer.h>
+#include <muda/buffer/device_var.h>
+#include <affine_body/abd_jacobi_matrix.h>
+#include <uipc/geometry/simplicial_complex.h>
+#include <sim_engine.h>
+#include <utils/dump_utils.h>
+
+namespace uipc::backend::cuda
+{
+class AffineBodyConstitution;
+class AffineBodyDiffParmReporter;
+class AffineBodyDiffDofReporter;
+class AffineBodyKineticDiffParmReporter;
+class AffineBodyBodyReporter;
+class AffineBodyKinetic;
+
+class AffineBodyDynamics : public SimSystem
+{
+    template <typename T>
+    using DeviceBuffer = muda::DeviceBuffer<T>;
+
+    template <typename T>
+    using DeviceVar = muda::DeviceVar<T>;
+
+  public:
+    using SimSystem::SimSystem;
+
+    class Impl;
+
+    class GeoInfo
+    {
+      public:
+        IndexT geo_slot_index     = -1;
+        IndexT geo_id             = -1;
+        U64    constitution_uid   = 0;
+        U64    constitution_index = 0;
+
+        SizeT vertex_offset = 0;
+        SizeT vertex_count  = 0;
+
+        SizeT body_offset = 0;
+        SizeT body_count  = 0;
+    };
+
+    class ForEachInfo
+    {
+      public:
+        SizeT          global_index() const noexcept { return m_global_index; }
+        SizeT          local_index() const noexcept { return m_local_index; }
+        const GeoInfo& geo_info() const noexcept { return *m_geo_info; }
+
+      private:
+        friend class AffineBodyDynamics;
+        SizeT          m_global_index = 0;
+        SizeT          m_local_index  = 0;
+        const GeoInfo* m_geo_info     = nullptr;
+    };
+
+    class ConstitutionInfo
+    {
+      public:
+        SizeT geo_offset = 0;
+        SizeT geo_count  = 0;
+
+        SizeT body_offset = 0;
+        SizeT body_count  = 0;
+
+        SizeT vertex_offset = 0;
+        SizeT vertex_count  = 0;
+    };
+
+    class FilteredInfo
+    {
+      public:
+        FilteredInfo(Impl* impl, SizeT constitution_index) noexcept;
+
+        /**
+         * @brief Short-cut to traverse all bodies of current constitution.
+         * 
+         * @code
+         *  for_each(geo_slots, 
+         *  [](SimplicialComplex& sc)
+         *  {
+         *      return sc.transforms().view();
+         *  },
+         *  [](const ForEachInfo& I, const Matrix4x4& transforms)
+         *  {
+         *      auto bodyI = I.global_index();
+         *      ...
+         *  })
+         * @endcode
+         */
+        template <typename ViewGetterF, typename ForEachF>
+        void for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                      ViewGetterF&&                   getter,
+                      ForEachF&&                      for_each) const;
+
+
+        /**
+         * @brief Short-cut to traverse all geometries of current constitution.
+         * 
+         * @code
+         *  for_each(geo_slots, 
+         *  [](const ForEachInfo& I, SimplicialComplex& sc)
+         *  {
+         *      auto geoI = I.global_index();
+         *      ...
+         *  });
+         * @endcode
+         */
+        template <typename ForEachGeometry>
+        void for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                      ForEachGeometry&&               for_every_geometry) const;
+
+        span<const GeoInfo> geo_infos() const noexcept;
+
+        const ConstitutionInfo& constitution_info() const noexcept;
+
+        SizeT body_count() const noexcept;
+
+        SizeT vertex_count() const noexcept;
+
+      private:
+        friend class Impl;
+        SizeT m_constitution_index = ~0ull;
+        Impl* m_impl               = nullptr;
+    };
+
+    class ComputeEnergyInfo
+    {
+      public:
+        ComputeEnergyInfo(muda::BufferView<Float> energies, Float dt) noexcept
+            : m_energies(energies)
+            , m_dt(dt)
+        {
+        }
+
+        auto dt() const noexcept { return m_dt; }
+
+        auto energies() const noexcept { return m_energies; }
+
+      private:
+        friend class Impl;
+        muda::BufferView<Float> m_energies;
+        Float                   m_dt = 0.0;
+    };
+
+    class ComputeGradientHessianInfo
+    {
+      public:
+        ComputeGradientHessianInfo(muda::BufferView<Vector12>    gradient,
+                                   muda::BufferView<Matrix12x12> hessian,
+                                   Float                         dt)
+            : m_gradients(gradient)
+            , m_hessians(hessian)
+            , m_dt(dt)
+        {
+        }
+
+        auto hessians() const noexcept { return m_hessians; }
+        auto gradients() const noexcept { return m_gradients; }
+        auto dt() const noexcept { return m_dt; }
+
+      private:
+        friend class Impl;
+        muda::BufferView<Matrix12x12> m_hessians;
+        muda::BufferView<Vector12>    m_gradients;
+        Float                         m_dt = 0.0;
+    };
+
+  protected:
+    virtual void do_build() override;
+
+    virtual bool do_dump(DumpInfo& info) override;
+    virtual bool do_try_recover(RecoverInfo& info) override;
+    virtual void do_apply_recover(RecoverInfo& info) override;
+    virtual void do_clear_recover(RecoverInfo& info) override;
+
+    virtual bool do_write_vertex_pos_to_sim(span<const Vector3> positions, IndexT vertex_offset, SizeT vertex_count);
+
+  public:
+    class Impl
+    {
+      public:
+        void init(WorldVisitor& world);
+
+        void _build_constitutions(WorldVisitor& world);
+        void _build_geo_infos(WorldVisitor& world);
+
+        void _setup_geometry_attributes(WorldVisitor& world);
+        void _build_geometry_on_host(WorldVisitor& world);
+        void _build_geometry_on_device(WorldVisitor& world);
+        void _distribute_geo_infos();
+        void _download_geometry_to_host();
+
+        void _init_dof_info();
+        void _init_diff_reporters();
+
+        void write_scene(WorldVisitor& world);
+
+        bool dump(DumpInfo& info);
+        bool try_recover(RecoverInfo& info);
+        void apply_recover(RecoverInfo& info);
+        void clear_recover(RecoverInfo& info);
+
+        bool write_vertex_pos_to_sim(span<const Vector3> positions, IndexT vertex_offset, SizeT vertex_count);
+
+        template <typename ViewGetterF, typename ForEachF>
+        static void _for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                              span<const GeoInfo>             geo_infos,
+                              ViewGetterF&&                   getter,
+                              ForEachF&&                      for_each);
+
+        /*
+         * @brief Short-cut to traverse all bodies of current constitution.
+         */
+        template <typename ViewGetterF, typename ForEachF>
+        void for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                      ViewGetterF&&                   getter,
+                      ForEachF&&                      for_each);
+
+        template <typename ForEachGeometry>
+        static void _for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                              span<const GeoInfo>             geo_infos,
+                              ForEachGeometry&& for_every_geometry);
+
+        template <typename ForEachGeometry>
+        void for_each(span<S<geometry::GeometrySlot>> geo_slots,
+                      ForEachGeometry&&               for_every_geometry);
+
+        SizeT geo_count() const noexcept { return abd_geo_count; }
+        SizeT body_count() const noexcept { return abd_body_count; }
+        SizeT vertex_count() const noexcept { return abd_vertex_count; }
+
+        SimSystemSlotCollection<AffineBodyConstitution> constitutions;
+        SimSystemSlot<AffineBodyKinetic> kinetic;  // ABD Kinetic, only one allowed
+
+        SizeT abd_geo_count    = 0;
+        SizeT abd_body_count   = 0;
+        SizeT abd_vertex_count = 0;
+
+        // core invariant data
+        vector<GeoInfo> geo_infos;
+        unordered_map<U64, IndexT> geo_id_to_geo_info_index;  // uid -> geo_info index
+        unordered_map<U64, IndexT> constitution_uid_to_index;
+        vector<ConstitutionInfo>   constitution_infos;
+
+        // diff reporters
+        SimSystemSlotCollection<AffineBodyDiffParmReporter> diff_parm_reporter;
+
+
+        /******************************************************************************
+        *                        host simulation data
+        *******************************************************************************/
+        vector<ABDJacobi> h_vertex_id_to_J;
+        vector<IndexT>    h_vertex_id_to_body_id;
+        vector<IndexT>    h_vertex_id_to_contact_element_id;
+
+        vector<Vector12>            h_body_id_to_q;
+        vector<Vector12>            h_body_id_to_q_v;
+        vector<IndexT>              h_body_id_to_dim;             // 2 or 3
+        vector<IndexT>              h_body_id_to_self_collision;  // 0 or 1
+        vector<ABDJacobiDyadicMass> h_body_id_to_abd_mass;
+        vector<Matrix12x12>         h_body_id_to_abd_mass_inv;
+        vector<Float>               h_body_id_to_volume;
+        vector<Vector12>            h_body_id_to_abd_gravity;
+        vector<IndexT>              h_body_id_to_is_fixed;
+        vector<IndexT>              h_body_id_to_is_dynamic;
+        vector<Float>               h_constitution_shape_energy;
+
+        /******************************************************************************
+        *                        abd vertex attributes
+        *******************************************************************************/
+        //tex: $$ \mathbf{J}(\bar{\mathbf{x}})
+        // =
+        //\left[\begin{array}{ccc|ccc:ccc:ccc}
+        //1 &   &   & \bar{x}_1 & \bar{x}_2 & \bar{x}_3 &  &  &  &  &  & \\
+            //& 1 &   &  &  &  & \bar{x}_1 & \bar{x}_2 & \bar{x}_3 &  &  &  \\
+            //&   & 1 &  &  &  &  &  &  &  \bar{x}_1 & \bar{x}_2 & \bar{x}_3\\
+            //\end{array}\right] $$
+        DeviceBuffer<ABDJacobi> vertex_id_to_J;
+        DeviceBuffer<IndexT>    vertex_id_to_body_id;
+
+
+        /******************************************************************************
+        *                           abd body attributes
+        *******************************************************************************
+        * abd body attributes are something that involved into physics simulation
+        *******************************************************************************/
+
+        // dim = 2 or 3, 2 for affine body from trimesh, 3 for affine body from tetmesh
+        DeviceBuffer<IndexT> body_id_to_dim;
+        //tex:
+        //$$
+        //\mathbf{M}_i
+        // =
+        // \sum_{j \in \mathcal{B}_i} \mathbf{m}_j
+        //$$
+        //where $\mathcal{B}_i$ is the body $i$,
+        //built from the tetrahedrons $\mathcal{T}_j$ it contains.
+        DeviceBuffer<ABDJacobiDyadicMass> body_id_to_abd_mass;
+        //tex: $$ \mathbf{M}_i^{-1} $$
+        DeviceBuffer<Matrix12x12> body_id_to_abd_mass_inv;
+
+        //tex:
+        //used to rebuild the affine_body_dynamics shape energy coefficient
+        //$$V_{\perp}(m_q)=\kappa v_b\left\|\mathrm{AA}^{T}-\mathrm{I}_{3}\right\|_{F}^{2}$$
+        //where $v_b$ is the volume of the affine body.
+        DeviceBuffer<Float> body_id_to_volume;
+
+        //tex:
+        // $$\mathbf{m_q} =
+        // \begin{bmatrix}
+        // \mathbf { p } \\
+            // \mathbf{a} _1 \\
+            // \mathbf{a} _2 \\
+            // \mathbf{a} _3 \\
+            // \end{bmatrix}
+        // $$
+        // where
+        // $$
+        // A = \begin{bmatrix}
+        // \mathbf{a}_1 & \mathbf{a}_2 & \mathbf{a}_3
+        // \end{bmatrix} ^T
+        // $$
+        DeviceBuffer<Vector12> body_id_to_q;
+
+        //tex: temp $\mathbf{q}$ for line search rollback
+        DeviceBuffer<Vector12> body_id_to_q_temp;
+
+        //tex:
+        //$$
+        //\tilde{\mathbf{q}}_{b}=\mathbf{q}_{b}^{t}+\Delta t \dot{\mathbf{q}}_{b}^{t}+\Delta t^{2} \mathbf{M}^{-1} \mathbf{f}_{b}^{t+1}
+        //$$
+        //predicted q
+        DeviceBuffer<Vector12> body_id_to_q_tilde;
+        //tex: $$ \mathbf{q}^{t}_b $$
+        DeviceBuffer<Vector12> body_id_to_q_prev;
+
+        //tex: $$ \dot{\mathbf{q}} $$
+        DeviceBuffer<Vector12> body_id_to_q_v;
+
+        //tex: $$ \Delta\mathbf{q} $$
+        //for move dir calculation, which means we use PCG/direct solver to solve it.
+        DeviceBuffer<Vector12> body_id_to_dq;
+
+        //tex:
+        //$$
+        //\mathbf{F}_i
+        // =
+        //\sum_{j \in \mathcal{B}_i} \mathbf{f}_j
+        //$$
+        // where $\mathcal{B}_i$ is the body $i$,
+        // built from the tetrahedrons $\mathcal{T}_j$ it contains.
+        DeviceBuffer<Vector12> body_id_to_abd_force;
+
+        DeviceBuffer<Vector12> body_id_to_abd_gravity;
+
+        DeviceBuffer<IndexT> body_id_to_is_fixed;    // Body IsFixed
+        DeviceBuffer<IndexT> body_id_to_is_dynamic;  // Body IsKinematic
+
+        //tex: $$K_i$$ kinetic energy per body
+        DeviceBuffer<Float> body_id_to_kinetic_energy;
+
+        //tex: $$K$$
+        DeviceVar<Float> abd_kinetic_energy;
+
+        //tex: $$E$$
+        DeviceBuffer<Float> body_id_to_shape_energy;
+        DeviceVar<Float>    abd_shape_energy;
+
+        //tex: $$ \mathbf{H}_{ii} $$
+        DeviceBuffer<Matrix12x12> body_id_to_shape_hessian;
+        //tex: $$ \mathbf{g}_{i} $$
+        DeviceBuffer<Vector12> body_id_to_shape_gradient;
+
+        //tex: $$ \mathbf{M}_{ii} $$
+        DeviceBuffer<Matrix12x12> body_id_to_kinetic_hessian;
+        //tex: $$ \mathbf{g}_{i} $$
+        DeviceBuffer<Vector12> body_id_to_kinetic_gradient;
+
+        //tex: diag hessian consider contact
+        DeviceBuffer<Matrix12x12> diag_hessian;
+
+        template <typename T>
+        muda::BufferView<T> subview(DeviceBuffer<T>& body_id_to_values,
+                                    SizeT constitution_index) const noexcept;
+
+        template <typename T>
+        span<T> subview(vector<T>& body_id_to_values, SizeT constitution_index) const noexcept;
+
+        // Dump:
+
+        BufferDump dump_q;
+        BufferDump dump_q_v;
+        BufferDump dump_q_prev;
+
+        // Dof Info:
+        void set_dof_info(SizeT frame, IndexT dof_offset, IndexT dof_count);
+
+        /**
+         * @brief dof offset in global linear system at the given frame.
+         * 
+         * \param frame
+         * \return 
+         */
+        IndexT dof_offset(SizeT frame) const;
+
+        /**
+         * @brief dof count in global linear system at the given frame.
+         * 
+         * \param frame
+         * \return 
+         */
+        IndexT dof_count(SizeT frame) const;
+
+      private:
+        vector<IndexT> frame_to_dof_offset;
+        vector<IndexT> frame_to_dof_count;
+    };
+
+  public:
+    /**
+     * @brief affine body local vertex id to ABD Jacobi matrix
+     */
+    auto Js() const noexcept { return m_impl.vertex_id_to_J.view(); }
+    /**
+     * @brief affine body local vertex id to body id
+     */
+    auto v2b() const noexcept { return m_impl.vertex_id_to_body_id.view(); }
+
+    auto qs() const noexcept { return m_impl.body_id_to_q.view(); }
+
+    auto dqs() const noexcept { return m_impl.body_id_to_dq.view(); }
+
+    auto q_tildes() const noexcept { return m_impl.body_id_to_q_tilde.view(); }
+
+    auto q_prevs() const noexcept { return m_impl.body_id_to_q_prev.view(); }
+
+    auto q_vs() const noexcept { return m_impl.body_id_to_q_v.view(); }
+
+    auto body_volumes() const noexcept
+    {
+        return m_impl.body_id_to_volume.view();
+    }
+
+    auto body_masses() const noexcept
+    {
+        return m_impl.body_id_to_abd_mass.view();
+    }
+
+    auto body_mass_invs() const noexcept
+    {
+        return m_impl.body_id_to_abd_mass_inv.view();
+    }
+
+    auto body_gravities() const noexcept
+    {
+        return m_impl.body_id_to_abd_gravity.view();
+    }
+
+    auto body_is_fixed() const noexcept
+    {
+        return m_impl.body_id_to_is_fixed.view();
+    }
+
+    auto body_is_dynamic() const noexcept
+    {
+        return m_impl.body_id_to_is_dynamic.view();
+    }
+
+    /**
+     * @brief return the body dimension of ABD at the given body.
+     * 
+     * - dim = 2: affine body represented by trimesh (still 3D entity)
+     * - dim = 3: affine body represented by tetmesh
+     *
+     */
+    auto body_dim() const noexcept { return m_impl.body_id_to_dim.view(); }
+
+    /**
+     * @brief return the frame-local dof offset of ABD at the given frame.
+     */
+    IndexT dof_offset(SizeT frame) const;
+    /**
+     * @brief return the frame-local dof count of ABD at the given frame.
+     */
+    IndexT dof_count(SizeT frame) const;
+
+    /*
+     * @brief Short-cut to traverse all bodies of current constitution.
+     */
+    template <typename ViewGetterF, typename ForEachF>
+    void for_each(span<S<geometry::GeometrySlot>> geo_slots, ViewGetterF&& getter, ForEachF&& for_each);
+
+    template <typename ForEachGeometry>
+    void for_each(span<S<geometry::GeometrySlot>> geo_slots, ForEachGeometry&& for_every_geometry);
+
+  private:
+    friend class AffineBodyConstitution;
+    void add_constitution(AffineBodyConstitution* constitution);  // only be called by AffineBodyConstitution
+
+    friend class AffineBodyKinetic;
+    void add_kinetic(AffineBodyKinetic* kinetic);  // only be called by AffineBodyKinetic
+
+    friend class InterAffineBodyAnimator;
+    friend class AffineBodyVertexReporter;
+    friend class AffinebodySurfaceReporter;
+    friend class AffineBodyBodyReporter;
+    friend class InterAffineBodyConstitutionManager;
+
+    friend class ABDLinearSubsystem;
+    friend class ABDLineSearchReporter;
+    friend class ABDDiagPreconditioner;
+
+    friend class AffineBodyConstitution;
+    friend class ABDGradientHessianComputer;
+    friend class AffineBodyAnimator;
+
+    friend class AffineBodyDiffParmReporter;
+    friend class AffineBodyDiffDofReporter;
+    friend class ABDAdjointMethodReplayer;
+    friend class ABDDiffSimManager;
+
+    friend class AffineBodyKineticDiffParmReporter;
+    friend class ABDTimeIntegrator;
+
+    void add_reporter(AffineBodyKineticDiffParmReporter* reporter);
+
+    friend class SimEngine;
+    void init();  // only be called by SimEngine
+
+    Impl m_impl;
+};
+}  // namespace uipc::backend::cuda
+
+#include "details/affine_body_dynamics.inl"

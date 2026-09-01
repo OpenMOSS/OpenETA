@@ -1,0 +1,7 @@
+imgui.ini
+.polyscope.ini
+dist/
+.pytest_cache/
+.venv/
+*.egg-info/
+build/

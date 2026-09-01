@@ -1463,16 +1463,18 @@ def _collision_distance_report(
     *,
     distance_limit_m: float,
 ) -> dict[str, Any]:
-    import mujoco
-
     model = configuration.model
     data = configuration.data
     minimum = math.inf
     worst: tuple[int, int] | None = None
-    fromto = np.empty(6, dtype=np.float64)
+    contact_distances = _contact_pair_minimum_distances(data)
     for geom1, geom2 in pairs:
-        distance = float(
-            mujoco.mj_geomDistance(model, data, geom1, geom2, 0.02, fromto)
+        distance = _signed_geom_pair_distance(
+            model,
+            data,
+            geom1,
+            geom2,
+            contact_distances=contact_distances,
         )
         if distance < minimum:
             minimum = distance
@@ -1502,17 +1504,74 @@ def _collision_pair_distances(
 ) -> dict[tuple[int, int], float]:
     """Return signed distances for deterministic penetration-recovery checks."""
 
-    import mujoco
-
     model = configuration.model
     data = configuration.data
-    fromto = np.empty(6, dtype=np.float64)
+    contact_distances = _contact_pair_minimum_distances(data)
     return {
-        (int(geom1), int(geom2)): float(
-            mujoco.mj_geomDistance(model, data, geom1, geom2, 0.02, fromto)
+        (int(geom1), int(geom2)): _signed_geom_pair_distance(
+            model,
+            data,
+            geom1,
+            geom2,
+            contact_distances=contact_distances,
         )
         for geom1, geom2 in pairs
     }
+
+
+def _signed_geom_pair_distance(
+    model: Any,
+    data: Any,
+    geom1: int,
+    geom2: int,
+    *,
+    contact_distances: dict[tuple[int, int], float] | None = None,
+) -> float:
+    """Return the most conservative signed distance available for one pair.
+
+    MuJoCo 3.3.0 can return exactly zero from ``mj_geomDistance`` for deeply
+    penetrating boxes near an orthogonal orientation, even though ``mj_forward``
+    has populated negative-distance contacts for the same geom pair.  A zero
+    distance is above OpenETA's -1 mm hard-stop threshold and would therefore
+    authorize the colliding step.  Contact distances are an independent
+    production signal, so retain the smaller of both values.
+    """
+
+    import mujoco
+
+    first = int(geom1)
+    second = int(geom2)
+    fromto = np.empty(6, dtype=np.float64)
+    distance = float(
+        mujoco.mj_geomDistance(model, data, first, second, 0.02, fromto)
+    )
+    contact_distance = (contact_distances or {}).get(
+        (min(first, second), max(first, second))
+    )
+    if contact_distance is not None:
+        distance = min(distance, contact_distance)
+    return distance
+
+
+def _contact_pair_minimum_distances(data: Any) -> dict[tuple[int, int], float]:
+    """Index finite MuJoCo contact distances once for all protected pairs."""
+
+    distances: dict[tuple[int, int], float] = {}
+    for index in range(int(getattr(data, "ncon", 0))):
+        contact = data.contact[index]
+        contact_first = int(contact.geom1)
+        contact_second = int(contact.geom2)
+        if contact_first < 0 or contact_second < 0:
+            continue
+        contact_distance = float(contact.dist)
+        if not math.isfinite(contact_distance):
+            continue
+        key = (
+            min(contact_first, contact_second),
+            max(contact_first, contact_second),
+        )
+        distances[key] = min(distances.get(key, math.inf), contact_distance)
+    return distances
 
 
 def _robot_joint_limit_state(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -512,6 +513,87 @@ def test_attached_object_rotation_prediction_exposes_obstacle_collision() -> Non
     assert np.allclose(
         transformed[3:7],
         [quarter_turn, 0.0, 0.0, quarter_turn],
+    )
+
+
+def test_production_collision_distance_uses_contacts_for_orthogonal_boxes() -> None:
+    mujoco = pytest.importorskip("mujoco")
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <body name="held" pos="0 0 0">
+              <freejoint/>
+              <geom name="held_geom" type="box" size="0.10 0.01 0.01"/>
+            </body>
+            <body name="obstacle" pos="0 0.08 0">
+              <geom name="obstacle_geom" type="box" size="0.02 0.02 0.02"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    half_angle = math.pi / 4.0
+    data.qpos[:7] = [
+        0.0,
+        0.0,
+        0.0,
+        math.cos(half_angle),
+        0.0,
+        0.0,
+        math.sin(half_angle),
+    ]
+    mujoco.mj_forward(model, data)
+    held = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "held_geom",
+    )
+    obstacle = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "obstacle_geom",
+    )
+
+    matching_contacts = [
+        float(data.contact[index].dist)
+        for index in range(data.ncon)
+        if {
+            int(data.contact[index].geom1),
+            int(data.contact[index].geom2),
+        }
+        == {held, obstacle}
+    ]
+    assert matching_contacts
+    assert min(matching_contacts) < -0.01
+    fromto = np.empty(6, dtype=np.float64)
+    raw_distance = float(
+        mujoco.mj_geomDistance(model, data, held, obstacle, 0.02, fromto)
+    )
+    if mujoco.__version__ == "3.3.0":
+        # This is the upstream degeneracy that originally let the collision
+        # through OpenETA's -1 mm hard stop.
+        assert raw_distance == pytest.approx(0.0)
+
+    configuration = SimpleNamespace(model=model, data=data)
+    report = mink_goal._collision_distance_report(
+        configuration,
+        [(held, obstacle)],
+        distance_limit_m=-0.001,
+    )
+    pair_distances = mink_goal._collision_pair_distances(
+        configuration,
+        [(held, obstacle)],
+    )
+
+    assert report["detected"] is True
+    assert report["minimum_distance_m"] == pytest.approx(
+        min(raw_distance, *matching_contacts)
+    )
+    assert pair_distances[(held, obstacle)] == pytest.approx(
+        report["minimum_distance_m"]
     )
 
 

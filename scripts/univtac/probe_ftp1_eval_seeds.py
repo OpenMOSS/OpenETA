@@ -26,6 +26,7 @@ from scripts.univtac.audit_ftp1_protocol import (
     audit_protocol,
     render_markdown,
 )
+from sim.envs.univtac.resource_sanitation import run_managed_process
 from sim.envs.univtac.trace import write_json
 
 
@@ -357,40 +358,28 @@ def _run_subprocess(
     log_path: Path,
     timeout: int,
     environment_overrides: dict[str, str] | None = None,
+    unset_environment: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    started = _utc_now()
-    timed_out = False
     child_environment = os.environ.copy()
+    for name in unset_environment:
+        child_environment.pop(name, None)
     child_environment.update(environment_overrides or {})
-    with log_path.open("w", encoding="utf-8") as log:
-        log.write("COMMAND: " + " ".join(command) + "\n")
-        log.flush()
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
-                text=True,
-                env=child_environment,
-            )
-            returncode = completed.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            returncode = 124
-            log.write(f"\nTIMEOUT after {timeout} seconds\n")
-    return {
-        "command": command,
-        "started_at": started,
-        "ended_at": _utc_now(),
-        "returncode": returncode,
-        "timed_out": timed_out,
-        "environment_overrides": dict(sorted((environment_overrides or {}).items())),
-        "log_path": str(log_path),
-    }
+    result = run_managed_process(
+        command,
+        cwd=cwd,
+        log_path=log_path,
+        timeout_seconds=timeout,
+        environment=child_environment,
+    )
+    result.update(
+        {
+            "environment_overrides": dict(
+                sorted((environment_overrides or {}).items())
+            ),
+            "unset_environment": sorted(unset_environment),
+        }
+    )
+    return result
 
 
 def _materialize_seed_evidence(

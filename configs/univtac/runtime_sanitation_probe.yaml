@@ -1,0 +1,21 @@
+canonical_checkout: /home/ubuntu/wybcode/.worktrees/ftp1-policy/r02-official-89fa681
+canonical_commit: 89fa681d6c014cce28300946b7526db808e0b1c1
+canonical_task_root: /home/ubuntu/wybcode/.worktrees/ftp1-policy/r02-official-89fa681/UniVTAC
+asset_root: /tmp/univtac/third_party/TacEx/source/tacex_assets/tacex_assets/data
+diagnostic_config: configs/univtac/ftp1_eval_seed_probe.yaml
+python_executable: /home/ubuntu/anaconda3/envs/UniVTAC/bin/python
+task_config: task_config/contact.yml
+seeds: [1000000, 1000001, 1000002]
+cuda_modes:
+  d0_visible_gpu0:
+    CUDA_VISIBLE_DEVICES: "0"
+    CUDA_DEVICE_ORDER: PCI_BUS_ID
+  d1_unset_visible_devices:
+    CUDA_DEVICE_ORDER: PCI_BUS_ID
+uipc_timeout_seconds: 300
+reset_timeout_seconds: 1800
+cleanup_wait_seconds: 15
+post_run_stabilization_seconds: 5
+gpu_free_ratio_required: 0.70
+inotify_instances_temporary_limit: 1024
+inotify_watches_temporary_limit: 524288

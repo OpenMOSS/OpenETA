@@ -346,6 +346,55 @@ def test_libero_success_requires_same_execution_trusted_receipt(
     )
 
 
+def test_terminal_receipt_is_not_overwritten_within_one_action() -> None:
+    def trusted_call(name: str, *, reward: float) -> dict:
+        return {
+            "name": name,
+            "result": {
+                "success": True,
+                "details": {
+                    "host_provenance": {"authority": "environment"},
+                    "environment_receipt": {
+                        "schema_version": "openeta.environment_receipt.v1",
+                        "execution_id": "episode-1",
+                        "agent_session_id": "agent-1",
+                        "simulator_session_id": "sim-session",
+                        "handle": "env-1",
+                        "reward_present": True,
+                        "reward": reward,
+                        "terminated": True,
+                        "truncated": False,
+                        "observation_fresh": False,
+                    },
+                },
+            },
+        }
+
+    environment = ToolFeedbackEpisodeEnvironment()
+    environment.reset(
+        task="pick cube",
+        metadata={"execution_id": "episode-1", "agent_session_id": "agent-1"},
+    )
+    action = EnvAction(
+        action_type="tool_call",
+        command={
+            "request": {"kind": "tool_call", "name": "move_to"},
+            "tool_calls": [
+                trusted_call("move_to", reward=1.0),
+                trusted_call("repeated_step", reward=0.0),
+            ],
+        },
+    )
+
+    step = environment.step(action)
+
+    assert step.reward == 1.0
+    assert step.terminated is True
+    assert step.info["rejected_environment_receipts"] == [
+        {"reason": "environment_receipt_after_terminal_state"}
+    ]
+
+
 def test_receipt_from_another_execution_is_rejected(tmp_path: Path) -> None:
     tools = bind_simulator_mcp_tool_handlers(
         build_default_tool_registry(),

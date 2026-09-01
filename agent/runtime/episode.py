@@ -1084,12 +1084,22 @@ def _latest_trusted_environment_receipt(
             rejected.append({"tool": call.get("name"), "reason": reason})
             continue
         trusted.append(dict(receipt))
-    if any(
-        _trusted_receipt_flag(receipt, "terminated")
-        or _trusted_receipt_flag(receipt, "truncated")
-        for receipt in trusted[:-1]
-    ):
+    terminal_index = next(
+        (
+            index
+            for index, receipt in enumerate(trusted)
+            if _trusted_receipt_flag(receipt, "terminated")
+            or _trusted_receipt_flag(receipt, "truncated")
+        ),
+        None,
+    )
+    if terminal_index is not None and terminal_index < len(trusted) - 1:
         rejected.append({"reason": "environment_receipt_after_terminal_state"})
+    if terminal_index is not None:
+        # Terminal environment evidence is absorbing within one Agent action.
+        # Later receipts may be retained for diagnostics, but cannot erase its
+        # official reward or terminal flags.
+        return trusted[terminal_index], rejected
     return (trusted[-1] if trusted else {}), rejected
 
 

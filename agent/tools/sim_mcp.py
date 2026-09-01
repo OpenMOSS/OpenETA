@@ -3913,6 +3913,19 @@ def _truncate_action_text(value: object, *, max_chars: int = 300) -> object:
 
 
 def _latest_action_reward(action: EnvAction, payload: JsonDict) -> float:
+    receipt = _latest_trusted_action_environment_receipt(action)
+    receipt_reward = receipt.get("reward")
+    if (
+        (receipt.get("terminated") is True or receipt.get("truncated") is True)
+        and receipt.get("reward_present") is True
+        and isinstance(receipt_reward, int | float)
+        and not isinstance(receipt_reward, bool)
+        and math.isfinite(float(receipt_reward))
+    ):
+        # ``payload`` is the read-only render performed after the Agent action.
+        # A legacy backend may echo reward=0 there; it cannot overwrite the
+        # action's trusted terminal receipt.
+        return float(receipt_reward)
     if "reward" in payload:
         reward = payload.get("reward")
         if (
@@ -3922,8 +3935,7 @@ def _latest_action_reward(action: EnvAction, payload: JsonDict) -> float:
         ):
             return float(reward)
         return 0.0
-    receipt = _latest_trusted_action_environment_receipt(action)
-    reward = receipt.get("reward")
+    reward = receipt_reward
     if (
         receipt.get("reward_present") is True
         and isinstance(reward, int | float)
@@ -3935,11 +3947,14 @@ def _latest_action_reward(action: EnvAction, payload: JsonDict) -> float:
 
 
 def _latest_action_flag(action: EnvAction, payload: JsonDict, key: str) -> bool:
+    receipt = _latest_trusted_action_environment_receipt(action)
+    receipt_value = receipt.get(key)
+    if receipt_value is True and key in {"terminated", "truncated"}:
+        return True
     if key in payload:
         value = payload.get(key)
         return value if isinstance(value, bool) else False
-    value = _latest_trusted_action_environment_receipt(action).get(key)
-    return value if isinstance(value, bool) else False
+    return receipt_value if isinstance(receipt_value, bool) else False
 
 
 def _latest_action_receipt_has_reward(action: EnvAction) -> bool:
@@ -3950,7 +3965,8 @@ def _latest_trusted_action_environment_receipt(action: EnvAction) -> JsonDict:
     calls = action.command.get("tool_calls")
     if not isinstance(calls, list):
         return {}
-    for call in reversed(calls):
+    latest: JsonDict = {}
+    for call in calls:
         if not isinstance(call, dict):
             continue
         result = call.get("result")
@@ -3965,8 +3981,14 @@ def _latest_trusted_action_environment_receipt(action: EnvAction) -> JsonDict:
             and isinstance(receipt, dict)
             and receipt.get("schema_version") == ENVIRONMENT_RECEIPT_SCHEMA_VERSION
         ):
-            return receipt
-    return {}
+            latest = receipt
+            if receipt.get("terminated") is True or receipt.get("truncated") is True:
+                # Terminal evidence is absorbing within the action.  The
+                # episode runner cannot stop between receipts produced inside
+                # one runtime.act(), so a later synthetic/replayed response
+                # must not overwrite the official terminal reward.
+                return receipt
+    return latest
 
 
 def _latest_action_termination_reason(action: EnvAction) -> str:

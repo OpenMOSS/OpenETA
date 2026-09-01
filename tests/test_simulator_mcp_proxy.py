@@ -2204,6 +2204,62 @@ def test_mcp_episode_stops_after_explicit_remote_termination_error() -> None:
     assert step.info["termination_reason"] == "remote_episode_terminated"
 
 
+def test_mcp_episode_keeps_first_terminal_receipt_reward() -> None:
+    def trusted_call(name: str, *, reward: float) -> dict:
+        return {
+            "name": name,
+            "result": {
+                "success": True,
+                "details": {
+                    "host_provenance": {"authority": "environment"},
+                    "environment_receipt": {
+                        "schema_version": "openeta.environment_receipt.v1",
+                        "reward_present": True,
+                        "reward": reward,
+                        "terminated": True,
+                        "truncated": False,
+                    },
+                },
+            },
+        }
+
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "cameras": [],
+            "robot": {},
+            "objects": [],
+            "reward": 0.0,
+            "terminated": False,
+            "truncated": False,
+        }
+    )
+    env = SimulatorMcpEpisodeEnvironment(
+        transport=transport,
+        config=SimulatorMcpEpisodeConfig(
+            env_id="openeta/libero_probe-v0",
+            session_id="sim-session",
+            handle="env-1",
+        ),
+    )
+    action = EnvAction(
+        action_type="tool_call",
+        command={
+            "request": {"kind": "tool_call", "name": "move_to"},
+            "tool_calls": [
+                trusted_call("move_to", reward=1.0),
+                trusted_call("repeated_step", reward=0.0),
+            ],
+        },
+    )
+
+    step = env.step(action)
+
+    assert step.reward == 1.0
+    assert step.terminated is True
+    assert step.info["official_reward"] is True
+
+
 def test_mcp_episode_does_not_treat_regular_tool_failure_as_termination() -> None:
     transport = FakeSimulatorMcpTransport({"cameras": [], "robot": {}, "reward": 0.0})
     env = SimulatorMcpEpisodeEnvironment(

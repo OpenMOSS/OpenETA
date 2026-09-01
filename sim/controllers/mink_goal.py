@@ -465,15 +465,18 @@ def execute_libero_mink_goal(
             attached_preview: dict[str, Any] | None = None
             attached_escape_safe = True
             if attached_pairs:
-                predicted_eef_xyz, _ = _configuration_eef_pose(
+                predicted_eef_xyz, predicted_eef_quat = _configuration_eef_pose(
                     model,
                     predicted_q,
                     robot,
                 )
-                predicted_attached_q = _translate_attached_object_with_eef(
+                predicted_attached_q = _transform_attached_object_with_eef(
                     predicted_q,
                     collision_policy,
-                    predicted_eef_xyz - current_xyz,
+                    current_eef_xyz=current_xyz,
+                    current_eef_quat_xyzw=current_quat,
+                    predicted_eef_xyz=predicted_eef_xyz,
+                    predicted_eef_quat_xyzw=predicted_eef_quat,
                 )
                 predicted_attached = mink.Configuration(
                     model,
@@ -1375,26 +1378,83 @@ def _libero_collision_policy(
     }
 
 
-def _translate_attached_object_with_eef(
+def _transform_attached_object_with_eef(
     q: np.ndarray,
     policy: dict[str, Any],
-    eef_delta_xyz: np.ndarray,
+    *,
+    current_eef_xyz: np.ndarray,
+    current_eef_quat_xyzw: np.ndarray,
+    predicted_eef_xyz: np.ndarray,
+    predicted_eef_quat_xyzw: np.ndarray,
 ) -> np.ndarray:
-    """Translate the attached free body with a predicted EEF increment."""
+    """Rigidly carry an attached free body into a predicted EEF pose.
+
+    MuJoCo stores free-joint orientation as WXYZ, while the EEF helpers and
+    scipy use XYZW.  Reconstructing the current object-to-EEF transform from
+    live qpos on every preview keeps both translation and rotation aligned
+    without introducing task-stage state or trusting a stale host estimate.
+    """
 
     qpos_adr = policy.get("attached_object_qpos_adr")
     if not isinstance(qpos_adr, int) or qpos_adr < 0:
         raise RuntimeError(
             "attached-object trajectory prediction has no valid free-joint qpos address"
         )
-    delta = _finite_vector(eef_delta_xyz, 3, "eef_delta_xyz")
-    translated = np.asarray(q, dtype=np.float64).copy()
-    if qpos_adr + 3 > translated.shape[0]:
+    transformed = np.asarray(q, dtype=np.float64).copy()
+    if qpos_adr + 7 > transformed.shape[0]:
         raise RuntimeError(
-            "attached-object free-joint translation lies outside the configuration"
+            "attached-object free-joint pose lies outside the configuration"
         )
-    translated[qpos_adr : qpos_adr + 3] += delta
-    return translated
+
+    current_eef_position = _finite_vector(
+        current_eef_xyz,
+        3,
+        "current_eef_xyz",
+    )
+    predicted_eef_position = _finite_vector(
+        predicted_eef_xyz,
+        3,
+        "predicted_eef_xyz",
+    )
+    current_eef_quat = _normalised_quaternion(current_eef_quat_xyzw)
+    predicted_eef_quat = _normalised_quaternion(predicted_eef_quat_xyzw)
+
+    current_object_position = transformed[qpos_adr : qpos_adr + 3].copy()
+    object_quat_wxyz = transformed[qpos_adr + 3 : qpos_adr + 7].copy()
+    object_quat_xyzw = object_quat_wxyz[[1, 2, 3, 0]]
+    object_quat_norm = float(np.linalg.norm(object_quat_xyzw))
+    if object_quat_norm <= 1e-9 or not np.isfinite(object_quat_norm):
+        raise RuntimeError("attached-object free-joint quaternion is invalid")
+    current_object_quat = object_quat_xyzw / object_quat_norm
+
+    current_eef_inverse = _quaternion_conjugate_xyzw(current_eef_quat)
+    eef_to_object_position = _rotate_vector_by_quaternion_xyzw(
+        current_eef_inverse,
+        current_object_position - current_eef_position
+    )
+    eef_to_object_quat = _multiply_quaternions_xyzw(
+        current_eef_inverse,
+        current_object_quat,
+    )
+    predicted_object_position = predicted_eef_position + (
+        _rotate_vector_by_quaternion_xyzw(
+            predicted_eef_quat,
+            eef_to_object_position,
+        )
+    )
+    predicted_object_quat_xyzw = _normalise_quaternion_xyzw(
+        _multiply_quaternions_xyzw(
+            predicted_eef_quat,
+            eef_to_object_quat,
+        ),
+        "predicted_attached_object_quaternion",
+    )
+
+    transformed[qpos_adr : qpos_adr + 3] = predicted_object_position
+    transformed[qpos_adr + 3 : qpos_adr + 7] = predicted_object_quat_xyzw[
+        [3, 0, 1, 2]
+    ]
+    return transformed
 
 
 def _collision_distance_report(
@@ -1572,7 +1632,7 @@ def _collision_receipt(policy: dict[str, Any] | None) -> dict[str, Any]:
         "self_checked": True,
         "check_mode": (
             "per_step_pre_actuation_and_post_step_configuration_with_"
-            "translated_attached_object"
+            "rigidly_transformed_attached_object"
             if attached
             else "per_step_pre_actuation_and_post_step_configuration"
         ),
@@ -1614,7 +1674,7 @@ def _collision_receipt(policy: dict[str, Any] | None) -> dict[str, Any]:
                 "actual_step_checked": bool(attached_pairs),
                 "geometry_source": "worker_live_mujoco_collision_geoms",
                 "prediction_policy": (
-                    "translate_attached_free_body_with_predicted_eef_delta"
+                    "rigid_object_to_eef_transform_per_predicted_step"
                 ),
                 "attached_object_geom_count": int(
                     policy.get("attached_object_geom_count") or 0
@@ -1640,8 +1700,8 @@ def _collision_receipt(policy: dict[str, Any] | None) -> dict[str, Any]:
                 },
                 "interpretation": (
                     "The outer server performs the conservative endpoint AABB check. "
-                    "The worker additionally translates the attached object's live "
-                    "MuJoCo collision geometry with each predicted EEF increment and "
+                    "The worker additionally applies the live object-to-EEF rigid "
+                    "transform to the attached object's MuJoCo collision geometry and "
                     "checks both predicted and actual object/world configurations."
                 ),
             }
@@ -1691,11 +1751,54 @@ def _finite_vector(value: Any, length: int, name: str) -> np.ndarray:
 
 
 def _normalised_quaternion(value: Any) -> np.ndarray:
-    quat = _finite_vector(value, 4, "target_quat_xyzw")
+    return _normalise_quaternion_xyzw(value, "target_quat_xyzw")
+
+
+def _normalise_quaternion_xyzw(value: Any, name: str) -> np.ndarray:
+    quat = _finite_vector(value, 4, name)
     norm = float(np.linalg.norm(quat))
     if norm <= 1e-9:
-        raise ValueError("target_quat_xyzw must be non-zero")
+        raise ValueError(f"{name} must be non-zero")
     return quat / norm
+
+
+def _quaternion_conjugate_xyzw(quat_xyzw: np.ndarray) -> np.ndarray:
+    quat = _finite_vector(quat_xyzw, 4, "quat_xyzw")
+    return np.asarray([-quat[0], -quat[1], -quat[2], quat[3]])
+
+
+def _multiply_quaternions_xyzw(
+    lhs_xyzw: np.ndarray,
+    rhs_xyzw: np.ndarray,
+) -> np.ndarray:
+    """Compose XYZW quaternions using the Hamilton product (lhs * rhs)."""
+
+    lx, ly, lz, lw = _finite_vector(lhs_xyzw, 4, "lhs_xyzw")
+    rx, ry, rz, rw = _finite_vector(rhs_xyzw, 4, "rhs_xyzw")
+    return np.asarray(
+        [
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw,
+            lw * rw - lx * rx - ly * ry - lz * rz,
+        ],
+        dtype=np.float64,
+    )
+
+
+def _rotate_vector_by_quaternion_xyzw(
+    quat_xyzw: np.ndarray,
+    vector_xyz: np.ndarray,
+) -> np.ndarray:
+    """Apply a unit XYZW quaternion to a 3-D vector without scipy."""
+
+    quat = _normalise_quaternion_xyzw(quat_xyzw, "rotation_quat_xyzw")
+    vector = _finite_vector(vector_xyz, 3, "vector_xyz")
+    axis = quat[:3]
+    return vector + 2.0 * (
+        quat[3] * np.cross(axis, vector)
+        + np.cross(axis, np.cross(axis, vector))
+    )
 
 
 def _angular_error_rad(actual_xyzw: np.ndarray, target_xyzw: np.ndarray) -> float:

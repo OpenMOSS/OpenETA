@@ -419,19 +419,100 @@ def test_mink_joint_seed_validation_binds_candidate_to_execution_tolerance(
     assert rejected.startswith("ik_execution_seed_target_mismatch:")
 
 
-def test_attached_object_prediction_translates_only_free_joint_position() -> None:
+def test_attached_object_prediction_preserves_rigid_transform_during_translation() -> None:
     q = np.arange(14, dtype=np.float64)
+    q[4:7] = [0.2, -0.1, 0.3]
+    q[7:11] = [1.0, 0.0, 0.0, 0.0]
 
-    translated = mink_goal._translate_attached_object_with_eef(
+    transformed = mink_goal._transform_attached_object_with_eef(
         q,
         {"attached_object_qpos_adr": 4},
-        np.asarray([0.01, -0.02, 0.03]),
+        current_eef_xyz=np.asarray([0.1, -0.2, 0.25]),
+        current_eef_quat_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+        predicted_eef_xyz=np.asarray([0.11, -0.22, 0.28]),
+        predicted_eef_quat_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
     )
 
-    assert np.allclose(translated[4:7], q[4:7] + [0.01, -0.02, 0.03])
-    assert np.allclose(translated[:4], q[:4])
-    assert np.allclose(translated[7:], q[7:])
-    assert np.allclose(q, np.arange(14, dtype=np.float64))
+    assert np.allclose(transformed[4:7], q[4:7] + [0.01, -0.02, 0.03])
+    assert np.allclose(transformed[7:11], [1.0, 0.0, 0.0, 0.0])
+    assert np.allclose(transformed[:4], q[:4])
+    assert np.allclose(transformed[11:], q[11:])
+    assert np.allclose(q[4:11], [0.2, -0.1, 0.3, 1.0, 0.0, 0.0, 0.0])
+
+
+def test_attached_object_prediction_rotates_offset_and_orientation() -> None:
+    q = np.zeros(9, dtype=np.float64)
+    q[:3] = [0.1, 0.0, 0.0]
+    q[3:7] = [1.0, 0.0, 0.0, 0.0]
+    quarter_turn = np.sqrt(0.5)
+
+    transformed = mink_goal._transform_attached_object_with_eef(
+        q,
+        {"attached_object_qpos_adr": 0},
+        current_eef_xyz=np.zeros(3),
+        current_eef_quat_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+        predicted_eef_xyz=np.asarray([0.0, 0.2, 0.0]),
+        predicted_eef_quat_xyzw=np.asarray(
+            [0.0, 0.0, quarter_turn, quarter_turn]
+        ),
+    )
+
+    assert np.allclose(transformed[:3], [0.0, 0.3, 0.0], atol=1e-9)
+    assert np.allclose(
+        transformed[3:7],
+        [quarter_turn, 0.0, 0.0, quarter_turn],
+        atol=1e-9,
+    )
+
+
+def test_attached_object_rotation_prediction_exposes_obstacle_collision() -> None:
+    q = np.zeros(7, dtype=np.float64)
+    q[3] = 1.0
+    quarter_turn = np.sqrt(0.5)
+    transformed = mink_goal._transform_attached_object_with_eef(
+        q,
+        {"attached_object_qpos_adr": 0},
+        current_eef_xyz=np.zeros(3),
+        current_eef_quat_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+        predicted_eef_xyz=np.zeros(3),
+        predicted_eef_quat_xyzw=np.asarray(
+            [0.0, 0.0, quarter_turn, quarter_turn]
+        ),
+    )
+
+    held_half_extent = np.asarray([0.10, 0.01, 0.01])
+    obstacle_min = np.asarray([-0.02, 0.07, -0.02])
+    obstacle_max = np.asarray([0.02, 0.11, 0.02])
+
+    def overlaps_obstacle(configuration: np.ndarray) -> bool:
+        center = configuration[:3]
+        quat_wxyz = configuration[3:7]
+        quat_xyzw = quat_wxyz[[1, 2, 3, 0]]
+        corners = np.asarray(
+            [
+                [sx * held_half_extent[0], sy * held_half_extent[1], sz * held_half_extent[2]]
+                for sx in (-1.0, 1.0)
+                for sy in (-1.0, 1.0)
+                for sz in (-1.0, 1.0)
+            ]
+        )
+        world_corners = np.asarray(
+            [
+                center
+                + mink_goal._rotate_vector_by_quaternion_xyzw(quat_xyzw, corner)
+                for corner in corners
+            ]
+        )
+        held_min = world_corners.min(axis=0)
+        held_max = world_corners.max(axis=0)
+        return bool(np.all(held_max >= obstacle_min) and np.all(held_min <= obstacle_max))
+
+    assert overlaps_obstacle(q) is False
+    assert overlaps_obstacle(transformed) is True
+    assert np.allclose(
+        transformed[3:7],
+        [quarter_turn, 0.0, 0.0, quarter_turn],
+    )
 
 
 def test_attached_object_collision_receipt_reports_per_step_geometry_coverage() -> None:
@@ -461,6 +542,9 @@ def test_attached_object_collision_receipt_reports_per_step_geometry_coverage() 
     assert coverage["predicted_step_checked"] is True
     assert coverage["actual_step_checked"] is True
     assert coverage["protected_pair_count"] == 2
+    assert coverage["prediction_policy"] == (
+        "rigid_object_to_eef_transform_per_predicted_step"
+    )
     assert coverage["boundary_recovery"]["verified_escape_steps"] == 1
 
 

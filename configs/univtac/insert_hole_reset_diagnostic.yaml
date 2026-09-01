@@ -1,0 +1,5 @@
+task_config: task_config/demo.yml
+strict_two_tactile_sensors: true
+fail_on_missing_rgb_marker: true
+required_valid_seeds: 3
+candidate_order: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

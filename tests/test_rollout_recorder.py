@@ -188,8 +188,10 @@ def test_rollout_externalizes_provider_images_and_redacts_secrets(tmp_path: Path
                     "finish_reason": "stop",
                     "message": {
                         "content": (
-                            '{"kind":"response","name":"talk",'
-                            '"parameters":{"message":"done"}}'
+                            "<decision><kind>response</kind><name>talk</name>"
+                            "<reasoning>done</reasoning>"
+                            "<parameters><message>done</message></parameters>"
+                            "</decision>"
                         )
                     },
                 }

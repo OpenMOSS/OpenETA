@@ -667,7 +667,12 @@ def test_backend_places_cache_stable_context_before_growing_history() -> None:
             "choices": [
                 {
                     "finish_reason": "stop",
-                    "message": {"content": '{"kind":"response","name":"talk"}'},
+                    "message": {
+                        "content": (
+                            "<decision><kind>response</kind><name>talk</name>"
+                            "<reasoning>ok</reasoning><parameters/></decision>"
+                        )
+                    },
                 }
             ],
             "usage": {
@@ -843,6 +848,70 @@ def test_backend_collapses_leading_system_messages_without_moving_static_prefix(
         "Earlier move_to calls completed."
     )
     assert "response_format" not in captured["body"]
+
+
+def test_backend_collapses_leading_system_messages_by_default() -> None:
+    """Chat templates such as Qwen3 via SGLang accept only one leading system
+    turn. The default layout must therefore merge the system prompt, stable
+    context, and summary into a single system message while keeping their order
+    (so the radix-cache stable prefix stays intact)."""
+
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": (
+                            "<decision><kind>response</kind><name>talk</name>"
+                            "<reasoning>ok</reasoning><parameters/></decision>"
+                        )
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="test-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+            enable_vision=False,
+        ),
+        transport=fake_transport,
+    )
+    backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "current_observation": {"step_idx": 1},
+                "available_tools": [{"name": "move_to"}],
+            },
+            system_prompt="return json",
+            conversation_summary="Earlier move_to calls completed.",
+            conversation_messages=[
+                {"role": "user", "content": "pick milk"},
+                {"role": "assistant", "content": '{"openeta_action":{"name":"observe"}}'},
+            ],
+        )
+    )
+
+    messages = captured["body"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    merged_system = messages[0]["content"]
+    assert merged_system.startswith("return json")
+    assert "openeta.planner_static_context.v1" in merged_system
+    assert "Earlier move_to calls completed." in merged_system
 
 
 def test_backend_keeps_isolated_context_in_one_user_message() -> None:

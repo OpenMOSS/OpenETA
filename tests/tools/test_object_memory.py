@@ -18,6 +18,7 @@ from agent.tools.object_memory import (
     ObjectMemoryResolutionError,
     load_configured_object_memory_bank,
     object_memory_query_key,
+    probe_object_memory_bank,
 )
 
 
@@ -25,6 +26,48 @@ def _png(color: str) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (16, 12), color).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def test_object_memory_health_probe_reports_sanitized_endpoint() -> None:
+    calls: list[tuple[str, dict[str, str], float, int]] = []
+
+    def download(url: str, headers, timeout_s: float, max_bytes: int) -> bytes:
+        calls.append((url, dict(headers), timeout_s, max_bytes))
+        return json.dumps({"status": "ok", "namespace": "libero", "objects": 40}).encode()
+
+    report = probe_object_memory_bank(
+        ObjectMemoryBankConfig(base_url=DEFAULT_OBJECT_MEMORY_BANK_URL),
+        downloader=download,
+        timeout_s=1.5,
+    )
+
+    assert report == {
+        "schema_version": "openeta.object_memory_health.v1",
+        "configured": True,
+        "checked": True,
+        "available": True,
+        "endpoint": DEFAULT_OBJECT_MEMORY_BANK_URL,
+        "status": "ok",
+        "namespace": "libero",
+        "objects": 40,
+    }
+    assert calls[0][0] == DEFAULT_OBJECT_MEMORY_BANK_URL + "/health"
+
+
+def test_object_memory_health_probe_keeps_connection_failure_structured() -> None:
+    def fail(*_args) -> bytes:
+        raise ConnectionRefusedError("worker route refused")
+
+    report = probe_object_memory_bank(
+        ObjectMemoryBankConfig(base_url=DEFAULT_OBJECT_MEMORY_BANK_URL),
+        downloader=fail,
+    )
+
+    assert report["available"] is False
+    assert report["endpoint"] == DEFAULT_OBJECT_MEMORY_BANK_URL
+    assert report["reason"] == "object_memory_health_check_failed"
+    assert report["error_type"] == "ConnectionRefusedError"
+    assert "worker" in report["recovery"]
 
 
 def _bundle(*, key: str = "libero/alphabet_soup", unsafe: bool = False) -> bytes:

@@ -112,6 +112,9 @@ def build_response_reference(
     reachability_summary = build_reachability_summary(payload)
     if reachability_summary:
         reference["reachability_summary"] = reachability_summary
+    control_spec = payload.get("control_spec")
+    if isinstance(control_spec, dict):
+        reference["control_spec"] = _plain_json_value(control_spec)
     for key in ("envs", "tasks", "items", "results"):
         if key in payload and isinstance(payload[key], list):
             reference[f"{key}_count"] = len(payload[key])
@@ -144,7 +147,16 @@ def build_reachability_summary(payload: JsonDict) -> JsonDict:
         value = payload.get(key)
         if _is_small_scalar(value) or value is None:
             summary[key] = value
-    for key in ("target", "tolerances", "best_candidate", "collision", "path", "solver"):
+    for key in (
+        "target",
+        "tolerances",
+        "best_candidate",
+        "joint_limit_proximity",
+        "execution_seed_quality",
+        "collision",
+        "path",
+        "solver",
+    ):
         value = payload.get(key)
         if isinstance(value, dict):
             summary[key] = _plain_json_value(value)
@@ -291,6 +303,84 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
     collision = payload.get("collision")
     if isinstance(collision, dict):
         summary["collision"] = _compact_scalar_mapping(collision)
+    controller_receipt = payload.get("controller_receipt")
+    if isinstance(controller_receipt, dict):
+        summary["controller_receipt"] = _compact_scalar_mapping(controller_receipt)
+    controller_failure = payload.get("controller_failure")
+    if isinstance(controller_failure, dict):
+        summary["controller_failure"] = _compact_scalar_mapping(controller_failure)
+    convergence_diagnostics = payload.get("convergence_diagnostics")
+    if isinstance(convergence_diagnostics, dict):
+        summary["convergence_diagnostics"] = _plain_json_value(
+            convergence_diagnostics
+        )
+    motion_profile = payload.get("motion_execution_profile")
+    if isinstance(motion_profile, dict):
+        summary["motion_execution_profile"] = _compact_scalar_mapping(
+            motion_profile
+        )
+    for key in ("waypoints_requested", "waypoints_completed"):
+        value = payload.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            summary[key] = value
+    waypoint_results = payload.get("waypoint_results")
+    if isinstance(waypoint_results, list):
+        compact_waypoints: list[JsonDict] = []
+        for index, result in enumerate(waypoint_results[:5]):
+            if not isinstance(result, dict):
+                continue
+            compact: JsonDict = {"index": index}
+            for key in (
+                "reached_target",
+                "stop_reason",
+                "code",
+                "steps_executed",
+                "position_error_m",
+                "max_axis_position_error_m",
+                "orientation_error_rad",
+            ):
+                value = result.get(key)
+                if _is_small_scalar(value):
+                    compact[key] = value
+            for key in ("end", "target"):
+                value = result.get(key)
+                if isinstance(value, dict):
+                    compact[key] = _compact_pose(value)
+            collision = result.get("collision")
+            if isinstance(collision, dict):
+                compact["collision"] = _compact_scalar_mapping(collision)
+            receipt = result.get("controller_receipt")
+            if isinstance(receipt, dict):
+                compact["controller_receipt"] = _compact_scalar_mapping(receipt)
+            compact_waypoints.append(compact)
+        summary["waypoint_results"] = compact_waypoints
+    sequential_preview = payload.get("sequential_route_preview")
+    if isinstance(sequential_preview, dict):
+        compact_preview = _compact_scalar_mapping(sequential_preview)
+        receipts = sequential_preview.get("receipts")
+        if isinstance(receipts, list):
+            compact_preview["receipts"] = [
+                {
+                    key: value
+                    for key, value in receipt.items()
+                    if key
+                    in {
+                        "index",
+                        "source_ik_receipt_id",
+                        "preview_id",
+                        "status",
+                        "feasible",
+                        "reason_code",
+                        "preview_state",
+                        "path_collision_checked",
+                        "path_collision_authority",
+                    }
+                    and _is_small_scalar(value)
+                }
+                for receipt in receipts[:5]
+                if isinstance(receipt, dict)
+            ]
+        summary["sequential_route_preview"] = compact_preview
     for key in ("start", "end", "target"):
         value = payload.get(key)
         if isinstance(value, dict):

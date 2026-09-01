@@ -427,26 +427,152 @@ def _make_libero_direct(task: Any, render_mode: str | None = "rgb_array",
     bddl_path = os.path.join(
         get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
     )
-    kwargs: dict[str, Any] = {"bddl_file_name": bddl_path, "camera_depths": True}
+    # Keep the low-level controller explicit.  The MCP control codec and
+    # execution receipt consume the matching openeta_control_spec below; an
+    # implicit LIBERO default would become a dangerous silent fallback once a
+    # Mink / JOINT_VELOCITY profile is available.
+    profile = os.environ.get("OPENETA_LIBERO_CONTROLLER_PROFILE", "osc_pose").strip().lower()
+    if profile == "osc_pose":
+        controller = "OSC_POSE"
+    elif profile == "mink_joint_velocity":
+        import importlib.util
+
+        missing = [
+            package
+            for package in ("mink", "qpsolvers", "quadprog")
+            if importlib.util.find_spec(package) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "OPENETA_LIBERO_CONTROLLER_PROFILE=mink_joint_velocity requires "
+                f"worker-local packages {', '.join(missing)}; no OSC fallback was attempted"
+            )
+        controller = "JOINT_VELOCITY"
+    else:
+        raise ValueError(
+            "OPENETA_LIBERO_CONTROLLER_PROFILE must be osc_pose or "
+            f"mink_joint_velocity, got {profile!r}"
+        )
+    kwargs: dict[str, Any] = {
+        "bddl_file_name": bddl_path,
+        "camera_depths": True,
+        "controller": controller,
+    }
     if image_width is not None:
         kwargs["camera_widths"] = image_width
     if image_height is not None:
         kwargs["camera_heights"] = image_height
     raw_env = OffScreenRenderEnv(**kwargs)
-    return _LibEnvWrapper(raw_env)
+    return _LibEnvWrapper(raw_env, controller=controller, controller_profile=profile)
 
 
 class _LibEnvWrapper(gym.Env):
     """Adapt old gym.Env (4-tuple step) to gymnasium (5-tuple step + reset kwargs)."""
-    def __init__(self, raw_env):
+    def __init__(
+        self,
+        raw_env,
+        *,
+        controller: str = "OSC_POSE",
+        controller_profile: str = "osc_pose",
+    ):
         super().__init__()
         self._env = raw_env
-        self.action_space = gym.spaces.Box(-1, 1, (7,), dtype=np.float32)
+        self._controller = str(controller)
+        self._controller_profile = str(controller_profile)
+        # OSC_POSE consumes 6 Cartesian deltas + gripper. JOINT_VELOCITY
+        # consumes 7 Panda joint velocities + gripper. Keeping this at the
+        # historical 7 broke the shared gripper tools in Mink environments
+        # even though the worker-local goal executor emitted 8-D actions.
+        action_dim = 8 if self._controller == "JOINT_VELOCITY" else 7
+        self.action_space = gym.spaces.Box(-1, 1, (action_dim,), dtype=np.float32)
         self.observation_space = raw_env.observation_space if hasattr(raw_env, "observation_space") else gym.spaces.Dict({})
         self.reward_range = (-float("inf"), float("inf"))
         self.metadata = {"render_modes": ["rgb_array"]}
         self._task_description = getattr(raw_env, "_task_description", "")
         self._last_frame: Any = None
+
+    @property
+    def openeta_control_spec(self) -> dict[str, Any]:
+        """Declare the controller/action layout actually configured at create."""
+
+        if (
+            self._controller == "JOINT_VELOCITY"
+            and self._controller_profile == "mink_joint_velocity"
+        ):
+            return {
+                "schema_version": "openeta.sim_control.v1",
+                "controller": {
+                    "controller_id": "mink.robosuite_joint_velocity",
+                    "configured_name": self._controller,
+                    "command_interface": "joint_velocity",
+                    "goal_executor": "openeta.worker_mink_goal.v1",
+                    "execution_location": "bench_worker",
+                    "supports_position": True,
+                    "supports_orientation": True,
+                    "collision_callback": True,
+                    "collision_scope": (
+                        "worker_per_step_pre_actuation_and_post_step_configuration"
+                    ),
+                    "intentional_contact_policy": (
+                        "host_compiled_grasp_target_gripper_subtree_only"
+                    ),
+                    "contact_validated": True,
+                    "contact_validation_scope": (
+                        "libero_task2_seed2_approach_contact_close_lift_canary"
+                    ),
+                    "attached_object_trajectory_coverage": (
+                        "worker_per_step_predicted_and_actual_live_geometry"
+                    ),
+                },
+                "cartesian_delta": {"supported": False},
+                "gripper": {
+                    "supported": True,
+                    "indices": [7],
+                    "open_value": -1.0,
+                    "close_value": 1.0,
+                },
+            }
+        if self._controller != "OSC_POSE":
+            return {
+                "schema_version": "openeta.sim_control.v1",
+                "controller": {
+                    "controller_id": f"robosuite.{self._controller.lower()}",
+                    "configured_name": self._controller,
+                    "command_interface": "unsupported",
+                    "goal_executor": "unavailable",
+                    "execution_location": "bench_worker",
+                    "supports_position": False,
+                    "supports_orientation": False,
+                },
+                "cartesian_delta": {"supported": False},
+                "gripper": {"supported": False},
+            }
+        return {
+            "schema_version": "openeta.sim_control.v1",
+            "controller": {
+                "controller_id": "robosuite.osc_pose",
+                "configured_name": "OSC_POSE",
+                "command_interface": "normalized_cartesian_delta_pose",
+                "goal_executor": "openeta.outer_closed_loop_cartesian.v1",
+                "execution_location": "mcp_server",
+                "supports_position": True,
+                "supports_orientation": True,
+            },
+            "cartesian_delta": {
+                "supported": True,
+                "position_indices": [0, 1, 2],
+                "rotation_indices": [3, 4, 5],
+                "command_frame": "world",
+                "position_scale_m": 0.05,
+                "rotation_scale_rad": 0.5,
+            },
+            "gripper": {
+                "supported": True,
+                "indices": [6],
+                "open_value": -1.0,
+                "close_value": 1.0,
+            },
+        }
 
     def reset(self, *, seed=None, options=None):
         obs = self._env.reset()

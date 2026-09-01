@@ -15,12 +15,17 @@ from agent.runtime.parallel import ParallelEpisodeSpec
 from agent.runtime.runtime_assembly import (
     ENVIRONMENT_PLACEHOLDER_TOOLS,
     MAIN_PLANNER_MAX_OUTPUT_TOKENS,
+    VDM_MAX_OUTPUT_TOKENS,
     REMOTE_PLACEHOLDER_TOOLS,
     RuntimeAssemblyConfig,
     RuntimeMcpEndpoints,
     assemble_runtime,
     resolve_runtime_mcp_endpoints,
 )
+from agent.runtime.reference_localization import (
+    REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS,
+)
+from agent.tools.grasp_pose_advisor import GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS
 from agent.runtime.session_workspace import SessionWorkspace
 from agent.runtime.supervision import SupervisionPolicy
 from agent.tools.sim_mcp import SimulatorMcpToolProxyConfig
@@ -109,7 +114,6 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
         anygrasp_url="http://anygrasp.example/sse",
         anyplace_url="http://anyplace.example/sse",
         graspgenx_url="http://graspgenx.example/sse",
-        contact_graspnet_url="http://contact.example/sse",
         molmopoint_url="http://molmo.example/sse",
     )
     transport = FakeSimulatorTransport()
@@ -147,6 +151,20 @@ def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -
     )
 
     assert _contract_snapshot(tui) == _contract_snapshot(batch)
+    assert (
+        tui.runtime.planner.tool_contract_policy
+        is tui.runtime.pipeline.tool_contract_policy
+    )
+    assert (
+        tui.runtime.planner.tool_contract_catalog
+        is tui.runtime.pipeline.tool_contract_catalog
+    )
+    assert tui.runtime.planner.tool_contract_policy.to_dict() == {
+        "schema_version": "openeta.tool_contract_runtime_policy.v1",
+        "request_validation_authority": [],
+        "gate_repair_envelope_authority": [],
+        "executable_gate_authority": "legacy_runtime",
+    }
     assert tui.depth_prefetch is not None
     assert batch.depth_prefetch is not None
     assert tui_workspace.grasp_profile_id == batch_workspace.grasp_profile_id
@@ -240,7 +258,7 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
         "max_vision_images": 9,
     } in calls
     assert {
-        "max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS,
+        "max_tokens": VDM_MAX_OUTPUT_TOKENS,
         "max_vision_images": 2,
         "enable_thinking": False,
     } in calls
@@ -249,6 +267,14 @@ def test_shared_assembly_reserves_visual_window_and_isolates_vdm_backend(
         "max_vision_images": 4,
     } in calls
     assert {"max_tokens": REASONING_SUBAGENT_MAX_OUTPUT_TOKENS} in calls
+    assert REASONING_SUBAGENT_MAX_OUTPUT_TOKENS >= 8192
+    assert GRASP_POSE_ADVISOR_MAX_OUTPUT_TOKENS >= 8192
+    assert REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS >= 8192
+    assert VDM_MAX_OUTPUT_TOKENS >= 4096
+    assert (
+        assembly.runtime.planner.context_config.reserved_output_tokens
+        == MAIN_PLANNER_MAX_OUTPUT_TOKENS
+    )
     assert assembly.runtime.visual_history.backend is not assembly.runtime.planner.backend
 
 
@@ -273,7 +299,7 @@ def test_shared_endpoint_resolution_owns_names_aliases_and_overrides() -> None:
     assert not any(name == "openeta-anygrasp" for name, _aliases in calls)
 
 
-def test_contact_graspnet_is_disabled_from_executable_runtime(tmp_path) -> None:
+def test_contact_graspnet_is_absent_from_runtime_registry(tmp_path) -> None:
     workspace = SessionWorkspace.create("contact-disabled", root=tmp_path)
     assembly = assemble_runtime(
         RuntimeAssemblyConfig(
@@ -288,13 +314,14 @@ def test_contact_graspnet_is_disabled_from_executable_runtime(tmp_path) -> None:
             endpoints=RuntimeMcpEndpoints(
                 anygrasp_url="http://anygrasp.example/sse",
                 graspgenx_url="http://graspgenx.example/sse",
-                contact_graspnet_url="http://contact.example/sse",
             ),
             web_access_config=WebAccessConfig(),
         )
     )
 
-    assert assembly.runtime.tools.can_execute("contact_graspnet") is False
+    assert "contact_graspnet" not in {
+        tool.name for tool in assembly.runtime.tools.list()
+    }
     assert assembly.runtime.tools.can_execute("grasp_pose_estimate") is True
 
 
@@ -349,7 +376,6 @@ def test_real_tui_and_batch_entries_have_runtime_parity(monkeypatch, tmp_path) -
         "openeta-anygrasp": "http://anygrasp.example/sse",
         "openeta-anyplace": "http://anyplace.example/sse",
         "openeta-graspgenx": "http://graspgenx.example/sse",
-        "openeta-contact-graspnet": "http://contact.example/sse",
         "openeta-molmopoint": "http://molmo.example/sse",
     }
 

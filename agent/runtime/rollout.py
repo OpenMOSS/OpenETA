@@ -625,6 +625,7 @@ class RolloutRecorder:
 def build_rollout_provenance(
     *,
     planner: Any,
+    pipeline: Any | None = None,
     tools: Any,
     skills: Any,
     metadata: JsonDict | None = None,
@@ -650,16 +651,52 @@ def build_rollout_provenance(
         )
     tool_rows = []
     executable = set(tools.handler_names())
+    from agent.tools.contracts import (
+        ToolContractRuntimePolicy,
+        build_default_tool_contract_catalog,
+    )
+
+    tool_contracts = getattr(planner, "tool_contract_catalog", None)
+    if tool_contracts is None:
+        tool_contracts = build_default_tool_contract_catalog(tools.list())
+    policy = getattr(planner, "tool_contract_policy", None)
+    if not isinstance(policy, ToolContractRuntimePolicy):
+        policy = ToolContractRuntimePolicy()
+    pipeline_catalog = getattr(pipeline, "tool_contract_catalog", None)
+    pipeline_policy = getattr(pipeline, "tool_contract_policy", None)
+    catalog_payload = tool_contracts.to_dict()
+    catalog_sha256 = hashlib.sha256(
+        json.dumps(
+            catalog_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    pipeline_catalog_sha256 = (
+        hashlib.sha256(
+            json.dumps(
+                pipeline_catalog.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if pipeline_catalog is not None
+        else ""
+    )
+    pipeline_policy_payload = (
+        pipeline_policy.to_dict()
+        if isinstance(pipeline_policy, ToolContractRuntimePolicy)
+        else {}
+    )
     for spec in tools.list():
+        contract = tool_contracts.get(spec.name)
         tool_rows.append(
             {
                 "name": spec.name,
-                "description": spec.description,
-                "category": spec.category,
-                "parameters": spec.parameters,
-                "effect": _enum_value(spec.effect),
-                "batchable": spec.allows_batched_observation,
                 "executable": spec.name in executable,
+                "contract": contract.to_dict(),
             }
         )
     return _sanitize(
@@ -672,6 +709,20 @@ def build_rollout_provenance(
                 "type": type(planner).__name__,
                 "prompt": getattr(planner, "prompt_metadata", {}),
                 "backend": getattr(getattr(planner, "backend", None), "descriptor", lambda: {})(),
+            },
+            "tool_contract_runtime": {
+                "schema_version": "openeta.tool_contract_runtime_provenance.v1",
+                "catalog_schema_version": catalog_payload.get("schema_version"),
+                "catalog_sha256": catalog_sha256,
+                "catalog_summary": catalog_payload.get("summary", {}),
+                "policy": policy.to_dict(),
+                "planner_pipeline_alignment": {
+                    "pipeline_present": pipeline is not None,
+                    "catalog_match": pipeline_catalog_sha256 == catalog_sha256,
+                    "policy_match": pipeline_policy_payload == policy.to_dict(),
+                    "pipeline_catalog_sha256": pipeline_catalog_sha256,
+                    "pipeline_policy": pipeline_policy_payload,
+                },
             },
             "tools": tool_rows,
             "skills": skill_rows,

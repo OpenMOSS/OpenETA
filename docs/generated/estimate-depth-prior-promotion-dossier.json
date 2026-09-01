@@ -1,0 +1,276 @@
+{
+  "schema_version": "openeta.tool_contract_promotion_dossier.v1",
+  "tool": "estimate_depth_prior",
+  "current_maturity": "verified",
+  "promotion_authority": "three_person_review_approved",
+  "eligible_for_review": true,
+  "eligible_for_verified_promotion": true,
+  "promotion_complete": true,
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "coverage_gaps": [],
+  "evidence_checks": {
+    "declared_or_verified_contract": true,
+    "deterministic_valid_invalid_parity": true,
+    "live_valid_request_seen": true,
+    "live_invalid_request_seen": true,
+    "live_request_acceptance_parity": true,
+    "live_tool_result_seen": true,
+    "live_tool_result_conformant": true,
+    "evidence_collected_in_shadow": true,
+    "durable_handler_fixture_receipt_conformant": true,
+    "runtime_gate_rejection_bound_to_check_id": true
+  },
+  "request_evidence": {
+    "record_count": 3,
+    "valid_count": 2,
+    "invalid_count": 1,
+    "enforcing_count": 0,
+    "records": [
+      {
+        "source": ".openeta_eval/runs/systematic-harness-toolcontract-projection-20260820-r28/jobs/libero-object-2-packet-toolchain-canary-r000-packet_toolchain/attempts/001/sessions/ab89c6a5-44d4-4d3f-b651-9e0393563c77/rollout/model_calls.jsonl",
+        "seq": 3,
+        "tool": "estimate_depth_prior",
+        "schema_version": "openeta.tool_contract_shadow_validation.v1",
+        "contract_maturity": "declared",
+        "evaluated": true,
+        "enforcing": false,
+        "legacy_accepted": true,
+        "contract_accepted": true,
+        "acceptance_match": true,
+        "legacy_errors": [],
+        "contract_violations": []
+      },
+      {
+        "source": ".openeta_eval/runs/systematic-harness-toolcontract-invalid-request-20260820-r31/jobs/libero-object-2-tool-contract-invalid-request-canary-r000-invalid_then_repair/attempts/001/sessions/06db0cc2-9834-4121-9f08-6c1556169951/rollout/model_calls.jsonl",
+        "seq": 1,
+        "tool": "estimate_depth_prior",
+        "schema_version": "openeta.tool_contract_shadow_validation.v1",
+        "contract_maturity": "declared",
+        "evaluated": true,
+        "enforcing": false,
+        "legacy_accepted": false,
+        "contract_accepted": false,
+        "acceptance_match": true,
+        "legacy_errors": [
+          "estimate_depth_prior requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+        ],
+        "contract_violations": [
+          {
+            "code": "request_required_field_missing",
+            "message": "parameters requires field 'source_packet_id'.",
+            "path": "parameters.source_packet_id",
+            "tool": "estimate_depth_prior"
+          }
+        ]
+      },
+      {
+        "source": ".openeta_eval/runs/systematic-harness-toolcontract-invalid-request-20260820-r31/jobs/libero-object-2-tool-contract-invalid-request-canary-r000-invalid_then_repair/attempts/001/sessions/06db0cc2-9834-4121-9f08-6c1556169951/rollout/model_calls.jsonl",
+        "seq": 2,
+        "tool": "estimate_depth_prior",
+        "schema_version": "openeta.tool_contract_shadow_validation.v1",
+        "contract_maturity": "declared",
+        "evaluated": true,
+        "enforcing": false,
+        "legacy_accepted": true,
+        "contract_accepted": true,
+        "acceptance_match": true,
+        "legacy_errors": [],
+        "contract_violations": []
+      }
+    ]
+  },
+  "tool_result_evidence": {
+    "event_count": 2,
+    "violation_count": 0,
+    "runs": [
+      {
+        "run": ".openeta_eval/runs/systematic-harness-toolcontract-projection-20260820-r28",
+        "tool_result_count": 1,
+        "semantic_counts": {
+          "estimate_depth_prior:completed": 1
+        },
+        "violation_count": 0,
+        "violations": []
+      },
+      {
+        "run": ".openeta_eval/runs/systematic-harness-toolcontract-invalid-request-20260820-r31",
+        "tool_result_count": 1,
+        "semantic_counts": {
+          "estimate_depth_prior:completed": 1
+        },
+        "violation_count": 0,
+        "violations": []
+      }
+    ]
+  },
+  "integration_canary_evidence": {
+    "present": false,
+    "conformant": false,
+    "source": "",
+    "row": {}
+  },
+  "fixture_evidence": {
+    "receipt_count": 1,
+    "conformant_receipt_count": 1,
+    "receipts": [
+      {
+        "source": "docs/generated/estimate-depth-prior-fixture-receipt.json",
+        "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+        "tool": "estimate_depth_prior",
+        "authority": "promotion_evidence_only",
+        "artifact_root": ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5",
+        "contract_schema_version": "openeta.tool_contract.v1",
+        "contract_maturity": "verified",
+        "handler_implementation": "agent.tools.handlers.build_depth_prior_handler",
+        "host_resolver_id": "openeta.host_resolver.estimate_depth_prior.v1",
+        "host_resolver_implementation": "agent.tools.runtime_contract_bindings._resolve_estimate_depth_prior_input",
+        "cases": [
+          {
+            "case": "handler_success",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": true,
+            "semantic_outcome": "completed",
+            "diagnostic_codes": [],
+            "diagnostic_messages": [],
+            "artifact_paths": [
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-confidence.npy",
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-depth.npy",
+              ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/tool_result.json"
+            ],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "handler_failure",
+            "boundary": "ToolRegistry -> production handler",
+            "executed": true,
+            "operational_success": false,
+            "semantic_outcome": "operational_failure",
+            "diagnostic_codes": [
+              "mcp_call_failed"
+            ],
+            "diagnostic_messages": [],
+            "artifact_paths": [],
+            "environment_receipt_present": false,
+            "state_delta_keys": [],
+            "conformant": true,
+            "violations": []
+          },
+          {
+            "case": "host_resolution_gate_rejection",
+            "boundary": "ActionPipeline -> host resolver",
+            "blocked": true,
+            "tool_execution_count": 0,
+            "repair_code": "invalid_source_packet",
+            "matched_gate_check_ids": [
+              "runtime.source_packet_resolution"
+            ],
+            "authoritative_gate": "legacy_runtime",
+            "enforcing": false,
+            "host_resolution_receipt": {
+              "schema_version": "openeta.host_resolution_receipt.v1",
+              "status": "rejected",
+              "tool": "estimate_depth_prior",
+              "resolver_id": "openeta.host_resolver.estimate_depth_prior.v1",
+              "implementation": "agent.tools.runtime_contract_bindings._resolve_estimate_depth_prior_input",
+              "dispatch_authority": "tool_contract",
+              "repair_code": "invalid_source_packet",
+              "public_parameter_keys": [
+                "camera_frame_id",
+                "source_packet_id"
+              ]
+            },
+            "conformant": true,
+            "contract_shadow_validation": {
+              "schema_version": "openeta.gate_contract_shadow_validation.v1",
+              "evaluated": true,
+              "enforcing": false,
+              "authoritative_gate": "legacy_runtime",
+              "repair_envelope_authority": "legacy_runtime",
+              "tool": "estimate_depth_prior",
+              "contract_maturity": "verified",
+              "contract_gate_checks": [
+                "source packet and camera frame resolve",
+                "resolution level is in [0, 10)",
+                "returned metric depth is a numeric HxW artifact",
+                "confidence semantics are explicit"
+              ],
+              "contract_gate_binding_count": 3,
+              "matched_gate_bindings": [
+                {
+                  "check_id": "runtime.source_packet_resolution",
+                  "description": "Opaque packet and camera ids resolve to one immutable host packet.",
+                  "implementation": "agent/tools/runtime_contract_bindings.py:resolve_host_parameters",
+                  "repair_codes": [
+                    "invalid_source_packet",
+                    "same_view_packet_mismatch"
+                  ],
+                  "applies_when": "the public request contains source packet references"
+                }
+              ],
+              "conformant": true,
+              "violations": []
+            }
+          }
+        ],
+        "coverage": {
+          "expected_success_outcomes": [
+            "completed"
+          ],
+          "observed_success_outcomes": [
+            "completed"
+          ],
+          "all_success_outcomes_covered": true,
+          "expected_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "observed_declared_outcomes": [
+            "completed",
+            "operational_failure"
+          ],
+          "all_declared_outcomes_covered": true,
+          "representative_failure_covered": true,
+          "runtime_gate_evidence_observed": true,
+          "runtime_gate_rejection_observed": true,
+          "matched_gate_check_ids": [
+            "runtime.source_packet_resolution"
+          ],
+          "freshness_and_invalidation_covered": true,
+          "remote_backend_semantics_covered": true,
+          "world_mutating_execution_receipt_covered": true
+        },
+        "conformant": true
+      }
+    ]
+  },
+  "review_evidence": {
+    "approved": true,
+    "source": "docs/generated/tool-contract-review-decision.json"
+  },
+  "authority_canary_evidence": {
+    "passed": true,
+    "source": "docs/generated/tool-contract-authority-canary.json"
+  },
+  "runs": [
+    {
+      "run": ".openeta_eval/runs/systematic-harness-toolcontract-projection-20260820-r28",
+      "request_record_count": 1,
+      "request_acceptance_mismatch_count": 0,
+      "tool_result_count": 1,
+      "tool_result_violation_count": 0
+    },
+    {
+      "run": ".openeta_eval/runs/systematic-harness-toolcontract-invalid-request-20260820-r31",
+      "request_record_count": 2,
+      "request_acceptance_mismatch_count": 0,
+      "tool_result_count": 1,
+      "tool_result_violation_count": 0
+    }
+  ],
+  "unresolved_requirements": [],
+  "interpretation": "This dossier aggregates evidence and never changes maturity or runtime authority. verified remains a reviewed declaration, not an audit side effect."
+}

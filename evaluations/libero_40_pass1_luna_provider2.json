@@ -1,0 +1,46 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-40-pass1-luna-provider2-20260826",
+  "description": "Strict one-valid-rollout-per-task pass@1 evaluation over LIBERO Spatial, Object, Goal, and LIBERO-10 using GPT-5.6 Luna; provider concurrency is capped at two after the concurrency-eight capacity probe produced only infrastructure-invalid episodes.",
+  "episode_manifest": "manifests/libero_40_pass1_seed0.json",
+  "variants": [
+    {
+      "variant_id": "current_harness_bounded_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260826
+  },
+  "execution": {
+    "concurrency": 4,
+    "provider_concurrency": 2,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suites": ["libero_spatial", "libero_object", "libero_goal", "libero_10"],
+    "task_count": 40,
+    "metric": "pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "infrastructure_retry_policy": "at most one automatic retry for structured infrastructure failure; invalid attempts are not scored as rollouts",
+    "purpose": "measure cross-suite generalization of the current state-machine-free harness"
+  }
+}

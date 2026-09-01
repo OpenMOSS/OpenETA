@@ -254,7 +254,9 @@ Claude Code / Claude Desktop 通过 SSE 连接后自动发现：
 > codec；未知 backend 或未声明的动作布局会返回结构化错误，不会猜测动作槽位。
 > `ik_preview_check` 当前的真实运动学后端仅支持 LIBERO Panda；
 > 其他 backend 返回 `unknown/backend_unsupported`，不会用 dummy
-> `feasible=true` 代替真实检查。路径可行性仍由 `obstacle_avoidance` 负责。
+> `feasible=true` 代替真实检查。端点 IK 不检查路径；后续运动控制器必须在
+> receipt 中明确给出逐步 trajectory/world collision coverage。当前生产
+> runtime 不暴露独立的 `obstacle_avoidance` 路径规划服务。
 > BEHAVIOR DirectEnv 默认把双臂切换为有界 delta-pose IK，并在创建环境时
 > 返回实际 arm/gripper action indices。`enable_collision_check` 当前只在已接入
 > checker 的 LIBERO / ManiSkill 上执行；其他后端会明确标记 unavailable。
@@ -267,6 +269,22 @@ Claude Code / Claude Desktop 通过 SSE 连接后自动发现：
 > 安全检查。`move_to` 的 `collision` receipt 会明确返回 `trajectory_checked`、
 > `self_checked`、`world_checked` 与 `world_object_count`，不得把
 > `detected=false` 解读为整条轨迹已通过全场景碰撞规划。
+
+LIBERO 的实验性 worker-local Mink 配置由 host 在启动时固定：
+
+```bash
+OPENETA_LIBERO_CONTROLLER_PROFILE=mink_joint_velocity \
+OPENETA_LIBERO_MINK_DEPENDENCY_PATH=/path/to/minimal-mink-overlay \
+sim/venvs/libero/bin/python3 -m sim.mcp_server --port 8769
+```
+
+依赖 overlay 只能包含与现有 LIBERO 环境兼容的 Mink、qpsolvers 和
+quadprog，不应再次安装或覆盖 MuJoCo、NumPy、SciPy。尤其不要把普通
+`pip install --target` 生成的完整依赖目录直接传入：其中更高版本 MuJoCo 会
+先于 `sim/venvs/libero` 被导入，并可能使旧 robosuite 在创建环境时因
+`MjData.qM` API 不兼容而失败。创建环境返回的 `control_spec.controller`
+必须显示 `mink.robosuite_joint_velocity`；缺少或不兼容时服务应失败关闭，
+不得静默回退 OSC。
 
 Claude Code 配置 (`.mcp.json`，项目根目录已有)：
 

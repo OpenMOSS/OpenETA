@@ -1,0 +1,35 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "motion-c-self-route-short-v1",
+  "description": "Short live canary that requires the Agent to choose a bounded free-space route and consume condition C's per-segment JIT receipts.",
+  "episode_manifest": "manifests/libero_object_task2_motion_c_self_route_short.json",
+  "variants": [
+    {
+      "variant_id": "bounded_visual_no_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 1,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": false
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260824},
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "motion-c-self-route-short",
+    "purpose": "verify Agent-selected multi-point route use and condition-C JIT receipt visibility"
+  }
+}

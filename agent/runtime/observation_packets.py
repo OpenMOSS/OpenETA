@@ -35,6 +35,7 @@ def build_observation_packet_entries(
     scene_epoch: int,
     object_scene_epoch: int,
     robot_motion_epoch: int,
+    compact_ids: bool = False,
 ) -> list[JsonDict]:
     """Build immutable packet index entries without copying image pixels."""
 
@@ -69,8 +70,18 @@ def build_observation_packet_entries(
         grouped.setdefault(packet_id, []).append(artifact)
 
     entries: list[JsonDict] = []
-    for packet_id, artifacts in grouped.items():
-        _validate_unique_artifact_keys(packet_id, artifacts)
+    for packet_ordinal, (origin_packet_id, artifacts) in enumerate(grouped.items(), start=1):
+        packet_id = (
+            _compact_packet_id(
+                origin_packet_id,
+                observation_index=observation_index,
+                packet_ordinal=packet_ordinal,
+                packet_count=len(grouped),
+            )
+            if compact_ids
+            else origin_packet_id
+        )
+        _validate_unique_artifact_keys(origin_packet_id, artifacts)
         frame_ids = {str(item.get("frame_id") or "") for item in artifacts}
         camera_rows: list[JsonDict] = []
         for frame_id in sorted(frame_ids):
@@ -86,8 +97,7 @@ def build_observation_packet_entries(
                 if camera.timestamp_s is not None:
                     row["timestamp_s"] = float(camera.timestamp_s)
             camera_rows.append(row)
-        entries.append(
-            {
+        entry: JsonDict = {
                 "schema_version": OBSERVATION_PACKET_INDEX_SCHEMA_VERSION,
                 "packet_id": packet_id,
                 "observation_index": observation_index,
@@ -95,11 +105,36 @@ def build_observation_packet_entries(
                 "scene_epoch": scene_epoch,
                 "object_scene_epoch": object_scene_epoch,
                 "robot_motion_epoch": robot_motion_epoch,
+                "robot": {
+                    "end_effector_pose": _plain_json(
+                        observation.robot.end_effector_pose
+                    ),
+                    "gripper_state": _plain_json(observation.robot.gripper_state),
+                },
                 "artifacts": artifacts,
                 "cameras": camera_rows,
             }
-        )
+        if packet_id != origin_packet_id:
+            # Kept only for host-side audit/debugging. Agent-facing references
+            # use the short session-scoped packet_id.
+            entry["origin_packet_id"] = origin_packet_id
+        entries.append(entry)
     return entries
+
+
+def _compact_packet_id(
+    origin_packet_id: str,
+    *,
+    observation_index: int,
+    packet_ordinal: int,
+    packet_count: int,
+) -> str:
+    """Return a short session-scoped opaque ID for model-visible references."""
+
+    if len(origin_packet_id) <= 32:
+        return origin_packet_id
+    base = f"obs-{max(0, int(observation_index)):04d}"
+    return base if packet_count == 1 else f"{base}-p{packet_ordinal}"
 
 
 def resolve_packet_source(
@@ -238,6 +273,14 @@ def resolve_packet_source(
     ):
         if entry.get(name) is not None:
             result[name] = entry[name]
+    robot = entry.get("robot")
+    if isinstance(robot, dict):
+        end_effector_pose = robot.get("end_effector_pose")
+        if isinstance(end_effector_pose, dict) and end_effector_pose:
+            result["current_eef_pose"] = _plain_json(end_effector_pose)
+        gripper_state = robot.get("gripper_state")
+        if isinstance(gripper_state, dict) and gripper_state:
+            result["gripper_state"] = _plain_json(gripper_state)
     return result
 
 
@@ -249,6 +292,7 @@ def packet_integrity_fingerprint(entry: JsonDict) -> str:
         "task": entry.get("task"),
         "artifacts": entry.get("artifacts", []),
         "cameras": entry.get("cameras", []),
+        "robot": entry.get("robot", {}),
     }
     return json.dumps(immutable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 

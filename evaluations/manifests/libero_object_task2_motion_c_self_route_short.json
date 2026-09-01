@@ -1,0 +1,26 @@
+{
+  "episodes": [
+    {
+      "episode_id": "motion-c-self-route-short",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Motion-only harness canary; ignore the simulator manipulation objective and do not actuate the gripper. Move the EEF to the final world-frame point [0.10, -0.32, 0.40]. You must choose your own safe route containing 2 to 4 total endpoints including that final point; do not copy a prewritten route from the prompt. Preview every chosen endpoint once with ik_preview_check using preserve_current_orientation=true, position_tolerance_m=0.01, orientation_tolerance_rad=0.30, and check_endpoint_collision=true. If every endpoint is executable, call follow_eef_trajectory exactly once with the ordered ik_receipt_ids, tolerance=0.01, ori_tolerance=0.30, num_steps_per_waypoint=100, and enable_collision_check=true. Inspect the returned per-waypoint receipts and stop. Report success only if all chosen endpoints were actually reached. Official LIBERO reward is outside this motion-only contract.",
+      "seed": 2,
+      "max_turns": 14,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 16,
+      "timeout_s": 1800,
+      "max_total_tokens": 1600000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "route_method": "agent_selected_waypoints",
+        "target_xyz": [0.10, -0.32, 0.40],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30,
+        "waypoint_count_min": 2,
+        "waypoint_count_max": 4
+      }
+    }
+  ]
+}

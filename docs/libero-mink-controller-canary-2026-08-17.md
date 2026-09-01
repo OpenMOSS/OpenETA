@@ -157,6 +157,13 @@ tracking enough to justify integration work” as a positive canary result, whil
 keeping OSC available until the four omitted boundaries have been resolved and
 an Agent-level manipulation A/B test passes.
 
+The subsequent worker-local phase-1 integration and capability receipts are
+documented in
+[`controller-capability-and-mink-integration.md`](controller-capability-and-mink-integration.md).
+It preserves OSC as the default and deliberately rejects collision-enabled or
+confirmed-attached-object Mink motion until the phase-2 safety boundary is
+implemented.
+
 ## Reproduction
 
 Runner: [`scripts/libero_mink_canary.py`](../scripts/libero_mink_canary.py)

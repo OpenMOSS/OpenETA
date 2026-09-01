@@ -1,0 +1,235 @@
+{
+  "schema_version": "openeta.tool_contract_migration_status.v1",
+  "internal_conformant": true,
+  "implementation_ready_for_review": true,
+  "goal_complete": true,
+  "catalog_summary": {
+    "tool_count": 35,
+    "maturity_counts": {
+      "inferred": 0,
+      "declared": 0,
+      "verified": 35
+    },
+    "coverage_gap_counts": {}
+  },
+  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+  "local_checks": {
+    "catalog_inventory": true,
+    "declared_contract_structure": true,
+    "reviewed_catalog_fully_verified": true,
+    "review_decision_approved": true,
+    "generated_projections_current": true,
+    "typed_toolchains_compatible": true,
+    "host_resolver_bindings_conformant": true,
+    "request_readiness_audited": true,
+    "empty_policy_authority_baseline_safe": true,
+    "estimate_depth_prior_authority_canary_safe": true,
+    "estimate_depth_prior_promotion_complete": true,
+    "remaining_tool_review_approved": true,
+    "remaining_tool_authority_canary_safe": true,
+    "remaining_tool_promotions_complete": true,
+    "remaining_review_request_fulfilled": true,
+    "shared_rfc_synced": true,
+    "agent_choice_preserved": true
+  },
+  "structural_issues": [],
+  "generated_projections": {
+    "catalog_json": {
+      "path": "docs/generated/tool-contracts.json",
+      "present": true,
+      "current": true
+    },
+    "markdown": {
+      "path": "docs/generated/tool-contracts.md",
+      "present": true,
+      "current": true
+    },
+    "readiness": {
+      "path": "docs/generated/tool-contract-readiness.json",
+      "present": true,
+      "current": true
+    },
+    "host_resolvers": {
+      "path": "docs/generated/host-resolver-binding-audit.json",
+      "present": true,
+      "current": true
+    },
+    "promotion_campaign": {
+      "path": "docs/generated/tool-contract-promotion-campaign.json",
+      "present": true,
+      "current": true
+    }
+  },
+  "typed_toolchains": {
+    "core_pick": {
+      "compatible": true,
+      "tools": [
+        "observe",
+        "sam3",
+        "select_sam3_detection",
+        "grasp_pose_estimate",
+        "compile_grasp_seed",
+        "ik_preview_check",
+        "move_to",
+        "gripper_control"
+      ],
+      "initial_facts": [],
+      "available_facts": [
+        "openeta.compiled_grasp_seed.v1",
+        "openeta.grasp_candidate_set.v1",
+        "openeta.grasp_input_bundle.v1",
+        "openeta.gripper_latch_receipt.v1",
+        "openeta.ik_execution_authorization.v1",
+        "openeta.motion_execution_receipt.v1",
+        "openeta.observation_packet.v1",
+        "openeta.sam3_detection_set.v1",
+        "openeta.selected_target_mask.v1"
+      ],
+      "issues": [],
+      "interpretation": "Static producer-consumer compatibility only; this does not require the Agent to follow the listed order at runtime."
+    },
+    "placement": {
+      "compatible": true,
+      "tools": [
+        "anyplace",
+        "camera_pose_to_world"
+      ],
+      "initial_facts": [
+        "openeta.anyplace_input_bundle.v1"
+      ],
+      "available_facts": [
+        "openeta.anyplace_input_bundle.v1",
+        "openeta.placement_candidate_set.v1",
+        "openeta.world_pose_reference.v1"
+      ],
+      "issues": [],
+      "interpretation": "Static producer-consumer compatibility only; this does not require the Agent to follow the listed order at runtime."
+    },
+    "wrist_refinement": {
+      "compatible": true,
+      "tools": [
+        "observe",
+        "propose_wrist_viewpoints",
+        "ik_preview_check",
+        "move_to"
+      ],
+      "initial_facts": [
+        "openeta.compiled_grasp_seed.v1"
+      ],
+      "available_facts": [
+        "openeta.compiled_grasp_seed.v1",
+        "openeta.ik_execution_authorization.v1",
+        "openeta.motion_execution_receipt.v1",
+        "openeta.observation_packet.v1",
+        "openeta.wrist_viewpoint_proposal.v1"
+      ],
+      "issues": [],
+      "interpretation": "Static producer-consumer compatibility only; this does not require the Agent to follow the listed order at runtime."
+    }
+  },
+  "requirements": [
+    {
+      "id": "machine_readable_contract_catalog",
+      "status": "complete",
+      "evidence": [
+        "docs/generated/tool-contracts.json"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "generated_interface_documentation",
+      "status": "complete",
+      "evidence": [
+        "docs/generated/tool-contracts.md"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "typed_fact_toolchain_checks",
+      "status": "complete",
+      "evidence": [
+        "core_pick",
+        "placement",
+        "wrist_refinement"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "contract_shadow_validation_and_gate_repairs",
+      "status": "complete",
+      "evidence": [
+        "docs/generated/tool-contract-authority-shadow-audit.json",
+        "docs/generated/tool-contract-authority-shadow-baseline.json"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "stable_host_resolution_contracts",
+      "status": "complete",
+      "evidence": [
+        "docs/generated/host-resolver-binding-audit.json"
+      ],
+      "gaps": [],
+      "note": "11 pipeline resolvers dispatch by stable contract id; 19 non-pipeline boundaries retain audited stable identities."
+    },
+    {
+      "id": "agent_autonomy_without_task_stage_machine",
+      "status": "complete",
+      "evidence": [
+        "all declared gate.preserves_agent_choice=true",
+        "tests/test_no_host_task_state_machine.py"
+      ],
+      "gaps": [],
+      "note": "Typed chains describe possible producer-consumer compatibility only; they do not impose runtime order."
+    },
+    {
+      "id": "promotion_evidence_package",
+      "status": "complete",
+      "evidence": [
+        "docs/generated/estimate-depth-prior-promotion-dossier.json",
+        "docs/generated/tool-contract-promotion-campaign.json",
+        "docs/generated/promotion-dossiers/<tool>.json"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "three_person_schema_and_promotion_review",
+      "status": "complete",
+      "evidence": [
+        "docs/rfc-tool-contract-v1-proposal.md",
+        "docs/generated/tool-contract-review-decision.json"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "shared_rfc_sync",
+      "status": "complete",
+      "evidence": [
+        "https://sii-czxy.feishu.cn/docx/HFB9d1ws8ow1CuxQeiacxMbonXe"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "verified_authority_canary",
+      "status": "complete",
+      "evidence": [
+        "estimate_depth_prior",
+        "docs/generated/tool-contract-authority-canary.json",
+        "docs/generated/tool-contract-catalog-authority-canary.json"
+      ],
+      "gaps": []
+    }
+  ],
+  "external_blockers": [],
+  "next_action": "Keep gate-repair-envelope authority empty and executable gates on legacy_runtime until a separately reviewed authority change is approved.",
+  "test_summary": {
+    "passed": 255,
+    "skipped": 0,
+    "warnings": 0
+  },
+  "harness_wiki": {
+    "url": "https://sii-czxy.feishu.cn/wiki/A6M9wTBoCiOYPwkT9rWcwgfon2f",
+    "revision": 291
+  },
+  "interpretation": "The reviewed migration is complete only when local evidence, the durable review decision, the narrow enforcing canary, and shared RFC sync all pass. All 35 public tools are verified. Request-validation canaries are scoped separately; gate-repair and executable-gate authority remain unchanged."
+}

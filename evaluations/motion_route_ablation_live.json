@@ -1,0 +1,38 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "motion-route-ablation-live-v2",
+  "description": "Paired motion-only ablation of one checked direct endpoint versus an Agent-selected 2-5 endpoint route on identical LIBERO task-2 geometry.",
+  "episode_manifest": "manifests/libero_object_task2_motion_route_ablation.json",
+  "variants": [
+    {
+      "variant_id": "bounded_visual_no_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 1,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": false
+        }
+      }
+    }
+  ],
+  "repeats": 2,
+  "schedule": {
+    "shuffle_seed": 20260824
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "motion-route-ablation",
+    "purpose": "measure method adherence, endpoint success, collision outcome, controller effort, waypoint count, turn cost, and token cost without grasp or perception confounds",
+    "note": "v2 makes the motion-only completion contract explicit; the completed r53 run retains its immutable v1 compiled snapshot"
+  }
+}

@@ -1,0 +1,3934 @@
+{
+  "schema_version": "openeta.tool_contract_readiness.v1",
+  "authority": "promotion_evidence_only",
+  "declared_tool_count": 35,
+  "ready_for_live_invalid_canary_count": 35,
+  "ready_for_live_invalid_canary": [
+    "observe",
+    "enhance_depth",
+    "estimate_depth_prior",
+    "create_simulator_env",
+    "close_simulator_env",
+    "python_exec",
+    "web_search",
+    "web_fetch",
+    "sam3",
+    "retrieve_asset_reference",
+    "molmopoint",
+    "select_sam3_detection",
+    "reject_sam3_detections",
+    "grasp_pose_estimate",
+    "anyplace",
+    "camera_pose_to_world",
+    "propose_calibration_profile",
+    "promote_calibration_profile",
+    "propose_grasp_strategy",
+    "promote_grasp_strategy",
+    "compile_grasp_seed",
+    "compute_wrist_alignment",
+    "propose_wrist_viewpoints",
+    "prepare_attachment_probe",
+    "assess_attachment_probe",
+    "move_to",
+    "follow_eef_trajectory",
+    "gripper_control",
+    "ik_preview_check",
+    "save_memory",
+    "get_memory",
+    "delete_memory",
+    "compact_memory",
+    "register_skill",
+    "update_skill"
+  ],
+  "tools": [
+    {
+      "tool": "observe",
+      "maturity": "verified",
+      "case_count": 2,
+      "invalid_class_count": 1,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "enhance_depth",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "create_simulator_env",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "close_simulator_env",
+      "maturity": "verified",
+      "case_count": 2,
+      "invalid_class_count": 1,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "python_exec",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "web_search",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "web_fetch",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "sam3",
+      "maturity": "verified",
+      "case_count": 5,
+      "invalid_class_count": 4,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "maturity": "verified",
+      "case_count": 8,
+      "invalid_class_count": 7,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "molmopoint",
+      "maturity": "verified",
+      "case_count": 6,
+      "invalid_class_count": 5,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "select_sam3_detection",
+      "maturity": "verified",
+      "case_count": 6,
+      "invalid_class_count": 5,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "maturity": "verified",
+      "case_count": 6,
+      "invalid_class_count": 5,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "anyplace",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "maturity": "verified",
+      "case_count": 8,
+      "invalid_class_count": 7,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "maturity": "verified",
+      "case_count": 9,
+      "invalid_class_count": 8,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "maturity": "verified",
+      "case_count": 6,
+      "invalid_class_count": 5,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "maturity": "verified",
+      "case_count": 9,
+      "invalid_class_count": 8,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "maturity": "verified",
+      "case_count": 6,
+      "invalid_class_count": 5,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "maturity": "verified",
+      "case_count": 8,
+      "invalid_class_count": 7,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "maturity": "verified",
+      "case_count": 8,
+      "invalid_class_count": 7,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "move_to",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "gripper_control",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "ik_preview_check",
+      "maturity": "verified",
+      "case_count": 3,
+      "invalid_class_count": 2,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "save_memory",
+      "maturity": "verified",
+      "case_count": 5,
+      "invalid_class_count": 4,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "get_memory",
+      "maturity": "verified",
+      "case_count": 2,
+      "invalid_class_count": 1,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "delete_memory",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "compact_memory",
+      "maturity": "verified",
+      "case_count": 2,
+      "invalid_class_count": 1,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "register_skill",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
+    {
+      "tool": "update_skill",
+      "maturity": "verified",
+      "case_count": 4,
+      "invalid_class_count": 3,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    }
+  ],
+  "records": [
+    {
+      "tool": "observe",
+      "case": "valid_minimal",
+      "parameters": {},
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "observe",
+      "case": "unexpected_property",
+      "parameters": {
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "observe received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "observe",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "enhance_depth",
+      "case": "valid_minimal",
+      "parameters": {
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "enhance_depth",
+      "case": "missing_required:source_packet_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "enhance_depth requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+      ],
+      "contract_violations": [
+        {
+          "tool": "enhance_depth",
+          "code": "request_required_field_missing",
+          "path": "parameters.source_packet_id",
+          "message": "parameters requires field 'source_packet_id'."
+        }
+      ]
+    },
+    {
+      "tool": "enhance_depth",
+      "case": "wrong_type:source_packet_id",
+      "parameters": {
+        "source_packet_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "enhance_depth requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+      ],
+      "contract_violations": [
+        {
+          "tool": "enhance_depth",
+          "code": "request_type_mismatch",
+          "path": "parameters.source_packet_id",
+          "message": "parameters.source_packet_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "enhance_depth",
+      "case": "unexpected_property",
+      "parameters": {
+        "source_packet_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "enhance_depth accepts observation packet references, not model-supplied paths or calibration payloads; unsupported fields: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "enhance_depth",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "case": "valid_minimal",
+      "parameters": {
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "case": "missing_required:source_packet_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "estimate_depth_prior requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+      ],
+      "contract_violations": [
+        {
+          "tool": "estimate_depth_prior",
+          "code": "request_required_field_missing",
+          "path": "parameters.source_packet_id",
+          "message": "parameters requires field 'source_packet_id'."
+        }
+      ]
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "case": "wrong_type:source_packet_id",
+      "parameters": {
+        "source_packet_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "estimate_depth_prior requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+      ],
+      "contract_violations": [
+        {
+          "tool": "estimate_depth_prior",
+          "code": "request_type_mismatch",
+          "path": "parameters.source_packet_id",
+          "message": "parameters.source_packet_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "estimate_depth_prior",
+      "case": "unexpected_property",
+      "parameters": {
+        "source_packet_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "estimate_depth_prior accepts observation packet references, not model-supplied paths or calibration payloads; unsupported fields: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "estimate_depth_prior",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "create_simulator_env",
+      "case": "valid_minimal",
+      "parameters": {
+        "env_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "create_simulator_env",
+      "case": "missing_required:env_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "create_simulator_env requires `parameters.env_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "create_simulator_env",
+          "code": "request_required_field_missing",
+          "path": "parameters.env_id",
+          "message": "parameters requires field 'env_id'."
+        }
+      ]
+    },
+    {
+      "tool": "create_simulator_env",
+      "case": "wrong_type:env_id",
+      "parameters": {
+        "env_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "create_simulator_env `parameters.env_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "create_simulator_env",
+          "code": "request_type_mismatch",
+          "path": "parameters.env_id",
+          "message": "parameters.env_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "create_simulator_env",
+      "case": "unexpected_property",
+      "parameters": {
+        "env_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "create_simulator_env received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "create_simulator_env",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "close_simulator_env",
+      "case": "valid_minimal",
+      "parameters": {},
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "close_simulator_env",
+      "case": "unexpected_property",
+      "parameters": {
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "close_simulator_env received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "close_simulator_env",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "python_exec",
+      "case": "valid_minimal",
+      "parameters": {
+        "code": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "python_exec",
+      "case": "missing_required:code",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "python_exec requires a non-empty string `parameters.code`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "python_exec",
+          "code": "request_required_field_missing",
+          "path": "parameters.code",
+          "message": "parameters requires field 'code'."
+        }
+      ]
+    },
+    {
+      "tool": "python_exec",
+      "case": "wrong_type:code",
+      "parameters": {
+        "code": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "python_exec requires a non-empty string `parameters.code`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "python_exec",
+          "code": "request_type_mismatch",
+          "path": "parameters.code",
+          "message": "parameters.code must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "python_exec",
+      "case": "unexpected_property",
+      "parameters": {
+        "code": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "python_exec received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "python_exec",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "web_search",
+      "case": "valid_minimal",
+      "parameters": {
+        "query": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "web_search",
+      "case": "missing_required:query",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_search requires `parameters.query` as 1-512 characters of public search terms without secrets or private user data."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_search",
+          "code": "request_required_field_missing",
+          "path": "parameters.query",
+          "message": "parameters requires field 'query'."
+        }
+      ]
+    },
+    {
+      "tool": "web_search",
+      "case": "wrong_type:query",
+      "parameters": {
+        "query": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_search requires `parameters.query` as 1-512 characters of public search terms without secrets or private user data."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_search",
+          "code": "request_type_mismatch",
+          "path": "parameters.query",
+          "message": "parameters.query must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "web_search",
+      "case": "unexpected_property",
+      "parameters": {
+        "query": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_search received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_search",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "web_fetch",
+      "case": "valid_minimal",
+      "parameters": {
+        "url": "https://example.com"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "web_fetch",
+      "case": "missing_required:url",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_fetch requires `parameters.url` as an absolute public HTTPS URL of at most 2048 characters."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_fetch",
+          "code": "request_required_field_missing",
+          "path": "parameters.url",
+          "message": "parameters requires field 'url'."
+        }
+      ]
+    },
+    {
+      "tool": "web_fetch",
+      "case": "wrong_type:url",
+      "parameters": {
+        "url": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_fetch requires `parameters.url` as an absolute public HTTPS URL of at most 2048 characters."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_fetch",
+          "code": "request_type_mismatch",
+          "path": "parameters.url",
+          "message": "parameters.url must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "web_fetch",
+      "case": "unexpected_property",
+      "parameters": {
+        "url": "https://example.com",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "web_fetch received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "web_fetch",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "sam3",
+      "case": "valid_minimal",
+      "parameters": {
+        "source_packet_id": "x",
+        "prompt": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "sam3",
+      "case": "missing_required:source_packet_id",
+      "parameters": {
+        "prompt": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "sam3 requires `parameters.source_packet_id` copied exactly from visible observation evidence. Local image paths are not accepted."
+      ],
+      "contract_violations": [
+        {
+          "tool": "sam3",
+          "code": "request_required_field_missing",
+          "path": "parameters.source_packet_id",
+          "message": "parameters requires field 'source_packet_id'."
+        }
+      ]
+    },
+    {
+      "tool": "sam3",
+      "case": "wrong_type:source_packet_id",
+      "parameters": {
+        "source_packet_id": 7,
+        "prompt": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "sam3 requires `parameters.source_packet_id` copied exactly from visible observation evidence. Local image paths are not accepted."
+      ],
+      "contract_violations": [
+        {
+          "tool": "sam3",
+          "code": "request_type_mismatch",
+          "path": "parameters.source_packet_id",
+          "message": "parameters.source_packet_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "sam3",
+      "case": "wrong_type:prompt",
+      "parameters": {
+        "source_packet_id": "x",
+        "prompt": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "sam3 text mode requires `parameters.prompt` as a concrete visual phrase."
+      ],
+      "contract_violations": [
+        {
+          "tool": "sam3",
+          "code": "request_type_mismatch",
+          "path": "parameters.prompt",
+          "message": "parameters.prompt must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "sam3",
+      "case": "unexpected_property",
+      "parameters": {
+        "source_packet_id": "x",
+        "prompt": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "sam3 received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "sam3",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "valid_minimal",
+      "parameters": {
+        "environment": "x",
+        "target_object": "x",
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "missing_required:environment",
+      "parameters": {
+        "target_object": "x",
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference requires `parameters.environment`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_required_field_missing",
+          "path": "parameters.environment",
+          "message": "parameters requires field 'environment'."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "missing_required:target_object",
+      "parameters": {
+        "environment": "x",
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference requires `parameters.target_object`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_required_field_missing",
+          "path": "parameters.target_object",
+          "message": "parameters requires field 'target_object'."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "missing_required:source_packet_id",
+      "parameters": {
+        "environment": "x",
+        "target_object": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference requires `parameters.source_packet_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_required_field_missing",
+          "path": "parameters.source_packet_id",
+          "message": "parameters requires field 'source_packet_id'."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "wrong_type:environment",
+      "parameters": {
+        "environment": 7,
+        "target_object": "x",
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference `parameters.environment` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_type_mismatch",
+          "path": "parameters.environment",
+          "message": "parameters.environment must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "wrong_type:target_object",
+      "parameters": {
+        "environment": "x",
+        "target_object": 7,
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference `parameters.target_object` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_type_mismatch",
+          "path": "parameters.target_object",
+          "message": "parameters.target_object must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "wrong_type:source_packet_id",
+      "parameters": {
+        "environment": "x",
+        "target_object": "x",
+        "source_packet_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference `parameters.source_packet_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_type_mismatch",
+          "path": "parameters.source_packet_id",
+          "message": "parameters.source_packet_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "case": "unexpected_property",
+      "parameters": {
+        "environment": "x",
+        "target_object": "x",
+        "source_packet_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "retrieve_asset_reference received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "retrieve_asset_reference",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "case": "valid_minimal",
+      "parameters": {
+        "sources": [
+          {
+            "source_packet_id": "x"
+          }
+        ],
+        "prompt": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "molmopoint",
+      "case": "missing_required:sources",
+      "parameters": {
+        "prompt": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "molmopoint requires `parameters.sources` as an ordered list of one to four objects containing source_packet_id and optional camera_frame_id."
+      ],
+      "contract_violations": [
+        {
+          "tool": "molmopoint",
+          "code": "request_required_field_missing",
+          "path": "parameters.sources",
+          "message": "parameters requires field 'sources'."
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "case": "missing_required:prompt",
+      "parameters": {
+        "sources": [
+          {
+            "source_packet_id": "x"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "molmopoint requires `parameters.prompt` as a complete pointing instruction of at most 1024 characters, not a placeholder."
+      ],
+      "contract_violations": [
+        {
+          "tool": "molmopoint",
+          "code": "request_required_field_missing",
+          "path": "parameters.prompt",
+          "message": "parameters requires field 'prompt'."
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "case": "wrong_type:sources",
+      "parameters": {
+        "sources": {
+          "not": "an-array"
+        },
+        "prompt": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "molmopoint requires `parameters.sources` as an ordered list of one to four objects containing source_packet_id and optional camera_frame_id."
+      ],
+      "contract_violations": [
+        {
+          "tool": "molmopoint",
+          "code": "request_type_mismatch",
+          "path": "parameters.sources",
+          "message": "parameters.sources must be JSON type array; got object."
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "case": "wrong_type:prompt",
+      "parameters": {
+        "sources": [
+          {
+            "source_packet_id": "x"
+          }
+        ],
+        "prompt": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "molmopoint requires `parameters.prompt` as a complete pointing instruction of at most 1024 characters, not a placeholder."
+      ],
+      "contract_violations": [
+        {
+          "tool": "molmopoint",
+          "code": "request_type_mismatch",
+          "path": "parameters.prompt",
+          "message": "parameters.prompt must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "case": "unexpected_property",
+      "parameters": {
+        "sources": [
+          {
+            "source_packet_id": "x"
+          }
+        ],
+        "prompt": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "molmopoint received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "molmopoint",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "valid_minimal",
+      "parameters": {
+        "sam3_result_id": "x",
+        "detection_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "missing_required:sam3_result_id",
+      "parameters": {
+        "detection_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "select_sam3_detection requires `parameters.sam3_result_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "select_sam3_detection",
+          "code": "request_required_field_missing",
+          "path": "parameters.sam3_result_id",
+          "message": "parameters requires field 'sam3_result_id'."
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "missing_required:detection_id",
+      "parameters": {
+        "sam3_result_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "select_sam3_detection requires `parameters.detection_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "select_sam3_detection",
+          "code": "request_required_field_missing",
+          "path": "parameters.detection_id",
+          "message": "parameters requires field 'detection_id'."
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "wrong_type:sam3_result_id",
+      "parameters": {
+        "sam3_result_id": 7,
+        "detection_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "select_sam3_detection `parameters.sam3_result_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "select_sam3_detection",
+          "code": "request_type_mismatch",
+          "path": "parameters.sam3_result_id",
+          "message": "parameters.sam3_result_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "wrong_type:detection_id",
+      "parameters": {
+        "sam3_result_id": "x",
+        "detection_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "select_sam3_detection `parameters.detection_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "select_sam3_detection",
+          "code": "request_type_mismatch",
+          "path": "parameters.detection_id",
+          "message": "parameters.detection_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "case": "unexpected_property",
+      "parameters": {
+        "sam3_result_id": "x",
+        "detection_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "select_sam3_detection received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "select_sam3_detection",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "valid_minimal",
+      "parameters": {
+        "sam3_result_id": "x",
+        "reason": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "missing_required:sam3_result_id",
+      "parameters": {
+        "reason": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "reject_sam3_detections requires `parameters.sam3_result_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "reject_sam3_detections",
+          "code": "request_required_field_missing",
+          "path": "parameters.sam3_result_id",
+          "message": "parameters requires field 'sam3_result_id'."
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "missing_required:reason",
+      "parameters": {
+        "sam3_result_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "reject_sam3_detections requires `parameters.reason`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "reject_sam3_detections",
+          "code": "request_required_field_missing",
+          "path": "parameters.reason",
+          "message": "parameters requires field 'reason'."
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "wrong_type:sam3_result_id",
+      "parameters": {
+        "sam3_result_id": 7,
+        "reason": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "reject_sam3_detections `parameters.sam3_result_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "reject_sam3_detections",
+          "code": "request_type_mismatch",
+          "path": "parameters.sam3_result_id",
+          "message": "parameters.sam3_result_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "wrong_type:reason",
+      "parameters": {
+        "sam3_result_id": "x",
+        "reason": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "reject_sam3_detections `parameters.reason` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "reject_sam3_detections",
+          "code": "request_type_mismatch",
+          "path": "parameters.reason",
+          "message": "parameters.reason must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "case": "unexpected_property",
+      "parameters": {
+        "sam3_result_id": "x",
+        "reason": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "reject_sam3_detections received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "reject_sam3_detections",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "case": "valid_minimal",
+      "parameters": {
+        "bundle_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "case": "missing_required:bundle_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "grasp_pose_estimate requires `parameters.rgb` as a concrete local path.",
+        "grasp_pose_estimate requires `parameters.depth` as a concrete local path.",
+        "grasp_pose_estimate targeted mode requires `parameters.object_mask` as a complete SAM3 artifact with mask_ref and source_image.",
+        "grasp_pose_estimate `parameters.intrinsics` must contain fx, fy, cx, cy, and scale.",
+        "grasp_pose_estimate requires a concrete camera_frame_id.",
+        "grasp_pose_estimate requires the current non-negative scene_epoch."
+      ],
+      "contract_violations": [
+        {
+          "tool": "grasp_pose_estimate",
+          "code": "request_required_field_missing",
+          "path": "parameters.bundle_id",
+          "message": "parameters requires field 'bundle_id'."
+        }
+      ]
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "case": "wrong_type:bundle_id",
+      "parameters": {
+        "bundle_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "grasp_pose_estimate requires `parameters.rgb` as a concrete local path.",
+        "grasp_pose_estimate requires `parameters.depth` as a concrete local path.",
+        "grasp_pose_estimate targeted mode requires `parameters.object_mask` as a complete SAM3 artifact with mask_ref and source_image.",
+        "grasp_pose_estimate `parameters.intrinsics` must contain fx, fy, cx, cy, and scale.",
+        "grasp_pose_estimate requires a concrete camera_frame_id.",
+        "grasp_pose_estimate requires the current non-negative scene_epoch."
+      ],
+      "contract_violations": [
+        {
+          "tool": "grasp_pose_estimate",
+          "code": "request_type_mismatch",
+          "path": "parameters.bundle_id",
+          "message": "parameters.bundle_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "case": "unexpected_property",
+      "parameters": {
+        "bundle_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "grasp_pose_estimate bundle references cannot be overridden with model-supplied fields: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "grasp_pose_estimate",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "anyplace",
+      "case": "valid_minimal",
+      "parameters": {
+        "bundle_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "anyplace",
+      "case": "missing_required:bundle_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "anyplace requires only the host-issued `parameters.bundle_id`; inspect host_resolved_inputs.anyplace and do not reconstruct RGB-D, mask, intrinsics, or selected_grasp fields."
+      ],
+      "contract_violations": [
+        {
+          "tool": "anyplace",
+          "code": "request_required_field_missing",
+          "path": "parameters.bundle_id",
+          "message": "parameters requires field 'bundle_id'."
+        }
+      ]
+    },
+    {
+      "tool": "anyplace",
+      "case": "wrong_type:bundle_id",
+      "parameters": {
+        "bundle_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "anyplace requires only the host-issued `parameters.bundle_id`; inspect host_resolved_inputs.anyplace and do not reconstruct RGB-D, mask, intrinsics, or selected_grasp fields."
+      ],
+      "contract_violations": [
+        {
+          "tool": "anyplace",
+          "code": "request_type_mismatch",
+          "path": "parameters.bundle_id",
+          "message": "parameters.bundle_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "anyplace",
+      "case": "unexpected_property",
+      "parameters": {
+        "bundle_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "anyplace bundle references cannot be overridden with model-supplied fields: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "anyplace",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "case": "valid_minimal",
+      "parameters": {
+        "placement_result_id": "x",
+        "candidate_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "case": "wrong_type:placement_result_id",
+      "parameters": {
+        "placement_result_id": 7,
+        "candidate_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "camera_pose_to_world AnyPlace handoff requires a non-empty `placement_result_id` returned by anyplace."
+      ],
+      "contract_violations": [
+        {
+          "tool": "camera_pose_to_world",
+          "code": "request_type_mismatch",
+          "path": "parameters.placement_result_id",
+          "message": "parameters.placement_result_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "case": "wrong_type:candidate_id",
+      "parameters": {
+        "placement_result_id": "x",
+        "candidate_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "camera_pose_to_world AnyPlace handoff requires an exact non-empty `candidate_id` from that placement result."
+      ],
+      "contract_violations": [
+        {
+          "tool": "camera_pose_to_world",
+          "code": "request_type_mismatch",
+          "path": "parameters.candidate_id",
+          "message": "parameters.candidate_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "case": "unexpected_property",
+      "parameters": {
+        "placement_result_id": "x",
+        "candidate_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "camera_pose_to_world placement references cannot be overridden with model-supplied pose or calibration fields: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "camera_pose_to_world",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "valid_minimal",
+      "parameters": {
+        "profile": {},
+        "profile_fingerprint": {},
+        "rationale": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "missing_required:profile",
+      "parameters": {
+        "profile_fingerprint": {},
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile requires object `parameters.profile`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.profile",
+          "message": "parameters requires field 'profile'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "missing_required:profile_fingerprint",
+      "parameters": {
+        "profile": {},
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile requires `parameters.profile_fingerprint`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.profile_fingerprint",
+          "message": "parameters requires field 'profile_fingerprint'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "missing_required:rationale",
+      "parameters": {
+        "profile": {},
+        "profile_fingerprint": {}
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile requires non-empty string `parameters.rationale`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.rationale",
+          "message": "parameters requires field 'rationale'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "wrong_type:profile",
+      "parameters": {
+        "profile": [
+          "not",
+          "an-object"
+        ],
+        "profile_fingerprint": {},
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile requires object `parameters.profile`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.profile",
+          "message": "parameters.profile must be JSON type object; got array."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "wrong_type:profile_fingerprint",
+      "parameters": {
+        "profile": {},
+        "profile_fingerprint": [
+          "not",
+          "an-object"
+        ],
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile `parameters.profile_fingerprint` must be dict."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.profile_fingerprint",
+          "message": "parameters.profile_fingerprint must be JSON type object; got array."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "wrong_type:rationale",
+      "parameters": {
+        "profile": {},
+        "profile_fingerprint": {},
+        "rationale": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile requires non-empty string `parameters.rationale`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.rationale",
+          "message": "parameters.rationale must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "case": "unexpected_property",
+      "parameters": {
+        "profile": {},
+        "profile_fingerprint": {},
+        "rationale": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_calibration_profile received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_calibration_profile",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "valid_minimal",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "missing_required:proposal_id",
+      "parameters": {
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile requires non-empty string `parameters.proposal_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.proposal_id",
+          "message": "parameters requires field 'proposal_id'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "missing_required:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.target_status",
+          "message": "parameters requires field 'target_status'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "missing_required:evidence",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile requires a non-empty evidence list."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_required_field_missing",
+          "path": "parameters.evidence",
+          "message": "parameters requires field 'evidence'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "wrong_type:proposal_id",
+      "parameters": {
+        "proposal_id": 7,
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile requires non-empty string `parameters.proposal_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.proposal_id",
+          "message": "parameters.proposal_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "wrong_type:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": 7,
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.target_status",
+          "message": "parameters.target_status must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "invalid_enum:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "__invalid_enum__",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_enum_mismatch",
+          "path": "parameters.target_status",
+          "message": "parameters.target_status must be one of ['candidate', 'validated']; got '__invalid_enum__'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "wrong_type:evidence",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": {
+          "not": "an-array"
+        }
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile requires a non-empty evidence list."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_type_mismatch",
+          "path": "parameters.evidence",
+          "message": "parameters.evidence must be JSON type array; got object."
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "case": "unexpected_property",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ],
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_calibration_profile received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_calibration_profile",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "valid_minimal",
+      "parameters": {
+        "strategy": {},
+        "rationale": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "missing_required:strategy",
+      "parameters": {
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_grasp_strategy requires object `parameters.strategy`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_grasp_strategy",
+          "code": "request_required_field_missing",
+          "path": "parameters.strategy",
+          "message": "parameters requires field 'strategy'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "missing_required:rationale",
+      "parameters": {
+        "strategy": {}
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_grasp_strategy requires non-empty string `parameters.rationale`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_grasp_strategy",
+          "code": "request_required_field_missing",
+          "path": "parameters.rationale",
+          "message": "parameters requires field 'rationale'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "wrong_type:strategy",
+      "parameters": {
+        "strategy": [
+          "not",
+          "an-object"
+        ],
+        "rationale": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_grasp_strategy requires object `parameters.strategy`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_grasp_strategy",
+          "code": "request_type_mismatch",
+          "path": "parameters.strategy",
+          "message": "parameters.strategy must be JSON type object; got array."
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "wrong_type:rationale",
+      "parameters": {
+        "strategy": {},
+        "rationale": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_grasp_strategy requires non-empty string `parameters.rationale`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_grasp_strategy",
+          "code": "request_type_mismatch",
+          "path": "parameters.rationale",
+          "message": "parameters.rationale must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "case": "unexpected_property",
+      "parameters": {
+        "strategy": {},
+        "rationale": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_grasp_strategy received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_grasp_strategy",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "valid_minimal",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "missing_required:proposal_id",
+      "parameters": {
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy requires non-empty string `parameters.proposal_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_required_field_missing",
+          "path": "parameters.proposal_id",
+          "message": "parameters requires field 'proposal_id'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "missing_required:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_required_field_missing",
+          "path": "parameters.target_status",
+          "message": "parameters requires field 'target_status'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "missing_required:evidence",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy requires a non-empty evidence list."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_required_field_missing",
+          "path": "parameters.evidence",
+          "message": "parameters requires field 'evidence'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "wrong_type:proposal_id",
+      "parameters": {
+        "proposal_id": 7,
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy requires non-empty string `parameters.proposal_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_type_mismatch",
+          "path": "parameters.proposal_id",
+          "message": "parameters.proposal_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "wrong_type:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": 7,
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_type_mismatch",
+          "path": "parameters.target_status",
+          "message": "parameters.target_status must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "invalid_enum:target_status",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "__invalid_enum__",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy target_status must be candidate or validated."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_enum_mismatch",
+          "path": "parameters.target_status",
+          "message": "parameters.target_status must be one of ['candidate', 'validated']; got '__invalid_enum__'."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "wrong_type:evidence",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": {
+          "not": "an-array"
+        }
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy requires a non-empty evidence list."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_type_mismatch",
+          "path": "parameters.evidence",
+          "message": "parameters.evidence must be JSON type array; got object."
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "case": "unexpected_property",
+      "parameters": {
+        "proposal_id": "x",
+        "target_status": "candidate",
+        "evidence": [
+          {
+            "path": "x",
+            "split": "canary"
+          }
+        ],
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "promote_grasp_strategy received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "promote_grasp_strategy",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "valid_minimal",
+      "parameters": {
+        "grasp_result_id": "x",
+        "candidate_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "missing_required:grasp_result_id",
+      "parameters": {
+        "candidate_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compile_grasp_seed requires `parameters.grasp_result_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compile_grasp_seed",
+          "code": "request_required_field_missing",
+          "path": "parameters.grasp_result_id",
+          "message": "parameters requires field 'grasp_result_id'."
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "missing_required:candidate_id",
+      "parameters": {
+        "grasp_result_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compile_grasp_seed requires `parameters.candidate_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compile_grasp_seed",
+          "code": "request_required_field_missing",
+          "path": "parameters.candidate_id",
+          "message": "parameters requires field 'candidate_id'."
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "wrong_type:grasp_result_id",
+      "parameters": {
+        "grasp_result_id": 7,
+        "candidate_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compile_grasp_seed `parameters.grasp_result_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compile_grasp_seed",
+          "code": "request_type_mismatch",
+          "path": "parameters.grasp_result_id",
+          "message": "parameters.grasp_result_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "wrong_type:candidate_id",
+      "parameters": {
+        "grasp_result_id": "x",
+        "candidate_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compile_grasp_seed `parameters.candidate_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compile_grasp_seed",
+          "code": "request_type_mismatch",
+          "path": "parameters.candidate_id",
+          "message": "parameters.candidate_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "case": "unexpected_property",
+      "parameters": {
+        "grasp_result_id": "x",
+        "candidate_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compile_grasp_seed received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compile_grasp_seed",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "case": "valid_minimal",
+      "parameters": {
+        "bundle_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "case": "missing_required:bundle_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compute_wrist_alignment requires `parameters.bundle_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compute_wrist_alignment",
+          "code": "request_required_field_missing",
+          "path": "parameters.bundle_id",
+          "message": "parameters requires field 'bundle_id'."
+        }
+      ]
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "case": "wrong_type:bundle_id",
+      "parameters": {
+        "bundle_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compute_wrist_alignment `parameters.bundle_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compute_wrist_alignment",
+          "code": "request_type_mismatch",
+          "path": "parameters.bundle_id",
+          "message": "parameters.bundle_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "case": "unexpected_property",
+      "parameters": {
+        "bundle_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compute_wrist_alignment received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compute_wrist_alignment",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "valid_minimal",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "source_packet_id": "x",
+        "camera_frame_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "missing_required:compiled_grasp_id",
+      "parameters": {
+        "source_packet_id": "x",
+        "camera_frame_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints requires `parameters.compiled_grasp_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_required_field_missing",
+          "path": "parameters.compiled_grasp_id",
+          "message": "parameters requires field 'compiled_grasp_id'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "missing_required:source_packet_id",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "camera_frame_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints requires `parameters.source_packet_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_required_field_missing",
+          "path": "parameters.source_packet_id",
+          "message": "parameters requires field 'source_packet_id'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "missing_required:camera_frame_id",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "source_packet_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints requires `parameters.camera_frame_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_required_field_missing",
+          "path": "parameters.camera_frame_id",
+          "message": "parameters requires field 'camera_frame_id'."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "wrong_type:compiled_grasp_id",
+      "parameters": {
+        "compiled_grasp_id": 7,
+        "source_packet_id": "x",
+        "camera_frame_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints `parameters.compiled_grasp_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_type_mismatch",
+          "path": "parameters.compiled_grasp_id",
+          "message": "parameters.compiled_grasp_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "wrong_type:source_packet_id",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "source_packet_id": 7,
+        "camera_frame_id": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints `parameters.source_packet_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_type_mismatch",
+          "path": "parameters.source_packet_id",
+          "message": "parameters.source_packet_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "wrong_type:camera_frame_id",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "source_packet_id": "x",
+        "camera_frame_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints `parameters.camera_frame_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_type_mismatch",
+          "path": "parameters.camera_frame_id",
+          "message": "parameters.camera_frame_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "case": "unexpected_property",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "source_packet_id": "x",
+        "camera_frame_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "propose_wrist_viewpoints received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "propose_wrist_viewpoints",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "valid_minimal",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "motion_type": "linear",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "missing_required:compiled_grasp_id",
+      "parameters": {
+        "motion_type": "linear",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe requires `parameters.compiled_grasp_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_required_field_missing",
+          "path": "parameters.compiled_grasp_id",
+          "message": "parameters requires field 'compiled_grasp_id'."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "missing_required:motion_type",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe requires `parameters.motion_type`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_required_field_missing",
+          "path": "parameters.motion_type",
+          "message": "parameters requires field 'motion_type'."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "wrong_type:compiled_grasp_id",
+      "parameters": {
+        "compiled_grasp_id": 7,
+        "motion_type": "linear",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe `parameters.compiled_grasp_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_type_mismatch",
+          "path": "parameters.compiled_grasp_id",
+          "message": "parameters.compiled_grasp_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "wrong_type:motion_type",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "motion_type": 7,
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe `parameters.motion_type` must be string.",
+        "prepare_attachment_probe `parameters.motion_type` has an unsupported value."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_type_mismatch",
+          "path": "parameters.motion_type",
+          "message": "parameters.motion_type must be JSON type string; got integer."
+        },
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "invalid_enum:motion_type",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "motion_type": "__invalid_enum__",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe `parameters.motion_type` has an unsupported value."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_enum_mismatch",
+          "path": "parameters.motion_type",
+          "message": "parameters.motion_type must be one of ['linear', 'arc']; got '__invalid_enum__'."
+        },
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "wrong_type:direction_world_xyz",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "motion_type": "linear",
+        "direction_world_xyz": {
+          "not": "an-array"
+        }
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe `parameters.direction_world_xyz` must be array."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_type_mismatch",
+          "path": "parameters.direction_world_xyz",
+          "message": "parameters.direction_world_xyz must be JSON type array; got object."
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "case": "unexpected_property",
+      "parameters": {
+        "compiled_grasp_id": "x",
+        "motion_type": "linear",
+        "direction_world_xyz": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "prepare_attachment_probe received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "prepare_attachment_probe",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "case": "valid_minimal",
+      "parameters": {
+        "probe_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "case": "missing_required:probe_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "assess_attachment_probe requires `parameters.probe_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "assess_attachment_probe",
+          "code": "request_required_field_missing",
+          "path": "parameters.probe_id",
+          "message": "parameters requires field 'probe_id'."
+        }
+      ]
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "case": "wrong_type:probe_id",
+      "parameters": {
+        "probe_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "assess_attachment_probe `parameters.probe_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "assess_attachment_probe",
+          "code": "request_type_mismatch",
+          "path": "parameters.probe_id",
+          "message": "parameters.probe_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "case": "unexpected_property",
+      "parameters": {
+        "probe_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "assess_attachment_probe received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "assess_attachment_probe",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "move_to",
+      "case": "valid_minimal",
+      "parameters": {
+        "ik_receipt_id": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "move_to",
+      "case": "missing_required:ik_receipt_id",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "move_to requires `parameters.ik_receipt_id`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "move_to",
+          "code": "request_required_field_missing",
+          "path": "parameters.ik_receipt_id",
+          "message": "parameters requires field 'ik_receipt_id'."
+        }
+      ]
+    },
+    {
+      "tool": "move_to",
+      "case": "wrong_type:ik_receipt_id",
+      "parameters": {
+        "ik_receipt_id": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "move_to `parameters.ik_receipt_id` must be string."
+      ],
+      "contract_violations": [
+        {
+          "tool": "move_to",
+          "code": "request_type_mismatch",
+          "path": "parameters.ik_receipt_id",
+          "message": "parameters.ik_receipt_id must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "move_to",
+      "case": "unexpected_property",
+      "parameters": {
+        "ik_receipt_id": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "move_to received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "move_to",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "case": "valid_minimal",
+      "parameters": {
+        "ik_receipt_ids": [
+          "x"
+        ]
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "case": "missing_required:ik_receipt_ids",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "follow_eef_trajectory requires `parameters.ik_receipt_ids`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "follow_eef_trajectory",
+          "code": "request_required_field_missing",
+          "path": "parameters.ik_receipt_ids",
+          "message": "parameters requires field 'ik_receipt_ids'."
+        }
+      ]
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "case": "wrong_type:ik_receipt_ids",
+      "parameters": {
+        "ik_receipt_ids": {
+          "not": "an-array"
+        }
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "follow_eef_trajectory `parameters.ik_receipt_ids` must be array."
+      ],
+      "contract_violations": [
+        {
+          "tool": "follow_eef_trajectory",
+          "code": "request_type_mismatch",
+          "path": "parameters.ik_receipt_ids",
+          "message": "parameters.ik_receipt_ids must be JSON type array; got object."
+        }
+      ]
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "case": "unexpected_property",
+      "parameters": {
+        "ik_receipt_ids": [
+          "x"
+        ],
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "follow_eef_trajectory received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "follow_eef_trajectory",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "gripper_control",
+      "case": "valid_minimal",
+      "parameters": {
+        "position": 0
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "gripper_control",
+      "case": "missing_required:position",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "gripper_control requires exactly `parameters.position`; use binary 0=closed or 1=open, not a measured aperture or fractional command."
+      ],
+      "contract_violations": [
+        {
+          "tool": "gripper_control",
+          "code": "request_required_field_missing",
+          "path": "parameters.position",
+          "message": "parameters requires field 'position'."
+        }
+      ]
+    },
+    {
+      "tool": "gripper_control",
+      "case": "invalid_enum:position",
+      "parameters": {
+        "position": "__invalid_enum__"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "gripper_control `parameters.position` must be exactly binary 0=closed or 1=open; measured gripper aperture is observation-only."
+      ],
+      "contract_violations": [
+        {
+          "tool": "gripper_control",
+          "code": "request_enum_mismatch",
+          "path": "parameters.position",
+          "message": "parameters.position must be one of [0, 1, False, True]; got '__invalid_enum__'."
+        }
+      ]
+    },
+    {
+      "tool": "gripper_control",
+      "case": "unexpected_property",
+      "parameters": {
+        "position": 0,
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "gripper_control requires exactly `parameters.position`; use binary 0=closed or 1=open, not a measured aperture or fractional command."
+      ],
+      "contract_violations": [
+        {
+          "tool": "gripper_control",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "ik_preview_check",
+      "case": "valid_minimal",
+      "parameters": {
+        "target_pose": {}
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "ik_preview_check",
+      "case": "wrong_type:target_pose",
+      "parameters": {
+        "target_pose": [
+          "not",
+          "an-object"
+        ]
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "ik_preview_check `parameters.target_pose` must be object."
+      ],
+      "contract_violations": [
+        {
+          "tool": "ik_preview_check",
+          "code": "request_type_mismatch",
+          "path": "parameters.target_pose",
+          "message": "parameters.target_pose must be JSON type object; got array."
+        }
+      ]
+    },
+    {
+      "tool": "ik_preview_check",
+      "case": "unexpected_property",
+      "parameters": {
+        "target_pose": {},
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "ik_preview_check received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "ik_preview_check",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "save_memory",
+      "case": "valid_minimal",
+      "parameters": {
+        "key": "x",
+        "content": {}
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "save_memory",
+      "case": "missing_required:key",
+      "parameters": {
+        "content": {}
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "save_memory requires `parameters.key`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "save_memory",
+          "code": "request_required_field_missing",
+          "path": "parameters.key",
+          "message": "parameters requires field 'key'."
+        }
+      ]
+    },
+    {
+      "tool": "save_memory",
+      "case": "missing_required:content",
+      "parameters": {
+        "key": "x"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "save_memory requires `parameters.content`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "save_memory",
+          "code": "request_required_field_missing",
+          "path": "parameters.content",
+          "message": "parameters requires field 'content'."
+        }
+      ]
+    },
+    {
+      "tool": "save_memory",
+      "case": "wrong_type:key",
+      "parameters": {
+        "key": 7,
+        "content": {}
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "save_memory key must be a non-empty string when supplied."
+      ],
+      "contract_violations": [
+        {
+          "tool": "save_memory",
+          "code": "request_type_mismatch",
+          "path": "parameters.key",
+          "message": "parameters.key must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "save_memory",
+      "case": "unexpected_property",
+      "parameters": {
+        "key": "x",
+        "content": {},
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "save_memory received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "save_memory",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "get_memory",
+      "case": "valid_minimal",
+      "parameters": {},
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "get_memory",
+      "case": "unexpected_property",
+      "parameters": {
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "get_memory received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "get_memory",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "delete_memory",
+      "case": "valid_minimal",
+      "parameters": {
+        "key": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "delete_memory",
+      "case": "missing_required:key",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "delete_memory requires `parameters.key`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "delete_memory",
+          "code": "request_required_field_missing",
+          "path": "parameters.key",
+          "message": "parameters requires field 'key'."
+        }
+      ]
+    },
+    {
+      "tool": "delete_memory",
+      "case": "wrong_type:key",
+      "parameters": {
+        "key": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "delete_memory key must be a non-empty string when supplied."
+      ],
+      "contract_violations": [
+        {
+          "tool": "delete_memory",
+          "code": "request_type_mismatch",
+          "path": "parameters.key",
+          "message": "parameters.key must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "delete_memory",
+      "case": "unexpected_property",
+      "parameters": {
+        "key": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "delete_memory received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "delete_memory",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "compact_memory",
+      "case": "valid_minimal",
+      "parameters": {},
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "compact_memory",
+      "case": "unexpected_property",
+      "parameters": {
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "compact_memory received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "compact_memory",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "register_skill",
+      "case": "valid_minimal",
+      "parameters": {
+        "name": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "register_skill",
+      "case": "missing_required:name",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "register_skill requires non-empty string `parameters.name`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "register_skill",
+          "code": "request_required_field_missing",
+          "path": "parameters.name",
+          "message": "parameters requires field 'name'."
+        }
+      ]
+    },
+    {
+      "tool": "register_skill",
+      "case": "wrong_type:name",
+      "parameters": {
+        "name": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "register_skill requires non-empty string `parameters.name`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "register_skill",
+          "code": "request_type_mismatch",
+          "path": "parameters.name",
+          "message": "parameters.name must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "register_skill",
+      "case": "unexpected_property",
+      "parameters": {
+        "name": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "register_skill received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "register_skill",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    },
+    {
+      "tool": "update_skill",
+      "case": "valid_minimal",
+      "parameters": {
+        "name": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "update_skill",
+      "case": "missing_required:name",
+      "parameters": {},
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "update_skill requires non-empty string `parameters.name`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "update_skill",
+          "code": "request_required_field_missing",
+          "path": "parameters.name",
+          "message": "parameters requires field 'name'."
+        }
+      ]
+    },
+    {
+      "tool": "update_skill",
+      "case": "wrong_type:name",
+      "parameters": {
+        "name": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "update_skill requires non-empty string `parameters.name`."
+      ],
+      "contract_violations": [
+        {
+          "tool": "update_skill",
+          "code": "request_type_mismatch",
+          "path": "parameters.name",
+          "message": "parameters.name must be JSON type string; got integer."
+        }
+      ]
+    },
+    {
+      "tool": "update_skill",
+      "case": "unexpected_property",
+      "parameters": {
+        "name": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "update_skill received unsupported parameters: __unexpected__."
+      ],
+      "contract_violations": [
+        {
+          "tool": "update_skill",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        }
+      ]
+    }
+  ]
+}

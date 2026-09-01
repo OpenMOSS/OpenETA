@@ -1,0 +1,22 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-7-wrist-grasp-short",
+      "env_id": "openeta/libero_libero_object_task7-v0",
+      "task": "Short grasp canary only; pick up the milk but do not transport it to the basket. Use the normal perception and grasp-candidate tools. Before contact, obtain a safe near-field wrist view and use fresh wrist evidence to refine or re-estimate the grasp; prefer the correction path supported by the evidence rather than blindly replaying the original contact anchor. Close the gripper, run a small safe lift/probe, and use fresh visual evidence plus assess_attachment_probe to decide whether attachment is proven by source vacancy and co-motion. Stop after one proven grasp, or after at most one failed close/lift attempt and one recovery attempt. Do not claim success from close acknowledgement or aperture alone. Official LIBERO placement reward is outside this grasp-only contract.",
+      "seed": 7,
+      "max_turns": 48,
+      "recovery_turns_per_branch": 8,
+      "max_recovery_turns": 16,
+      "max_tool_calls": 90,
+      "timeout_s": 4200,
+      "max_total_tokens": 5000000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "grasp_attempt_limit": 2,
+        "required_attachment_evidence": ["source_vacancy", "co_motion"]
+      }
+    }
+  ]
+}

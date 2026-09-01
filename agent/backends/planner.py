@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import mimetypes
 import threading
@@ -17,17 +18,23 @@ from typing import Callable
 
 from adapter.protocol import JsonDict
 from agent.runtime.actions import PipelineStatus
-from agent.backends.provider_config import PlannerProviderConfig, ProviderEndpointConfig
+from agent.backends.provider_config import (
+    DEFAULT_PLANNER_PROVIDER_TIMEOUT_S,
+    PlannerProviderConfig,
+    ProviderEndpointConfig,
+)
 from agent.runtime.token_counting import estimate_json_tokens, estimate_text_tokens
 
 
 PLANNER_STATIC_CONTEXT_SCHEMA_VERSION = "openeta.planner_static_context.v1"
 _MAIN_AGENT_CONTEXT_SCHEMA_VERSION = "openeta.agent_context.v2"
 _CACHE_STABLE_AGENT_CONTEXT_KEYS = (
+    "available_tools_schema_version",
     "available_tools",
     "tool_references",
     "relevant_skills",
     "skill_usage",
+    "task_playbook",
 )
 
 
@@ -310,7 +317,20 @@ class CommercialApiPlannerBackend(PlannerBackend):
 OpenAICompatibleTransport = Callable[[str, JsonDict, dict[str, str], float], JsonDict]
 
 
-REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 2048
+# OpenAI-compatible reasoning models may spend this budget on hidden reasoning
+# before emitting the small JSON object requested by an isolated reviewer.
+# Live DeepSeek V4 attachment-review evidence exhausted the former 2k cap and
+# surfaced as an invalid verdict; 4k succeeded on the identical four images.
+# Keep additional variance headroom because the limit is only a ceiling and
+# normal short reviewer responses still stop early.
+REASONING_SUBAGENT_MAX_OUTPUT_TOKENS = 8192
+
+# Capacity failures usually outlive the ordinary sub-second retry interval. A
+# provider that reports overload/concurrency exhaustion needs a real cooldown;
+# otherwise all configured attempts are consumed while the same hot backend is
+# still rejecting work. Keep ordinary network/protocol retries responsive and
+# apply this floor only to errors explicitly classified as capacity-related.
+PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S = 15.0
 
 
 @dataclass(slots=True)
@@ -321,7 +341,7 @@ class OpenAICompatiblePlannerBackendConfig:
     model: str = ""
     api_base: str = ""
     api_key: str = ""
-    timeout_s: float = 60.0
+    timeout_s: float = DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
     max_attempts: int = 3
     retry_backoff_s: float = 0.5
     temperature: float = 0.0
@@ -329,17 +349,15 @@ class OpenAICompatiblePlannerBackendConfig:
     # providers may count hidden reasoning against this same completion budget.
     max_tokens: int = REASONING_SUBAGENT_MAX_OUTPUT_TOKENS
     context_window_tokens: int | None = None
-    # Master switch for the provider's JSON structured-output mode. It is only
-    # applied to isolated sub-planner requests (reference localization, grasp
-    # strategy, supervision, ...) which still emit JSON. The main embodied
-    # planner emits XML (see planner.py `_parse_xml_decision`) whose multi-line
-    # code travels in CDATA, so json_object mode is never applied to it.
+    # Structured JSON mode remains useful for isolated reviewers, which keep
+    # their existing JSON contracts. The main embodied planner uses XML.
     use_json_response_format: bool = True
+    # Optional Qwen-style provider switch. None omits the provider-specific
+    # field; isolated roles such as VDM may explicitly disable hidden thinking.
     enable_thinking: bool | None = None
-    # Some chat templates (e.g. Qwen3 served via SGLang/vLLM) accept only a
-    # single leading system message. Upstream emits separate system turns for
-    # radix-cache alignment; collapsing them into one is semantically identical
-    # and keeps the stable prefix byte-identical, so the cache benefit remains.
+    # Some chat templates permit only one leading system message. Collapsing
+    # retains the exact system -> stable context -> summary byte order, so the
+    # cache-stable prefix stays before all growing conversation history.
     collapse_leading_system_messages: bool = True
     enable_vision: bool = True
     max_vision_images: int = 2
@@ -361,6 +379,12 @@ class OpenAICompatiblePlannerBackendConfig:
             max_attempts=config.max_attempts,
             retry_backoff_s=config.retry_backoff_s,
             context_window_tokens=config.context_window_tokens,
+            enable_thinking=_metadata_optional_bool(metadata, "enable_thinking"),
+            collapse_leading_system_messages=_metadata_bool(
+                metadata,
+                "collapse_leading_system_messages",
+                default=True,
+            ),
             enable_vision=_metadata_bool(metadata, "enable_vision", default=True),
             max_vision_images=_metadata_positive_int(
                 metadata,
@@ -455,18 +479,24 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             )
 
         stable_context, dynamic_context = _partition_planner_tool_context(request)
+        prompt_dynamic_context = (
+            _planner_visible_main_agent_context(dynamic_context)
+            if request.tool_context.get("schema_version")
+            == _MAIN_AGENT_CONTEXT_SCHEMA_VERSION
+            else dynamic_context
+        )
         stable_context_prompt = (
             _stable_planner_context_prompt(stable_context) if stable_context else ""
         )
         prompt_layout = _planner_prompt_layout_summary(
             stable_context=stable_context,
             stable_context_prompt=stable_context_prompt,
-            dynamic_context=dynamic_context,
+            dynamic_context=prompt_dynamic_context,
         )
         user_content, vision_attachments = _planner_user_content(
             request,
             self.config,
-            prompt_tool_context=dynamic_context,
+            prompt_tool_context=prompt_dynamic_context,
         )
         system_segments: list[str] = [request.system_prompt]
         if stable_context_prompt:
@@ -477,14 +507,14 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 + request.conversation_summary.strip()
             )
         if self.config.collapse_leading_system_messages:
-            # Chat templates that permit only one leading system turn require the
-            # segments to be joined. Ordering is preserved so the cache-stable
-            # prefix (system_prompt + stable context) stays byte-identical.
             messages: list[JsonDict] = [
-                {"role": "system", "content": "\n\n".join(system_segments)},
+                {"role": "system", "content": "\n\n".join(system_segments)}
             ]
         else:
-            messages = [{"role": "system", "content": segment} for segment in system_segments]
+            messages = [
+                {"role": "system", "content": segment}
+                for segment in system_segments
+            ]
         messages.extend(_validated_conversation_messages(request.conversation_messages))
         messages.append({"role": "user", "content": user_content})
         body: JsonDict = {
@@ -493,16 +523,13 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
-        # The main embodied planner emits an XML <decision>; only isolated
-        # sub-planner roles still emit JSON, so json_object mode is scoped to
-        # them. Applying it to the XML planner would corrupt CDATA code bodies.
         isolated_role = request.metadata.get("isolated_context") is True
         if self.config.use_json_response_format and isolated_role:
             body["response_format"] = {"type": "json_object"}
         if self.config.enable_thinking is not None:
-            # Qwen3-style toggle: disable the <think> prefix so a small
-            # max_tokens budget is not consumed by reasoning before output.
-            body["chat_template_kwargs"] = {"enable_thinking": self.config.enable_thinking}
+            body["chat_template_kwargs"] = {
+                "enable_thinking": self.config.enable_thinking
+            }
 
         (
             response,
@@ -519,6 +546,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
             bool(error.get("switch_provider_next")) for error in retry_errors
         )
         if final_error is not None:
+            provider_error_code = _provider_failure_code(final_error)
+            provider_error_retryable = _is_transient_provider_error(final_error)
             return PlannerBackendResult(
                 payload={
                     "kind": "response",
@@ -527,6 +556,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         "message": "Planner provider request failed.",
                         "error_type": type(final_error).__name__,
                         "provider_attempts": provider_attempts,
+                        "provider_error_code": provider_error_code,
+                        "retryable": provider_error_retryable,
                     },
                     "reasoning": f"Planner provider request failed: {final_error}",
                 },
@@ -537,6 +568,8 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                     "error_type": type(final_error).__name__,
                     "error": str(final_error),
                     "provider_attempts": provider_attempts,
+                    "provider_error_code": provider_error_code,
+                    "retryable": provider_error_retryable,
                     "retry_errors": retry_errors,
                     "provider_role": provider_role,
                     "provider_failover": provider_switch_count > 0,
@@ -606,7 +639,9 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
         else:
             active_endpoint = primary_endpoint
             provider_role = "primary"
+        attempted_provider_roles: set[str] = set()
         for attempt in range(1, max_attempts + 1):
+            attempted_provider_roles.add(provider_role)
             url = _chat_completions_url(active_endpoint.api_base)
             attempt_body = dict(body)
             attempt_body["model"] = active_endpoint.model
@@ -658,12 +693,20 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                 protocol_details = (
                     dict(exc.details) if isinstance(exc, ProviderProtocolError) else None
                 )
-                switch_provider_next = (
-                    self.config.fallback is not None and _is_provider_failover_error(exc)
-                )
                 next_provider_role = None
-                if switch_provider_next:
-                    next_provider_role = "fallback" if provider_role == "primary" else "primary"
+                if self.config.fallback is not None and _is_provider_failover_error(exc):
+                    alternate_role = (
+                        "fallback" if provider_role == "primary" else "primary"
+                    )
+                    # Authentication/access/quota failures are persistent for one
+                    # endpoint configuration. Try the alternate endpoint once, but
+                    # do not cycle back to an endpoint that already returned the
+                    # same class of account failure.
+                    if not _is_provider_account_error(exc) or (
+                        alternate_role not in attempted_provider_roles
+                    ):
+                        next_provider_role = alternate_role
+                switch_provider_next = next_provider_role is not None
                 retryable = _is_transient_provider_error(exc) or switch_provider_next
                 provider_exchanges.append(
                     {
@@ -698,7 +741,11 @@ class OpenAICompatiblePlannerBackend(PlannerBackend):
                         provider_role,
                         provider_exchanges,
                     )
-                delay_s = max(0.0, self.config.retry_backoff_s) * (2 ** (attempt - 1))
+                delay_s = _provider_retry_delay_s(
+                    exc,
+                    configured_backoff_s=self.config.retry_backoff_s,
+                    attempt=attempt,
+                )
                 retry_errors.append(
                     {
                         "attempt": attempt,
@@ -836,21 +883,60 @@ def _planner_user_prompt(
     *,
     tool_context: JsonDict | None = None,
 ) -> str:
-    instruction = (
-        "Follow the system prompt for this isolated role. Return only the exact "
-        "JSON object requested by that prompt, without markdown."
-        if request.metadata.get("isolated_context") is True
-        else (
-            "Choose exactly one next OpenETA action. Return only one XML <decision> "
-            "element with child elements kind, name, parameters, reasoning. Wrap code "
-            "or multi-line text in CDATA. Do not include markdown."
+    isolated = request.metadata.get("isolated_context") is True
+    if request.validation_errors:
+        instruction = (
+            f"Your previous candidate action from attempt {max(1, request.attempt - 1)} "
+            "was rejected by the host validator. The requested first attempt is now "
+            "complete. Return a corrected candidate for the current attempt and do not "
+            "repeat the same rejected kind/name/parameters. Repair every item in "
+            "validation_errors using exact values already present in tool_context; do "
+            "not invent references. Return only the exact JSON object requested by the "
+            "system prompt, without markdown."
+            if isolated
+            else (
+                f"Your previous OpenETA action from attempt "
+                f"{max(1, request.attempt - 1)} was rejected by the host validator. "
+                "The requested first attempt is now complete. Return a corrected next "
+                "action for the current attempt and do not repeat the same rejected "
+                "kind/name/parameters. Repair every item in validation_errors using "
+                "exact values already present in tool_context; do not invent references. "
+                "Return only one XML <decision> element with child elements kind, "
+                "name, parameters, and reasoning. Use plain true/false/null for "
+                "typed scalars and encode arrays as a container with type=\"array\" "
+                "and <item> children. Wrap code, multi-line text, or text containing "
+                "XML punctuation in CDATA. Do not include markdown."
+            )
         )
-    )
+    else:
+        instruction = (
+            "Follow the system prompt for this isolated role. Return only the exact "
+            "JSON object requested by that prompt, without markdown."
+            if isolated
+            else (
+                "Choose exactly one next OpenETA action. Return only one XML <decision> "
+                "element with child elements kind, name, parameters, and reasoning. "
+                "Use plain true/false/null for typed scalars and encode arrays as a "
+                "container with type=\"array\" and <item> children. Wrap code, "
+                "multi-line text, or text containing XML punctuation in CDATA. Do not "
+                "include markdown."
+            )
+        )
     payload = {
         "instruction": instruction,
         "tool_context": request.tool_context if tool_context is None else tool_context,
         "attempt": request.attempt,
         "validation_errors": request.validation_errors,
+        "validation_feedback": (
+            {
+                "status": "previous_attempt_rejected",
+                "rejected_attempt": max(1, request.attempt - 1),
+                "must_change_rejected_action": True,
+                "errors": list(request.validation_errors),
+            }
+            if request.validation_errors
+            else {"status": "none"}
+        ),
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -905,10 +991,64 @@ def _stable_planner_context_prompt(stable_context: JsonDict) -> str:
         separators=(",", ":"),
     )
     return (
-        "Stable OpenETA tool and skill context for this session. Treat these "
-        "schemas, guidance documents, and execution rules as authoritative. "
+        "Stable OpenETA contracts and guidance for this session. Tool contracts "
+        "own interfaces, skills own reusable domain advice, and any task playbook "
+        "is an exact-scope prior. "
         "The final user message supplies the current turn state.\n" + payload
     )
+
+
+def _planner_visible_main_agent_context(dynamic_context: JsonDict) -> JsonDict:
+    """Hide transport-local visual paths from the main Agent's text prompt.
+
+    The backend still reads the canonical request to attach image bytes.  The
+    Agent reasons with packet/frame identities and short host-resolved bundles,
+    so filesystem paths cannot become accidental tool arguments.
+    """
+
+    visible = dict(dynamic_context)
+    visible.pop("vision_image_paths", None)
+    for key in (
+        "vision_evidence",
+        "visual_history",
+        "current_observation",
+        "decision_state",
+        "pending_target_selection",
+        "selected_sam3_detection",
+        "selected_sam3_detections",
+        "pending_reference_localization",
+    ):
+        if key in visible:
+            visible[key] = _strip_visual_transport_paths(visible[key])
+    return visible
+
+
+_VISUAL_TRANSPORT_PATH_KEYS = {
+    "path",
+    "rgb_path",
+    "depth_path",
+    "image_path",
+    "source_image",
+    "scene_image",
+    "original_image_ref",
+    "contact_sheet_ref",
+    "overlay_ref",
+    "crop_ref",
+    "mask_ref",
+    "marked_scene_image_ref",
+}
+
+
+def _strip_visual_transport_paths(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _strip_visual_transport_paths(item)
+            for key, item in value.items()
+            if key not in _VISUAL_TRANSPORT_PATH_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_visual_transport_paths(item) for item in value]
+    return value
 
 
 def _planner_prompt_layout_summary(
@@ -1141,6 +1281,11 @@ def _metadata_bool(metadata: JsonDict, key: str, *, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
+def _metadata_optional_bool(metadata: JsonDict, key: str) -> bool | None:
+    value = metadata.get(key)
+    return value if isinstance(value, bool) else None
+
+
 def _metadata_positive_int(metadata: JsonDict, key: str, *, default: int) -> int:
     parsed = _coerce_positive_int(metadata.get(key))
     return parsed if parsed is not None else default
@@ -1169,7 +1314,16 @@ def _is_transient_provider_error(exc: Exception) -> bool:
         return exc.status_code in {408, 429, 500, 502, 503, 504} or (520 <= exc.status_code <= 527)
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in {408, 429, 500, 502, 503, 504}
-    return isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError))
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+        ),
+    )
 
 
 def _is_provider_failover_error(exc: Exception) -> bool:
@@ -1185,7 +1339,49 @@ def _is_provider_failover_error(exc: Exception) -> bool:
         )
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in {401, 403, 408, 429, 502, 503, 504} or 520 <= exc.code <= 527
-    return isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError))
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            urllib.error.URLError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+        ),
+    )
+
+
+def _is_provider_account_error(exc: Exception) -> bool:
+    """Return whether retrying the same endpoint cannot repair this request."""
+
+    if isinstance(exc, ProviderHttpError):
+        return exc.status_code in {401, 403}
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {401, 403}
+    return False
+
+
+def _provider_failure_code(exc: Exception) -> str:
+    """Map terminal provider errors to a stable Agent/evaluation-facing code."""
+
+    message = str(exc).lower()
+    if any(
+        marker in message
+        for marker in (
+            "insufficient_user_quota",
+            "insufficient quota",
+            "insufficient balance",
+            "额度失败",
+            "剩余额度",
+            "余额不足",
+        )
+    ):
+        return "insufficient_provider_quota"
+    if _is_provider_account_error(exc):
+        return "provider_credentials_or_access_denied"
+    if _is_transient_provider_error(exc):
+        return "transient_provider_failure"
+    return "provider_request_failed"
 
 
 def _provider_error_reports_capacity(exc: Exception) -> bool:
@@ -1204,6 +1400,22 @@ def _provider_error_reports_capacity(exc: Exception) -> bool:
             "暂时不可用",
         )
     )
+
+
+def _provider_retry_delay_s(
+    exc: Exception,
+    *,
+    configured_backoff_s: float,
+    attempt: int,
+) -> float:
+    """Return exponential retry delay with a capacity-specific cooldown floor."""
+
+    exponent = max(0, int(attempt) - 1)
+    configured_delay_s = max(0.0, float(configured_backoff_s)) * (2**exponent)
+    if not _provider_error_reports_capacity(exc):
+        return configured_delay_s
+    capacity_delay_s = PROVIDER_CAPACITY_MIN_RETRY_BACKOFF_S * (2**exponent)
+    return max(configured_delay_s, capacity_delay_s)
 
 
 def _chat_completions_url(api_base: str) -> str:

@@ -9,6 +9,7 @@
   "length_unit": "m",
   "rotation_convention": "active_column_vectors",
   "max_gripper_width_m": 0.08,
+  "execution_reference_point": "translation_xyz",
   "compatibility": {
     "environment_families": ["libero"],
     "controllers": ["OSC_POSE"],
@@ -32,7 +33,7 @@
     "task": "libero_10 task 0",
     "method": "offline rigid-body GraspNet->EEF calibration with end-to-end physical canary",
     "eef_frame_note": "OpenETA EEF pos = gripper0_grip_site position; EEF quat = robot0_right_hand body orientation (mixed frame). T_grasp_eef assembled against this exact convention.",
-    "approach_axis": "+X column of the GraspNet rotation is the approach direction; translation origin is grasp translation_xyz (depth-independent).",
+    "approach_axis": "+X column of the GraspNet rotation is the approach direction. This profile controls robosuite gripper0_grip_site, whose Panda XML location is the centre of the finger pads, so execution_contact_center_xyz uses the backend grasp centre (translation_xyz). gripper_tip_position_xyz remains diagnostic geometry and is appropriate only for a calibration whose controlled EEF origin is the physical tip.",
     "pad_offset_m": 0.0036,
     "panda_gripper_xml_sha256": "d9d68123909d6910488310d0fae4e358ed4ac831c6d0957f3e30893a5412baac",
     "versions": {

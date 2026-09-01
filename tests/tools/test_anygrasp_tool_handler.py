@@ -9,6 +9,7 @@ import pytest
 
 from adapter.protocol import EnvObservation, RobotState
 from agent.tools.handlers import DEFAULT_ANYGRASP_OUTPUT_ROOT, build_anygrasp_handler
+from agent.tools.grasp_backend_specs import build_internal_grasp_backend_specs
 from agent.tools.registry import ToolExecutionContext, build_default_tool_registry
 
 
@@ -32,7 +33,7 @@ def _context(
     session_id: str = "",
     observation: EnvObservation | None = None,
 ) -> ToolExecutionContext:
-    spec = build_default_tool_registry().get("anygrasp")
+    spec = build_internal_grasp_backend_specs()["anygrasp"]
     return ToolExecutionContext(
         name="anygrasp",
         spec=spec,
@@ -106,9 +107,10 @@ def _candidate(**overrides: Any) -> dict[str, Any]:
     return candidate
 
 
-def test_anygrasp_tool_spec_exposes_public_parameters() -> None:
-    spec = build_default_tool_registry().get("anygrasp")
+def test_anygrasp_metadata_is_internal_and_absent_from_agent_registry() -> None:
+    spec = build_internal_grasp_backend_specs()["anygrasp"]
 
+    assert "anygrasp" not in {item.name for item in build_default_tool_registry().list()}
     assert set(spec.parameters) == {
         "mode",
         "rgb",
@@ -121,12 +123,7 @@ def test_anygrasp_tool_spec_exposes_public_parameters() -> None:
         "dense_grasp",
         "depth_cutoff_factor",
     }
-    assert "fx, fy, cx, cy, scale" in spec.parameters["intrinsics"]
-    assert "same observe/render camera_packet.anygrasp_intrinsics" in spec.parameters["intrinsics"]
-    assert "required for targeted mode" in spec.parameters["target_mask"]
-    assert "details.outputs.selected_detection.mask_ref" in spec.parameters["target_mask"]
-    assert "details.outputs.detections[i].mask_ref" in spec.parameters["target_mask"]
-    assert "detections[0]" not in spec.parameters["target_mask"]
+    assert spec.category == "internal_grasp_backend"
 
 
 @pytest.mark.parametrize(

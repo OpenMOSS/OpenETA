@@ -16,7 +16,9 @@ from agent.backends.planner import PlannerBackend, PlannerBackendRequest
 
 
 REFERENCE_POINT_LOCALIZATION_SCHEMA_VERSION = "openeta.reference_point_localization.v1"
-REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS = 2048
+# Leave room for hidden reasoning before the small localization JSON.  This is
+# a ceiling, not a requested response length.
+REFERENCE_POINT_LOCALIZATION_MAX_OUTPUT_TOKENS = 8192
 REFERENCE_POINT_LOCALIZATION_MAX_ATTEMPTS = 3
 REFERENCE_POINT_LOCALIZATION_PROVISIONAL_MAX_CONFIDENCE = 0.5
 

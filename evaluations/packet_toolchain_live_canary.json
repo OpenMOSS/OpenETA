@@ -1,0 +1,38 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "packet-toolchain-live-canary-v1",
+  "description": "No-motion live canary for source_packet_id resolution through MolmoPoint, depth-prior estimation, and depth enhancement.",
+  "episode_manifest": "manifests/libero_object_task2_packet_toolchain_canary.json",
+  "variants": [
+    {
+      "variant_id": "packet_toolchain",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 4
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260819
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "packet-toolchain-live-canary",
+    "purpose": "validate short packet references and host-owned perception/depth input resolution"
+  }
+}

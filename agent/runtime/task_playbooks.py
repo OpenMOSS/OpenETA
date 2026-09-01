@@ -168,9 +168,8 @@ def select_task_playbook(
             "official_reward_count": len(selected["evidence"]["official_rewards"]),
         },
         "usage_contract": (
-            "Treat this as a localization and strategy prior. Re-observe and verify the "
-            "current scene; never replay stored coordinates or bypass safety, attachment, "
-            "placement, or official-reward checks."
+            "Exact-scope prior only; current evidence and live tool contracts remain "
+            "authoritative."
         ),
     }
 

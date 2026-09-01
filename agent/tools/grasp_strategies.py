@@ -246,6 +246,52 @@ def select_grasp_strategy(
     return matches[0], "automatic_geometry_family"
 
 
+def compatible_explicit_grasp_strategies(
+    strategies: Sequence[Mapping[str, Any]],
+    *,
+    calibration_id: str,
+    target_geometry_family: str,
+) -> list[JsonDict]:
+    """Project task-agnostic candidate geometry that the Agent may compare.
+
+    This is discovery evidence only. Returning a candidate here neither selects
+    it nor changes the generic geometry used when ``strategy_id`` is omitted.
+    Task- or episode-specific provenance remains in the host-owned strategy
+    record and is intentionally not projected into the Agent context.
+    """
+
+    family = target_geometry_family.strip().lower()
+    if not calibration_id or not family:
+        return []
+    options: list[JsonDict] = []
+    for strategy in strategies:
+        if strategy.get("status") != "candidate" or not _strategy_supports_calibration(
+            strategy, calibration_id
+        ):
+            continue
+        activation = _mapping(
+            strategy.get("automatic_activation", {}),
+            "automatic_activation",
+        )
+        families = activation.get("target_geometry_families", [])
+        if not isinstance(families, list) or family not in families:
+            continue
+        option: JsonDict = {
+                "strategy_id": str(strategy.get("strategy_id") or ""),
+                "status": "candidate",
+                "description": str(strategy.get("description") or ""),
+                "target_geometry_family": family,
+                "activation": "explicit_agent_choice_required",
+                "effect": (
+                    "compile the same selected estimator candidate with this "
+                    "strategy_id to apply its bounded pose policy"
+                ),
+            }
+        options.append(option)
+    options.sort(key=lambda item: str(item["strategy_id"]))
+    return options
+
+
 def strategy_grasp_width_bounds(strategy: Mapping[str, Any]) -> tuple[float, float]:
     constraints = _mapping(strategy.get("constraints"), "constraints")
     values = _vector(

@@ -1,0 +1,16 @@
+{
+  "episodes": [
+    {
+      "episode_id": "libero-object-2-tool-contract-invalid-request-canary",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Tool-contract request-repair canary only; do not move the robot or actuate the gripper. First, intentionally call estimate_depth_prior with an empty parameters object so the Planner validator can return its exact missing-source_packet_id feedback. This first invalid request is required by the canary and must not be replaced preemptively. On the validation retry, repair only the reported defect by copying source_packet_id from the visible initial agentview observation; camera_frame_id may also be copied if useful. Never pass local paths, image payloads, depth, intrinsics, or calibration fields. Inspect the successful tool result, then use talk to report whether the invalid request was rejected, whether the retry was accepted, and whether the result preserved the source packet provenance. This canary does not claim physical task completion.",
+      "seed": 2,
+      "max_turns": 4,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 4,
+      "timeout_s": 600,
+      "max_total_tokens": 300000
+    }
+  ]
+}

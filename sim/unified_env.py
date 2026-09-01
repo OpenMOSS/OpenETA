@@ -1026,14 +1026,13 @@ class UnifiedEnv(gym.Env):
 
     @staticmethod
     def _mujoco_object_world_bounds(model: Any, data: Any, root_body_id: int) -> dict[str, Any]:
-        """Return a world AABB for one MuJoCo object subtree.
+        """Return a collision-geometry world AABB for one MuJoCo object subtree.
 
-        Uses each geom's true type and half-extents rather than ``geom_rbound``
-        (the bounding *sphere* radius, which over-reports a cube's extent by
-        ~1.73x).  An inflated ``dims`` propagates into the carried-object
-        collision box and the receptacle placement corridor, so tight bounds
-        matter for both.  Mesh/heightfield/plane geoms have no cheap analytic
-        box and still fall back to ``geom_rbound``.
+        ``geom_rbound`` is a bounding-sphere radius.  Applying it independently
+        on x/y/z turns a tall thin mesh into a large cube, which is safe but too
+        pessimistic for carried-object routing.  Use live geom transforms and
+        shape-aware extents instead; mesh vertices are already compiler-scaled
+        and centred in MuJoCo's geom frame.
         """
 
         body_parent = np.asarray(model.body_parentid).reshape(-1)
@@ -1044,29 +1043,38 @@ class UnifiedEnv(gym.Env):
                 current = int(body_parent[current])
             return current == root_body_id
 
+        geom_body = np.asarray(model.geom_bodyid).reshape(-1)
+        subtree_geoms = [
+            geom_id
+            for geom_id, body_id in enumerate(geom_body)
+            if belongs_to_root(int(body_id))
+        ]
+        geom_contype = np.asarray(
+            getattr(model, "geom_contype", np.ones(len(geom_body)))
+        ).reshape(-1)
+        geom_conaffinity = np.asarray(
+            getattr(model, "geom_conaffinity", np.ones(len(geom_body)))
+        ).reshape(-1)
+        collision_geoms = [
+            geom_id
+            for geom_id in subtree_geoms
+            if int(geom_contype[geom_id]) != 0
+            or int(geom_conaffinity[geom_id]) != 0
+        ]
+        # Some imported assets expose only visual geoms.  Preserve a bounded
+        # fallback rather than dropping their geometry entirely.
+        selected_geoms = collision_geoms or subtree_geoms
+
         minimum = np.full(3, np.inf, dtype=np.float64)
         maximum = np.full(3, -np.inf, dtype=np.float64)
         found = False
-        geom_body = np.asarray(model.geom_bodyid).reshape(-1)
-        geom_rbound = np.asarray(model.geom_rbound).reshape(-1)
-        geom_xpos = np.asarray(data.geom_xpos)
-        geom_type = np.asarray(model.geom_type).reshape(-1)
-        geom_size = np.asarray(model.geom_size)
-        geom_xmat = np.asarray(data.geom_xmat)
-        for geom_id, body_id in enumerate(geom_body):
-            if not belongs_to_root(int(body_id)):
+        for geom_id in selected_geoms:
+            bounds = UnifiedEnv._mujoco_geom_world_aabb(model, data, geom_id)
+            if bounds is None:
                 continue
-            half = UnifiedEnv._mujoco_geom_world_half_extent(
-                int(geom_type[geom_id]),
-                np.asarray(geom_size[geom_id], dtype=np.float64).reshape(-1),
-                np.asarray(geom_xmat[geom_id], dtype=np.float64).reshape(3, 3),
-                float(geom_rbound[geom_id]),
-            )
-            if half is None:
-                continue
-            center = np.asarray(geom_xpos[geom_id], dtype=np.float64).reshape(-1)[:3]
-            minimum = np.minimum(minimum, center - half)
-            maximum = np.maximum(maximum, center + half)
+            geom_minimum, geom_maximum = bounds
+            minimum = np.minimum(minimum, geom_minimum)
+            maximum = np.maximum(maximum, geom_maximum)
             found = True
         if not found:
             return {}
@@ -1077,55 +1085,63 @@ class UnifiedEnv(gym.Env):
         }
 
     @staticmethod
-    def _mujoco_geom_world_half_extent(
-        geom_type: int,
-        size: "np.ndarray",
-        rot: "np.ndarray",
-        rbound: float,
-    ) -> "np.ndarray | None":
-        """World-axis half-extent of one geom, or ``None`` to skip it.
+    def _mujoco_geom_world_aabb(
+        model: Any,
+        data: Any,
+        geom_id: int,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Compute a shape-aware world AABB for one compiled MuJoCo geom."""
 
-        ``geom_size`` semantics are per-type: box stores half-sizes, sphere
-        uses only ``size[0]`` as its radius, and capsule/cylinder store
-        (radius, half-length) with the length along local +z.  ``abs(rot) @ h``
-        is the exact world-axis half-extent of a rotated box.
-        """
-        try:
-            import mujoco
-        except Exception:
-            mujoco = None
+        center = np.asarray(data.geom_xpos[geom_id], dtype=np.float64).reshape(-1)[:3]
+        rotation = np.asarray(
+            data.geom_xmat[geom_id],
+            dtype=np.float64,
+        ).reshape(3, 3)
+        geom_type = int(np.asarray(model.geom_type).reshape(-1)[geom_id])
+        size = np.asarray(model.geom_size[geom_id], dtype=np.float64).reshape(-1)[:3]
 
-        def sphere_fallback() -> "np.ndarray | None":
-            if not np.isfinite(rbound) or rbound <= 0:
-                return None
-            return np.full(3, rbound, dtype=np.float64)
-
-        if mujoco is None:
-            return sphere_fallback()
-
-        gt = mujoco.mjtGeom
-        local: "np.ndarray | None" = None
-        if geom_type == gt.mjGEOM_SPHERE and size.size >= 1:
+        # Stable MuJoCo mjtGeom enum values: sphere=2, capsule=3,
+        # ellipsoid=4, cylinder=5, box=6, mesh=7.
+        if geom_type == 2:
+            extent = np.full(3, float(size[0]), dtype=np.float64)
+        elif geom_type == 3:
             radius = float(size[0])
-            if radius > 0:
-                # Rotation-invariant: return directly, no need to project.
-                return np.full(3, radius, dtype=np.float64)
-        elif geom_type == gt.mjGEOM_BOX and size.size >= 3:
-            local = size[:3].astype(np.float64)
-        elif geom_type in (gt.mjGEOM_CAPSULE, gt.mjGEOM_CYLINDER) and size.size >= 2:
-            radius, half_len = float(size[0]), float(size[1])
-            # Capsule end caps add one radius past each flat cylinder face.
-            axial = half_len + (radius if geom_type == gt.mjGEOM_CAPSULE else 0.0)
-            local = np.array([radius, radius, axial], dtype=np.float64)
-        elif geom_type == gt.mjGEOM_ELLIPSOID and size.size >= 3:
-            local = size[:3].astype(np.float64)
+            half_length = float(size[1])
+            extent = radius + np.abs(rotation[:, 2]) * half_length
+        elif geom_type == 4:
+            extent = np.sqrt(np.square(rotation * size).sum(axis=1))
+        elif geom_type == 5:
+            radius = float(size[0])
+            half_length = float(size[1])
+            radial = radius * np.sqrt(
+                np.square(rotation[:, 0]) + np.square(rotation[:, 1])
+            )
+            extent = radial + np.abs(rotation[:, 2]) * half_length
+        elif geom_type == 6:
+            extent = np.abs(rotation) @ size
+        elif geom_type == 7:
+            data_id = int(np.asarray(model.geom_dataid).reshape(-1)[geom_id])
+            if data_id < 0:
+                return None
+            vertex_start = int(np.asarray(model.mesh_vertadr).reshape(-1)[data_id])
+            vertex_count = int(np.asarray(model.mesh_vertnum).reshape(-1)[data_id])
+            vertices = np.asarray(
+                model.mesh_vert[vertex_start : vertex_start + vertex_count],
+                dtype=np.float64,
+            )
+            if vertices.size == 0:
+                return None
+            world_vertices = vertices @ rotation.T + center
+            return world_vertices.min(axis=0), world_vertices.max(axis=0)
+        else:
+            radius = float(np.asarray(model.geom_rbound).reshape(-1)[geom_id])
+            if not np.isfinite(radius) or radius <= 0:
+                return None
+            extent = np.full(3, radius, dtype=np.float64)
 
-        if local is None or not np.all(np.isfinite(local)) or not np.any(local > 0):
-            return sphere_fallback()
-        half = np.abs(rot) @ local
-        if not np.all(np.isfinite(half)) or not np.any(half > 0):
-            return sphere_fallback()
-        return half
+        if not np.all(np.isfinite(extent)) or np.any(extent < 0):
+            return None
+        return center - extent, center + extent
 
     def _normalise_metaworld(self, raw: dict) -> dict:
         """MetaWorld direct env returns numpy state array, not a dict."""

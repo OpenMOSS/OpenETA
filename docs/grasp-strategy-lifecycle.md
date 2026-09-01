@@ -39,6 +39,13 @@ Parallel workers copy repository strategies into:
 These copies are session-owned and writable so reviewed-autonomy experiments do
 not race on shared files. The repository copies are only shared baselines.
 
+Strategy records retain complete task and canary provenance for host review,
+promotion, and audit. The Agent-facing discovery projection intentionally
+contains only the strategy ID, status, task-agnostic geometry description,
+compatible geometry family, and bounded pose-policy effect. It does not expose
+task names, successful episode narratives, or task-specific canary summaries.
+Exact-task experience belongs in an exactly scoped task playbook instead.
+
 ## Automated Review And Promotion
 
 `GraspStrategyLifecycleManager` provides two bookkeeping tools:

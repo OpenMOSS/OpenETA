@@ -14,6 +14,7 @@ from agent.runtime.token_counting import DEFAULT_CONTEXT_WINDOW_TOKENS
 
 DEFAULT_ENV_PATH = ".env"
 DEFAULT_APIKEY_PATH = "apikey.md"
+DEFAULT_PLANNER_PROVIDER_TIMEOUT_S = 180.0
 
 
 @dataclass(slots=True)
@@ -24,7 +25,7 @@ class ProviderEndpointConfig:
     model: str = ""
     api_base: str = ""
     api_key: str = ""
-    timeout_s: float = 60.0
+    timeout_s: float = DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
 
     def missing_fields(self) -> list[str]:
         missing: list[str] = []
@@ -60,7 +61,7 @@ class PlannerProviderConfig:
     model: str = ""
     api_base: str = ""
     api_key: str = ""
-    timeout_s: float = 60.0
+    timeout_s: float = DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
     max_attempts: int = 3
     retry_backoff_s: float = 0.5
     context_window_tokens: int | None = DEFAULT_CONTEXT_WINDOW_TOKENS
@@ -161,12 +162,12 @@ def load_planner_provider_config(
         source_env.get("OPENETA_LLM_TIMEOUT_S"),
         dotenv.get("OPENETA_LLM_TIMEOUT_S"),
         str(apikey_config.timeout_s) if apikey_config.timeout_s else "",
-        "60",
+        str(DEFAULT_PLANNER_PROVIDER_TIMEOUT_S),
     )
     try:
         timeout_s = float(timeout_raw)
     except ValueError:
-        timeout_s = 60.0
+        timeout_s = DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
     max_attempts = _first_positive_int(
         source_env.get("OPENETA_LLM_MAX_ATTEMPTS"),
         dotenv.get("OPENETA_LLM_MAX_ATTEMPTS"),

@@ -19,8 +19,8 @@ from agent.tools.handlers import (
     build_sse_graspgenx_mcp_predictor,
     build_stdio_graspgenx_mcp_gripper_lister,
     build_stdio_graspgenx_mcp_predictor,
-    bind_dummy_tool_handlers,
 )
+from agent.tools.grasp_backend_specs import build_internal_grasp_backend_specs
 from agent.tools.registry import ToolEffect, ToolExecutionContext, build_default_tool_registry
 
 
@@ -155,16 +155,17 @@ def _listing_response() -> dict[str, Any]:
 
 
 def _context(parameters: dict[str, Any]) -> ToolExecutionContext:
-    spec = build_default_tool_registry().get("graspgenx")
+    spec = build_internal_grasp_backend_specs()["graspgenx"]
     return ToolExecutionContext(name="graspgenx", spec=spec, parameters=parameters)
 
 
-def test_specs_are_visible_without_dummy_handlers() -> None:
-    tools = bind_dummy_tool_handlers(build_default_tool_registry())
-    prediction = tools.get("graspgenx")
-    listing = tools.get("list_graspgenx_grippers")
+def test_backend_specs_are_internal_and_absent_from_agent_registry() -> None:
+    internal = build_internal_grasp_backend_specs()
+    prediction = internal["graspgenx"]
+    listing = internal["list_graspgenx_grippers"]
+    public_names = {item.name for item in build_default_tool_registry().list()}
 
-    assert prediction.category == "manipulation"
+    assert prediction.category == "internal_grasp_backend"
     assert prediction.effect == ToolEffect.PLANNING
     assert set(prediction.parameters) == {
         "rgb",
@@ -177,8 +178,7 @@ def test_specs_are_visible_without_dummy_handlers() -> None:
     }
     assert listing.effect == ToolEffect.READ_ONLY
     assert listing.safe_by_default is True
-    assert tools.can_execute("graspgenx") is False
-    assert tools.can_execute("list_graspgenx_grippers") is False
+    assert {"graspgenx", "list_graspgenx_grippers"}.isdisjoint(public_names)
 
 
 def test_default_root_uses_repo_tmp_layout() -> None:
@@ -425,7 +425,7 @@ def test_gripper_list_handler_returns_validated_sorted_capabilities() -> None:
     result = build_graspgenx_gripper_list_handler(_listing_response)(
         ToolExecutionContext(
             name="list_graspgenx_grippers",
-            spec=build_default_tool_registry().get("list_graspgenx_grippers"),
+            spec=build_internal_grasp_backend_specs()["list_graspgenx_grippers"],
             parameters={},
         )
     )
@@ -446,7 +446,7 @@ def test_gripper_list_handler_rejects_duplicate_or_unsorted_results() -> None:
     result = build_graspgenx_gripper_list_handler(lambda: response)(
         ToolExecutionContext(
             name="list_graspgenx_grippers",
-            spec=build_default_tool_registry().get("list_graspgenx_grippers"),
+            spec=build_internal_grasp_backend_specs()["list_graspgenx_grippers"],
             parameters={},
         )
     )

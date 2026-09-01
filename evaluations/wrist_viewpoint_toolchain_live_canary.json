@@ -1,0 +1,38 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "wrist-viewpoint-toolchain-live-canary-v1",
+  "description": "Single LIBERO canary for packet-resolved target-facing wrist viewpoint proposals, exact full-pose IK binding, fresh observation, and downstream grasp recovery.",
+  "episode_manifest": "manifests/libero_object_task2_wrist_viewpoint_canary.json",
+  "variants": [
+    {
+      "variant_id": "wrist_viewpoint_toolchain",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260818
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "wrist-viewpoint-toolchain-live-canary",
+    "purpose": "validate coordinated grasp, viewpoint, IK, motion, perception, and recovery contracts"
+  }
+}

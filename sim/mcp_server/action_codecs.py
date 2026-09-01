@@ -54,6 +54,71 @@ def _declared_behavior_layout(meta: dict[str, Any]) -> dict[str, Any]:
     return cartesian
 
 
+def require_controller_capability(
+    meta: dict[str, Any],
+    backend: str,
+    *,
+    orientation_requested: bool,
+) -> dict[str, Any]:
+    """Return the declared controller block or fail closed for LIBERO.
+
+    Other backends retain their existing codec contracts.  LIBERO is made
+    strict first because its outer closed-loop executor assumes OSC_POSE; a
+    future JOINT_VELOCITY environment must never be driven as if it were OSC.
+    """
+
+    spec = meta.get("control_spec")
+    controller = spec.get("controller") if isinstance(spec, dict) else None
+    cartesian = spec.get("cartesian_delta") if isinstance(spec, dict) else None
+    if backend != "libero":
+        return dict(controller) if isinstance(controller, dict) else {}
+    if not isinstance(controller, dict) or not isinstance(cartesian, dict):
+        raise ControlCodecError(
+            "controller_capability_missing",
+            backend,
+            "LIBERO worker did not declare openeta.sim_control.v1 controller and "
+            "cartesian_delta capabilities. Restart/redeploy the matching worker; "
+            "move_to will not guess an OSC_POSE action layout.",
+        )
+    controller_id = str(controller.get("controller_id") or "")
+    command_interface = str(controller.get("command_interface") or "")
+    executor = str(controller.get("goal_executor") or "")
+    osc_contract = (
+        controller_id == "robosuite.osc_pose"
+        and command_interface == "normalized_cartesian_delta_pose"
+        and executor == "openeta.outer_closed_loop_cartesian.v1"
+        and cartesian.get("supported") is True
+    )
+    mink_contract = (
+        controller_id == "mink.robosuite_joint_velocity"
+        and command_interface == "joint_velocity"
+        and executor == "openeta.worker_mink_goal.v1"
+        and cartesian.get("supported") is False
+    )
+    if not osc_contract and not mink_contract:
+        raise ControlCodecError(
+            "controller_capability_mismatch",
+            backend,
+            "LIBERO move_to supports only a declared robosuite.osc_pose outer "
+            "executor or mink.robosuite_joint_velocity worker-local executor. "
+            "The environment declared "
+            f"controller_id={controller_id or '<missing>'}, "
+            f"command_interface={command_interface or '<missing>'}, "
+            f"goal_executor={executor or '<missing>'}. Use a matching worker "
+            "deployment; no OSC fallback was attempted.",
+        )
+    if controller.get("supports_position") is not True or (
+        orientation_requested and controller.get("supports_orientation") is not True
+    ):
+        raise ControlCodecError(
+            "controller_goal_unsupported",
+            backend,
+            "The declared LIBERO controller does not support the requested "
+            f"{'full-pose' if orientation_requested else 'position'} goal.",
+        )
+    return dict(controller)
+
+
 def trunk_layout(meta: dict[str, Any]) -> dict[str, Any] | None:
     """Return the declared trunk layout, or None when the robot has no trunk.
 

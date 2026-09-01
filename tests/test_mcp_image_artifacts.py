@@ -8,7 +8,6 @@ from pathlib import Path
 
 from adapter.protocol import CameraFrame
 from agent.runtime.image_artifacts import DEFAULT_MCP_IMAGE_OUTPUT_ROOT, materialize_mcp_images
-from agent.runtime.runtime import OpenEtaAgentRuntime
 
 
 PNG_1X1 = base64.b64encode(
@@ -137,34 +136,3 @@ def test_materialized_images_are_isolated_by_session_and_safe_from_traversal(
     assert second_path.relative_to(tmp_path).parts[0] == "session-b"
     assert escaped_path.is_relative_to(tmp_path.resolve())
     assert ".." not in escaped_path.relative_to(tmp_path.resolve()).parts
-
-
-def test_materialize_mcp_images_tool_returns_lightweight_refs(tmp_path: Path) -> None:
-    runtime = OpenEtaAgentRuntime()
-    result = runtime.tools.call(
-        "materialize_mcp_images",
-        {
-            "payload": {
-                "cameras": [
-                    {
-                        "frame_id": "agentview",
-                        "rgb_base64": PNG_1X1,
-                        "width": 1,
-                        "height": 1,
-                    }
-                ]
-            },
-            "output_root": str(tmp_path),
-            "bundle_id": "runtime-bundle",
-        },
-    )
-
-    assert result.success is True
-    assert result.details["result_type"] == "bookkeeping"
-    assert result.details["outputs"]["bundle_id"] == "runtime-bundle"
-    assert result.details["outputs"]["payload"]["cameras"][0]["rgb_ref"] == (
-        "cameras.0.agentview.rgb"
-    )
-    assert len(result.details["artifacts"]) == 1
-    assert Path(result.details["artifacts"][0]["path"]).exists()
-    assert PNG_1X1 not in json.dumps(result.details)

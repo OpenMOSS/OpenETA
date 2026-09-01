@@ -1,0 +1,51 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-6-infra-supplement-main-group1-20260829",
+  "description": "Same-seed serial supplemental rollouts for the six Group 1 Object tasks whose original pass@1 attempts ended only because of provider infrastructure failures. Capacity-specific provider cooldown is enabled, and simulator concurrency is pinned to one because the current local LIBERO MCP deployment is single-environment and returns cross-session handles under concurrent episodes.",
+  "episode_manifest": "manifests/libero_object_6_infra_supplement_seed0.json",
+  "variants": [
+    {
+      "variant_id": "main_group1_python_console_infra_supplement",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "02a3d26eb188e904b1329fbfff88f5b80cf70832"
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260829
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 6,
+    "metric": "pass@1 infrastructure supplement",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "supplements_run_id": "libero-object-10-main-group1-20260829-r01",
+    "supplemented_task_indices": [0, 3, 4, 5, 7, 8],
+    "aggregation_policy": "replace only original infrastructure terminals; retain original valid task outcomes",
+    "feature_group": "python exec fixes, human VLM operator console, capacity-specific provider retry cooldown, and explicit planner-visible gripper command direction",
+    "provider_capacity_retry_delays_s": [15, 30],
+    "simulator_concurrency_policy": "single local LIBERO MCP environment; do not overlap episode handles"
+  }
+}

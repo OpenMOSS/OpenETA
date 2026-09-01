@@ -79,6 +79,9 @@ def lint_skill_contracts(
 
     issues: list[JsonDict] = []
     known_tools = {spec.name: spec for spec in tools.list()}
+    from agent.tools.contracts import build_default_tool_contract_catalog
+
+    tool_contracts = build_default_tool_contract_catalog(tools.list())
     call_pattern = re.compile(
         r"tool_call::([a-z][a-z0-9_]*)|"
         r"(?:call|use|run|invoke|调用|使用)\s+`([a-z][a-z0-9_]*)`",
@@ -135,8 +138,14 @@ def lint_skill_contracts(
                     }
                 )
         for tool_name in sorted(documented_calls & set(known_tools)):
-            spec = known_tools[tool_name]
-            parameter_names = set(spec.parameters)
+            request_properties = tool_contracts.get(tool_name).request_schema.get(
+                "properties"
+            )
+            parameter_names = (
+                set(request_properties)
+                if isinstance(request_properties, dict)
+                else set()
+            )
             if parameter_names != {"bundle_id"}:
                 continue
             mentions_bundle = bool(
@@ -189,13 +198,14 @@ def build_default_skill_registry() -> SkillRegistry:
             description="Place a held object on or inside a target receptacle.",
             task_patterns=("place <object> on <target>", "put <object> into <target>"),
             allowed_tools=(
-                "scene_detector",
+                "observe",
                 "sam3",
+                "select_sam3_detection",
+                "anyplace",
+                "camera_pose_to_world",
                 "ik_preview_check",
-                "obstacle_avoidance",
                 "move_to",
                 "gripper_control",
-                "observe",
             ),
             content=(
                 "Use this skill as guidance only. Locate the receptacle or surface, "
@@ -209,13 +219,11 @@ def build_default_skill_registry() -> SkillRegistry:
             description="Draft guidance for short planar push manipulation.",
             task_patterns=("push <object>", "move <object> by pushing"),
             allowed_tools=(
-                "scene_detector",
+                "observe",
                 "sam3",
                 "ik_preview_check",
-                "obstacle_avoidance",
                 "move_to",
                 "gripper_control",
-                "observe",
             ),
             content=(
                 "Use this skill as guidance only. This is placeholder guidance "
@@ -230,13 +238,14 @@ def build_default_skill_registry() -> SkillRegistry:
             description="Draft guidance for short pull manipulation.",
             task_patterns=("pull <object>", "move <object> by pulling"),
             allowed_tools=(
-                "scene_detector",
-                "sam3",
-                "ik_preview_check",
-                "obstacle_avoidance",
-                "move_to",
-                "gripper_control",
                 "observe",
+                "sam3",
+                "grasp_pose_estimate",
+                "compile_grasp_seed",
+                "ik_preview_check",
+                "move_to",
+                "follow_eef_trajectory",
+                "gripper_control",
             ),
             content=(
                 "Use this skill as guidance only. This is placeholder guidance "
@@ -251,14 +260,14 @@ def build_default_skill_registry() -> SkillRegistry:
             description="Guidance for stacking one object on another.",
             task_patterns=("stack <object> on <object>",),
             allowed_tools=(
-                "scene_detector",
+                "observe",
                 "sam3",
-                "anygrasp",
+                "select_sam3_detection",
+                "grasp_pose_estimate",
+                "compile_grasp_seed",
                 "ik_preview_check",
-                "obstacle_avoidance",
                 "move_to",
                 "gripper_control",
-                "observe",
             ),
             content=(
                 "Use this skill as guidance only. Combine pick and place guidance, "

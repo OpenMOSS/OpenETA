@@ -31,6 +31,7 @@ DEFAULT_OBJECT_MEMORY_MAX_SEARCH_BYTES = 256 * 1024
 DEFAULT_OBJECT_MEMORY_SEARCH_LIMIT = 5
 DEFAULT_OBJECT_MEMORY_SEARCH_MIN_SCORE = 0.75
 DEFAULT_OBJECT_MEMORY_SEARCH_MIN_MARGIN = 0.10
+DEFAULT_OBJECT_MEMORY_HEALTH_TIMEOUT_S = 3.0
 OBJECT_MEMORY_SEARCH_SCHEMA_VERSION = "openeta.object_memory.search.v1"
 OBJECT_MEMORY_SEARCH_MATCH_TYPES = frozenset(
     {"exact_key", "exact_alias", "token", "fuzzy", "semantic"}
@@ -137,6 +138,59 @@ def load_configured_object_memory_bank(
     ).strip()
     _require_complete_object_memory_config(base_url=base_url, api_key=api_key)
     return ObjectMemoryBankConfig(base_url=base_url, api_key=api_key)
+
+
+def probe_object_memory_bank(
+    config: ObjectMemoryBankConfig,
+    *,
+    downloader: ObjectMemoryDownloader | None = None,
+    timeout_s: float = DEFAULT_OBJECT_MEMORY_HEALTH_TIMEOUT_S,
+) -> JsonDict:
+    """Return a sanitized health receipt for preflight and Agent diagnostics."""
+
+    config.validate()
+    endpoint = config.base_url.rstrip("/")
+    health_url = endpoint + "/health"
+    headers = {"Accept": "application/json", "User-Agent": "OpenETA-ObjectMemory/1.0"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {config.api_key}"
+    fetch = downloader or _download_object_memory_bundle
+    try:
+        raw = fetch(health_url, headers, timeout_s, 64 * 1024)
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("health response must be a JSON object")
+        healthy = str(payload.get("status") or "").lower() in {"ok", "healthy"}
+        return {
+            "schema_version": "openeta.object_memory_health.v1",
+            "configured": True,
+            "checked": True,
+            "available": healthy,
+            "endpoint": endpoint,
+            "status": payload.get("status"),
+            "namespace": payload.get("namespace"),
+            "objects": payload.get("objects"),
+            **(
+                {}
+                if healthy
+                else {"reason": "object_memory_health_not_ok"}
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - preflight returns structured evidence.
+        return {
+            "schema_version": "openeta.object_memory_health.v1",
+            "configured": True,
+            "checked": True,
+            "available": False,
+            "endpoint": endpoint,
+            "reason": "object_memory_health_check_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "recovery": (
+                "verify the endpoint from the evaluation worker network namespace; "
+                "the host terminal and worker may have different proxy or routing state"
+            ),
+        }
 
 
 def _require_complete_object_memory_config(*, base_url: str, api_key: str) -> None:

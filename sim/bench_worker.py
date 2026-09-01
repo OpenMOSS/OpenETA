@@ -19,6 +19,7 @@ The worker exposes a subset of the REST API:
     POST /env/{handle}/observe
     POST /env/{handle}/render
     POST /env/{handle}/reachability
+    POST /env/{handle}/controller-goal
 """
 
 from __future__ import annotations
@@ -45,6 +46,24 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 while _REPO in sys.path:
     sys.path.remove(_REPO)
 sys.path.insert(0, _REPO)
+
+# The manager intentionally strips inherited PYTHONPATH to protect package
+# resolution. A host-selected experimental Mink profile may instead expose one
+# explicit dependency directory to the LIBERO worker. It is never accepted
+# from an Agent tool parameter.
+if os.environ.get("OPENETA_LIBERO_CONTROLLER_PROFILE", "").strip().lower() == (
+    "mink_joint_velocity"
+):
+    from sim.controllers.dependency_overlay import validate_mink_dependency_overlay
+
+    _mink_dependency_path = os.environ.get(
+        "OPENETA_LIBERO_MINK_DEPENDENCY_PATH", ""
+    ).strip()
+    if _mink_dependency_path:
+        _validated_mink_dependency_path = validate_mink_dependency_overlay(
+            _mink_dependency_path
+        )
+        sys.path.insert(1, str(_validated_mink_dependency_path))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -740,6 +759,12 @@ async def create_env(request):
             control_spec = candidate
     except Exception:
         control_spec = {}
+    if be == "libero" and isinstance(control_spec.get("controller"), dict):
+        controller = control_spec["controller"]
+        adesc = (
+            f"{controller.get('configured_name', '<unknown>')} via "
+            f"{controller.get('goal_executor', '<unknown>')}"
+        )
 
     return _json_response({
         "handle": h, "env_id": eid, "action_dim": adim, "action_desc": adesc,
@@ -916,6 +941,95 @@ async def reachability_env(request):
     return _json_response(await _run_sim_call(_check))
 
 
+async def controller_goal_env(request):
+    """Execute one host-selected worker-local Cartesian goal controller."""
+
+    h = request.path_params.get("handle", "")
+    env = _envs.get(h)
+    if env is None:
+        return _json_response({"error": f"Unknown handle: {h}"}, 400)
+    body = _safe_json_body(await request.body())
+    target_xyz = body.get("target_xyz")
+    if not isinstance(target_xyz, list) or len(target_xyz) != 3:
+        return _json_response({"error": "target_xyz must contain three numbers"}, 400)
+    target_quat = body.get("target_quat_xyzw")
+    euler_deg = body.get("target_euler_xyz_deg")
+    if target_quat is None and euler_deg is not None:
+        try:
+            from scipy.spatial.transform import Rotation
+
+            target_quat = Rotation.from_euler(
+                "xyz", euler_deg, degrees=True
+            ).as_quat().tolist()
+        except Exception as exc:
+            return _json_response({"error": f"invalid target_euler_xyz_deg: {exc}"}, 400)
+
+    def _execute():
+        from sim.controllers.mink_goal import execute_libero_mink_goal
+
+        result = execute_libero_mink_goal(
+            env,
+            target_xyz=target_xyz,
+            target_quat_xyzw=target_quat,
+            preserve_current_orientation=body.get(
+                "preserve_current_orientation", True
+            ),
+            max_steps=body.get("max_steps", 100),
+            position_tolerance_m=body.get("position_tolerance_m", 0.002),
+            orientation_tolerance_rad=body.get("orientation_tolerance_rad", 0.05),
+            gripper_command=body.get("gripper_command", 0.0),
+            enable_collision_check=body.get("enable_collision_check", True) is not False,
+            contact_authorization=(
+                dict(body["contact_authorization"])
+                if isinstance(body.get("contact_authorization"), dict)
+                else None
+            ),
+            attachment_proxy=(
+                dict(body["attachment_proxy"])
+                if isinstance(body.get("attachment_proxy"), dict)
+                else None
+            ),
+            ik_execution_seed=(
+                dict(body["ik_execution_seed"])
+                if isinstance(body.get("ik_execution_seed"), dict)
+                else None
+            ),
+            motion_execution_condition=body.get("motion_execution_condition", "A"),
+            step_callback=lambda action, render: _step_with_image(
+                env,
+                action,
+                handle=h,
+                render=render,
+            ),
+        )
+        # Always return a fresh final visual observation, even when the short
+        # controller run completed before the periodic render cadence.
+        result["observation"] = _observe_with_image(env, handle=h)
+        return result
+
+    try:
+        result = await _run_sim_call(_execute)
+        _env_errors.pop(h, None)
+        return _json_response(result)
+    except Exception as exc:
+        import traceback as _tb
+
+        _tb.print_exc()
+        error = f"Worker-local controller goal failed: {type(exc).__name__}: {exc}"
+        _env_errors[h] = error
+        return _json_response(
+            {
+                "ok": False,
+                "code": "worker_controller_goal_failed",
+                "error": error,
+                "steps_executed": 0,
+                "reached_target": False,
+                "stop_reason": "controller_error",
+            },
+            500,
+        )
+
+
 async def render_env(request):
     h = request.path_params.get("handle", "")
     env = _envs.get(h)
@@ -990,6 +1104,7 @@ app = Starlette(routes=[
     Route("/env/{handle}/observe", observe_env, methods=["POST"]),
     Route("/env/{handle}/render", render_env, methods=["POST"]),
     Route("/env/{handle}/reachability", reachability_env, methods=["POST"]),
+    Route("/env/{handle}/controller-goal", controller_goal_env, methods=["POST"]),
     Route("/render_all", render_all_envs, methods=["POST"]),
 ])
 

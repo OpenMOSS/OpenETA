@@ -925,6 +925,16 @@ def test_sam3_handler_accepts_empty_detection_success() -> None:
     assert result.details["detection_count"] == 0
     assert result.details["detections"] == []
     assert "no detections" in result.content
+    handoff = result.details["same_view_recovery_handoff"]
+    assert handoff["source_packet_id"] == "test-packet"
+    assert handoff["camera_frame_id"] == "agentview"
+    assert handoff["sam3_point_call_template"]["mode"] == "points"
+    assert handoff["molmopoint_source"] == {
+        "sources": [
+            {"source_packet_id": "test-packet", "camera_frame_id": "agentview"}
+        ]
+    }
+    assert "keep this exact packet/camera" in result.content
 
 
 def test_sam3_roi_preserves_full_frame_and_clamps_mask(tmp_path: Path) -> None:

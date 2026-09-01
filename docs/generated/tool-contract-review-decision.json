@@ -1,0 +1,98 @@
+{
+  "schema_version": "openeta.tool_contract_review_decision.v1",
+  "review_date": "2026-08-24",
+  "review_status": "approved",
+  "review_scope": "three_person_review",
+  "decisions": {
+    "fact_authority_categories": {
+      "status": "approved",
+      "values": ["agent", "host", "tool", "backend", "environment"],
+      "note": "Human authority is deferred until a concrete ToolContract needs to encode human confirmation."
+    },
+    "verified_promotion_granularity": {
+      "status": "approved",
+      "maturity_scope": "per_tool",
+      "evidence_scope": "per_semantic_outcome",
+      "runtime_authority_scope": "separate_per_capability_allowlists",
+      "contract_field_maturity": "not_used"
+    },
+    "gate_repair_extensions": {
+      "status": "approved_with_reserved_placeholder",
+      "field": "extensions",
+      "current_shape": "empty_object",
+      "inner_schema": "intentionally_undefined_until_first_concrete_need"
+    },
+    "first_authority_canary": {
+      "status": "approved",
+      "tool": "estimate_depth_prior",
+      "request_validation_authority": true,
+      "gate_repair_envelope_authority": false,
+      "executable_gate_authority": "legacy_runtime"
+    },
+    "remaining_tool_promotions": {
+      "status": "approved",
+      "approved_tools": [
+        "observe",
+        "enhance_depth",
+        "create_simulator_env",
+        "close_simulator_env",
+        "python_exec",
+        "web_search",
+        "web_fetch",
+        "sam3",
+        "retrieve_asset_reference",
+        "molmopoint",
+        "select_sam3_detection",
+        "reject_sam3_detections",
+        "grasp_pose_estimate",
+        "anyplace",
+        "camera_pose_to_world",
+        "propose_calibration_profile",
+        "promote_calibration_profile",
+        "propose_grasp_strategy",
+        "promote_grasp_strategy",
+        "compile_grasp_seed",
+        "compute_wrist_alignment",
+        "propose_wrist_viewpoints",
+        "prepare_attachment_probe",
+        "assess_attachment_probe",
+        "move_to",
+        "follow_eef_trajectory",
+        "gripper_control",
+        "ik_preview_check",
+        "save_memory",
+        "get_memory",
+        "delete_memory",
+        "compact_memory",
+        "register_skill",
+        "update_skill"
+      ],
+      "request_validation_authority_canary": true,
+      "gate_repair_envelope_authority": false,
+      "executable_gate_authority": "legacy_runtime",
+      "canary_tool_execution_count": 0,
+      "canary_world_mutation_count": 0,
+      "evidence": [
+        "docs/generated/tool-contract-promotion-campaign.json",
+        "docs/generated/tool-contract-integration-canary.json",
+        "docs/generated/promotion-dossiers/<tool>.json",
+        "docs/generated/<tool>-fixture-receipt.json"
+      ]
+    },
+    "attachment_probe_short_id_handoff": {
+      "status": "approved",
+      "tool": "ik_preview_check",
+      "request_branch": "probe_id + waypoint_index",
+      "host_resolution": "exact frozen attachment-probe waypoint",
+      "fail_closed_on": [
+        "unknown_or_inactive_probe_id",
+        "unprepared_probe",
+        "waypoint_index_out_of_range",
+        "robot_or_object_epoch_mismatch",
+        "frozen_path_digest_mismatch"
+      ],
+      "downstream_motion_authority": "matching_ik_receipt_only"
+    }
+  },
+  "shared_rfc_sync_authorized": true
+}

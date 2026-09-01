@@ -3,7 +3,8 @@
   "status": "candidate",
   "strategy_id": "top-down-vertical-panda-p8",
   "strategy_family_id": "top-down-vertical-panda",
-  "revision": 1,
+  "revision": 3,
+  "supersedes": "aa3161441f0adba7b71c8a8cf429ee7c615643502afa483fd77e748f91b04708",
   "description": "Conservative top-down grasp strategy for narrow upright rigid objects.",
   "compatibility": {
     "calibration_ids": ["graspnet-eef-panda-p8"]
@@ -19,6 +20,9 @@
     "grasp_width_bounds_m": [0.005, 0.08],
     "clearance_m": 0.01
   },
+  "candidate_filter": {
+    "min_downward_alignment": 0.5
+  },
   "pose_policy": {
     "approach_axis": "world_-Z",
     "orientation": "top_down"
@@ -26,6 +30,22 @@
   "provenance": {
     "source_calibration_id": "graspnet-eef-panda-p8",
     "derived_from": "legacy restricted_geometry",
-    "intended_use": "Session-local candidate strategy; not a validated task-family policy."
+    "intended_use": "Session-local candidate strategy; not a validated task-family policy.",
+    "canary_evidence": {
+      "status": "experimental",
+      "summary": "On LIBERO object task 7 seed 7, two Advisor-selected raw side-contact attempts collapsed to empty close during a 3-5 cm lift probe, while an explicitly selected top-down branch passed attachment assessment and transported the milk carton across the table. A privileged diagnostic-only physical canary then completed top-down pick, collision-checked transport, centred raised release, and official reward in 3/3 repetitions; Agent-driven end-to-end placement is not yet validated.",
+      "positive_run": "grasp-quality-full-milk-20260825-strategy-options-sol-r22",
+      "negative_runs": [
+        "grasp-quality-full-milk-20260825-strategy-options-sol-r22",
+        "grasp-quality-full-milk-20260825-strategy-continuity-sol-r24"
+      ],
+      "geometry_canary": "tmp/mink-task7-milk-topdown-r21.json",
+      "physical_pick_place_canaries": [
+        "tmp/mink-task7-milk-pick-place-physical-canary-r1.json",
+        "tmp/mink-task7-milk-pick-place-physical-canary-r2.json",
+        "tmp/mink-task7-milk-pick-place-physical-canary-r3.json"
+      ],
+      "physical_canary_scope": "Privileged simulator coordinates isolate embodiment physics only; these runs do not validate Agent perception, planning, or policy."
+    }
   }
 }

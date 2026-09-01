@@ -1,0 +1,53 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-group2-xml-remediation-canary-20260831",
+  "description": "Fixed-seed canary on the three tasks that succeeded in the Group 1 gate, after repairing natural XML boolean/null inference and single-point array decoding. This is a diagnostic precursor, not a replacement for the full Object10 quality gate.",
+  "episode_manifest": "manifests/libero_object_group1_successes_seed0.json",
+  "variants": [
+    {
+      "variant_id": "main_group2_xml_scalar_remediation",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "0cef441ccebb51c3815c0355466eed7a1ccdc14f",
+        "integration_invariants": [
+          "main planner emits XML decisions",
+          "natural true/false/null XML scalars preserve JSON-equivalent types",
+          "single SAM3 point objects are promoted to the ToolContract array shape",
+          "isolated sub-agents retain JSON response contracts",
+          "ToolContract and provider retry/budget authority remain unchanged"
+        ]
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {"shuffle_seed": 20260831},
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 3,
+    "metric": "diagnostic pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "source_group1_gate_run_id": "libero-object-10-main-group1-attachment-remediation-20260830-r02",
+    "failed_group2_gate_run_id": "libero-object-10-main-group2-xml-20260830-r04",
+    "promotion_rule": "at least one objective success and materially fewer XML type/array validation retries before rerunning full Object10"
+  }
+}

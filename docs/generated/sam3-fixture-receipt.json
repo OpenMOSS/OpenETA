@@ -1,0 +1,178 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "sam3",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-sam3-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.tools.handlers.build_sam3_handler",
+  "host_resolver_id": "openeta.host_resolver.sam3.v1",
+  "host_resolver_implementation": "agent.tools.runtime_contract_bindings._resolve_sam3_input",
+  "cases": [
+    {
+      "case": "handler_success_1",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "detections_available",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        ".openeta_eval/audits/toolcontract-fixture-sam3-r5/detections/images/20260820T140204309873Z-470e405a/detection_000.crop.png",
+        ".openeta_eval/audits/toolcontract-fixture-sam3-r5/detections/images/20260820T140204309873Z-470e405a/detection_000.overlay.png",
+        ".openeta_eval/audits/toolcontract-fixture-sam3-r5/detections/images/20260820T140204309873Z-470e405a/mask_000.png",
+        ".openeta_eval/audits/toolcontract-fixture-sam3-r5/detections/images/20260820T140204309873Z-470e405a/selection.contact_sheet.png"
+      ],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_success_2",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "no_detection",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_dependency_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "mcp_call_failed"
+      ],
+      "diagnostic_messages": [],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "motion_reconciliation_gate_rejection",
+      "boundary": "ActionPipeline -> host gate",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "motion_reconciliation_required",
+      "matched_gate_check_ids": [
+        "runtime.motion_reconciliation"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "sam3",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "source packet exists in this session",
+          "camera frame belongs to source packet",
+          "text, point, and ROI prompts obey mutual-exclusion rules"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.motion_reconciliation",
+            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+            "repair_codes": [
+              "motion_reconciliation_required"
+            ],
+            "applies_when": "motion reconciliation status is required or unresolved"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    },
+    {
+      "case": "freshness_or_provenance_gate_rejection",
+      "boundary": "ActionPipeline -> host resolver",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "invalid_source_packet",
+      "matched_gate_check_ids": [
+        "runtime.source_packet_resolution"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "sam3",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "source packet exists in this session",
+          "camera frame belongs to source packet",
+          "text, point, and ROI prompts obey mutual-exclusion rules"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.source_packet_resolution",
+            "description": "Opaque packet and camera ids resolve to one immutable host packet.",
+            "implementation": "agent/tools/runtime_contract_bindings.py:resolve_host_parameters",
+            "repair_codes": [
+              "invalid_source_packet",
+              "same_view_packet_mismatch"
+            ],
+            "applies_when": "the public request contains source packet references"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "detections_available",
+      "no_detection"
+    ],
+    "observed_success_outcomes": [
+      "detections_available",
+      "no_detection"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "detections_available",
+      "no_detection",
+      "operational_failure"
+    ],
+    "observed_declared_outcomes": [
+      "detections_available",
+      "no_detection",
+      "operational_failure"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": true,
+    "matched_gate_check_ids": [
+      "runtime.motion_reconciliation",
+      "runtime.source_packet_resolution"
+    ],
+    "freshness_and_invalidation_covered": true,
+    "remote_backend_semantics_covered": true,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

@@ -98,12 +98,10 @@ class PythonExecConfig:
 def _compile_agent_code(code: str) -> Any:
     """Compile agent code, tolerating over-escaped JSON string payloads.
 
-    Some planner providers emit the ``code`` argument with literal ``\\n`` /
-    ``\\t`` two-character sequences (double-escaped in the JSON) instead of real
-    control characters, collapsing the whole snippet onto one physical line. That
-    produces a ``SyntaxError`` (a trailing ``\\`` reads as a line continuation).
-    We only attempt the un-escaped variant when the verbatim code fails to
-    compile, so well-formed snippets are unaffected.
+    Some planner providers emit the ``code`` argument with literal ``\\n`` or
+    ``\\t`` two-character sequences instead of real control characters. Only
+    retry with a repaired variant when the verbatim snippet fails to compile,
+    so valid Python string escapes keep their original meaning.
     """
 
     try:
@@ -116,14 +114,11 @@ def _compile_agent_code(code: str) -> Any:
             .replace("\\n", "\n")
             .replace("\\t", "\t")
         )
-        # A lone trailing backslash reads as a line continuation to nothing
-        # ("unexpected EOF") and never appears in a valid snippet.
         repaired = repaired.rstrip()
         if repaired.endswith("\\") and not repaired.endswith("\\\\"):
             repaired = repaired[:-1].rstrip()
         if repaired == code:
             raise
-        # Let a second failure surface the repaired code's own SyntaxError.
         return compile(repaired, "<openeta-python-exec>", "exec")
 
 

@@ -1,0 +1,55 @@
+{
+  "episodes": [
+    {
+      "episode_id": "motion-c-libero-object-task2-salad-dressing",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "pick up the salad dressing and place it in the basket",
+      "seed": 2,
+      "max_turns": 120,
+      "recovery_turns_per_branch": 16,
+      "max_recovery_turns": 48,
+      "max_tool_calls": 240,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {
+        "target_geometry": "tall_bottle",
+        "motion_condition": "C",
+        "stability_suite": "libero-object-motion-c-three-task"
+      }
+    },
+    {
+      "episode_id": "motion-c-libero-object-task4-ketchup",
+      "env_id": "openeta/libero_libero_object_task4-v0",
+      "task": "pick up the ketchup and place it in the basket",
+      "seed": 4,
+      "max_turns": 120,
+      "recovery_turns_per_branch": 16,
+      "max_recovery_turns": 48,
+      "max_tool_calls": 240,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {
+        "target_geometry": "squeeze_bottle",
+        "motion_condition": "C",
+        "stability_suite": "libero-object-motion-c-three-task"
+      }
+    },
+    {
+      "episode_id": "motion-c-libero-object-task7-milk",
+      "env_id": "openeta/libero_libero_object_task7-v0",
+      "task": "pick up the milk and place it in the basket",
+      "seed": 7,
+      "max_turns": 120,
+      "recovery_turns_per_branch": 16,
+      "max_recovery_turns": 48,
+      "max_tool_calls": 240,
+      "timeout_s": 10800,
+      "max_total_tokens": 15000000,
+      "metadata": {
+        "target_geometry": "carton",
+        "motion_condition": "C",
+        "stability_suite": "libero-object-motion-c-three-task"
+      }
+    }
+  ]
+}

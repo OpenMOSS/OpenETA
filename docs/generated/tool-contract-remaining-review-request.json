@@ -1,0 +1,70 @@
+{
+  "schema_version": "openeta.tool_contract_review_request.v1",
+  "status": "fulfilled_by_separate_decision_receipt",
+  "review_scope": "remaining_public_tools_per_tool_promotion",
+  "campaign_sha256": "77477fe9fada7c1180a2588bbffd81f1c73915c93dcd4b12e388444feaef4301",
+  "tools": [
+    "observe",
+    "enhance_depth",
+    "create_simulator_env",
+    "close_simulator_env",
+    "python_exec",
+    "web_search",
+    "web_fetch",
+    "sam3",
+    "retrieve_asset_reference",
+    "molmopoint",
+    "select_sam3_detection",
+    "reject_sam3_detections",
+    "grasp_pose_estimate",
+    "anyplace",
+    "camera_pose_to_world",
+    "propose_calibration_profile",
+    "promote_calibration_profile",
+    "propose_grasp_strategy",
+    "promote_grasp_strategy",
+    "compile_grasp_seed",
+    "compute_wrist_alignment",
+    "propose_wrist_viewpoints",
+    "prepare_attachment_probe",
+    "assess_attachment_probe",
+    "move_to",
+    "follow_eef_trajectory",
+    "gripper_control",
+    "ik_preview_check",
+    "save_memory",
+    "get_memory",
+    "delete_memory",
+    "compact_memory",
+    "register_skill",
+    "update_skill"
+  ],
+  "tool_count": 34,
+  "decision_receipt": "docs/generated/tool-contract-review-decision.json",
+  "requested_decisions": {
+    "remaining_tool_promotions": {
+      "maturity_from": "declared",
+      "maturity_to": "verified",
+      "decision_scope": "per_tool",
+      "evidence_scope": "per_semantic_outcome"
+    },
+    "request_validation_authority_canary": {
+      "requested": true,
+      "post_review_only": true,
+      "tool_execution_count": 0,
+      "world_mutation_count": 0
+    },
+    "gate_repair_envelope_authority": {
+      "requested": false,
+      "allowlist": []
+    },
+    "executable_gate_authority": "legacy_runtime"
+  },
+  "evidence": [
+    "docs/generated/tool-contract-promotion-campaign.json",
+    "docs/generated/tool-contract-integration-canary.json",
+    "docs/generated/promotion-dossiers/<tool>.json",
+    "docs/generated/<tool>-fixture-receipt.json"
+  ],
+  "interpretation": "This file requests review and cannot itself be consumed as approval. The separate three-person decision receipt is authoritative."
+}

@@ -18,6 +18,7 @@ from agent.backends.planner import (
     list_openai_compatible_models,
 )
 from agent.backends.provider_config import (
+    DEFAULT_PLANNER_PROVIDER_TIMEOUT_S,
     PlannerProviderConfig,
     load_planner_provider_config,
     write_env_file,
@@ -86,7 +87,9 @@ class ProviderConfigHandler(BaseHTTPRequestHandler):
             model=str(payload.get("model", "")).strip(),
             api_base=str(payload.get("api_base", "")).strip().rstrip("/"),
             api_key=api_key,
-            timeout_s=_float_or_default(payload.get("timeout_s"), 60.0),
+            timeout_s=_float_or_default(
+                payload.get("timeout_s"), DEFAULT_PLANNER_PROVIDER_TIMEOUT_S
+            ),
             max_attempts=_optional_positive_int(payload.get("max_attempts")) or 3,
             retry_backoff_s=max(
                 0.0,
@@ -515,7 +518,7 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div class="field">
             <label for="timeout_s">Timeout</label>
-            <input id="timeout_s" name="timeout_s" value="60" inputmode="decimal" />
+            <input id="timeout_s" name="timeout_s" value="180" inputmode="decimal" />
           </div>
         </div>
         <div class="field">
@@ -582,7 +585,7 @@ INDEX_HTML = r"""<!doctype html>
       $('api_base').value = payload.config.api_base || '';
       $('api_key').value = '';
       $('api_key').placeholder = payload.config.api_key ? payload.config.api_key : 'Stored in local .env';
-      $('timeout_s').value = payload.config.timeout_s || 60;
+      $('timeout_s').value = payload.config.timeout_s || 180;
       $('max_attempts').value = payload.config.max_attempts || 3;
       $('retry_backoff_s').value = payload.config.retry_backoff_s ?? 0.5;
       $('context_window_tokens').value = payload.config.context_window_tokens || '';
@@ -625,7 +628,7 @@ INDEX_HTML = r"""<!doctype html>
         api_base: $('api_base').value.trim(),
         api_key: includeKey ? $('api_key').value.trim() : '',
         model: $('model').value.trim(),
-        timeout_s: Number($('timeout_s').value || 60),
+        timeout_s: Number($('timeout_s').value || 180),
         max_attempts: Number($('max_attempts').value || 3),
         retry_backoff_s: Number($('retry_backoff_s').value || 0),
         context_window_tokens: Number($('context_window_tokens').value || 0) || null,

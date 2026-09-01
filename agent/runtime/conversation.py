@@ -13,6 +13,7 @@ from adapter.protocol import EnvAction, JsonDict
 
 CONVERSATION_SCHEMA_VERSION = "openeta.conversation.v1"
 CONVERSATION_CHECKPOINT_SCHEMA_VERSION = "openeta.conversation_checkpoint.v1"
+PLANNER_VALIDATION_RECEIPT_SCHEMA_VERSION = "openeta.planner_validation_receipt.v1"
 # These constants remain as explicit-compaction defaults for callers that ask
 # for a durable checkpoint. Normal model projection uses the planner's total
 # token budget instead of a fixed action window.
@@ -132,6 +133,19 @@ class ConversationHistory:
             "tool_calls": _summarize_tool_calls(command.get("tool_calls")),
             "skill_call": _summarize_skill_call(command.get("skill_call")),
         }
+        command_metadata = command.get("metadata")
+        if isinstance(command_metadata, dict):
+            repair_bundle = command_metadata.get("repair_bundle")
+            if isinstance(repair_bundle, dict):
+                result_data["repair_bundle"] = _bounded_value(
+                    repair_bundle,
+                    max_depth=7,
+                    max_items=24,
+                    max_string_chars=4_000,
+                )
+            validation_receipt = _planner_validation_receipt(command_metadata)
+            if validation_receipt is not None:
+                result_data["planner_validation_receipt"] = validation_receipt
         if kind == "response":
             content = _response_text(name, parameters)
             item = ConversationItem(
@@ -358,6 +372,61 @@ def checkpoint_record(checkpoint: JsonDict) -> JsonDict:
     return {"record_type": "checkpoint", **dict(checkpoint)}
 
 
+def _planner_validation_receipt(command_metadata: JsonDict) -> JsonDict | None:
+    """Preserve rejected same-decision attempts as model-visible host evidence."""
+
+    planner_metadata = command_metadata.get("planner_metadata")
+    if not isinstance(planner_metadata, dict):
+        return None
+    history = planner_metadata.get("validation_attempt_history")
+    if not isinstance(history, list) or len(history) <= 1:
+        return None
+    attempts: list[JsonDict] = []
+    for raw in history[:8]:
+        if not isinstance(raw, dict):
+            continue
+        raw_errors = raw.get("validation_errors")
+        raw_errors = raw_errors if isinstance(raw_errors, list) else []
+        errors = [
+            str(error)
+            for error in raw_errors[:16]
+            if isinstance(error, str) and error
+        ]
+        decision = raw.get("decision")
+        decision = decision if isinstance(decision, dict) else {}
+        attempts.append(
+            {
+                "attempt": raw.get("attempt"),
+                "candidate": {
+                    "kind": decision.get("kind"),
+                    "name": decision.get("name"),
+                },
+                "accepted": not errors,
+                "validation_errors": errors,
+            }
+        )
+    if len(attempts) <= 1:
+        return None
+    rejected = [item for item in attempts if item["accepted"] is False]
+    return {
+        "schema_version": PLANNER_VALIDATION_RECEIPT_SCHEMA_VERSION,
+        "attempt_count": len(attempts),
+        "accepted_attempt": next(
+            (
+                item["attempt"]
+                for item in reversed(attempts)
+                if item["accepted"] is True
+            ),
+            None,
+        ),
+        "rejected_attempts": rejected,
+        "interpretation": (
+            "Rejected candidates were not executed; the accepted candidate below "
+            "was the only action dispatched to the tool pipeline."
+        ),
+    }
+
+
 def _select_recent_message_ids(
     items: list[ConversationItem],
     max_chars: int,
@@ -438,14 +507,12 @@ def _summarize_tool_calls(value: Any) -> list[JsonDict]:
                 outputs = details.get("outputs")
                 if isinstance(outputs, dict):
                     result_summary["output_keys"] = sorted(str(key) for key in outputs)[:20]
-                    # Every tool gets a bounded value projection. Large payloads stay in
-                    # durable artifacts, but merely listing output keys leaves the Agent
-                    # unable to reason about the result it just requested.
-                    result_summary["outputs"] = _bounded_value(
+                    # Keep direct code results, but project structured perception and
+                    # control receipts by semantic fields. The complete action remains
+                    # in the append-only event trace and large artifacts.
+                    result_summary["outputs"] = _conversation_tool_output_projection(
+                        str(raw.get("name") or ""),
                         outputs,
-                        max_depth=6,
-                        max_items=DEFAULT_MAX_TOOL_RESULT_ITEMS,
-                        max_string_chars=DEFAULT_MAX_TOOL_RESULT_STRING_CHARS,
                     )
                     # Preserve the historical direct field for coding-agent callers.
                     if raw.get("name") == "python_exec" and "result" in outputs:
@@ -469,9 +536,103 @@ def _summarize_tool_calls(value: Any) -> list[JsonDict]:
                 "name": raw.get("name"),
                 "status": raw.get("status"),
                 "result": result_summary,
+                **(
+                    {"reason": str(raw.get("reason"))[:4_000]}
+                    if str(raw.get("reason") or "").strip()
+                    else {}
+                ),
             }
         )
     return calls
+
+
+def _conversation_tool_output_projection(tool: str, outputs: JsonDict) -> JsonDict:
+    """Avoid duplicating full structured receipts in every history layer."""
+
+    if tool == "python_exec":
+        projected = _bounded_value(
+            outputs,
+            max_depth=6,
+            max_items=DEFAULT_MAX_TOOL_RESULT_ITEMS,
+            max_string_chars=DEFAULT_MAX_TOOL_RESULT_STRING_CHARS,
+        )
+        return projected if isinstance(projected, dict) else {}
+    if tool == "prepare_attachment_probe":
+        projected = _bounded_value(
+            {
+                key: outputs[key]
+                for key in (
+                    "schema_version",
+                    "status",
+                    "probe_id",
+                    "compiled_grasp_id",
+                    "scene_epoch",
+                    "robot_motion_epoch",
+                    "motion_type",
+                    "path_sha256",
+                    "ik_preview_requests",
+                    "execution_handoff",
+                )
+                if key in outputs
+            },
+            max_depth=7,
+            max_items=16,
+            max_string_chars=2_000,
+        )
+        return projected if isinstance(projected, dict) else {}
+    projected = _bounded_value(
+        outputs,
+        max_depth=5,
+        max_items=32,
+        max_string_chars=2_000,
+    )
+    if not isinstance(projected, dict):
+        return {}
+    serialized = json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= 8_000:
+        return projected
+    priority = {
+        "schema_version",
+        "result_id",
+        "candidate_count",
+        "best_grasp_candidate",
+        "selected_grasp_source",
+        "grasp_selection_bundle",
+        "grasp_selection_advice",
+        "compiled_grasp_id",
+        "hover_pose",
+        "precontact_pose",
+        "contact_pose",
+        "execution_guidance",
+        "ik_receipt",
+        "receipt",
+        "reachability",
+        "classification",
+        "reason_code",
+        "message",
+        "suggestions",
+        "motion_summary",
+        "collision_coverage",
+        "pose_feedback",
+        "attachment_proxy_receipt",
+        "gripper_actuation_receipt",
+        "observation_summary",
+        "response_path",
+        "raw_output_ref",
+        "complete_outputs_artifact",
+    }
+    compact = _bounded_value(
+        {key: value for key, value in outputs.items() if key in priority},
+        max_depth=4,
+        max_items=12,
+        max_string_chars=750,
+    )
+    compact = compact if isinstance(compact, dict) else {}
+    compact["projection"] = {
+        "full_output_omitted": True,
+        "available_via": "append-only action trace or returned artifact path",
+    }
+    return compact
 
 
 def _compact_host_result(result_data: JsonDict) -> JsonDict:
@@ -516,9 +677,14 @@ def _compact_host_result(result_data: JsonDict) -> JsonDict:
                 "name": call.get("name"),
                 "status": call.get("status"),
                 "result": compacted_result,
+                **(
+                    {"reason": str(call.get("reason"))[:800]}
+                    if str(call.get("reason") or "").strip()
+                    else {}
+                ),
             }
         )
-    return {
+    compacted: JsonDict = {
         "action_id": result_data.get("action_id"),
         "status": result_data.get("status"),
         "tool_calls": compacted_calls,
@@ -530,6 +696,23 @@ def _compact_host_result(result_data: JsonDict) -> JsonDict:
             ),
         },
     }
+    repair_bundle = result_data.get("repair_bundle")
+    if isinstance(repair_bundle, dict):
+        compacted["repair_bundle"] = _bounded_value(
+            repair_bundle,
+            max_depth=5,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    validation_receipt = result_data.get("planner_validation_receipt")
+    if isinstance(validation_receipt, dict):
+        compacted["planner_validation_receipt"] = _bounded_value(
+            validation_receipt,
+            max_depth=6,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    return compacted
 
 
 def _summarize_skill_call(value: Any) -> JsonDict | None:

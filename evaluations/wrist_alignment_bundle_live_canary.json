@@ -1,0 +1,38 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "wrist-alignment-bundle-live-canary-v1",
+  "description": "Single live LIBERO canary covering fresh wrist selection, explicit target identity relation, host-resolved wrist-alignment bundle creation, and bundle-only compute_wrist_alignment invocation.",
+  "episode_manifest": "manifests/libero_object_task7_wrist_alignment_bundle_canary.json",
+  "variants": [
+    {
+      "variant_id": "wrist_alignment_bundle_live",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260818
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "wrist-alignment-bundle-live-canary",
+    "purpose": "live coverage of the reviewed wrist-alignment host-bundle contract"
+  }
+}

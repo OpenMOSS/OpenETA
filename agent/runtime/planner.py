@@ -8,6 +8,7 @@ import re
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from functools import lru_cache
 from hashlib import sha256
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -48,7 +49,12 @@ from agent.runtime.visual_history import (
     VisualHistoryConfig,
     build_visual_history_projection,
 )
-from agent.tools.registry import ToolRegistry, ToolSpec
+from agent.tools.registry import GRASP_POSE_BACKENDS, ToolRegistry, ToolSpec
+from agent.tools.contracts import (
+    ToolContractCatalog,
+    ToolContractRuntimePolicy,
+    check_tool_request_conformance,
+)
 
 
 _SKILL_MATCH_STOPWORDS = {
@@ -80,6 +86,9 @@ _CAMERA_ROLE_PREFERENCE = {
 DEFAULT_MAX_SKILL_CONTENT_CHARS = 8000
 DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS = 4
 DEFAULT_RECENT_TRANSITION_OBSERVATIONS = 3
+TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION = (
+    "openeta.tool_contract_shadow_validation.v1"
+)
 
 
 @dataclass(slots=True)
@@ -150,10 +159,17 @@ class ToolCallingPlanner(BasePlanner):
         max_validation_retries: int = 1,
         system_prompt: str = "",
         context_config: PlannerContextConfig | None = None,
+        tool_contract_catalog: ToolContractCatalog | None = None,
+        tool_contract_policy: ToolContractRuntimePolicy | None = None,
     ) -> None:
         self.backend = backend or PlaceholderPlannerBackend()
         self.max_validation_retries = max(0, max_validation_retries)
         self.context_config = context_config or PlannerContextConfig()
+        self.tool_contract_catalog = (
+            tool_contract_catalog or _default_tool_contract_catalog()
+        )
+        self.tool_contract_policy = tool_contract_policy or ToolContractRuntimePolicy()
+        self.tool_contract_policy.ensure_valid(self.tool_contract_catalog)
         base_prompt = system_prompt or _agent_owned_tool_planner_system_prompt()
         self.system_prompt, self.prompt_metadata = compose_main_planner_prompt(base_prompt)
         self.rollout_recorder: RolloutRecorder | None = None
@@ -237,13 +253,10 @@ class ToolCallingPlanner(BasePlanner):
                 last_result,
                 tools=tools,
                 skills=skills,
-            )
-            canonicalizations = _canonicalize_host_parameters(
-                decision,
+                tool_contract_catalog=self.tool_contract_catalog,
+                tool_contract_policy=self.tool_contract_policy,
                 tool_context=tool_context,
             )
-            if canonicalizations:
-                decision.metadata["host_parameter_canonicalizations"] = canonicalizations
             required_skill = ""
             if not validation_errors:
                 required_skill = _required_skill_inspection_name(
@@ -509,17 +522,22 @@ class RuleBasedPlanner(BasePlanner):
         if _contains_any(task, ("place", "put", "放", "放置")):
             return PlannerDecision(
                 action_type="tool_call",
-                action="scene_detector",
-                parameters={"image": _first_camera_id(observation)},
-                reasoning="Task asks for placement; first locate candidate receptacles.",
+                action="observe",
+                parameters={"reason": "locate candidate placement receptacles"},
+                reasoning="Task asks for placement; first inspect the current scene.",
             )
 
         if _contains_any(task, ("navigate", "go to", "move to", "room", "导航", "移动")):
             return PlannerDecision(
-                action_type="tool_call",
-                action="slam",
-                parameters={"target_location": "task-specified location"},
-                reasoning="Task asks for navigation or base movement; query spatial map first.",
+                action_type="response",
+                action="talk",
+                parameters={
+                    "message": (
+                        "No base-navigation tool is registered in this runtime; "
+                        "I cannot execute the requested navigation safely."
+                    )
+                },
+                reasoning="The default runtime has no executable base-navigation facade.",
             )
 
         if _contains_any(task, ("wait", "等待")):
@@ -551,13 +569,41 @@ def _decision_from_backend_result(
     *,
     tools: ToolRegistry,
     skills: SkillRegistry,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
+    tool_context: JsonDict | None = None,
 ) -> tuple[PlannerDecision, list[str]]:
     payload, parse_errors = _parse_backend_payload(result.payload)
     if parse_errors:
         return _invalid_decision(parse_errors), parse_errors
 
     decision, build_errors = _build_planner_decision(payload)
-    validation_errors = [*build_errors, *_validate_planner_decision(decision, tools, skills)]
+    canonicalizations = _canonicalize_host_parameters(
+        decision,
+        tool_context=tool_context or {},
+    )
+    if canonicalizations:
+        decision.metadata["host_parameter_canonicalizations"] = canonicalizations
+    catalog = tool_contract_catalog or _default_tool_contract_catalog()
+    policy = tool_contract_policy or ToolContractRuntimePolicy()
+    validation_errors = [
+        *build_errors,
+        *_validate_planner_decision(
+            decision,
+            tools,
+            skills,
+            tool_contract_catalog=catalog,
+            tool_contract_policy=policy,
+        ),
+    ]
+    contract_shadow = _tool_contract_shadow_validation(
+        decision,
+        tools=tools,
+        tool_contract_catalog=catalog,
+        tool_contract_policy=policy,
+    )
+    if contract_shadow is not None:
+        decision.metadata["tool_contract_shadow_validation"] = contract_shadow
     if validation_errors:
         return decision, validation_errors
     return decision, []
@@ -577,38 +623,53 @@ def _parse_backend_payload(payload: JsonDict | str) -> tuple[JsonDict, list[str]
     return _parse_xml_decision(payload)
 
 
-# Leaf element names whose text is always kept verbatim as a string and never
-# number/boolean coerced. This protects free-text and code fields (e.g. a code
-# body that happens to read like "42", or a source_packet_id like "3:agentview").
+# Leaf element names whose text must remain verbatim. This prevents identifiers
+# and code-like text from being inferred as numbers merely because they happen
+# to contain a numeric-looking value.
 _XML_STRING_LEAF_NAMES = frozenset(
     {
-        "code",
-        "prompt",
-        "message",
-        "reasoning",
-        "source_packet_id",
-        "name",
-        "tool",
-        "kind",
-        "skill",
-        "query",
-        "url",
-        "target_mask",
         "camera_frame_id",
+        "code",
+        "kind",
+        "message",
+        "name",
+        "prompt",
+        "query",
+        "reasoning",
+        "skill",
+        "source_packet_id",
+        "target_mask",
+        "tool",
+        "url",
     }
 )
 
-# Child element names that mark their parent as a list rather than an object.
+# These child names are the explicit list vocabulary used by the planner wire
+# contract. Other repeated child tags are objects and are rejected downstream
+# if they do not match the requested ToolContract schema.
 _XML_LIST_ITEM_NAMES = frozenset({"item", "call"})
+
+# Some single-item arrays are naturally emitted as an XML object without an
+# extra ``<item>`` wrapper. Keep this vocabulary deliberately narrow: these
+# are wire-level collection fields whose element object is unambiguous. The
+# downstream ToolContract validator remains the authority for the contents.
+_XML_SINGLE_OBJECT_ARRAY_NAMES = frozenset({"points"})
+
+_XML_TOKEN_PATTERN = re.compile(
+    r"<!\[CDATA\[.*?\]\]>|<!--.*?-->|<[^>]+>",
+    re.DOTALL,
+)
+_XML_OPEN_TAG_PATTERN = re.compile(r"<\s*([A-Za-z_][\w.:-]*)\b[^>]*>", re.DOTALL)
+_XML_CLOSE_TAG_PATTERN = re.compile(r"</\s*([A-Za-z_][\w.:-]*)\s*>")
 
 
 def _parse_xml_decision(payload: str) -> tuple[JsonDict, list[str]]:
-    """Parse one ``<decision>`` XML document into the planner decision dict.
+    """Parse one main-planner ``<decision>`` into the existing decision shape.
 
-    Emits the same dict shape the previous JSON parser produced
-    (``{kind, name, parameters, reasoning, code?, calls?}``) so the downstream
-    build/validate/record path is unchanged. Parse failures return an error
-    list that flows into the existing validation-retry loop.
+    Host-generated failure payloads remain dictionaries and bypass this parser.
+    Main-model strings are intentionally XML-only so a malformed or stale JSON
+    response is visible to the existing validation-retry loop instead of being
+    silently accepted through a compatibility path.
     """
 
     text = _strip_code_fence(payload)
@@ -617,28 +678,102 @@ def _parse_xml_decision(payload: str) -> tuple[JsonDict, list[str]]:
     if start == -1 or end == -1:
         return {}, ["Planner backend returned text without a <decision> element."]
     document = text[start : end + len("</decision>")]
+    repair_tags: list[str] = []
     try:
         root = ET.fromstring(document)
-    except ET.ParseError as exc:
-        return {}, [f"Planner backend returned invalid XML: {exc}"]
+    except ET.ParseError as original_exc:
+        repaired_document, repair_tags = _repair_unclosed_xml_list_containers(document)
+        if not repair_tags:
+            return {}, [f"Planner backend returned invalid XML: {original_exc}"]
+        try:
+            root = ET.fromstring(repaired_document)
+        except ET.ParseError:
+            return {}, [f"Planner backend returned invalid XML: {original_exc}"]
     if root.tag != "decision":
         return {}, [f"Planner backend XML root must be <decision>, got <{root.tag}>."]
 
-    value = _element_to_value(root)
+    value = _xml_element_to_value(root)
     if not isinstance(value, dict):
         return {}, ["Planner backend <decision> must decode to an object."]
+    if repair_tags:
+        value["_xml_wire_repair"] = {
+            "schema_version": "openeta.planner_xml_repair.v1",
+            "kind": "close_unclosed_list_container",
+            "inserted_closing_tags": repair_tags,
+            "count": len(repair_tags),
+        }
     return value, []
 
 
-def _element_to_value(element: ET.Element) -> object:
-    """Convert an XML element into a JSON-equivalent Python value.
+def _repair_unclosed_xml_list_containers(document: str) -> tuple[str, list[str]]:
+    """Close only list containers whose omitted end tag is unambiguous.
 
-    - ``type="object"``/``type="array"`` force an empty ``{}``/``[]`` container.
-    - Children named ``item``/``call`` make the element a list.
-    - Any other children make the element a dict keyed by child tag.
-    - An empty ``<parameters/>`` is the empty object ``{}``, never ``""``.
-    - Any other childless element is a scalar coerced from its text.
+    The XML wire contract defines a container with ``<item>`` or ``<call>``
+    children as a list.  Models occasionally emit a complete list and begin a
+    sibling field without closing that container, for example ``<xyz><item>``
+    followed by ``<quat_xyzw>``.  Re-parenting the sibling by inserting
+    ``</xyz>`` is deterministic.  No object element, scalar, or arbitrary tag
+    mismatch is repaired here; those remain visible to the validation retry
+    loop.
     """
+
+    output: list[str] = []
+    stack: list[dict[str, object]] = []
+    repaired: list[str] = []
+    cursor = 0
+
+    def close_intervening_lists(next_name: str) -> None:
+        while stack and stack[-1]["is_list"] is True and next_name not in _XML_LIST_ITEM_NAMES:
+            name = str(stack.pop()["name"])
+            output.append(f"</{name}>")
+            repaired.append(name)
+
+    for match in _XML_TOKEN_PATTERN.finditer(document):
+        output.append(document[cursor : match.start()])
+        token = match.group(0)
+        cursor = match.end()
+
+        if token.startswith("<![CDATA[") or token.startswith("<!--"):
+            output.append(token)
+            continue
+        if token.startswith("<?") or token.startswith("<!"):
+            output.append(token)
+            continue
+
+        closing = _XML_CLOSE_TAG_PATTERN.fullmatch(token)
+        if closing is not None:
+            name = closing.group(1)
+            while stack and str(stack[-1]["name"]) != name:
+                if stack[-1]["is_list"] is not True:
+                    break
+                missing = str(stack.pop()["name"])
+                output.append(f"</{missing}>")
+                repaired.append(missing)
+            output.append(token)
+            if stack and str(stack[-1]["name"]) == name:
+                stack.pop()
+            continue
+
+        opening = _XML_OPEN_TAG_PATTERN.fullmatch(token)
+        if opening is None:
+            output.append(token)
+            continue
+        name = opening.group(1)
+        close_intervening_lists(name)
+        output.append(token)
+        if stack and name in _XML_LIST_ITEM_NAMES:
+            stack[-1]["is_list"] = True
+        if not token.rstrip().endswith("/>"):
+            stack.append({"name": name, "is_list": False})
+
+    output.append(document[cursor:])
+    if not repaired:
+        return document, []
+    return "".join(output), repaired
+
+
+def _xml_element_to_value(element: ET.Element) -> object:
+    """Convert the XML wire vocabulary into JSON-equivalent Python values."""
 
     declared = (element.get("type") or "").strip().lower()
     children = list(element)
@@ -649,30 +784,36 @@ def _element_to_value(element: ET.Element) -> object:
             return []
         if element.tag == "parameters" and (element.text or "").strip() == "":
             return {}
-        return _coerce_scalar(element)
+        return _coerce_xml_scalar(element)
 
     child_tags = {child.tag for child in children}
-    if declared == "array" or (child_tags & _XML_LIST_ITEM_NAMES):
-        return [_element_to_value(child) for child in children]
+    if declared == "array" or child_tags & _XML_LIST_ITEM_NAMES:
+        return [_xml_element_to_value(child) for child in children]
+    if element.tag in _XML_SINGLE_OBJECT_ARRAY_NAMES:
+        if len(child_tags) == 1 and next(iter(child_tags)) in {"point"}:
+            return [_xml_element_to_value(child) for child in children]
+        return [
+            {child.tag: _xml_element_to_value(child) for child in children}
+        ]
 
     result: JsonDict = {}
     for child in children:
-        result[child.tag] = _element_to_value(child)
+        result[child.tag] = _xml_element_to_value(child)
     return result
 
 
-def _coerce_scalar(element: ET.Element) -> object:
-    """Coerce a leaf element's text to a typed Python scalar.
+def _coerce_xml_scalar(element: ET.Element) -> object:
+    """Coerce one XML leaf while preserving free text and CDATA verbatim.
 
-    Respects an explicit ``type`` attribute; ``boolean`` and ``null`` require
-    it. Reserved leaf names stay strings. Otherwise infer int-then-float, else
-    string. CDATA is merged by ElementTree into ``.text`` verbatim, so code and
-    other text survive with literal newlines and no escaping.
+    Explicit XML ``type`` attributes remain authoritative, while the natural
+    scalar spellings ``true``, ``false``, and ``null`` are also inferred. This
+    keeps planner XML equivalent to the former JSON wire format when a model
+    omits a redundant type attribute. Reserved free-text fields are checked
+    first and therefore remain strings even when they contain those words.
     """
 
     raw = element.text if element.text is not None else ""
     declared = (element.get("type") or "").strip().lower()
-
     if declared == "null":
         return None
     if declared == "boolean":
@@ -689,13 +830,19 @@ def _coerce_scalar(element: ET.Element) -> object:
             return float(raw.strip())
         except ValueError:
             return raw
-
     if element.tag in _XML_STRING_LEAF_NAMES:
         return raw
 
     stripped = raw.strip()
     if stripped == "":
         return raw
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
     try:
         return int(stripped)
     except ValueError:
@@ -767,6 +914,9 @@ def _validate_planner_decision(
     decision: PlannerDecision,
     tools: ToolRegistry,
     skills: SkillRegistry,
+    *,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
 ) -> list[str]:
     errors: list[str] = []
     kind = _planner_kind_alias(decision.action_type, decision.skill)
@@ -816,7 +966,26 @@ def _validate_planner_decision(
                         f"Tool requested by planner is not executable: {decision.action}."
                     )
                 else:
-                    errors.extend(_validate_tool_parameters(decision.action, decision.parameters))
+                    policy = tool_contract_policy or ToolContractRuntimePolicy()
+                    if policy.request_is_authoritative(decision.action):
+                        catalog = tool_contract_catalog or _default_tool_contract_catalog()
+                        contract = catalog.get(decision.action)
+                        errors.extend(
+                            _format_tool_contract_request_violations(
+                                decision.action,
+                                check_tool_request_conformance(
+                                    contract,
+                                    decision.parameters,
+                                ),
+                            )
+                        )
+                    else:
+                        errors.extend(
+                            _validate_tool_parameters(
+                                decision.action,
+                                decision.parameters,
+                            )
+                        )
 
     if kind == CommandKind.RESPONSE and decision.action not in {
         "ask_human",
@@ -851,7 +1020,197 @@ def _validate_tool_batch(parameters: JsonDict, tools: ToolRegistry) -> list[str]
     return errors
 
 
+_STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
+    "observe": {
+        "types": {"reason": "string"},
+    },
+    "create_simulator_env": {
+        "required": ("env_id",),
+        "types": {
+            "env_id": "string",
+            "seed": "integer",
+            "task": "string",
+            "render_mode": "string",
+            "image_width": "integer",
+            "image_height": "integer",
+            "session_id": "string",
+            "include_objects": "boolean",
+        },
+    },
+    "close_simulator_env": {"types": {}},
+    "retrieve_asset_reference": {
+        "required": ("environment", "target_object", "source_packet_id"),
+        "types": {
+            "environment": "string",
+            "target_object": "string",
+            "source_packet_id": "string",
+            "camera_frame_id": "string",
+        },
+    },
+    "select_sam3_detection": {
+        "required": ("sam3_result_id", "detection_id"),
+        "types": {
+            "sam3_result_id": "string",
+            "detection_id": "string",
+            "selection_confidence": "number",
+            "reason": "string",
+            "identity_anchor_id": "string",
+            "identity_relation": "string",
+            "evidence_role": "string",
+            "target_geometry_family": "string",
+        },
+        "enums": {
+            "identity_relation": {"same_instance", "replace_misidentified_anchor"},
+            "evidence_role": {"target_object", "placement_region"},
+        },
+    },
+    "reject_sam3_detections": {
+        "required": ("sam3_result_id", "reason"),
+        "types": {"sam3_result_id": "string", "reason": "string"},
+    },
+    "compile_grasp_seed": {
+        "required": ("grasp_result_id", "candidate_id"),
+        "types": {
+            "grasp_result_id": "string",
+            "candidate_id": "string",
+            "target_geometry_family": "string",
+            "target_class": "string",
+            "strategy_id": "string",
+            "articulated_handle_options": "object",
+            "pregrasp_distance_m": "number",
+        },
+    },
+    "compute_wrist_alignment": {
+        "required": ("bundle_id",),
+        "types": {"bundle_id": "string", "max_correction_m": "number"},
+    },
+    "propose_wrist_viewpoints": {
+        "required": ("compiled_grasp_id", "source_packet_id", "camera_frame_id"),
+        "types": {
+            "compiled_grasp_id": "string",
+            "source_packet_id": "string",
+            "camera_frame_id": "string",
+        },
+    },
+    "prepare_attachment_probe": {
+        "required": ("compiled_grasp_id", "motion_type"),
+        "types": {
+            "compiled_grasp_id": "string",
+            "motion_type": "string",
+            "direction_world_xyz": "array",
+            "waypoint_offsets_world_xyz": "array",
+            "reason": "string",
+        },
+        "enums": {"motion_type": {"linear", "arc"}},
+    },
+    "assess_attachment_probe": {
+        "required": ("probe_id",),
+        "types": {"probe_id": "string"},
+    },
+    "move_to": {
+        "required": ("ik_receipt_id",),
+        "types": {
+            "ik_receipt_id": "string",
+            "num_steps": "integer",
+            "tolerance": "number",
+            "ori_tolerance": "number",
+            "enable_collision_check": "boolean",
+        },
+    },
+    "follow_eef_trajectory": {
+        "required": ("ik_receipt_ids",),
+        "types": {
+            "ik_receipt_ids": "array",
+            "num_steps_per_waypoint": "integer",
+            "tolerance": "number",
+            "ori_tolerance": "number",
+            "enable_collision_check": "boolean",
+        },
+    },
+    "ik_preview_check": {
+        "types": {
+            "target_pose": "object",
+            "compiled_grasp_id": "string",
+            "waypoint_role": "string",
+            "path_fraction": "number",
+            "viewpoint_proposal_id": "string",
+            "candidate_id": "string",
+            "probe_id": "string",
+            "waypoint_index": "integer",
+            "position_tolerance_m": "number",
+            "orientation_tolerance_rad": "number",
+            "preserve_current_orientation": "boolean",
+            "check_endpoint_collision": "boolean",
+        },
+        "enums": {
+            "waypoint_role": {
+                "grasp_clearance",
+                "grasp_precontact",
+                "grasp_alignment_reference",
+                "grasp_contact",
+            }
+        },
+        "one_of_required": (
+            ("target_pose",),
+            ("compiled_grasp_id", "waypoint_role"),
+            ("compiled_grasp_id", "path_fraction"),
+            ("viewpoint_proposal_id", "candidate_id"),
+            ("probe_id", "waypoint_index"),
+        ),
+    },
+}
+
+
+def _validate_static_tool_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    rules = _STATIC_TOOL_PARAMETER_RULES[tool_name]
+    types = rules.get("types")
+    types = types if isinstance(types, dict) else {}
+    errors = _unsupported_parameter_errors(tool_name, parameters, set(types))
+    for name in rules.get("required", ()):
+        if name not in parameters:
+            errors.append(f"{tool_name} requires `parameters.{name}`.")
+    one_of = rules.get("one_of_required")
+    if isinstance(one_of, tuple):
+        matched = sum(
+            all(name in parameters for name in group)
+            for group in one_of
+            if isinstance(group, tuple)
+        )
+        if matched != 1:
+            errors.append(f"{tool_name} requires exactly one supported reference shape.")
+    for name, expected in types.items():
+        if name not in parameters:
+            continue
+        value = parameters[name]
+        valid = {
+            "string": isinstance(value, str),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+            "boolean": isinstance(value, bool),
+            "array": isinstance(value, list),
+            "object": isinstance(value, dict),
+        }.get(str(expected), True)
+        if not valid:
+            errors.append(f"{tool_name} `parameters.{name}` must be {expected}.")
+            continue
+        if expected == "string" and not value:
+            errors.append(f"{tool_name} `parameters.{name}` must be non-empty.")
+    enums = rules.get("enums")
+    enums = enums if isinstance(enums, dict) else {}
+    for name, allowed in enums.items():
+        if name in parameters and parameters[name] not in allowed:
+            errors.append(f"{tool_name} `parameters.{name}` has an unsupported value.")
+    return errors
+
+
 def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]:
+    if tool_name in _STATIC_TOOL_PARAMETER_RULES:
+        return _validate_static_tool_parameters(tool_name, parameters)
+    if tool_name == "python_exec":
+        return _validate_python_exec_parameters(parameters)
     if tool_name == "web_search":
         return _validate_web_search_parameters(parameters)
     if tool_name == "web_fetch":
@@ -860,14 +1219,51 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
         return _validate_sam3_parameters(parameters)
     if tool_name == "molmopoint":
         return _validate_molmopoint_parameters(parameters)
+    if tool_name == "estimate_depth_prior":
+        return _validate_depth_packet_parameters(
+            tool_name,
+            parameters,
+            optional_fields={"resolution_level"},
+        )
+    if tool_name == "enhance_depth":
+        return _validate_depth_packet_parameters(
+            tool_name,
+            parameters,
+            optional_fields={"config"},
+        )
     if tool_name == "anyplace":
         return _validate_anyplace_parameters(parameters)
+    if tool_name == "camera_pose_to_world":
+        return _validate_camera_pose_to_world_parameters(parameters)
     if tool_name == "gripper_control":
         return _validate_gripper_control_parameters(parameters)
     if tool_name == "grasp_pose_estimate":
         return _validate_grasp_pose_estimate_parameters(parameters)
-    if tool_name == "contact_graspnet":
-        return _validate_contact_graspnet_parameters(parameters)
+    if tool_name == "propose_calibration_profile":
+        return _validate_proposal_parameters(
+            tool_name,
+            parameters,
+            payload_field="profile",
+            extra_fields={"profile_fingerprint": dict, "validation_gates": list, "ledger": list},
+            required_extra=("profile_fingerprint",),
+        )
+    if tool_name == "propose_grasp_strategy":
+        return _validate_proposal_parameters(
+            tool_name,
+            parameters,
+            payload_field="strategy",
+            extra_fields={
+                "base_strategy_sha256": str,
+                "rollout_summary": dict,
+                "ledger": list,
+            },
+        )
+    if tool_name in {"promote_calibration_profile", "promote_grasp_strategy"}:
+        return _validate_promotion_parameters(tool_name, parameters)
+    if tool_name in {"save_memory", "get_memory", "delete_memory", "compact_memory"}:
+        return _validate_memory_tool_parameters(tool_name, parameters)
+    if tool_name in {"register_skill", "update_skill"}:
+        return _validate_skill_management_parameters(tool_name, parameters)
     if tool_name == "graspgenx":
         return _validate_graspgenx_parameters(parameters)
     if tool_name != "anygrasp":
@@ -909,6 +1305,294 @@ def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]
     return errors
 
 
+def _validate_python_exec_parameters(parameters: JsonDict) -> list[str]:
+    errors = _unsupported_parameter_errors(
+        "python_exec",
+        parameters,
+        {"code", "sandbox", "timeout_s"},
+    )
+    code = parameters.get("code")
+    if not isinstance(code, str) or not code:
+        errors.append("python_exec requires a non-empty string `parameters.code`.")
+    sandbox = parameters.get("sandbox")
+    if sandbox is not None and sandbox not in {"sandbox", "outside_sandbox"}:
+        errors.append("python_exec sandbox must be sandbox or outside_sandbox.")
+    timeout_s = parameters.get("timeout_s")
+    if timeout_s is not None and (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, (int, float))
+        or not 0 < float(timeout_s) <= 600
+    ):
+        errors.append("python_exec timeout_s must be a number in (0, 600].")
+    return errors
+
+
+def _validate_proposal_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+    *,
+    payload_field: str,
+    extra_fields: dict[str, type],
+    required_extra: tuple[str, ...] = (),
+) -> list[str]:
+    allowed = {payload_field, "rationale", *extra_fields}
+    errors = _unsupported_parameter_errors(tool_name, parameters, allowed)
+    payload = parameters.get(payload_field)
+    if not isinstance(payload, dict):
+        errors.append(f"{tool_name} requires object `parameters.{payload_field}`.")
+    rationale = parameters.get("rationale")
+    if not isinstance(rationale, str) or not rationale:
+        errors.append(f"{tool_name} requires non-empty string `parameters.rationale`.")
+    for name in required_extra:
+        if name not in parameters:
+            errors.append(f"{tool_name} requires `parameters.{name}`.")
+    for name, expected_type in extra_fields.items():
+        value = parameters.get(name)
+        if value is not None and not isinstance(value, expected_type):
+            errors.append(
+                f"{tool_name} `parameters.{name}` must be {expected_type.__name__}."
+            )
+    return errors
+
+
+def _validate_promotion_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    errors = _unsupported_parameter_errors(
+        tool_name,
+        parameters,
+        {"proposal_id", "target_status", "evidence"},
+    )
+    proposal_id = parameters.get("proposal_id")
+    if not isinstance(proposal_id, str) or not proposal_id:
+        errors.append(f"{tool_name} requires non-empty string `parameters.proposal_id`.")
+    if parameters.get("target_status") not in {"candidate", "validated"}:
+        errors.append(f"{tool_name} target_status must be candidate or validated.")
+    evidence = parameters.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        errors.append(f"{tool_name} requires a non-empty evidence list.")
+    else:
+        for index, item in enumerate(evidence):
+            if not isinstance(item, dict):
+                errors.append(f"{tool_name} evidence[{index}] must be an object.")
+                continue
+            if set(item) - {"path", "split"}:
+                errors.append(f"{tool_name} evidence[{index}] has unsupported fields.")
+            if not isinstance(item.get("path"), str) or not item.get("path"):
+                errors.append(f"{tool_name} evidence[{index}].path must be non-empty.")
+            if item.get("split") not in {"canary", "held_out"}:
+                errors.append(
+                    f"{tool_name} evidence[{index}].split must be canary or held_out."
+                )
+    return errors
+
+
+def _validate_memory_tool_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    allowed_by_tool = {
+        "save_memory": {"namespace", "key", "content", "tags"},
+        "get_memory": {"namespace", "key"},
+        "delete_memory": {"namespace", "key"},
+        "compact_memory": {"max_events"},
+    }
+    errors = _unsupported_parameter_errors(
+        tool_name,
+        parameters,
+        allowed_by_tool[tool_name],
+    )
+    if tool_name == "compact_memory":
+        max_events = parameters.get("max_events")
+        if max_events is not None and (
+            isinstance(max_events, bool)
+            or not isinstance(max_events, int)
+            or max_events < 1
+        ):
+            errors.append("compact_memory max_events must be an integer >= 1.")
+        return errors
+    namespace = parameters.get("namespace")
+    allowed_namespaces = {"facts", "artifacts", "skill_notes"}
+    if tool_name != "save_memory":
+        allowed_namespaces.add("all")
+    if namespace is not None and namespace not in allowed_namespaces:
+        errors.append(
+            f"{tool_name} namespace must be one of {sorted(allowed_namespaces)}."
+        )
+    key = parameters.get("key")
+    if key is not None and (not isinstance(key, str) or not key):
+        errors.append(f"{tool_name} key must be a non-empty string when supplied.")
+    if tool_name in {"save_memory", "delete_memory"} and "key" not in parameters:
+        errors.append(f"{tool_name} requires `parameters.key`.")
+    if tool_name == "save_memory":
+        if "content" not in parameters:
+            errors.append("save_memory requires `parameters.content`.")
+        tags = parameters.get("tags")
+        if tags is not None and (
+            not isinstance(tags, list)
+            or any(not isinstance(tag, str) for tag in tags)
+        ):
+            errors.append("save_memory tags must be an array of strings.")
+    return errors
+
+
+def _validate_skill_management_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+) -> list[str]:
+    allowed = (
+        {
+            "name",
+            "goal",
+            "description",
+            "requirements",
+            "examples",
+            "content",
+            "task_patterns",
+            "allowed_tools",
+        }
+        if tool_name == "register_skill"
+        else {"name", "requested_changes", "examples", "requirements", "content"}
+    )
+    errors = _unsupported_parameter_errors(tool_name, parameters, allowed)
+    name = parameters.get("name")
+    if not isinstance(name, str) or not name:
+        errors.append(f"{tool_name} requires non-empty string `parameters.name`.")
+    elif tool_name == "register_skill" and re.fullmatch(
+        r"[a-z0-9]+(?:-[a-z0-9]+)*", name
+    ) is None:
+        errors.append("register_skill name must be a lowercase hyphenated slug.")
+    string_fields = (
+        {"goal", "description", "content"}
+        if tool_name == "register_skill"
+        else {"requested_changes", "content"}
+    )
+    for field in string_fields:
+        value = parameters.get(field)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{tool_name} {field} must be a string when supplied.")
+    if tool_name == "register_skill":
+        for field in ("task_patterns", "allowed_tools"):
+            value = parameters.get(field)
+            if value is not None and (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) for item in value)
+            ):
+                errors.append(f"register_skill {field} must be an array of strings.")
+    return errors
+
+
+def _unsupported_parameter_errors(
+    tool_name: str,
+    parameters: JsonDict,
+    allowed: set[str],
+) -> list[str]:
+    extras = sorted(set(parameters) - allowed)
+    if not extras:
+        return []
+    return [f"{tool_name} received unsupported parameters: {', '.join(extras)}."]
+
+
+def _tool_contract_shadow_validation(
+    decision: PlannerDecision,
+    *,
+    tools: ToolRegistry,
+    tool_contract_catalog: ToolContractCatalog | None = None,
+    tool_contract_policy: ToolContractRuntimePolicy | None = None,
+) -> JsonDict | None:
+    """Record legacy/contract parity and the selected per-tool authority."""
+
+    if decision.action_type.strip().lower() != "tool_call":
+        return None
+    if decision.action in {
+        "sense",
+        "tool_batch",
+        "batch",
+        "safe_check",
+        "code_policy",
+        "skill_call",
+    }:
+        return None
+    try:
+        tools.get(decision.action)
+    except KeyError:
+        return None
+
+    from agent.tools.contracts import ContractMaturity
+
+    try:
+        contract = (tool_contract_catalog or _default_tool_contract_catalog()).get(
+            decision.action
+        )
+    except KeyError:
+        return None
+    if contract.maturity is ContractMaturity.INFERRED:
+        return {
+            "schema_version": TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION,
+            "tool": decision.action,
+            "contract_maturity": contract.maturity.value,
+            "evaluated": False,
+            "enforcing": False,
+            "authoritative_validator": "legacy_planner",
+            "reason": "inferred contracts are inventory-only",
+        }
+
+    policy = tool_contract_policy or ToolContractRuntimePolicy()
+    contract_authoritative = policy.request_is_authoritative(decision.action)
+    legacy_errors = _validate_tool_parameters(decision.action, decision.parameters)
+    contract_violations = check_tool_request_conformance(
+        contract,
+        decision.parameters,
+    )
+    legacy_accepted = not legacy_errors
+    contract_accepted = not contract_violations
+    return {
+        "schema_version": TOOL_CONTRACT_SHADOW_VALIDATION_SCHEMA_VERSION,
+        "tool": decision.action,
+        "contract_maturity": contract.maturity.value,
+        "evaluated": True,
+        "enforcing": contract_authoritative,
+        "authoritative_validator": (
+            "tool_contract" if contract_authoritative else "legacy_planner"
+        ),
+        "legacy_accepted": legacy_accepted,
+        "contract_accepted": contract_accepted,
+        "acceptance_match": legacy_accepted == contract_accepted,
+        "legacy_errors": list(legacy_errors),
+        "contract_violations": [
+            violation.to_dict() for violation in contract_violations
+        ],
+    }
+
+
+def _format_tool_contract_request_violations(
+    tool_name: str,
+    violations: tuple[object, ...],
+) -> list[str]:
+    """Turn structured contract failures into concise Agent repair feedback."""
+
+    errors: list[str] = []
+    for violation in violations:
+        code = str(getattr(violation, "code", "request_contract_violation"))
+        path = str(getattr(violation, "path", "parameters"))
+        message = str(getattr(violation, "message", "request does not match schema"))
+        errors.append(
+            f"{tool_name} request violates ToolContract at `{path}` ({code}): {message}"
+        )
+    return errors
+
+
+@lru_cache(maxsize=1)
+def _default_tool_contract_catalog():
+    """Cache immutable default declarations used by non-enforcing shadow checks."""
+
+    from agent.tools.contracts import build_default_tool_contract_catalog
+    from agent.tools.registry import build_default_tool_registry
+
+    return build_default_tool_contract_catalog(build_default_tool_registry().list())
+
+
 def _validate_gripper_control_parameters(parameters: JsonDict) -> list[str]:
     """Keep the Agent-facing latch command explicitly binary.
 
@@ -935,7 +1619,11 @@ def _validate_gripper_control_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_web_search_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "web_search",
+        parameters,
+        {"query", "max_results", "language", "time_range"},
+    )
     query = parameters.get("query")
     if not isinstance(query, str) or not query.strip() or len(query.strip()) > 512:
         errors.append(
@@ -956,7 +1644,11 @@ def _validate_web_search_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "web_fetch",
+        parameters,
+        {"url", "max_chars"},
+    )
     url = parameters.get("url")
     if not isinstance(url, str) or not url.strip() or len(url.strip()) > 2048:
         errors.append(
@@ -986,7 +1678,20 @@ def _validate_web_fetch_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
+    errors = _unsupported_parameter_errors(
+        "sam3",
+        parameters,
+        {
+            "source_packet_id",
+            "camera_frame_id",
+            "mode",
+            "prompt",
+            "points",
+            "positive_points",
+            "roi_bbox_xyxy",
+            "evidence_role",
+        },
+    )
     source_packet_id = parameters.get("source_packet_id")
     if not isinstance(source_packet_id, str) or not source_packet_id.strip():
         errors.append(
@@ -1032,9 +1737,7 @@ def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
         errors.append("sam3 points mode must not include a non-empty `parameters.prompt`.")
     if not isinstance(points, list) or not 1 <= len(points) <= 64:
         errors.append(
-            "sam3 points mode requires `parameters.points` as a JSON list of one to 64 "
-            'point objects, e.g. [{"x": 272, "y": 152, "label": 1}]. Wrap a single point '
-            "in a list; do not pass a bare object or an empty list."
+            "sam3 points mode requires `parameters.points` as a list of one to 64 points."
         )
         return errors
     foreground_count = 0
@@ -1067,23 +1770,50 @@ def _validate_sam3_parameters(parameters: JsonDict) -> list[str]:
 
 
 def _validate_molmopoint_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
-    images = parameters.get("images")
-    if not isinstance(images, list) or not 1 <= len(images) <= 4:
+    errors = _unsupported_parameter_errors(
+        "molmopoint",
+        parameters,
+        {"sources", "prompt"},
+    )
+    if "images" in parameters:
         errors.append(
-            "molmopoint requires `parameters.images` as an ordered list of one to four "
-            "concrete local image paths."
+            "molmopoint no longer accepts `parameters.images`; use ordered packet "
+            "sources so the host resolves session-owned images and provenance."
+        )
+    sources = parameters.get("sources")
+    if not isinstance(sources, list) or not 1 <= len(sources) <= 4:
+        errors.append(
+            "molmopoint requires `parameters.sources` as an ordered list of one to "
+            "four objects containing source_packet_id and optional camera_frame_id."
         )
     else:
-        for image_index, value in enumerate(images):
-            if (
-                not isinstance(value, str)
-                or not value.strip()
-                or _looks_like_placeholder_path(value)
+        for source_index, source in enumerate(sources):
+            if not isinstance(source, dict):
+                errors.append(
+                    f"molmopoint sources[{source_index}] must be an object containing "
+                    "source_packet_id and optional camera_frame_id."
+                )
+                continue
+            extra = sorted(set(source) - {"source_packet_id", "camera_frame_id"})
+            if extra:
+                errors.append(
+                    f"molmopoint sources[{source_index}] contains unsupported fields: "
+                    + ", ".join(extra)
+                    + ". Do not pass paths or copied observation payloads."
+                )
+            source_packet_id = source.get("source_packet_id")
+            if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+                errors.append(
+                    f"molmopoint sources[{source_index}].source_packet_id must be a "
+                    "non-empty id copied exactly from visible observation evidence."
+                )
+            camera_frame_id = source.get("camera_frame_id")
+            if camera_frame_id is not None and (
+                not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
             ):
                 errors.append(
-                    "molmopoint requires each `parameters.images` entry as a concrete "
-                    f"local image path; entry {image_index} is invalid."
+                    f"molmopoint sources[{source_index}].camera_frame_id must be a "
+                    "non-empty string when set."
                 )
     prompt = parameters.get("prompt")
     if (
@@ -1099,10 +1829,60 @@ def _validate_molmopoint_parameters(parameters: JsonDict) -> list[str]:
     return errors
 
 
+def _validate_depth_packet_parameters(
+    tool_name: str,
+    parameters: JsonDict,
+    *,
+    optional_fields: set[str],
+) -> list[str]:
+    errors: list[str] = []
+    allowed = {"source_packet_id", "camera_frame_id", *optional_fields}
+    extra = sorted(set(parameters) - allowed)
+    if extra:
+        errors.append(
+            f"{tool_name} accepts observation packet references, not model-supplied "
+            "paths or calibration payloads; unsupported fields: "
+            + ", ".join(extra)
+            + "."
+        )
+    source_packet_id = parameters.get("source_packet_id")
+    if not isinstance(source_packet_id, str) or not source_packet_id.strip():
+        errors.append(
+            f"{tool_name} requires `parameters.source_packet_id` copied exactly "
+            "from visible observation evidence."
+        )
+    camera_frame_id = parameters.get("camera_frame_id")
+    if camera_frame_id is not None and (
+        not isinstance(camera_frame_id, str) or not camera_frame_id.strip()
+    ):
+        errors.append(
+            f"{tool_name} `parameters.camera_frame_id` must be a non-empty string when set."
+        )
+    if "resolution_level" in optional_fields and "resolution_level" in parameters:
+        value = parameters.get("resolution_level")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value < 10
+        ):
+            errors.append(
+                "estimate_depth_prior `parameters.resolution_level` must be an integer "
+                "in [0, 10)."
+            )
+    if "config" in optional_fields and "config" in parameters:
+        if not isinstance(parameters.get("config"), dict):
+            errors.append("enhance_depth `parameters.config` must be an object when set.")
+    return errors
+
+
 def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
     bundle_id = parameters.get("bundle_id")
     if isinstance(bundle_id, str) and bundle_id.strip():
-        extra = sorted(str(key) for key in parameters if key != "bundle_id")
+        extra = sorted(
+            str(key)
+            for key in parameters
+            if key not in {"bundle_id", "backend_preference"}
+        )
         if extra:
             return [
                 "grasp_pose_estimate bundle references cannot be overridden with "
@@ -1110,7 +1890,7 @@ def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
                 + ", ".join(extra)
                 + "."
             ]
-        return []
+        return _validate_grasp_backend_preference(parameters.get("backend_preference"))
     errors: list[str] = []
     mode = str(parameters.get("mode") or "targeted").strip().lower()
     if mode not in {"targeted", "scene"}:
@@ -1155,42 +1935,40 @@ def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
     hints = parameters.get("hints")
     if hints is not None and not isinstance(hints, dict):
         errors.append("grasp_pose_estimate hints must be an object when provided.")
+    errors.extend(_validate_grasp_backend_preference(parameters.get("backend_preference")))
     return errors
 
 
-def _validate_contact_graspnet_parameters(parameters: JsonDict) -> list[str]:
-    errors: list[str] = []
-    for key in ("rgb", "depth"):
-        value = parameters.get(key)
-        if not isinstance(value, str) or not value.strip() or _looks_like_placeholder_path(value):
-            errors.append(
-                f"contact_graspnet requires `parameters.{key}` as a concrete local file path."
-            )
-
-    object_mask = parameters.get("object_mask")
-    if not isinstance(object_mask, dict):
-        errors.append(
-            "contact_graspnet requires `parameters.object_mask` as a SAM3 artifact "
-            "containing mask_ref and source_image; bare mask paths are not accepted."
-        )
-    else:
-        for key in ("mask_ref", "source_image"):
-            value = object_mask.get(key)
-            if (
-                not isinstance(value, str)
-                or not value.strip()
-                or _looks_like_placeholder_path(value)
-            ):
-                errors.append(
-                    f"contact_graspnet object_mask requires a concrete `{key}` local path."
-                )
-
-    _validate_required_intrinsics(
-        parameters.get("intrinsics"),
-        label="contact_graspnet `parameters.intrinsics`",
-        errors=errors,
-    )
-    return errors
+def _validate_grasp_backend_preference(value: object) -> list[str]:
+    if value is None:
+        return []
+    allowed = ", ".join(GRASP_POSE_BACKENDS)
+    if not isinstance(value, list) or not value:
+        return [
+            "grasp_pose_estimate backend_preference must be a non-empty ordered "
+            f"list chosen from: {allowed}."
+        ]
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        return [
+            "grasp_pose_estimate backend_preference entries must be non-empty "
+            f"backend names chosen from: {allowed}."
+        ]
+    normalized = [str(item).strip().lower() for item in value]
+    unknown = sorted(set(normalized).difference(GRASP_POSE_BACKENDS))
+    if unknown:
+        return [
+            "grasp_pose_estimate backend_preference contains unknown backend(s): "
+            + ", ".join(unknown)
+            + f". Allowed backends: {allowed}."
+        ]
+    duplicates = sorted({item for item in normalized if normalized.count(item) > 1})
+    if duplicates:
+        return [
+            "grasp_pose_estimate backend_preference must not repeat backend(s): "
+            + ", ".join(duplicates)
+            + "."
+        ]
+    return []
 
 
 def _validate_graspgenx_parameters(parameters: JsonDict) -> list[str]:
@@ -1292,6 +2070,39 @@ def _validate_anyplace_parameters(parameters: JsonDict) -> list[str]:
     if extra:
         return [
             "anyplace bundle references cannot be overridden with model-supplied fields: "
+            + ", ".join(extra)
+            + "."
+        ]
+    return []
+
+
+def _validate_camera_pose_to_world_parameters(parameters: JsonDict) -> list[str]:
+    """Keep AnyPlace handoff opaque while preserving the generic geometry path."""
+
+    result_id = parameters.get("placement_result_id")
+    candidate_id = parameters.get("candidate_id")
+    uses_placement_reference = result_id is not None or candidate_id is not None
+    if not uses_placement_reference:
+        return []
+    if not isinstance(result_id, str) or not result_id.strip():
+        return [
+            "camera_pose_to_world AnyPlace handoff requires a non-empty "
+            "`placement_result_id` returned by anyplace."
+        ]
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        return [
+            "camera_pose_to_world AnyPlace handoff requires an exact non-empty "
+            "`candidate_id` from that placement result."
+        ]
+    extra = sorted(
+        str(key)
+        for key in parameters
+        if key not in {"placement_result_id", "candidate_id"}
+    )
+    if extra:
+        return [
+            "camera_pose_to_world placement references cannot be overridden with "
+            "model-supplied pose or calibration fields: "
             + ", ".join(extra)
             + "."
         ]
@@ -1412,92 +2223,39 @@ def _invalid_decision(errors: list[str]) -> PlannerDecision:
 
 
 def _agent_owned_tool_planner_system_prompt() -> str:
-    """Return the production prompt without host-authored task phases."""
+    """Return the task-agnostic planner role and response contract.
+
+    Closed-loop invariants are appended from ``embodied_closed_loop.md``.
+    Task procedures belong to selected skills/playbooks, while exact request,
+    result, receipt, and bundle semantics belong to the live tool contracts.
+    """
 
     return (
         "You are the OpenETA closed-loop embodied planner. Return exactly one XML "
         "<decision> element with child elements kind, name, reasoning, and parameters. "
-        "kind must be tool_call or response. name is the tool name (tool_call) or one "
-        "of ask_human, talk, task_complete (response). Put tool arguments inside "
-        "<parameters> as named child elements; use an empty <parameters/> when there "
-        "are none. Encode a list as repeated <item> children, a nested object as named "
-        "child elements, and always wrap code or any multi-line/quoted text in a CDATA "
-        "section so newlines survive verbatim (never escape newlines as backslash-n). "
-        "Numbers may carry type=\"integer\" or type=\"number\"; use type=\"boolean\" or "
-        "type=\"null\" for those values. Example:\n"
-        "<decision>\n"
-        "  <kind>tool_call</kind>\n"
-        "  <name>python_exec</name>\n"
-        "  <reasoning>Inspect the create_env response file.</reasoning>\n"
-        "  <parameters>\n"
-        "    <code><![CDATA[\n"
-        "import os, json\n"
-        "result = {\"exists\": os.path.exists(\"/tmp/x.json\")}\n"
-        "]]></code>\n"
-        "  </parameters>\n"
-        "</decision>\n"
-        "For sam3 points mode, encode <points> as <item> children each with x, y, and "
-        "label (label type=\"integer\" 0 or 1). For a tool_batch, put <call> children "
-        "inside <calls>, each with a <name> and <parameters>. "
+        "kind must be tool_call or response. name is the executable tool name for a "
+        "tool_call, or ask_human, talk, or task_complete for a response. Put tool "
+        "arguments inside <parameters> as named child elements and use an empty "
+        "<parameters/> when there are none. Encode arrays as repeated <item> children "
+        "and nested objects as named child elements. Wrap code and all multi-line or "
+        "quoted text in CDATA so literal newlines survive; do not encode them as "
+        "backslash-n. Numbers may use type=\"integer\" or type=\"number\"; booleans "
+        "and nulls require type=\"boolean\" and type=\"null\". A tool_batch encodes "
+        "<calls> with repeated <call> children, each containing name and parameters. "
+        "Example: <decision><kind>tool_call</kind><name>python_exec</name>"
+        "<reasoning>Inspect an artifact.</reasoning><parameters><code><![CDATA["
+        "\nresult = artifacts.read_json('/workspace/result.json')\n"
+        "]]></code></parameters></decision>. "
         "For tool_call choose exactly one executable atomic "
-        "tool from available_tools; tool_references is only a legacy name index. For "
-        "response use ask_human, talk, "
-        "or task_complete. create_simulator_env is the only environment-creation path; "
-        "never invoke create_env or close_env through python_exec or code_policy. "
+        "tool from available_tools; tool_references is only a legacy name index. "
         "You own task decomposition, progress assessment, recovery choice, and the next "
         "task action. The host does not provide a task phase or required next action. "
-        "Use decision_state as the compact operational index: it names the current "
-        "observation packet, active host bundles, unresolved hard obligations, last "
-        "action effect, and currently available tools. Query full artifacts or memory "
-        "only when this bounded index is insufficient. Exact current camera intrinsics "
-        "and extrinsics are in decision_state.current_observation_packet.camera_calibrations; "
-        "do not search session files for calibration already present there. "
-        "Use save_memory to maintain concise plans, hypotheses, attempted alternatives, "
-        "and open questions in agent_working_state; revise them when newer evidence "
-        "contradicts them. Do not invent a phase that is absent from observable evidence. "
-        "Inspect current_observation and its labelled current_scene images before using "
-        "memory. Current visual evidence outranks stale world_evidence and summaries. "
-        "Cite evidence ids that support visually grounded reasoning. Treat freshness "
-        "labels literally: object_scene_epoch invalidates object-relative evidence, while "
-        "robot_motion_epoch records EEF/camera motion without by itself invalidating a "
-        "world-frame target pose. stale_scene_epoch is historical, commanded_not_observed is "
-        "not a sensed state, and an acknowledged close command is not proof of attachment. "
-        "Use the recent action/result conversation and recent_transitions observation "
-        "or recovery evidence to connect the last atomic action to the current scene. "
-        "If visual evidence is missing or ambiguous, observe or ask_human instead of "
-        "pretending the state is known. Perform at most one world-mutating tool call, "
-        "then inspect a fresh observation before further control. A transport-unknown "
-        "result requires observing and reconciling the same environment before any new "
-        "world mutation; never resend an uncertain partial motion. "
-        "Skills are editable guidance, not executable macros. If "
-        "skill_usage.inspection_required is non-empty, inspect the named skill with "
-        "skill_call before world mutation. Runtime tool schemas and returned docstrings "
-        "are authoritative over examples. Preserve exact artifact paths, frame ids, "
-        "scene epochs, matrices, mask refs, candidate ids, and tool-result provenance; "
-        "never invent placeholders such as latest_mask. For sam3, copy the short exact "
-        "source_packet_id from observation evidence and let the host resolve local RGB-D "
-        "paths and source_observation; never send an image path to sam3. Resolve "
-        "open_questions.target_selection by visually checking the current original image "
-        "and candidate evidence, then call select_sam3_detection or "
-        "reject_sam3_detections with exact ids. Scores rank proposals but do not prove "
-        "identity. Never use web content as embodied observation. "
-        "Task-domain procedures belong to relevant_skills. Treat those skills as "
-        "inspectable advice, not a host-authored script or mandatory phase machine; adapt "
-        "or reject a suggested step when current evidence supports a better safe action. "
-        "Host-resolved input bundles are immutable convenience handles for aligned tool "
-        "inputs, not instructions to invoke a particular tool. When you choose a bundled "
-        "tool, use its exact bundle_id rather than reconstructing paths, masks, camera "
-        "calibration, scene epochs, or provenance. Tool outputs, semantic outcomes, "
-        "artifact paths, diagnostics, and recovery options are direct evidence: inspect "
-        "them, record useful hypotheses in Agent memory, and do not repeat a call unless "
-        "you can state what input or observation changed. Infrastructure failure is not "
-        "task or candidate failure. If unresolved_obligations.provenance_integrity says "
-        "a compiled grasp was superseded by newer target evidence, safe retreat and "
-        "clearance motion remain available, but re-estimate and compile before contact "
-        "or gripper close. Preserve evidence identity and obey deterministic "
-        "safety, collision, workspace, permission, and supervision checks. "
-        "task_complete is valid only when a trusted same-episode environment receipt or "
-        "official reward establishes success; tool-call success alone is insufficient."
+        "Use the supplied current-state projection as an index and query durable artifacts "
+        "or memory only when it is insufficient. Relevant skills are reusable task-domain "
+        "guidance; an exact-task playbook, when present, is only a prior. Neither is an "
+        "executable macro or host-authored phase machine. Live tool contracts exclusively "
+        "define request fields, structured outputs, opaque references, receipts, bundles, "
+        "and repair payloads."
     )
 
 
@@ -1511,6 +2269,8 @@ def _validate_official_reward_completion(
     memory = tool_context.get("memory")
     metadata = memory.get("metadata") if isinstance(memory, dict) else None
     if not isinstance(metadata, dict) or metadata.get("source") != "ParallelEpisodeHarness":
+        return []
+    if metadata.get("require_official_reward") is False:
         return []
     receipt = tool_context.get("latest_environment_receipt")
     info = receipt.get("info") if isinstance(receipt, dict) else None
@@ -1670,46 +2430,19 @@ def _canonicalize_host_parameters(
             }
         ]
     if decision.action == "retrieve_asset_reference":
-        current_rgb = [
-            artifact
-            for artifact in tool_context.get("current_camera_artifacts", [])
-            if isinstance(artifact, dict)
-            and artifact.get("kind") == "rgb"
-            and isinstance(artifact.get("path"), str)
-        ]
-        wrist = tool_context.get("wrist_reference_obligation")
-        wrist_parameters = wrist.get("required_parameters") if isinstance(wrist, dict) else None
-        required_image = (
-            wrist_parameters.get("scene_image") if isinstance(wrist_parameters, dict) else None
-        )
-        if not isinstance(required_image, str):
-            no_detection = tool_context.get("sam3_no_detection")
-            source_image = (
-                no_detection.get("source_image") if isinstance(no_detection, dict) else None
-            )
-            source_name = Path(source_image).name if isinstance(source_image, str) else ""
-            matching = next(
-                (
-                    artifact["path"]
-                    for artifact in current_rgb
-                    if source_name and Path(artifact["path"]).name == source_name
-                ),
-                None,
-            )
-            required_image = matching or (current_rgb[0]["path"] if current_rgb else None)
         supplied_image = decision.parameters.get("scene_image")
-        if not isinstance(required_image, str) or _same_local_artifact(
-            supplied_image, required_image
-        ):
+        if supplied_image is None:
             return []
-        decision.parameters = {**decision.parameters, "scene_image": required_image}
+        parameters = dict(decision.parameters)
+        parameters.pop("scene_image", None)
+        decision.parameters = parameters
         return [
             {
                 "field": "scene_image",
                 "tool": "retrieve_asset_reference",
-                "reason": "bind_reference_localizer_to_current_camera_rgb",
+                "reason": "strip_agent_visual_transport_path",
                 "supplied": supplied_image,
-                "canonical": required_image,
+                "canonical": "host_resolved_from_source_packet_id",
             }
         ]
     return []
@@ -2069,21 +2802,34 @@ def _build_tool_context_payload(
     config: PlannerContextConfig,
 ) -> JsonDict:
     executable_tools = [tool for tool in tools.list() if tools.can_execute(tool.name)]
+    tool_references, tool_contract_projection_audit = (
+        _contract_driven_tool_references(executable_tools)
+    )
+    executable_tool_names = {tool.name for tool in executable_tools}
     selected_skill_guidance = _selected_skill_guidance(
         skills.list(),
         observation=observation,
         memory=memory,
         config=config,
     )
+    for skill_guidance in selected_skill_guidance:
+        _annotate_skill_tool_availability(
+            skill_guidance,
+            executable_tool_names=executable_tool_names,
+        )
     skill_usage = _skill_usage_guidance(selected_skill_guidance, memory)
     memory_context = memory.planning_context(max_events=config.max_memory_events)
+    pending_ik_execution_index = _pending_ik_execution_index(memory)
+    tool_loop_warning = _motion_failure_attractor_warning(
+        memory
+    ) or _conversation_no_progress_warning(memory)
     effective_task = _effective_task_text(observation, memory)
     task_playbook = _matched_task_playbook(
         observation=observation,
         memory=memory,
         task=effective_task,
     )
-    camera_artifacts = _current_camera_artifacts(observation)
+    camera_artifacts = _current_camera_artifacts(observation, memory=memory)
     visual_history: JsonDict | None = None
     if config.visual_history.enabled:
         visual_projection = build_visual_history_projection(
@@ -2109,6 +2855,7 @@ def _build_tool_context_payload(
     context: JsonDict = {
         "schema_version": "openeta.planner_context.v1",
         "task": effective_task,
+        "task_authority": memory.metadata.get("task_authority") or "environment_task",
         "active_environment_task": memory_context.get("active_environment_task"),
         "task_playbook": task_playbook,
         "observation": _observation_summary(
@@ -2129,12 +2876,14 @@ def _build_tool_context_payload(
         "pending_reference_localization": memory_context.get(
             "pending_reference_localization"
         ),
+        "target_identity_anchor": memory_context.get("target_identity_anchor"),
         "retained_targeted_grasp": memory_context.get("retained_targeted_grasp"),
         "provenance_evidence_graph": memory_context.get(
             "provenance_evidence_graph"
         ),
         "grasp_adjustment_budget": memory_context.get("grasp_adjustment_budget"),
         "grasp_input_bundle": memory_context.get("grasp_input_bundle"),
+        "wrist_alignment_bundle": memory_context.get("wrist_alignment_bundle"),
         "anyplace_input_bundle": memory_context.get("anyplace_input_bundle"),
         "articulated_attachment_probe": memory_context.get(
             "articulated_attachment_probe"
@@ -2142,6 +2891,8 @@ def _build_tool_context_payload(
         "gripper_command_state": memory_context.get("gripper_command_state"),
         "attachment_evidence": memory_context.get("attachment_evidence"),
         "motion_reconciliation": memory_context.get("motion_reconciliation"),
+        "ik_preview_receipts": memory_context.get("ik_preview_receipts"),
+        "pending_ik_execution_index": pending_ik_execution_index,
         "fresh_observation_obligation": {
             "schema_version": "openeta.fresh_observation_obligation.v1",
             "required": True,
@@ -2153,14 +2904,25 @@ def _build_tool_context_payload(
         "object_scene_epoch": memory_context.get("object_scene_epoch"),
         "robot_motion_epoch": memory_context.get("robot_motion_epoch"),
         "transition_ledger": memory_context.get("transition_ledger"),
+        "latest_compiled_clearance_execution": memory_context.get(
+            "latest_compiled_clearance_execution"
+        ),
+        "latest_compiled_contact_execution": memory_context.get(
+            "latest_compiled_contact_execution"
+        ),
         "latest_environment_receipt": memory_context.get("latest_environment_receipt"),
-        "tool_references": [_tool_reference(tool) for tool in executable_tools],
+        "tool_references": tool_references,
+        # Host-only migration evidence. The Agent receives the contract-driven
+        # references above; this audit remains outside agent_context and records
+        # where legacy ToolSpec parameter names intentionally differ.
+        "tool_contract_projection_audit": tool_contract_projection_audit,
         "registered_tool_handlers": tools.handler_names(),
         "skill_references": [_selected_skill_reference(skill) for skill in selected_skill_guidance],
         "available_skill_count": len(skills.list()),
         "selected_skill_guidance": selected_skill_guidance,
         "skill_usage": skill_usage,
         "execution_rules": _tool_calling_rules(),
+        "tool_loop_warning": tool_loop_warning,
     }
     context["agent_context"] = _build_agent_decision_context(context, config=config)
     return context
@@ -2198,7 +2960,7 @@ def _build_agent_decision_context(
 
     explicit_world_evidence = memory.get("world_evidence")
     runtime_evidence = (
-        dict(explicit_world_evidence)
+        _project_world_evidence(dict(explicit_world_evidence))
         if isinstance(explicit_world_evidence, dict)
         else {}
     )
@@ -2212,7 +2974,14 @@ def _build_agent_decision_context(
     for output_key, context_key in question_fields.items():
         value = memory.get(context_key)
         if value is not None:
-            open_questions[output_key] = value
+            open_questions[output_key] = (
+                _project_perception_failure(
+                    value,
+                    retained_grasp=memory.get("retained_targeted_grasp"),
+                )
+                if output_key == "perception_failure" and isinstance(value, dict)
+                else value
+            )
 
     recent_events = memory.get("recent_events")
     recent_events = recent_events if isinstance(recent_events, list) else []
@@ -2258,6 +3027,25 @@ def _build_agent_decision_context(
     provenance_inconsistencies = evidence_graph.get("inconsistencies")
     if isinstance(provenance_inconsistencies, list) and provenance_inconsistencies:
         unresolved_obligations["provenance_integrity"] = provenance_inconsistencies
+    tool_loop_warning = runtime_context.get("tool_loop_warning")
+    if isinstance(tool_loop_warning, dict):
+        unresolved_obligations["no_progress_tool_loop"] = tool_loop_warning
+    pending_ik_execution_index = runtime_context.get("pending_ik_execution_index")
+    if isinstance(pending_ik_execution_index, dict) and pending_ik_execution_index.get(
+        "receipts"
+    ):
+        unresolved_obligations["preview_execution_gap"] = {
+            "pending_receipt_ids": [
+                item.get("receipt_id")
+                for item in pending_ik_execution_index["receipts"]
+                if isinstance(item, dict) and item.get("receipt_id")
+            ],
+            "resolution": (
+                "Execute an exact receipt reference, intentionally supersede it with "
+                "materially changed evidence/geometry, or explain why it is no longer "
+                "useful before repeating same-state perception."
+            ),
+        }
     camera_artifacts = runtime_context.get("current_camera_artifacts")
     camera_artifacts = camera_artifacts if isinstance(camera_artifacts, list) else []
     packet_ids = list(
@@ -2282,8 +3070,22 @@ def _build_agent_decision_context(
         },
         "active_bundles": active_bundles,
         "grasp_adjustment_budget": memory.get("grasp_adjustment_budget"),
+        # Execution receipt only: an Agent-chosen clearance is optional, but an
+        # explicit miss cannot be silently treated as a successful contact premise.
+        "latest_compiled_clearance_execution": memory.get(
+            "latest_compiled_clearance_execution"
+        ),
+        # This is an execution receipt, not a host-owned task phase.  Keeping it
+        # in the compact decision index lets the Agent reason from the actual
+        # contact outcome even before a dependent close is attempted.
+        "latest_compiled_contact_execution": memory.get(
+            "latest_compiled_contact_execution"
+        ),
+        "pending_execution_receipts": pending_ik_execution_index,
         "unresolved_obligations": unresolved_obligations,
         "last_action_effect": _latest_action_effect(recent_events),
+        "no_progress_tool_loop": tool_loop_warning,
+        "tool_health": memory.get("tool_health", {}),
         "available_tools": [
             reference.get("name")
             for reference in tool_references
@@ -2295,6 +3097,7 @@ def _build_agent_decision_context(
         "schema_version": "openeta.agent_context.v2",
         "objective": {
             "task": runtime_context.get("task"),
+            "task_authority": runtime_context.get("task_authority"),
             "active_environment_task": runtime_context.get("active_environment_task"),
             "latest_human_interaction": memory.get("latest_human_interaction"),
         },
@@ -2307,11 +3110,14 @@ def _build_agent_decision_context(
         },
         "visual_history": runtime_context.get("visual_history"),
         "recent_transitions": recent_transitions,
-        "transition_ledger": memory.get("transition_ledger", []),
+        "transition_ledger": _project_transition_ledger(
+            memory.get("transition_ledger", [])
+        ),
         "world_evidence": runtime_evidence,
         "evidence_graph": evidence_graph,
         "host_resolved_inputs": {
             "grasp_pose_estimate": memory.get("grasp_input_bundle"),
+            "wrist_alignment": memory.get("wrist_alignment_bundle"),
             "anyplace": memory.get("anyplace_input_bundle"),
         },
         "decision_state": decision_state,
@@ -2322,11 +3128,13 @@ def _build_agent_decision_context(
             "compact_summary": working.get("compact_summary", ""),
         },
         "artifacts": artifacts,
+        "task_playbook": runtime_context.get("task_playbook"),
         "relevant_skills": runtime_context.get("selected_skill_guidance", []),
         "skill_usage": runtime_context.get("skill_usage", {}),
         # Full schemas remain in the canonical context once. The provider backend
         # moves this cache-stable block ahead of growing conversation history; the
         # legacy tool_references field stays a name-only compatibility index.
+        "available_tools_schema_version": "openeta.agent_tool_contract.v2",
         "available_tools": runtime_context.get("tool_references", []),
         "tool_references": [
             {"name": reference.get("name")}
@@ -2343,6 +3151,644 @@ def _build_agent_decision_context(
         "vision_image_paths": runtime_context.get("vision_image_paths", []),
         "vision_evidence": visual_evidence,
     }
+
+
+def _pending_ik_execution_index(memory: AgentMemory) -> JsonDict | None:
+    """Project current executable IK receipts that have not been dispatched.
+
+    The index is deliberately capability-oriented: it does not choose a target,
+    force motion, or advance a host-owned stage.  It merely makes the causal gap
+    between a successful read-only preview and physical execution hard to miss.
+    """
+
+    state = memory.ik_preview_receipts() or {}
+    receipts = [
+        item for item in state.get("receipts", []) if isinstance(item, dict)
+    ]
+    if not receipts:
+        return None
+    current_object_epoch = memory.object_scene_epoch()
+    current_robot_epoch = memory.robot_motion_epoch()
+    latest_disposition: dict[str, str] = {}
+    for event in reversed(memory.events[-240:]):
+        if event.event_type == "ik_preview_receipt":
+            if (
+                _planner_epoch(event.payload.get("object_scene_epoch"))
+                == current_object_epoch
+                and _planner_epoch(event.payload.get("robot_motion_epoch"))
+                == current_robot_epoch
+            ):
+                receipt_id = str(event.payload.get("receipt_id") or "")
+                if receipt_id:
+                    latest_disposition.setdefault(receipt_id, "previewed")
+            continue
+        if event.event_type != "action":
+            continue
+        anchor = event.payload.get("input_state_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        if not anchor or (
+            _planner_epoch(anchor.get("object_scene_epoch")) != current_object_epoch
+            or _planner_epoch(anchor.get("robot_motion_epoch")) != current_robot_epoch
+        ):
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        if name == "move_to":
+            receipt_id = str(parameters.get("ik_receipt_id") or "")
+            if receipt_id:
+                latest_disposition.setdefault(receipt_id, "attempted")
+        elif name == "follow_eef_trajectory":
+            receipt_ids = parameters.get("ik_receipt_ids")
+            if isinstance(receipt_ids, list):
+                for value in receipt_ids:
+                    receipt_id = str(value or "")
+                    if receipt_id:
+                        latest_disposition.setdefault(receipt_id, "attempted")
+
+    projected: list[JsonDict] = []
+    seen: set[str] = set()
+    for receipt in reversed(receipts):
+        receipt_id = str(receipt.get("receipt_id") or "")
+        if (
+            not receipt_id
+            or receipt_id in seen
+            or latest_disposition.get(receipt_id) == "attempted"
+        ):
+            continue
+        seen.add(receipt_id)
+        if (
+            _planner_epoch(receipt.get("object_scene_epoch")) != current_object_epoch
+            or _planner_epoch(receipt.get("robot_motion_epoch")) != current_robot_epoch
+        ):
+            continue
+        classification = str(receipt.get("classification") or "")
+        delegation = receipt.get("motion_collision_delegation")
+        delegated = bool(
+            classification == "kinematically_feasible_collision_deferred"
+            and isinstance(delegation, dict)
+            and delegation.get("available_for_matching_move") is True
+        )
+        if classification != "feasible" and not delegated:
+            continue
+        execution_parameters: JsonDict = {"ik_receipt_id": receipt_id}
+        if delegated:
+            execution_parameters["enable_collision_check"] = True
+        item: JsonDict = {
+            "receipt_id": receipt_id,
+            "status": "previewed_not_executed",
+            "classification": classification,
+            "orientation_policy": receipt.get("orientation_policy"),
+            "target_signature": receipt.get("target_signature"),
+            "execution_reference": {
+                "tool": "move_to",
+                "parameters": execution_parameters,
+            },
+        }
+        request_reference = receipt.get("request_reference")
+        if isinstance(request_reference, dict) and request_reference:
+            item["request_reference"] = dict(request_reference)
+        projected.append(item)
+        if len(projected) >= 3:
+            break
+    if not projected:
+        return None
+    return {
+        "schema_version": "openeta.decision_state.pending_execution_index.v1",
+        "receipts": projected,
+        "interpretation": (
+            "Each entry is an executable IK preview that has not yet been dispatched. "
+            "The Agent may execute the exact short reference, supersede it with "
+            "materially changed evidence/geometry, or decline it with an explicit reason."
+        ),
+        "host_policy": "capability_index_only; no next action is forced or gated",
+    }
+
+
+def _planner_epoch(value: object) -> int:
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _conversation_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect repeated semantically equivalent tool requests without host progress.
+
+    Observation packet ids are provenance handles, not task progress. Read-only
+    turns can mint a new handle for unchanged geometry, so the signature omits
+    packet ids while retaining the actual tool, prompt, camera, bundle, and
+    candidate identifiers. This is Agent-visible reflection evidence, not a
+    required-next-action state machine or an execution gate.
+    """
+
+    actions: list[tuple[str, str, JsonDict]] = []
+    for item in reversed(memory.conversation.items):
+        if item.role != "assistant" or item.kind != "action":
+            continue
+        request = item.data.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            break
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        stable_parameters = _without_packet_provenance(parameters)
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": stable_parameters},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        actions.append((name, signature, parameters))
+        if len(actions) >= 8:
+            break
+    if not actions:
+        return None
+    latest_name, latest_signature, _ = actions[0]
+    repeated = 0
+    packet_ids: list[str] = []
+    for name, signature, parameters in actions:
+        if name != latest_name or signature != latest_signature:
+            break
+        repeated += 1
+        packet_id = parameters.get("source_packet_id")
+        if isinstance(packet_id, str) and packet_id:
+            packet_ids.append(packet_id)
+    if repeated >= 2:
+        repeated_anchors = _recent_equivalent_request_anchors(
+            memory,
+            tool_name=latest_name,
+            semantic_signature=latest_signature,
+            limit=repeated,
+        )
+        if (
+            len(repeated_anchors) >= 2
+            and all(anchor.get("visual_signature") for anchor in repeated_anchors)
+            and not all(
+                _same_semantic_state_anchor(anchor, repeated_anchors[0])
+                for anchor in repeated_anchors[1:]
+            )
+        ):
+            return None
+        return {
+            "schema_version": "openeta.no_progress_tool_loop.v1",
+            "tool": latest_name,
+            "equivalent_call_count": repeated,
+            "semantic_signature": latest_signature,
+            "packet_ids_changed": len(set(packet_ids)) > 1,
+            "interpretation": (
+                "The same semantic tool request was repeated without an intervening "
+                "different action. Packet-id-only refresh is provenance churn, not new "
+                "geometry or task progress. Inspect and consume the latest result, choose "
+                "a materially different input/action, or explain the observed change."
+            ),
+            "host_policy": "reflection_warning_only; no tool is forced or blocked",
+        }
+    return _interleaved_no_progress_warning(memory)
+
+
+def _recent_equivalent_request_anchors(
+    memory: AgentMemory,
+    *,
+    tool_name: str,
+    semantic_signature: str,
+    limit: int,
+) -> list[JsonDict]:
+    anchors: list[JsonDict] = []
+    for event in reversed(memory.events[-160:]):
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        name = str(request.get("name") or "")
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": _without_packet_provenance(parameters)},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        if name != tool_name or signature != semantic_signature:
+            break
+        anchor = event.payload.get("input_state_anchor")
+        anchors.append(dict(anchor) if isinstance(anchor, dict) else {})
+        if len(anchors) >= limit:
+            break
+    return anchors
+
+
+def _interleaved_no_progress_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect equivalent calls hidden inside a short read-only/planning cycle.
+
+    A common failure mode is ``sam3 -> select -> sam3 -> select``.  Adjacent-call
+    detection misses it even though no world mutation occurred.  This detector
+    deliberately remains advisory: it exposes a ready bundle and asks the Agent
+    to consume it, but never blocks a legitimate refresh after visible change.
+    """
+
+    semantic_state_warning = _semantic_state_cycle_warning(memory)
+    if semantic_state_warning is not None:
+        return semantic_state_warning
+
+    actions: list[tuple[str, str, JsonDict]] = []
+    world_mutating = {"move_to", "follow_eef_trajectory", "gripper_control"}
+    for event in reversed(memory.events[-160:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            continue
+        name = str(request.get("name") or "")
+        if name in world_mutating:
+            break
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        stable_parameters = _semantic_repeat_parameters(name, parameters)
+        signature = sha256(
+            json.dumps(
+                {"name": name, "parameters": stable_parameters},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        actions.append((name, signature, parameters))
+        if len(actions) >= 12:
+            break
+    if len(actions) < 2:
+        return None
+    latest_name, latest_signature, _ = actions[0]
+    matches = [
+        (name, parameters)
+        for name, signature, parameters in actions
+        if name == latest_name and signature == latest_signature
+    ]
+    if len(matches) < 2:
+        return None
+    intervening_tools = [name for name, _, _ in actions[1:] if name != latest_name]
+    reusable_bundles: JsonDict = {}
+    for key, bundle in {
+        "grasp_pose_estimate": memory.grasp_input_bundle(),
+        "anyplace": memory.anyplace_input_bundle(),
+    }.items():
+        if isinstance(bundle, dict) and bundle.get("status") == "ready":
+            reusable_bundles[key] = {
+                "bundle_id": bundle.get("bundle_id"),
+                "status": bundle.get("status"),
+                "target_evidence_id": bundle.get("target_evidence_id"),
+            }
+    packet_ids = [
+        str(parameters.get("source_packet_id"))
+        for _, parameters in matches
+        if parameters.get("source_packet_id")
+    ]
+    return {
+        "schema_version": "openeta.no_progress_tool_loop.v1",
+        "tool": latest_name,
+        "trigger_type": "interleaved_equivalent_read_only_cycle",
+        "equivalent_call_count": len(matches),
+        "semantic_signature": latest_signature,
+        "packet_ids_changed": len(set(packet_ids)) > 1,
+        "intervening_tools": list(dict.fromkeys(intervening_tools)),
+        "reusable_bundles": reusable_bundles,
+        "interpretation": (
+            "The same semantic request recurred inside a read-only/planning cycle with "
+            "no world change. Consume the latest successful result or a ready bundle. "
+            "Repeat localization only when current visual/VDM evidence shows object "
+            "motion, occlusion, mask invalidity, or another material input change."
+        ),
+        "host_policy": "reflection_warning_only; no tool is forced or blocked",
+    }
+
+
+def _semantic_state_cycle_warning(memory: AgentMemory) -> JsonDict | None:
+    """Detect a repeated negative outcome under identical visual/epoch evidence."""
+
+    actions: list[JsonDict] = []
+    world_mutating = {
+        "move_to",
+        "follow_eef_trajectory",
+        "gripper_control",
+        "lower_body_control_policy",
+    }
+    for event in reversed(memory.events[-240:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        request = command.get("request")
+        request = request if isinstance(request, dict) else {}
+        if str(request.get("kind") or "") != "tool_call":
+            continue
+        name = str(request.get("name") or "")
+        if name in world_mutating:
+            break
+        anchor = event.payload.get("input_state_anchor")
+        anchor = anchor if isinstance(anchor, dict) else {}
+        visual_signature = str(anchor.get("visual_signature") or "")
+        if not visual_signature:
+            continue
+        semantic_outcome = _event_tool_semantic_outcome(command, name=name)
+        actions.append(
+            {
+                "name": name,
+                "semantic_outcome": semantic_outcome,
+                "anchor": anchor,
+            }
+        )
+        if len(actions) >= 16:
+            break
+    if len(actions) < 2:
+        return None
+    latest = actions[0]
+    latest_outcome = str(latest.get("semantic_outcome") or "")
+    if not _is_no_progress_semantic_outcome(latest_outcome):
+        return None
+    latest_anchor = latest["anchor"]
+    match_index: int | None = None
+    repeat_count = 1
+    for index, candidate in enumerate(actions[1:], start=1):
+        if (
+            candidate.get("name") == latest.get("name")
+            and candidate.get("semantic_outcome") == latest_outcome
+            and _same_semantic_state_anchor(candidate.get("anchor"), latest_anchor)
+        ):
+            repeat_count += 1
+            if match_index is None:
+                match_index = index
+    if match_index is None:
+        return None
+    intervening_tools = [
+        str(item.get("name") or "") for item in reversed(actions[1:match_index])
+    ]
+    pending = _pending_ik_execution_index(memory)
+    pending_ids = []
+    if isinstance(pending, dict):
+        pending_ids = [
+            str(item.get("receipt_id") or "")
+            for item in pending.get("receipts", [])
+            if isinstance(item, dict) and item.get("receipt_id")
+        ]
+    return {
+        "schema_version": "openeta.no_progress_tool_loop.v1",
+        "trigger_type": "semantic_state_cycle_without_world_change",
+        "tool": latest.get("name"),
+        "semantic_outcome": latest_outcome,
+        "equivalent_outcome_count": repeat_count,
+        "intervening_tools": list(dict.fromkeys(intervening_tools)),
+        "state_anchor": {
+            "visual_signature": latest_anchor.get("visual_signature"),
+            "object_scene_epoch": latest_anchor.get("object_scene_epoch"),
+            "robot_motion_epoch": latest_anchor.get("robot_motion_epoch"),
+        },
+        "pending_execution_receipt_ids": pending_ids,
+        "interpretation": (
+            "The same non-progress outcome recurred after a multi-tool read-only "
+            "cycle while the visual observation hash and both world epochs stayed "
+            "unchanged. Additional same-state perception is unlikely to add evidence. "
+            "Consume a useful pending execution reference, materially change the "
+            "geometry/evidence, choose another strategy, or explain why retry is useful."
+        ),
+        "host_policy": "reflection_warning_only; no tool is forced or blocked",
+    }
+
+
+def _event_tool_semantic_outcome(command: JsonDict, *, name: str) -> str:
+    calls = command.get("tool_calls")
+    calls = calls if isinstance(calls, list) else []
+    for call in reversed(calls):
+        if not isinstance(call, dict) or str(call.get("name") or "") != name:
+            continue
+        result = call.get("result")
+        result = result if isinstance(result, dict) else {}
+        details = result.get("details")
+        details = details if isinstance(details, dict) else {}
+        outcome = details.get("semantic_outcome")
+        if isinstance(outcome, str):
+            return outcome.strip().lower()
+    return ""
+
+
+def _is_no_progress_semantic_outcome(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return False
+    exact = {
+        "requires_better_view",
+        "no_detection",
+        "not_found",
+        "target_not_reached",
+        "no_material_view_change",
+        "unchanged",
+        "inconclusive",
+        "retry_required",
+        "blocked",
+        "rejected",
+        "failed",
+    }
+    return normalized in exact or any(
+        marker in normalized
+        for marker in ("not_reached", "no_detection", "better_view", "infeasible")
+    )
+
+
+def _same_semantic_state_anchor(left: object, right: object) -> bool:
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    return bool(left.get("visual_signature")) and all(
+        left.get(field_name) == right.get(field_name)
+        for field_name in (
+            "visual_signature",
+            "object_scene_epoch",
+            "robot_motion_epoch",
+        )
+    )
+
+
+def _semantic_repeat_parameters(name: str, parameters: JsonDict) -> JsonDict:
+    stable = _without_packet_provenance(parameters)
+    stable = stable if isinstance(stable, dict) else {}
+    if name == "sam3" and not stable.get("mode"):
+        stable["mode"] = "text"
+    if name == "select_sam3_detection":
+        return {
+            key: stable.get(key)
+            for key in (
+                "evidence_role",
+                "identity_anchor_id",
+                "identity_relation",
+                "target_geometry_family",
+            )
+            if stable.get(key) is not None
+        }
+    return stable
+
+
+def _motion_failure_attractor_warning(memory: AgentMemory) -> JsonDict | None:
+    """Expose repeated controller convergence to the same wrong endpoint.
+
+    This is outcome-based rather than request-adjacency-based: perception,
+    preview, and recovery calls may occur between two attempts.  It remains a
+    reflection warning only and never selects or blocks an action.
+    """
+
+    failures: dict[str, JsonDict] = {}
+    for event in reversed(memory.events[-160:]):
+        if event.event_type == "observed_object_scene_change":
+            break
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        calls = command.get("tool_calls")
+        calls = calls if isinstance(calls, list) else []
+        for call in reversed(calls):
+            if not isinstance(call, dict) or str(call.get("name") or "") != "move_to":
+                continue
+            result = call.get("result")
+            result = result if isinstance(result, dict) else {}
+            details = result.get("details")
+            details = details if isinstance(details, dict) else {}
+            if details.get("operational_success") is not False:
+                continue
+            outputs = details.get("outputs")
+            outputs = outputs if isinstance(outputs, dict) else {}
+            motion = outputs.get("motion_summary")
+            motion = motion if isinstance(motion, dict) else {}
+            if motion.get("reached_target") is not False:
+                continue
+            parameters = call.get("parameters")
+            parameters = parameters if isinstance(parameters, dict) else {}
+            pose_signature = _motion_pose_policy_signature(parameters)
+            end = motion.get("end")
+            end = end if isinstance(end, dict) else {}
+            actual_xyz = end.get("xyz")
+            if not pose_signature or not _finite_planner_xyz(actual_xyz):
+                continue
+            current = {
+                "actual_xyz": [float(value) for value in actual_xyz[:3]],
+                "position_error_m": motion.get("position_error_m"),
+                "steps_executed": motion.get("steps_executed"),
+                "stop_reason": motion.get("stop_reason"),
+            }
+            newer = failures.get(pose_signature)
+            if isinstance(newer, dict) and _planner_xyz_distance(
+                newer.get("actual_xyz"), current["actual_xyz"]
+            ) <= 0.005:
+                return {
+                    "schema_version": "openeta.no_progress_tool_loop.v1",
+                    "trigger_type": "repeated_failed_motion_attractor",
+                    "tool": "move_to",
+                    "semantic_signature": pose_signature,
+                    "attempt_count": 2,
+                    "actual_endpoint_a_xyz": newer.get("actual_xyz"),
+                    "actual_endpoint_b_xyz": current["actual_xyz"],
+                    "position_error_m": newer.get("position_error_m"),
+                    "steps_executed": newer.get("steps_executed"),
+                    "stop_reason": newer.get("stop_reason"),
+                    "interpretation": (
+                        "Multiple executions of the same endpoint/orientation policy "
+                        "converged to the same wrong EEF pose within 5 mm. More retries "
+                        "are unlikely to add evidence. Change candidate, orientation "
+                        "policy, controller-compatible waypoint, or recovery strategy."
+                    ),
+                    "host_policy": "reflection_warning_only; no tool is forced or blocked",
+                }
+            failures[pose_signature] = current
+    return None
+
+
+def _motion_pose_policy_signature(parameters: JsonDict) -> str:
+    target = parameters.get("target_pose")
+    if not isinstance(target, dict):
+        return ""
+    xyz = target.get("xyz", target.get("translation_xyz"))
+    if not _finite_planner_xyz(xyz):
+        return ""
+    orientation = {
+        key: target.get(key)
+        for key in (
+            "rotation_matrix",
+            "quat_xyzw",
+            "quaternion",
+            "rotvec",
+            "roll",
+            "pitch",
+            "yaw",
+        )
+        if target.get(key) is not None
+    }
+    preserve_current = parameters.get("preserve_current_orientation")
+    if preserve_current is None:
+        preserve_current = not orientation
+    canonical = {
+        "target_xyz": [float(value) for value in xyz[:3]],
+        "orientation_policy": (
+            "preserve_current" if preserve_current is True else "explicit_orientation"
+        ),
+        "orientation": orientation,
+    }
+    return sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def _finite_planner_xyz(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) >= 3
+        and all(
+            isinstance(item, (int, float))
+            and not isinstance(item, bool)
+            and math.isfinite(float(item))
+            for item in value[:3]
+        )
+    )
+
+
+def _planner_xyz_distance(left: object, right: object) -> float:
+    if not _finite_planner_xyz(left) or not _finite_planner_xyz(right):
+        return float("inf")
+    return math.sqrt(sum((float(left[i]) - float(right[i])) ** 2 for i in range(3)))
+
+
+def _without_packet_provenance(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _without_packet_provenance(item)
+            for key, item in value.items()
+            if str(key)
+            not in {
+                "source_packet_id",
+                "source_packet_ids",
+                "source_observation",
+                "source_observations",
+            }
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_packet_provenance(item) for item in value]
+    return value
 
 
 def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
@@ -2391,7 +3837,10 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "effect": details.get("effect"),
             "facts_produced": details.get("facts_produced", []),
             "recovery_options": details.get("recovery_options", []),
-            "outputs": _bounded_decision_value(outputs),
+            "outputs": _project_latest_tool_outputs(
+                str(call.get("name") or ""),
+                outputs,
+            ),
             "grasp_selection_advice": _bounded_decision_value(
                 grasp_selection_advice
             )
@@ -2431,7 +3880,11 @@ def _recent_high_fidelity_transitions(
     if observation_turns <= 0:
         return []
     relevant = [
-        event
+        (
+            _project_recovery_feedback_event(event)
+            if event.get("type") == "recovery_feedback"
+            else event
+        )
         for event in events
         if isinstance(event, dict)
         and event.get("type") in {"observation", "recovery_feedback"}
@@ -2449,6 +3902,324 @@ def _recent_high_fidelity_transitions(
     # example, a preflight rejection). Keep a small bounded fallback rather than
     # silently hiding the only actionable evidence.
     return relevant[-observation_turns:]
+
+
+def _project_recovery_feedback_event(event: JsonDict) -> JsonDict:
+    """Keep actionable failure evidence without replaying a full ToolResult."""
+
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    command = payload.get("command")
+    command = command if isinstance(command, dict) else {}
+    effect = _latest_action_effect(
+        [{"type": "action", "payload": {"command": command}}]
+    )
+    request = command.get("request")
+    request = request if isinstance(request, dict) else {}
+    return {
+        "type": "recovery_feedback",
+        "timestamp_s": event.get("timestamp_s"),
+        "payload": {
+            "source": payload.get("source"),
+            "keys": payload.get("keys"),
+            "request": {
+                "name": request.get("name"),
+                "parameters": _bounded_decision_value(
+                    request.get("parameters", {}),
+                    depth=4,
+                    max_items=16,
+                    max_string_chars=500,
+                ),
+            },
+            "outcome": effect,
+            "durable_trace": "full recovery event remains in the session event log",
+        },
+    }
+
+
+def _project_latest_tool_outputs(tool: str, outputs: JsonDict) -> object:
+    """Bound the latest result by semantic fields, not arbitrary raw size."""
+
+    if tool == "prepare_attachment_probe":
+        return _bounded_decision_value(
+            {
+                key: outputs[key]
+                for key in (
+                    "schema_version",
+                    "status",
+                    "probe_id",
+                    "compiled_grasp_id",
+                    "scene_epoch",
+                    "robot_motion_epoch",
+                    "motion_type",
+                    "path_sha256",
+                    "ik_preview_requests",
+                    "execution_handoff",
+                )
+                if key in outputs
+            },
+            depth=7,
+            max_items=16,
+            max_string_chars=1_500,
+        )
+    projected = _bounded_decision_value(outputs)
+    serialized = json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) <= 8_000:
+        return projected
+    priority = {
+        "schema_version",
+        "result_id",
+        "candidate_count",
+        "best_grasp_candidate",
+        "selected_grasp_source",
+        "grasp_selection_advice",
+        "grasp_selection_bundle",
+        "compiled_grasp_id",
+        "contact_pose",
+        "hover_pose",
+        "precontact_pose",
+        "execution_guidance",
+        "ik_receipt",
+        "receipt",
+        "reachability",
+        "classification",
+        "reason_code",
+        "message",
+        "suggestions",
+        "motion_summary",
+        "collision_coverage",
+        "pose_feedback",
+        "attachment_proxy_receipt",
+        "gripper_actuation_receipt",
+        "observation_summary",
+        "response_path",
+        "raw_output_ref",
+        "complete_outputs_artifact",
+    }
+    selected = {
+        key: value
+        for key, value in outputs.items()
+        if key in priority
+    }
+    compact = _bounded_decision_value(
+        selected,
+        depth=4,
+        max_items=12,
+        max_string_chars=750,
+    )
+    if isinstance(compact, dict):
+        compact["projection"] = {
+            "tool": tool,
+            "full_output_omitted": True,
+            "available_via": "artifact path or durable tool receipt",
+        }
+    return compact
+
+
+def _project_world_evidence(evidence: JsonDict) -> JsonDict:
+    """Project large evidence banks while preserving their durable runtime form."""
+
+    projected = dict(evidence)
+    ik_entry = projected.get("ik_preview_receipts")
+    if isinstance(ik_entry, dict):
+        value = ik_entry.get("value")
+        if isinstance(value, dict):
+            receipts = value.get("receipts")
+            receipts = receipts if isinstance(receipts, list) else []
+            compact_receipts = [
+                _compact_ik_receipt(receipt)
+                for receipt in receipts
+                if isinstance(receipt, dict)
+            ]
+            projected["ik_preview_receipts"] = {
+                **ik_entry,
+                "value": {
+                    "schema_version": "openeta.ik_preview_receipt_projection.v1",
+                    "receipt_count": len(receipts),
+                    "latest": _bounded_decision_value(
+                        value.get("latest", {}),
+                        depth=5,
+                        max_items=24,
+                        max_string_chars=1_000,
+                    ),
+                    "index": compact_receipts,
+                    "query": (
+                        "Use the exact receipt_id in ik_preview_check/move_to. Full "
+                        "receipts remain in durable memory and rollout artifacts."
+                    ),
+                },
+            }
+    candidate_entry = projected.get("grasp_candidates")
+    if isinstance(candidate_entry, dict):
+        value = candidate_entry.get("value")
+        if isinstance(value, dict):
+            candidates = value.get("grasp_candidates")
+            candidates = candidates if isinstance(candidates, list) else []
+            advice = value.get("grasp_selection_advice")
+            advice = advice if isinstance(advice, dict) else {}
+            recommended_id = str(advice.get("recommended_candidate_id") or "")
+            visible_ids = {
+                recommended_id,
+                *(
+                    str(item)
+                    for item in advice.get("alternatives", [])
+                    if isinstance(item, str)
+                ),
+            }
+            visible = [
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and str(candidate.get("id") or "") in visible_ids
+            ]
+            if not visible:
+                visible = [item for item in candidates[:3] if isinstance(item, dict)]
+            projected["grasp_candidates"] = {
+                **candidate_entry,
+                "value": {
+                    key: value.get(key)
+                    for key in (
+                        "type",
+                        "result_id",
+                        "candidate_count",
+                        "scene_epoch",
+                        "source_tool",
+                        "source_backend",
+                        "source_rgb",
+                        "source_depth",
+                        "target_mask",
+                        "raw_output_ref",
+                        "complete_outputs_artifact",
+                        "query_hint",
+                    )
+                    if value.get(key) is not None
+                },
+            }
+            projected_value = projected["grasp_candidates"]["value"]
+            projected_value["visible_candidates"] = _bounded_decision_value(
+                visible[:4], depth=5, max_items=16, max_string_chars=750
+            )
+            projected_value["grasp_selection_advice"] = {
+                key: advice.get(key)
+                for key in (
+                    "status",
+                    "decision",
+                    "recommended_candidate_id",
+                    "alternatives",
+                    "confidence",
+                    "reasons",
+                    "uncertainties",
+                    "bundle_id",
+                )
+                if advice.get(key) is not None
+            }
+            projected_value["projection"] = {
+                "visible_candidate_count": len(visible[:4]),
+                "full_candidate_count": len(candidates),
+                "full_bank_available_via": (
+                    value.get("complete_outputs_artifact")
+                    or value.get("raw_output_ref")
+                ),
+            }
+    return projected
+
+
+def _compact_ik_receipt(receipt: JsonDict) -> JsonDict:
+    target = receipt.get("target_pose")
+    target = target if isinstance(target, dict) else {}
+    return {
+        key: receipt.get(key)
+        for key in (
+            "receipt_id",
+            "classification",
+            "reason_code",
+            "orientation_policy",
+            "pose_policy_signature",
+            "object_scene_epoch",
+            "robot_motion_epoch",
+        )
+        if receipt.get(key) is not None
+    } | {
+        "target": {
+            key: target.get(key)
+            for key in ("xyz", "waypoint_role", "compiled_grasp_id")
+            if target.get(key) is not None
+        }
+    }
+
+
+def _project_perception_failure(
+    failure: JsonDict,
+    *,
+    retained_grasp: object,
+) -> JsonDict:
+    projected = dict(failure)
+    frame_id = str(
+        failure.get("frame_id")
+        or failure.get("camera_frame_id")
+        or ""
+    )
+    if "wrist" not in frame_id.lower():
+        return projected
+    retained = retained_grasp if isinstance(retained_grasp, dict) else {}
+    projected["workflow_impact"] = {
+        "classification": "optional_wrist_refinement_unavailable",
+        "coarse_grasp_invalidated": False,
+        "retained_compiled_grasp_id": retained.get("compiled_grasp_id"),
+        "guidance": (
+            "A wrist-view segmentation miss does not invalidate current-epoch "
+            "scene-view grasp evidence. Inspect the fresh dual view and either use "
+            "the retained grasp as a reference, make an Agent-owned bounded residual "
+            "adjustment, or pursue same-view point grounding only when refinement is "
+            "actually needed. Do not restart the entire scene pipeline by default."
+        ),
+        "host_policy": "advisory_only",
+    }
+    return projected
+
+
+def _project_transition_ledger(value: object) -> list[JsonDict]:
+    """Drop repeated zero-reward receipts from the model projection only."""
+
+    rows = (
+        [dict(row) for row in value if isinstance(row, dict)]
+        if isinstance(value, list)
+        else []
+    )
+    zero_environment_indices = [
+        index
+        for index, row in enumerate(rows)
+        if row.get("tool") == "environment_receipt"
+        and float(row.get("reward") or 0.0) <= 0
+        and row.get("terminated") is not True
+        and row.get("truncated") is not True
+    ]
+    latest_zero_environment_index = (
+        zero_environment_indices[-1] if zero_environment_indices else None
+    )
+    projected: list[JsonDict] = []
+    for index, row in enumerate(rows):
+        if row.get("tool") != "environment_receipt":
+            projected.append(row)
+            continue
+        if (
+            float(row.get("reward") or 0.0) > 0
+            or row.get("terminated") is True
+            or row.get("truncated") is True
+        ):
+            projected.append(row)
+            continue
+        if index == latest_zero_environment_index:
+            projected.append(
+                {
+                    **row,
+                    "projection_note": (
+                        f"latest of {len(zero_environment_indices)} repeated zero-reward "
+                        "environment receipts; full ledger remains durable"
+                    ),
+                }
+            )
+    return projected
 
 
 def _bounded_artifact_index(
@@ -2581,7 +4352,11 @@ def _matched_task_playbook(
         return None
 
 
-def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
+def _current_camera_artifacts(
+    observation: EnvObservation,
+    *,
+    memory: AgentMemory,
+) -> list[JsonDict]:
     """Return current RGB/depth artifacts in stable planner preference order."""
 
     if observation.metadata.get("fresh_observation_required") is True:
@@ -2611,6 +4386,9 @@ def _current_camera_artifacts(observation: EnvObservation) -> list[JsonDict]:
             value = raw.get(artifact_field)
             if value is not None:
                 artifact[artifact_field] = value
+        packet_reference = memory.observation_packet_reference_for_path(path)
+        if packet_reference.get("source_packet_id"):
+            artifact["packet_id"] = packet_reference["source_packet_id"]
         artifact["_sort_key"] = (
             _CAMERA_ROLE_PREFERENCE.get(role, preferred_frames.get(frame_id, 3)),
             0 if kind == "rgb" else 1,
@@ -3045,6 +4823,10 @@ def _tool_context_summary(context: JsonDict) -> JsonDict:
     recent_events = memory.get("recent_events", [])
     if not isinstance(recent_events, list):
         recent_events = []
+    projection_audit = context.get("tool_contract_projection_audit")
+    projection_audit = (
+        projection_audit if isinstance(projection_audit, dict) else {}
+    )
     return {
         "schema_version": "openeta.planner_context_summary.v1",
         "task": context.get("task"),
@@ -3069,6 +4851,15 @@ def _tool_context_summary(context: JsonDict) -> JsonDict:
         },
         "tool_count": len(context.get("tool_references", []) or []),
         "registered_handler_count": len(context.get("registered_tool_handlers", []) or []),
+        "tool_contract_projection": {
+            "authoritative_projection": projection_audit.get(
+                "authoritative_projection"
+            ),
+            "tool_count": projection_audit.get("tool_count", 0),
+            "matching_tool_count": projection_audit.get("matching_tool_count", 0),
+            "mismatch_count": projection_audit.get("mismatch_count", 0),
+            "mismatches": list(projection_audit.get("mismatches") or []),
+        },
         "skill_count": len(context.get("skill_references", []) or []),
         "selected_skills": [
             {
@@ -3124,16 +4915,37 @@ def _observation_summary(
     return summary
 
 
-def _tool_reference(tool: ToolSpec) -> JsonDict:
-    return {
-        "name": tool.name,
-        "category": tool.category,
-        "description": tool.description,
-        "parameters": tool.parameters,
-        "safe_by_default": tool.safe_by_default,
-        "effect": tool.effect.value,
-        "batchable": tool.allows_batched_observation,
-        "requires_observation_after_call": tool.requires_observation_after_call,
+def _contract_driven_tool_references(
+    tools: list[ToolSpec],
+) -> tuple[list[JsonDict], JsonDict]:
+    """Build Agent-visible schemas from ToolContract, not duplicate ToolSpec prose."""
+
+    from agent.tools.contracts import (
+        audit_agent_tool_projection,
+        build_default_tool_contract_catalog,
+        project_agent_tool_contract,
+    )
+
+    catalog = build_default_tool_contract_catalog(tools)
+    references: list[JsonDict] = []
+    audit_rows: list[JsonDict] = []
+    for spec in tools:
+        contract = catalog.get(spec.name)
+        references.append(project_agent_tool_contract(contract))
+        audit_rows.append(audit_agent_tool_projection(contract, spec))
+    mismatches = [row for row in audit_rows if row.get("matches") is not True]
+    return references, {
+        "schema_version": "openeta.agent_tool_contract_projection_catalog_audit.v1",
+        "authoritative_projection": "tool_contract",
+        "runtime_authority": "tool_registry_handler_binding",
+        "tool_count": len(audit_rows),
+        "matching_tool_count": len(audit_rows) - len(mismatches),
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "interpretation": (
+            "Parameter-name mismatches are migration evidence; they do not change "
+            "legacy Planner validation or runtime gate authority."
+        ),
     }
 
 
@@ -3160,6 +4972,8 @@ def _selected_skill_reference(skill: JsonDict) -> JsonDict:
             "description",
             "task_patterns",
             "allowed_tools",
+            "available_allowed_tools",
+            "unavailable_allowed_tools",
             "source",
             "version",
             "editable",
@@ -3171,6 +4985,32 @@ def _selected_skill_reference(skill: JsonDict) -> JsonDict:
             "content_truncated",
         }
     }
+
+
+def _annotate_skill_tool_availability(
+    skill: JsonDict,
+    *,
+    executable_tool_names: set[str],
+) -> None:
+    """Project one static skill contract onto this runtime's bound handlers.
+
+    ``allowed_tools`` remains the durable authoring declaration.  It must not be
+    interpreted as proof that an optional MCP/backend is configured for the
+    current process, so the Agent receives the executable intersection and the
+    unavailable remainder explicitly on every turn.
+    """
+
+    declared = [
+        str(name)
+        for name in skill.get("allowed_tools", [])
+        if isinstance(name, str) and name
+    ]
+    skill["available_allowed_tools"] = [
+        name for name in declared if name in executable_tool_names
+    ]
+    skill["unavailable_allowed_tools"] = [
+        name for name in declared if name not in executable_tool_names
+    ]
 
 
 def _selected_skill_guidance(
@@ -3259,6 +5099,11 @@ def _skill_usage_guidance(selected_skill_guidance: list[JsonDict], memory: Agent
         "inspected_skills": sorted(inspected),
         "inspection_recommended": inspection_recommended,
         "inspection_required": inspection_required,
+        "tool_availability_rule": (
+            "A skill's allowed_tools is authoring guidance. Call only its "
+            "available_allowed_tools that also appear in current tool_references; "
+            "report an unavailable capability instead of retrying an unbound tool."
+        ),
         "rule": (
             "If inspection_required is non-empty, call tool_call::skill_call for "
             "the first listed skill before world-mutating control because the "
@@ -3364,6 +5209,15 @@ def _skill_query_text(
 
 
 def _effective_task_text(observation: EnvObservation, memory: AgentMemory) -> str:
+    # Benchmark environments often expose their native manipulation instruction
+    # in every observation.  Most runs intentionally use that as the objective,
+    # but focused evaluation/probe episodes may provide a narrower user request
+    # (for example, execute one motion and stop).  Keep that authority explicit
+    # in run metadata instead of guessing from the wording of either task.
+    if memory.metadata.get("task_authority") == "session_user_request":
+        requested = memory.current_user_request or memory.task
+        if isinstance(requested, str) and requested.strip():
+            return requested.strip()
     active = memory.active_environment_task()
     task = active.get("task") if isinstance(active, dict) else None
     return task.strip() if isinstance(task, str) and task.strip() else observation.task

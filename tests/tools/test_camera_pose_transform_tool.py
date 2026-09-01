@@ -34,6 +34,8 @@ def test_camera_pose_to_world_tool_spec_is_read_only_geometry() -> None:
     assert spec.allows_batched_observation is True
     assert "camera_to_world" in spec.parameters
     assert "camera_extrinsics" in spec.parameters
+    assert "placement_result_id" in spec.parameters
+    assert "candidate_id" in spec.parameters
 
 
 def test_camera_pose_to_world_transforms_standard_opencv_camera_to_world_payload() -> None:
@@ -77,6 +79,75 @@ def test_camera_pose_to_world_transforms_standard_opencv_camera_to_world_payload
         "height": 0.03,
         "gripper_tip_position_xyz": [0.8, 2.2, 3.3],
     }
+
+
+def test_camera_pose_to_world_preserves_resolved_placement_identity() -> None:
+    tools = bind_dummy_tool_handlers(build_default_tool_registry())
+    result = tools.call(
+        "camera_pose_to_world",
+        {
+            "placement_result_id": "anyplace-result:abc",
+            "candidate_id": "placement_003",
+            "camera_pose": _candidate(id="place_grasp_003"),
+            "camera_to_world": {
+                "camera_frame": "opencv",
+                "camera_to_world": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ],
+            },
+        },
+    )
+
+    assert result.success is True
+    assert result.details["outputs"]["placement_result_id"] == "anyplace-result:abc"
+    assert result.details["outputs"]["candidate_id"] == "placement_003"
+    assert result.details["outputs"]["placement_reference"] == {
+        "schema_version": "openeta.placement_world_reference.v1",
+        "semantic_role": "low_release_geometric_reference",
+        "pose_field": "world_pose",
+        "execution_authorized": False,
+        "placement_result_id": "anyplace-result:abc",
+        "candidate_id": "placement_003",
+        "required_before_motion": [
+            "agent_authored_waypoint",
+            "exact_pose_policy_ik_preview",
+            "trajectory_and_attached_object_collision_check",
+            "fresh_attachment_and_receptacle_visual_evidence",
+        ],
+        "agent_release_options": [
+            {
+                "mode": "controlled_descent",
+                "when": (
+                    "fresh geometry supports a collision-clear vertical corridor "
+                    "to an Agent-chosen release endpoint"
+                ),
+            },
+            {
+                "mode": "gravity_assisted_open_container_drop",
+                "when": (
+                    "the receptacle is visibly open, the held non-fragile object "
+                    "fits the opening with useful margin, and rim-safe descent is "
+                    "less certain than a bounded stationary drop"
+                ),
+                "constraints": (
+                    "Agent chooses and exact-IK-checks a centred raised endpoint, "
+                    "requires successful collision-checked arrival plus fresh "
+                    "attachment/receptacle evidence, stops lateral motion before "
+                    "release, and keeps drop height visually bounded"
+                ),
+            },
+        ],
+        "unreachable_reference_recovery": (
+            "Use IK residuals and fresh visual evidence to propose a distinct safe "
+            "world-frame waypoint; do not treat this low reference as a direct "
+            "one-step carry target."
+        ),
+    }
+    assert "not motion authorization" in result.content
+    assert "bounded stationary raised drop" in result.content
 
 
 def test_camera_pose_to_world_transforms_sim_pos_mat_row_major_opengl_payload() -> None:

@@ -1,0 +1,26 @@
+{
+  "schema_version": "openeta.tool_contract_authority_baseline.v1",
+  "session_id": "grasp-quality-baseline-20260825",
+  "manifest": "/tmp/openeta-toolcontract-grasp-quality-20260825/sessions/grasp-quality-baseline-20260825/rollout/manifest.json",
+  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+  "policy": {
+    "executable_gate_authority": "legacy_runtime",
+    "gate_repair_envelope_authority": [],
+    "request_validation_authority": [],
+    "schema_version": "openeta.tool_contract_runtime_policy.v1"
+  },
+  "planner_pipeline_alignment": {
+    "catalog_match": true,
+    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+    "pipeline_policy": {
+      "executable_gate_authority": "legacy_runtime",
+      "gate_repair_envelope_authority": [],
+      "request_validation_authority": [],
+      "schema_version": "openeta.tool_contract_runtime_policy.v1"
+    },
+    "pipeline_present": true,
+    "policy_match": true
+  },
+  "model_call_count": 0,
+  "tool_call_count": 0
+}

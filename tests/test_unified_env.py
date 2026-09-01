@@ -1,9 +1,74 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 
 from adapter.protocol import EnvObservation
 from sim.unified_env import UnifiedEnv
+
+
+def test_libero_mesh_bounds_use_vertices_instead_of_bounding_sphere_cube() -> None:
+    vertices = np.asarray(
+        [
+            [-0.02, -0.03, -0.10],
+            [-0.02, -0.03, 0.10],
+            [-0.02, 0.03, -0.10],
+            [-0.02, 0.03, 0.10],
+            [0.02, -0.03, -0.10],
+            [0.02, -0.03, 0.10],
+            [0.02, 0.03, -0.10],
+            [0.02, 0.03, 0.10],
+        ],
+        dtype=np.float64,
+    )
+    model = SimpleNamespace(
+        body_parentid=np.asarray([0, 0]),
+        geom_bodyid=np.asarray([1]),
+        geom_contype=np.asarray([1]),
+        geom_conaffinity=np.asarray([1]),
+        geom_type=np.asarray([7]),
+        geom_size=np.asarray([[0.10, 0.10, 0.10]]),
+        geom_dataid=np.asarray([0]),
+        geom_rbound=np.asarray([0.11]),
+        mesh_vertadr=np.asarray([0]),
+        mesh_vertnum=np.asarray([len(vertices)]),
+        mesh_vert=vertices,
+    )
+    data = SimpleNamespace(
+        geom_xpos=np.asarray([[1.0, 2.0, 3.0]]),
+        geom_xmat=np.asarray([np.eye(3)]),
+    )
+
+    bounds = UnifiedEnv._mujoco_object_world_bounds(model, data, 1)
+
+    np.testing.assert_allclose(bounds["aabb_min"], [0.98, 1.97, 2.90])
+    np.testing.assert_allclose(bounds["aabb_max"], [1.02, 2.03, 3.10])
+    np.testing.assert_allclose(bounds["dims"], [0.04, 0.06, 0.20])
+
+
+def test_libero_object_bounds_prefer_collision_geoms_over_large_visual_mesh() -> None:
+    model = SimpleNamespace(
+        body_parentid=np.asarray([0, 0]),
+        geom_bodyid=np.asarray([1, 1]),
+        geom_contype=np.asarray([0, 1]),
+        geom_conaffinity=np.asarray([0, 1]),
+        geom_type=np.asarray([2, 6]),
+        geom_size=np.asarray([[1.0, 0.0, 0.0], [0.02, 0.03, 0.10]]),
+        geom_dataid=np.asarray([-1, -1]),
+        geom_rbound=np.asarray([1.0, 0.11]),
+        mesh_vertadr=np.asarray([], dtype=int),
+        mesh_vertnum=np.asarray([], dtype=int),
+        mesh_vert=np.empty((0, 3)),
+    )
+    data = SimpleNamespace(
+        geom_xpos=np.asarray([[0.0, 0.0, 0.0], [0.0, 0.0, 0.1]]),
+        geom_xmat=np.asarray([np.eye(3), np.eye(3)]),
+    )
+
+    bounds = UnifiedEnv._mujoco_object_world_bounds(model, data, 1)
+
+    np.testing.assert_allclose(bounds["dims"], [0.04, 0.06, 0.20])
 
 
 def _normalise_libero_proprio(quaternion_xyzw: list[float]) -> np.ndarray:

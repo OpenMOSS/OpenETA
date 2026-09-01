@@ -12,12 +12,15 @@ from agent.runtime.episode import (
     OpenEtaEpisodeRunner,
     ToolFeedbackEpisodeEnvironment,
 )
+from agent.runtime.checkers import CheckerSubagentConfig
 from agent.runtime.memory import AgentMemory
 from agent.runtime.parallel import classify_episode_result
+from agent.runtime.pipeline import ActionPipeline
 from agent.runtime.planner import PlannerDecision, ToolCallingPlanner
 from agent.runtime.runtime import OpenEtaAgentRuntime
 from agent.runtime.skills import build_default_skill_registry
 from agent.tools.registry import (
+    ToolResult,
     build_default_tool_registry,
     make_tool_result,
 )
@@ -106,7 +109,7 @@ def _observation_response(*, reward: float = 0.0, terminated: bool = False) -> d
 def test_untrusted_tool_cannot_publish_environment_receipt() -> None:
     tools = build_default_tool_registry()
     tools.bind_handler(
-        "scene_detector",
+        "get_memory",
         lambda context: make_tool_result(
             context,
             success=True,
@@ -120,7 +123,7 @@ def test_untrusted_tool_cannot_publish_environment_receipt() -> None:
         ),
     )
 
-    result = tools.call("scene_detector", {})
+    result = tools.call("get_memory", {})
 
     assert "environment_receipt" not in result.details
     assert "host_provenance" not in result.details
@@ -436,6 +439,21 @@ def test_runner_auto_observes_after_world_mutation_without_snapshot(
         ),
         tool_names=("observe", "move_to"),
     )
+    tools.bind_handler(
+        "ik_preview_check",
+        lambda _context: ToolResult(
+            True,
+            content="IK preview reachable.",
+            details={
+                "operational_success": True,
+                "semantic_outcome": "ik_feasible",
+                "outputs": {
+                    "ik_preview_receipt": {"classification": "feasible"}
+                },
+            },
+        ),
+        replace=True,
+    )
 
     class OneMovePlanner(ToolCallingPlanner):
         def plan(self, observation, *, memory, tools, skills):
@@ -464,6 +482,11 @@ def test_runner_auto_observes_after_world_mutation_without_snapshot(
             )
         ),
         tools=tools,
+        pipeline=ActionPipeline(
+            checker_subagents=CheckerSubagentConfig(
+                pre_safety_checks={"move_to": "ik_preview_check"}
+            )
+        ),
         rollout_enabled=False,
     )
     runner = OpenEtaEpisodeRunner(

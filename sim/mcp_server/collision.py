@@ -40,6 +40,121 @@ RECEPTACLE_CATEGORIES = frozenset({"basket", "bin", "bowl", "tray", "container"}
 _RECEPTACLE_CATEGORIES = RECEPTACLE_CATEGORIES
 
 
+def resolve_contact_authorization(
+    authorization: object,
+    objects: list[dict],
+    *,
+    max_anchor_distance_m: float = 0.15,
+    ambiguity_margin_m: float = 0.01,
+) -> tuple[dict | None, dict]:
+    """Bind host grasp evidence to exactly one current simulator object.
+
+    The Agent never supplies this authorization directly.  The harness resolves
+    a current compiled grasp to an opaque host block; the simulator adapter then
+    associates its 3-D target anchor with current privileged geometry.  This is
+    an evidence-to-safety adapter, not task-stage tracking.
+    """
+
+    if not isinstance(authorization, dict):
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_missing",
+            "message": "No host-resolved contact authorization was supplied.",
+        }
+    if authorization.get("schema_version") != "openeta.contact_authorization.v1":
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_schema_mismatch",
+            "message": "Contact authorization has an unsupported schema version.",
+        }
+    if authorization.get("waypoint_role") != "grasp_contact":
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_role_mismatch",
+            "message": "Only a host-resolved grasp_contact waypoint may authorize contact.",
+        }
+    anchor = authorization.get("target_anchor_world_xyz")
+    if not _finite_xyz(anchor):
+        return None, {
+            "ok": False,
+            "code": "contact_authorization_anchor_invalid",
+            "message": "Contact authorization has no finite world-frame target anchor.",
+        }
+    anchor_xyz = [float(value) for value in anchor[:3]]
+    candidates: list[tuple[float, float, dict]] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        category = str(obj.get("category") or "").strip().lower()
+        if category in _RECEPTACLE_CATEGORIES:
+            continue
+        position = obj.get("position")
+        if not _finite_xyz(position):
+            continue
+        bounds = _object_aabb(obj)
+        surface_distance = (
+            _point_aabb_distance(anchor_xyz, *bounds)
+            if bounds is not None
+            else math.inf
+        )
+        center_distance = math.dist(
+            anchor_xyz,
+            [float(value) for value in position[:3]],
+        )
+        candidates.append((surface_distance, center_distance, obj))
+    if not candidates:
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_unavailable",
+            "message": "No non-receptacle scene object geometry can be associated with the grasp anchor.",
+        }
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2].get("name") or "")))
+    best_surface, best_center, best = candidates[0]
+    # Conservative rbound-derived AABBs may overlap, so surface distance alone
+    # cannot disambiguate.  Among equally containing/nearby bounds, require a
+    # clear centre-distance winner rather than silently choosing one object.
+    near_surface = [item for item in candidates if item[0] <= best_surface + 1e-9]
+    near_surface.sort(key=lambda item: item[1])
+    if len(near_surface) > 1 and (
+        near_surface[1][1] - near_surface[0][1] < ambiguity_margin_m
+    ):
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_ambiguous",
+            "message": (
+                "The compiled grasp anchor is equally close to multiple scene objects; "
+                "refresh target geometry instead of guessing which contact is intended."
+            ),
+            "candidate_objects": [
+                str(item[2].get("name") or "") for item in near_surface[:4]
+            ],
+        }
+    if best_surface > max_anchor_distance_m and best_center > max_anchor_distance_m:
+        return None, {
+            "ok": False,
+            "code": "contact_target_geometry_not_found",
+            "message": (
+                "No scene object is within the contact-authorization association "
+                f"radius ({max_anchor_distance_m:.3f} m) of the compiled grasp anchor."
+            ),
+            "nearest_object": str(best.get("name") or ""),
+            "nearest_surface_distance_m": best_surface,
+            "nearest_center_distance_m": best_center,
+        }
+    return best, {
+        "ok": True,
+        "schema_version": "openeta.contact_authorization_resolution.v1",
+        "compiled_grasp_id": authorization.get("compiled_grasp_id"),
+        "target_evidence_id": authorization.get("target_evidence_id"),
+        "object_scene_epoch": authorization.get("object_scene_epoch"),
+        "target_object_name": str(best.get("name") or ""),
+        "target_object_category": str(best.get("category") or ""),
+        "anchor_world_xyz": anchor_xyz,
+        "surface_distance_m": best_surface,
+        "center_distance_m": best_center,
+    }
+
+
 def _detect_curobo() -> bool:
     """Check whether cuRobo and CUDA are usable.  Result is cached."""
     global _curobo_available
@@ -121,6 +236,7 @@ def check_attached_object_collision(
     objects: list[dict],
     predicted_eef_xyz: list[float],
     *,
+    baseline_eef_xyz: list[float] | None = None,
     margin_m: float = 0.005,
 ) -> tuple[bool, dict]:
     """Check a conservative attached-object AABB against scene obstacles.
@@ -136,10 +252,24 @@ def check_attached_object_collision(
     if not _finite_xyz(relative) or not _finite_xyz(dims) or not _finite_xyz(predicted_eef_xyz):
         return False, {"available": False, "reason": "attached_object_geometry_incomplete"}
     held_dims = [max(0.01, float(value)) for value in dims]
-    held_center = [float(predicted_eef_xyz[i]) + float(relative[i]) for i in range(3)]
-    held_min = [held_center[i] - held_dims[i] / 2.0 - margin_m for i in range(3)]
-    held_max = [held_center[i] + held_dims[i] / 2.0 + margin_m for i in range(3)]
+    held_center, held_min, held_max = _attached_aabb(
+        predicted_eef_xyz,
+        relative,
+        held_dims,
+        margin_m=margin_m,
+    )
+    baseline_bounds = (
+        _attached_aabb(
+            baseline_eef_xyz,
+            relative,
+            held_dims,
+            margin_m=margin_m,
+        )
+        if _finite_xyz(baseline_eef_xyz)
+        else None
+    )
     attached_name = str(attachment.get("object_name") or "")
+    egress_obstacles: list[str] = []
 
     for obstacle in objects:
         if not isinstance(obstacle, dict) or str(obstacle.get("name") or "") == attached_name:
@@ -151,15 +281,65 @@ def check_attached_object_collision(
         if not _aabb_intersects(held_min, held_max, obstacle_min, obstacle_max):
             continue
         category = str(obstacle.get("category") or "").strip().lower()
-        if category in _RECEPTACLE_CATEGORIES and _inside_receptacle_corridor(
-            held_center,
-            held_dims,
+        receptacle_corridor = None
+        if category in _RECEPTACLE_CATEGORIES:
+            receptacle_corridor = _receptacle_corridor_assessment(
+                held_center,
+                held_dims,
+                obstacle_min,
+                obstacle_max,
+                margin_m=margin_m,
+            )
+            if receptacle_corridor["inside_xy"]:
+                continue
+        obstacle_name = str(obstacle.get("name") or category or "scene obstacle")
+        predicted_overlap = _aabb_overlap_volume(
+            held_min,
+            held_max,
             obstacle_min,
             obstacle_max,
-            margin_m=margin_m,
-        ):
+        )
+        baseline_overlap = 0.0
+        if baseline_bounds is not None:
+            _, baseline_min, baseline_max = baseline_bounds
+            baseline_overlap = _aabb_overlap_volume(
+                baseline_min,
+                baseline_max,
+                obstacle_min,
+                obstacle_max,
+            )
+        # A conservative proxy can already overlap a neighbouring object at the
+        # instant attachment is confirmed.  Rejecting every still-overlapping
+        # intermediate pose creates a deadlock in which even a vertical escape
+        # cannot begin.  Permit only strict monotonic egress from that existing
+        # overlap; new or unchanged/worsened overlap remains a hard stop.
+        if baseline_overlap > 0.0 and predicted_overlap < baseline_overlap - 1e-12:
+            egress_obstacles.append(obstacle_name)
             continue
-        obstacle_name = str(obstacle.get("name") or category or "scene obstacle")
+        obstacle_description = obstacle_name
+        recovery_message = (
+            f"Attached object {attached_name or '<unknown>'} would collide with "
+            f"{obstacle_description}. Raise or reroute the carry waypoint."
+        )
+        if receptacle_corridor is not None:
+            if receptacle_corridor["feasible_xy"]:
+                correction = receptacle_corridor["required_center_delta_xy_m"]
+                recovery_message = (
+                    f"Attached object {attached_name or '<unknown>'} is outside "
+                    f"{obstacle_description}'s interior placement corridor. At a "
+                    "collision-clear height, shift the rigidly held object by at "
+                    "least world-frame XY delta "
+                    f"[{correction[0]:+.4f}, {correction[1]:+.4f}] m, add a small "
+                    "planner margin, then recheck the descent. The EEF may use the "
+                    "same XY delta while the grasp remains rigid."
+                )
+            else:
+                recovery_message = (
+                    f"Attached object {attached_name or '<unknown>'} cannot fit "
+                    f"inside {obstacle_description}'s conservative XY corridor at "
+                    "its current orientation. Raise it and change orientation or "
+                    "choose a different safe release strategy."
+                )
         return True, {
             "available": True,
             "world_collision": True,
@@ -171,14 +351,46 @@ def check_attached_object_collision(
             "obstacle": obstacle_name,
             "predicted_attached_center_xyz": held_center,
             "predicted_eef_xyz": [float(value) for value in predicted_eef_xyz],
-            "message": (
-                f"Attached object {attached_name or '<unknown>'} would collide with "
-                f"{obstacle_name}. Raise or reroute the carry waypoint; for a "
-                "receptacle, centre the object inside its placement corridor before "
-                "descending."
+            "overlap_volume_m3": predicted_overlap,
+            "baseline_overlap_volume_m3": baseline_overlap,
+            "new_or_worsened": True,
+            **(
+                {"receptacle_corridor": receptacle_corridor}
+                if receptacle_corridor is not None
+                else {}
             ),
+            "message": recovery_message,
         }
-    return False, {"available": True, "attached_object_world_collision": False}
+    return False, {
+        "available": True,
+        "attached_object_world_collision": False,
+        **(
+            {
+                "egress_from_initial_overlap": True,
+                "egress_obstacles": egress_obstacles,
+                "message": (
+                    "The attached-object proxy still overlaps conservative scene "
+                    "geometry, but this controller increment strictly reduces that "
+                    "pre-existing overlap. Monotonic egress is allowed."
+                ),
+            }
+            if egress_obstacles
+            else {}
+        ),
+    }
+
+
+def _attached_aabb(
+    eef_xyz: list[float] | tuple[float, ...],
+    relative_xyz: list[float] | tuple[float, ...],
+    held_dims: list[float],
+    *,
+    margin_m: float,
+) -> tuple[list[float], list[float], list[float]]:
+    centre = [float(eef_xyz[i]) + float(relative_xyz[i]) for i in range(3)]
+    lower = [centre[i] - held_dims[i] / 2.0 - margin_m for i in range(3)]
+    upper = [centre[i] + held_dims[i] / 2.0 + margin_m for i in range(3)]
+    return centre, lower, upper
 
 
 def _finite_xyz(value: object) -> bool:
@@ -220,20 +432,71 @@ def _aabb_intersects(
     return all(left_min[i] <= right_max[i] and left_max[i] >= right_min[i] for i in range(3))
 
 
-def _inside_receptacle_corridor(
+def _point_aabb_distance(
+    point: list[float],
+    lower: list[float],
+    upper: list[float],
+) -> float:
+    offsets = [
+        lower[index] - point[index]
+        if point[index] < lower[index]
+        else point[index] - upper[index]
+        if point[index] > upper[index]
+        else 0.0
+        for index in range(3)
+    ]
+    return math.sqrt(sum(value * value for value in offsets))
+
+
+def _aabb_overlap_volume(
+    left_min: list[float],
+    left_max: list[float],
+    right_min: list[float],
+    right_max: list[float],
+) -> float:
+    overlaps = [
+        max(0.0, min(left_max[i], right_max[i]) - max(left_min[i], right_min[i]))
+        for i in range(3)
+    ]
+    return overlaps[0] * overlaps[1] * overlaps[2]
+
+
+def _receptacle_corridor_assessment(
     held_center: list[float],
     held_dims: list[float],
     receptacle_min: list[float],
     receptacle_max: list[float],
     *,
     margin_m: float,
-) -> bool:
+) -> dict:
+    centre_min_xy: list[float] = []
+    centre_max_xy: list[float] = []
+    required_delta_xy: list[float] = []
+    feasible = True
     for axis in (0, 1):
         lower = receptacle_min[axis] + held_dims[axis] / 2.0 + margin_m
         upper = receptacle_max[axis] - held_dims[axis] / 2.0 - margin_m
-        if lower > upper or not lower <= held_center[axis] <= upper:
-            return False
-    return True
+        centre_min_xy.append(lower)
+        centre_max_xy.append(upper)
+        if lower > upper:
+            feasible = False
+            required_delta_xy.append(0.0)
+        elif held_center[axis] < lower:
+            required_delta_xy.append(lower - held_center[axis])
+        elif held_center[axis] > upper:
+            required_delta_xy.append(upper - held_center[axis])
+        else:
+            required_delta_xy.append(0.0)
+    inside = feasible and all(abs(value) <= 1e-12 for value in required_delta_xy)
+    return {
+        "schema_version": "openeta.receptacle_corridor_check.v1",
+        "inside_xy": inside,
+        "feasible_xy": feasible,
+        "held_center_xy_m": [float(held_center[0]), float(held_center[1])],
+        "valid_center_xy_min_m": centre_min_xy,
+        "valid_center_xy_max_m": centre_max_xy,
+        "required_center_delta_xy_m": required_delta_xy,
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -423,7 +686,6 @@ class CollisionChecker:
         ))
         if obj_hash == self._last_objects_hash:
             return False
-        self._last_objects_hash = obj_hash
 
         rw = self._robot_world
         if rw is None:
@@ -432,18 +694,19 @@ class CollisionChecker:
         wc = _build_world_config(objects)
         if wc is None:
             # No usable geometry → drop every obstacle rather than keep the
-            # previous world.  Recording the count as 0 is what actually makes
-            # the next query safe: cuRobo leaves the primitive collision type
-            # registered after an empty update, so its own state cannot tell us
-            # the world is empty.
-            self._obstacle_count = 0
+            # previous world.  Commit the bookkeeping only after cuRobo accepts
+            # the update; otherwise an identical retry would be skipped while
+            # the old world remained resident.
             from curobo.geom.types import WorldConfig as CuroboWorldConfig
 
             rw.update_world(CuroboWorldConfig())
+            self._obstacle_count = 0
+            self._last_objects_hash = obj_hash
             return True
 
         rw.update_world(wc)
         self._obstacle_count = len(getattr(wc, "cuboid", None) or [])
+        self._last_objects_hash = obj_hash
         return True
 
     # ── penetration query ──────────────────────────────────────────
@@ -456,13 +719,15 @@ class CollisionChecker:
         has no obstacles, cuRobo would error on the query, so we short-circuit
         to 0.0 (nothing to collide with).
         """
-        import torch  # noqa: F401 — parity with caller's device/dtype
-
         # Nothing loaded → nothing to penetrate.  Keyed on the count we recorded
         # rather than ``collision_types["primitive"]``, which stays True after an
-        # empty update and would send an empty world through the ESDF query.
+        # empty update and would send an empty world through the ESDF query.  Keep
+        # this dependency-free so an empty-world check does not require torch or
+        # a fully provisioned cuRobo runtime.
         if self._obstacle_count == 0:
             return 0.0
+
+        import torch  # noqa: F401 — parity with caller's device/dtype
 
         from curobo.geom.sdf.world import CollisionQueryBuffer
 
@@ -505,8 +770,8 @@ class CollisionChecker:
         coverage = {
             "check_mode": "post_step_configuration",
             "trajectory_checked": False,
-            "self_checked": bool(self._available),
-            "world_checked": bool(self._available and objects),
+            "self_checked": False,
+            "world_checked": False,
             "world_object_count": len(objects),
         }
         if not self._available:
@@ -525,12 +790,13 @@ class CollisionChecker:
                 reason = "cuRobo not installed or CUDA unavailable"
             return False, {"available": False, "reason": reason,
                            "unsupported_robot": False,
-                           **coverage,
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
-                           "world_collision": False, "self_collision": False}
+                           "world_collision": False, "self_collision": False,
+                           **coverage}
 
         if not joint_positions:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": "No joint positions in observation",
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
@@ -548,7 +814,8 @@ class CollisionChecker:
                                "max_self_penetration": 0.0,
                                "world_collision": False, "self_collision": False}
         elif len(joint_positions) < self._arm_dof:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": f"Need >= {self._arm_dof} joint positions, got {len(joint_positions)}",
                            "max_world_penetration": 0.0, "max_self_penetration": 0.0,
                            "world_collision": False, "self_collision": False}
@@ -559,7 +826,11 @@ class CollisionChecker:
             rw = self._ensure_robot_world()
         except Exception as exc:
             _logger.error("Failed to create cuRobo RobotWorld: %s", exc)
-            return False, {"available": False, "reason": f"RobotWorld init failed: {exc}"}
+            return False, {
+                **coverage,
+                "available": False,
+                "reason": f"RobotWorld init failed: {exc}",
+            }
 
         # Update world obstacles.  Called unconditionally — an empty list must
         # reach _update_world_if_changed so it can clear stale geometry.
@@ -575,7 +846,8 @@ class CollisionChecker:
         if q_arm is None:
             q_arm = joint_positions[:self._arm_dof]
         if len(q_arm) < self._arm_dof:
-            return False, {"available": True,
+            return False, {**coverage,
+                           "available": True,
                            "reason": f"Expected {self._arm_dof} arm joints, got {len(q_arm)}"}
 
         import torch
@@ -621,6 +893,7 @@ class CollisionChecker:
         # unconditional ``detected: False`` reads as a safety guarantee that
         # was never actually evaluated.
         info = {
+            **coverage,
             "available": True,
             "world_checked": self._obstacle_count > 0 and not world_update_error,
             "self_checked": True,
@@ -629,7 +902,6 @@ class CollisionChecker:
             "max_self_penetration": d_self_val,
             "world_collision": world_coll,
             "self_collision": self_coll,
-            **coverage,
         }
         if world_update_error:
             info["world_update_error"] = world_update_error

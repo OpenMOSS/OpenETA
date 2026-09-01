@@ -1,0 +1,56 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-10-pass1-main-group1-remediation-20260830",
+  "description": "Fixed-seed pass@1 quality-gate rerun after binding attachment probes to tentative non-empty close evidence and invalidating released contact geometry. Group 2 remains blocked unless this run reaches the frozen 2/10 baseline.",
+  "episode_manifest": "manifests/libero_object_10_pass1_seed0.json",
+  "variants": [
+    {
+      "variant_id": "main_group1_attachment_evidence_remediation",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "1fad13f",
+        "remediation": [
+          "attachment probe requires tentative non-empty close evidence",
+          "measured-open gripper overrides visual attachment PASS",
+          "finite continuous aperture takes precedence over a coarse open boolean",
+          "gripper reopen invalidates contact geometry but preserves identity lineage"
+        ]
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260830
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 10,
+    "metric": "pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "baseline_run_id": "libero-object-10-static-reduction-20260828-r02",
+    "baseline_objective_success": "2/10",
+    "failed_predecessor_gate": "valid aggregate of libero-object-10-main-group1-20260829-r01 and libero-object-6-main-group1-serial-gripper-contract-20260830-r05 was 1/10",
+    "quality_gate": "objective success must be at least 2/10 before Group 2",
+    "feature_group": "python exec fixes, human VLM operator console, and evidence-lifecycle remediation"
+  }
+}

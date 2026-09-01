@@ -3,6 +3,10 @@
 This document defines the first structured agent-command schema and execution
 pipeline for the lightweight OpenETA agent runtime.
 
+Cross-tool result projection, packet-validity semantics, no-progress reflection,
+and the durable rollout auditor are specified in
+[`tool-contract-audit-and-grasp-recovery.md`](tool-contract-audit-and-grasp-recovery.md).
+
 ## Goal
 
 The agent should not send an unstructured dict to the simulator. The primary
@@ -137,75 +141,33 @@ contains a world-mutating tool such as `lower_body_control_policy` is compiled
 as `blocked`.
 
 The `EnvAction`/`AgentCommand` JSON above is the internal, post-parse logging
-shape. The *wire format* a live model backend emits is XML, described next.
-
-## Planner Decision Wire Format (XML)
-
-The main embodied planner backend prompts the model to return exactly one XML
-`<decision>` element with child elements `kind`, `name`, `reasoning`, and
-`parameters`. `<parameters>` holds tool arguments as named child elements (use
-an empty `<parameters/>` when there are none). Lists are repeated `<item>`
-children; nested objects are named child elements. Scalars may carry
-`type="integer"`, `type="number"`, `type="boolean"`, or `type="null"`; a bare
-numeric leaf is inferred as int-then-float, and reserved text leaves (`code`,
-`prompt`, `message`, `reasoning`, `source_packet_id`, `name`, `tool`, ...) stay
-strings. Multi-line code lives in a `<![CDATA[ ... ]]>` block so newlines
-survive verbatim without escaping.
-
-`ToolCallingPlanner` parses this into the same `{kind, name, parameters,
-reasoning, code?, calls?}` dict the validators and recorder consume, so the
-`EnvAction`/rollout shapes above are unchanged.
-
-sam3 points-mode example:
-
-```xml
-<decision>
-  <kind>tool_call</kind>
-  <name>sam3</name>
-  <reasoning>Text mode returned nothing; point at the target.</reasoning>
-  <parameters>
-    <source_packet_id>env-abc-observation-0001</source_packet_id>
-    <mode>points</mode>
-    <points>
-      <item><x type="integer">272</x><y type="integer">152</y><label type="integer">1</label></item>
-    </points>
-  </parameters>
-</decision>
-```
-
-python_exec with multi-line code:
+shape. The live main-planner wire format is XML:
 
 ```xml
 <decision>
   <kind>tool_call</kind>
   <name>python_exec</name>
-  <reasoning>Inspect the create_env response file.</reasoning>
+  <reasoning>Inspect the persisted result.</reasoning>
   <parameters>
     <code><![CDATA[
-import os, json
-result = {"exists": os.path.exists("/tmp/x.json")}
+result = artifacts.read_json('/workspace/result.json')
 ]]></code>
   </parameters>
 </decision>
 ```
 
-Restricted `tool_batch`:
+The response must contain exactly one `<decision>` with `kind`, `name`,
+`reasoning`, and `parameters`. Tool arguments are named children of
+`parameters`; an argument-free call uses `<parameters/>`. Repeated `<item>`
+children encode lists and named children encode nested objects. Scalars may use
+`type="integer"`, `type="number"`, `type="boolean"`, or `type="null"`.
+Multi-line code and quoted text should use CDATA. `tool_batch` uses repeated
+`<call>` children under `<calls>`, each with its own `name` and `parameters`.
 
-```xml
-<decision>
-  <kind>tool_call</kind>
-  <name>tool_batch</name>
-  <reasoning>Two independent read-only calls.</reasoning>
-  <calls>
-    <call><name>sam3</name><parameters>
-      <source_packet_id>env-abc-observation-0001</source_packet_id><prompt>cube</prompt>
-    </parameters></call>
-    <call><name>hand_pose_database</name><parameters>
-      <object>cube</object><task>pick</task>
-    </parameters></call>
-  </calls>
-</decision>
-```
+`ToolCallingPlanner` converts XML to the existing internal decision dict before
+schema validation and rollout recording. Host-generated failure payloads and
+deterministic test fixtures may still provide an already-parsed dict. Isolated
+sub-agents retain their explicit JSON contracts and JSON response mode.
 
 ## Pipeline Stages
 
@@ -217,13 +179,13 @@ The default runtime stages are:
    selected markdown skill guidance, and execution rules.
 3. `PlannerBackend`: returns one decision payload from a placeholder,
    deterministic fixture, callable SDK/API wrapper, future commercial API, or
-   local LLM/VLM backend. Live model backends emit the decision as an XML
-   `<decision>` element (see below); fixture/SDK backends may return the parsed
-   dict directly.
-4. Backend validation: `ToolCallingPlanner` parses the XML `<decision>` into the
+   local LLM/VLM backend. The live main planner emits XML; fixture backends may
+   return the parsed dict directly.
+4. Backend validation: `ToolCallingPlanner` parses XML into the internal
    `{kind, name, parameters, reasoning}` shape, validates command kind,
    tool/skill names, parameters, and bounded code-policy requirements, then
-   retries with validation feedback before falling back to `response::ask_human`.
+   retries with validation feedback before falling back to
+   `response::ask_human`.
 5. `ActionPipeline`: normalizes that decision into a `CommandRequest`.
 6. Compilation: registered tool handlers may execute immediately and return a
    structured `ToolResult`; missing handlers leave calls as `pending`.
@@ -344,6 +306,14 @@ the SAM3 request's explicit `evidence_role`. `target_object` is the compatible
 default; `placement_region` retains a receptacle independently. Starting or
 resolving one role never deletes the other role's mask or source-observation
 bundle, and a selection cannot change the role declared by its pending result.
+The first target selection creates `openeta.target_identity_anchor.v1`. A later
+target selection from different detection evidence must copy its exact
+`identity_anchor_id` and declare either `identity_relation=same_instance` or
+`identity_relation=replace_misidentified_anchor`. The former is an auditable
+cross-view identity confirmation; the latter requires a concrete correction
+reason, creates a new anchor, and cannot override an exact reference-verifier
+match. Missing or mismatched identity parameters leave the SAM3 selection
+pending and return executable correction guidance.
 Targeted AnyGrasp and GraspGenX may consume only a mask whose semantic selection
 has been explicitly recorded; an unresolved result is rejected as unverified
 provenance, with the result id and reason returned to the Agent. After selection,
@@ -465,6 +435,22 @@ world-frame poses before control, including OpenCV grasp pose to OpenGL sim
 camera conversions when required. Simulator control tools such as `move_to`
 should receive world-frame targets only.
 
+For AnyPlace, the planner-facing conversion contract is reference-only:
+`camera_pose_to_world({placement_result_id, candidate_id})`. A successful
+AnyPlace call stores the five candidates and their immutable source observation
+lineage in host memory. The pipeline resolves the chosen `place_grasp_pose` and
+the original packet's camera extrinsics atomically. Mixed calls that combine
+these IDs with model-authored pose or calibration fields are rejected. The
+generic explicit-pose conversion form remains available for non-AnyPlace
+geometry operations.
+
+The resolved AnyPlace transform also returns
+`openeta.placement_world_reference.v1`. It explicitly marks the world pose as a
+low release geometric reference with `execution_authorized=false`; no fixed
+carry script or fabricated clearance is implied. The Agent proposes waypoints
+from current visual/EEF evidence, while exact-pose IK and controller-side
+trajectory/attached-object collision checks remain the execution boundary.
+
 Any test, smoke run, or integration runner that calls `create_env` against a
 remote simulator MCP server must call `close_env` in a `finally` block once the
 test is done. Remote env handles consume simulator resources on another
@@ -479,8 +465,11 @@ transport boundary, but they must not be copied into planner context,
 multi-turn memory, or downstream tool parameters because they can dominate the
 context window.
 
-Agent-side simulator facades and MCP-backed tool handlers should run
-`materialize_mcp_images` before exposing an observation to the planner. The
+Agent-side simulator facades and MCP-backed tool handlers should run the
+host-internal `materialize_mcp_images()` utility before exposing an observation
+to the planner. It is deliberately not registered as a main-Agent tool because
+the Agent never receives raw MCP base64 payloads and therefore has no valid
+reason to call it. The
 materializer writes each image to `outputs/mcp_images/runs/<bundle_id>/` by
 default, removes the inline base64 payload, and inserts lightweight references
 such as:
@@ -519,7 +508,10 @@ This is the current placeholder for future safety/failure sub-agents:
   `{"move_to": "ik_preview_check"}` runs `ik_preview_check` before the
   world-mutating move. If the checker is pending, failed, or returns
   `success=false`, the target tool call is skipped and the command is marked
-  `blocked`. CLI pre-check gates are deliberately opt-in through the
+  `blocked`. The rejection always carries `openeta.gate_repair.v1`, including
+  the complete checker call/result, violated invariant, rejected parameters,
+  current evidence ids, and executable recovery calls. Empty skipped-call
+  feedback is a contract failure. CLI pre-check gates are deliberately opt-in through the
   `OPENETA_PRE_SAFETY_CHECKS` JSON object because its default safety handlers
   are deterministic placeholders, not real safety backends.
 - `post_failure_checks`: lists target tools that should trigger a post-tool
@@ -530,6 +522,11 @@ This is the current placeholder for future safety/failure sub-agents:
 - A blocked or failed pipeline also writes a bounded `recovery_feedback` memory
   event. Its compact command status, request, tool result, and checker metadata
   are visible in the next planner turn for explicit replan/recovery.
+
+Batch-level rejections use the same repair schema per blocked member. No gate
+uses a manipulation-stage label as evidence: later motion is evaluated from the
+actual EEF state reported by the previous receipt, not from the previous
+requested target.
 
 The hook output deliberately stays in `metadata.checker_results` and existing
 `PipelineCall` records. A final standalone `SafetyVerdict` / `FailureVerdict`
@@ -647,8 +644,7 @@ from agent.runtime.planner import ToolCallingPlanner
 
 
 def call_model(request: PlannerBackendRequest) -> str:
-    # Replace this with provider SDK/API code. Return an XML <decision> string
-    # (live wire format) or the parsed decision dict.
+    # Replace this with provider SDK/API code. Return main-planner XML or a dict.
     return (
         "<decision><kind>response</kind><name>talk</name>"
         "<reasoning>demo</reasoning>"

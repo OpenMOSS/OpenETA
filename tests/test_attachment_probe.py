@@ -29,7 +29,8 @@ def _observation() -> EnvObservation:
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
                 ],
-            }
+            },
+            gripper_state={"open": False, "openness": 0.4},
         ),
         metadata={
             "image_artifacts": [
@@ -78,6 +79,15 @@ def _memory_context(*, freshness: str = "current_object_scene") -> dict:
     return {
         "memory": {
             "scene_epoch": 4,
+            "gripper_command_state": {
+                "position": 0,
+                "state": "closed",
+                "attachment_proxy_receipt": {
+                    "schema_version": "openeta.attachment_proxy_receipt.v1",
+                    "status": "tentative",
+                    "reason": "non_empty_close_with_tentative_safety_proxy",
+                },
+            },
             "provenance_evidence_graph": {
                 "schema_version": "openeta.provenance_evidence_graph.v1",
                 "nodes": [
@@ -112,12 +122,29 @@ def test_prepare_linear_probe_freezes_exact_five_centimetres() -> None:
     )
 
     assert result["motion_type"] == "linear"
-    assert result["frozen_action"]["name"] == "move_to"
-    endpoint = result["frozen_action"]["parameters"]["target_pose"]["xyz"]
+    assert result["frozen_motion"]["name"] == "move_to"
+    endpoint = result["frozen_motion"]["parameters"]["target_pose"]["xyz"]
     assert endpoint == pytest.approx([0.15, 0.2, 0.3])
     assert result["distance_m"] == ARTICULATED_ATTACHMENT_PROBE_DISTANCE_M
     assert result["pre_probe_image_paths"] == ["before-agent.png", "before-wrist.png"]
-    assert result["frozen_action"]["parameters"]["enable_collision_check"] is True
+    assert result["frozen_motion"]["parameters"]["enable_collision_check"] is True
+    assert result["ik_preview_requests"] == [
+        {
+            "tool": "ik_preview_check",
+            "parameters": {
+                "probe_id": result["probe_id"],
+                "waypoint_index": 0,
+                "position_tolerance_m": 0.01,
+                "orientation_tolerance_rad": 0.10,
+                "check_endpoint_collision": True,
+            },
+        }
+    ]
+    assert result["execution_handoff"]["tool"] == "move_to"
+    assert set(result["execution_handoff"]["parameters"]) == {
+        "ik_receipt_id",
+        "enable_collision_check",
+    }
     assert result["probe_id"] == f"probe:{result['path_sha256']}"
 
 
@@ -133,7 +160,7 @@ def test_prepare_linear_probe_preserves_quaternion_orientation() -> None:
         observation=observation,
     )
 
-    assert result["frozen_action"]["parameters"]["target_pose"]["quat_xyzw"] == [
+    assert result["frozen_motion"]["parameters"]["target_pose"]["quat_xyzw"] == [
         0.0,
         0.0,
         0.0,
@@ -163,11 +190,20 @@ def test_prepare_arc_probe_preserves_waypoints_and_bounds() -> None:
         }
     )
 
-    assert result["frozen_action"]["name"] == "follow_eef_trajectory"
-    trajectory = result["frozen_action"]["parameters"]["trajectory"]
+    assert result["frozen_motion"]["name"] == "follow_eef_trajectory"
+    trajectory = result["frozen_motion"]["parameters"]["trajectory"]
     assert len(trajectory) == 4
     assert trajectory[-1]["xyz"] == pytest.approx([0.15, 0.2, 0.3])
     assert all(pose["probe_path_sha256"] == result["path_sha256"] for pose in trajectory)
+    assert [request["parameters"]["probe_id"] for request in result["ik_preview_requests"]] == [
+        result["probe_id"]
+    ] * 4
+    assert [
+        request["parameters"]["waypoint_index"]
+        for request in result["ik_preview_requests"]
+    ] == [0, 1, 2, 3]
+    assert result["execution_handoff"]["tool"] == "follow_eef_trajectory"
+    assert len(result["execution_handoff"]["parameters"]["ik_receipt_ids"]) == 4
 
 
 @pytest.mark.parametrize(
@@ -221,7 +257,7 @@ def test_prepare_probe_accepts_same_lineage_after_gripper_close_epoch_change() -
     )
 
     assert result["compiled_grasp_id"] == "compiled-1"
-    assert result["frozen_action"]["name"] == "move_to"
+    assert result["frozen_motion"]["name"] == "move_to"
 
 
 def test_prepare_probe_requires_scene_and_wrist_rgb() -> None:
@@ -234,6 +270,52 @@ def test_prepare_probe_requires_scene_and_wrist_rgb() -> None:
             {"motion_type": "linear", "direction_world_xyz": [1, 0, 0]},
             observation=observation,
         )
+
+
+def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
+    parameters = {
+        "compiled_grasp_id": "compiled-1",
+        "motion_type": "linear",
+        "direction_world_xyz": [0, 0, 1],
+    }
+    opened = _observation()
+    opened.robot.gripper_state = {"open": True, "openness": 0.998}
+    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
+        prepare_attachment_probe(
+            parameters,
+            observation=opened,
+            supervision_context=_memory_context(),
+        )
+
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"]["attachment_proxy_receipt"] = {
+        "status": "not_armed",
+        "reason": "empty_close_or_no_measurable_contact",
+    }
+    with pytest.raises(AttachmentProbeError, match="tentative non-empty close receipt"):
+        prepare_attachment_probe(
+            parameters,
+            observation=_observation(),
+            supervision_context=memory,
+        )
+
+
+def test_prepare_probe_prefers_continuous_aperture_over_coarse_open_flag() -> None:
+    observation = _observation()
+    observation.robot.gripper_state = {"open": True, "openness": 0.5258}
+
+    result = prepare_attachment_probe(
+        {
+            "compiled_grasp_id": "compiled-1",
+            "motion_type": "linear",
+            "direction_world_xyz": [0, 0, 1],
+        },
+        observation=observation,
+        supervision_context=_memory_context(),
+    )
+
+    assert result["gripper_evidence"]["measured_open"] is True
+    assert result["gripper_evidence"]["measured_openness"] == pytest.approx(0.5258)
 
 
 def _assessment_context(probe: dict, observation: EnvObservation) -> ToolExecutionContext:
@@ -299,4 +381,19 @@ def test_assessment_rejects_wrong_probe_id_and_missing_after_view() -> None:
         assess_attachment_probe(
             context,
             backend=StaticPlannerBackend({"verdict": "PASS", "reason": "unused"}),
+        )
+
+
+def test_assessment_rejects_visual_pass_when_gripper_is_measured_open() -> None:
+    probe = _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]})
+    after = _observation()
+    after.robot.gripper_state = {"open": True, "openness": 0.998}
+    context = _assessment_context(probe, after)
+
+    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
+        assess_attachment_probe(
+            context,
+            backend=StaticPlannerBackend(
+                {"verdict": "PASS", "reason": "must not override proprioception"}
+            ),
         )

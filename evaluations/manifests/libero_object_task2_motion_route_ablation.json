@@ -1,0 +1,92 @@
+{
+  "episodes": [
+    {
+      "episode_id": "route-clear-direct",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Motion-only route ablation; ignore the simulator's manipulation objective. Move the EEF from its actual initial pose to world xyz [0.10, -0.32, 0.12] while preserving the current orientation. Use exactly one ik_preview_check for this endpoint with position_tolerance_m=0.01, orientation_tolerance_rad=0.30, preserve_current_orientation=true, and check_endpoint_collision=true. If the preview authorizes execution, call move_to with that ik_receipt_id, tolerance=0.01, ori_tolerance=0.30, and enable_collision_check=true. Do not call perception, grasp, gripper, or follow_eef_trajectory tools. Inspect the execution receipt, report reached or not reached, and stop; official LIBERO task success is not expected.",
+      "seed": 2,
+      "max_turns": 8,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 8,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "ablation_pair_id": "clear",
+        "route_method": "direct",
+        "target_xyz": [0.10, -0.32, 0.12],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30
+      }
+    },
+    {
+      "episode_id": "route-clear-agent-waypoints",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Motion-only route ablation; ignore the simulator's manipulation objective. Move the EEF from its actual initial pose to world xyz [0.10, -0.32, 0.12] while preserving the current orientation. Choose the number and coordinates of 2-5 generic route endpoints from current visual and geometric evidence; do not assign phase or stage labels. Preview every endpoint separately with ik_preview_check using position_tolerance_m=0.01, orientation_tolerance_rad=0.30, preserve_current_orientation=true, and check_endpoint_collision=true. If all endpoints authorize execution, call follow_eef_trajectory exactly once with the ordered ik_receipt_ids, tolerance=0.01, ori_tolerance=0.30, num_steps_per_waypoint=100, and enable_collision_check=true. Do not call move_to, perception, grasp, or gripper tools. Inspect the trajectory receipt, report reached or not reached, and stop; official LIBERO task success is not expected.",
+      "seed": 2,
+      "max_turns": 12,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 12,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "ablation_pair_id": "clear",
+        "route_method": "agent_waypoints",
+        "target_xyz": [0.10, -0.32, 0.12],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30,
+        "waypoint_count_min": 2,
+        "waypoint_count_max": 5
+      }
+    },
+    {
+      "episode_id": "route-long-transit-direct",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Motion-only route ablation; ignore the simulator's manipulation objective. Move the EEF from its actual initial pose to world xyz [0.08, 0.45, 0.15] while preserving the current orientation. Use exactly one ik_preview_check for this endpoint with position_tolerance_m=0.01, orientation_tolerance_rad=0.30, preserve_current_orientation=true, and check_endpoint_collision=true. If the preview authorizes execution, call move_to with that ik_receipt_id, tolerance=0.01, ori_tolerance=0.30, and enable_collision_check=true. Do not call perception, grasp, gripper, or follow_eef_trajectory tools. Inspect the execution receipt, report reached or not reached, and stop; official LIBERO task success is not expected.",
+      "seed": 2,
+      "max_turns": 8,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 8,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "ablation_pair_id": "long_transit",
+        "route_method": "direct",
+        "target_xyz": [0.08, 0.45, 0.15],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30
+      }
+    },
+    {
+      "episode_id": "route-long-transit-agent-waypoints",
+      "env_id": "openeta/libero_libero_object_task2-v0",
+      "task": "Motion-only route ablation; ignore the simulator's manipulation objective. Move the EEF from its actual initial pose to world xyz [0.08, 0.45, 0.15] while preserving the current orientation. Choose the number and coordinates of 2-5 generic route endpoints from current visual and geometric evidence; do not assign phase or stage labels. Preview every endpoint separately with ik_preview_check using position_tolerance_m=0.01, orientation_tolerance_rad=0.30, preserve_current_orientation=true, and check_endpoint_collision=true. If all endpoints authorize execution, call follow_eef_trajectory exactly once with the ordered ik_receipt_ids, tolerance=0.01, ori_tolerance=0.30, num_steps_per_waypoint=100, and enable_collision_check=true. Do not call move_to, perception, grasp, or gripper tools. Inspect the trajectory receipt, report reached or not reached, and stop; official LIBERO task success is not expected.",
+      "seed": 2,
+      "max_turns": 12,
+      "recovery_turns_per_branch": 2,
+      "max_recovery_turns": 2,
+      "max_tool_calls": 12,
+      "timeout_s": 1800,
+      "max_total_tokens": 1500000,
+      "metadata": {
+        "task_authority": "session_user_request",
+        "require_official_reward": false,
+        "ablation_pair_id": "long_transit",
+        "route_method": "agent_waypoints",
+        "target_xyz": [0.08, 0.45, 0.15],
+        "position_tolerance_m": 0.01,
+        "orientation_tolerance_rad": 0.30,
+        "waypoint_count_min": 2,
+        "waypoint_count_max": 5
+      }
+    }
+  ]
+}

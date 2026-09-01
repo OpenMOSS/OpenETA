@@ -1,0 +1,39 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "motion-c-libero-three-task-canary-v1",
+  "description": "Three-task LIBERO object canary for condition-C sequential motion execution in complete pick-and-place episodes.",
+  "episode_manifest": "manifests/libero_object_three_task_motion_c.json",
+  "variants": [
+    {
+      "variant_id": "motion_c_bounded_visual_vdm",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260824
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 180,
+    "supervision_profile": "standard",
+    "max_attempts": 1
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "split": "motion-c-cross-target-geometry-canary",
+    "motion_condition": "C",
+    "purpose": "test whether condition-C route execution improves complete pick-and-place reliability across three visible target geometries"
+  }
+}

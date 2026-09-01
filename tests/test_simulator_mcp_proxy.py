@@ -12,6 +12,10 @@ import pytest
 
 import agent.tools.sim_mcp as sim_mcp
 from adapter.protocol import EnvAction, JsonDict
+from agent.tools.contracts import (
+    build_default_tool_contract_catalog,
+    check_tool_result_conformance,
+)
 from agent.tools.sim_mcp import (
     DEFAULT_SIMULATOR_MCP_TOOL_NAMES,
     SimulatorMcpEpisodeConfig,
@@ -599,9 +603,11 @@ def test_observe_proxy_exposes_metric_intrinsics_for_depth_png(tmp_path: Path) -
     observation = result.details["state_delta"]["observation"]
     assert observation["robot"]["end_effector_pose"]["xyz"] == [0.1, 0.2, 0.3]
     assert observation["robot"]["gripper_state"]["open"] is False
-    assert observation["objects"][0]["category"] == "alphabet_soup"
+    assert observation["objects"] == []
+    assert payload.get("objects") == []
+    assert "alphabet_soup_1" not in response_path.read_text(encoding="utf-8")
     response_summary = result.details["outputs"]["response"]["observation_summary"]
-    assert response_summary["objects"][0]["position"] == [-0.1, -0.2, 0.47]
+    assert response_summary["objects"] == []
 
 
 def test_control_tool_proxy_forwards_to_simulator_mcp_and_materializes_images(
@@ -676,6 +682,45 @@ def test_control_tool_proxy_forwards_to_simulator_mcp_and_materializes_images(
     assert PNG_1X1 not in json.dumps(result.details)
 
 
+def test_control_tool_proxy_promotes_explicit_remote_terminal_error(
+    tmp_path: Path,
+) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": False,
+            "error": (
+                "Worker-local controller goal failed: ValueError: "
+                "executing action in terminated episode"
+            ),
+            "motion_summary": {
+                "reached_target": False,
+                "steps_executed": 0,
+                "stop_reason": "controller_error",
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-terminated",
+            handle="env-terminated",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.1, 0.2, 0.3]}})
+
+    assert result.success is False
+    assert result.details["environment_receipt"]["terminated"] is True
+    assert result.details["state_delta"]["terminated"] is True
+    assert result.details["diagnostics"][0]["code"] == "remote_episode_terminated"
+    assert result.details["diagnostics"][0]["failure_class"] == "environment_terminal"
+    assert "already terminated" in result.content
+    assert "do not retry" in result.content
+
+
 def test_move_to_proxy_converts_world_rotation_matrix_to_mcp_euler_angles() -> None:
     transport = FakeSimulatorMcpTransport({"success": True})
     tools = bind_simulator_mcp_tool_handlers(
@@ -707,6 +752,54 @@ def test_move_to_proxy_converts_world_rotation_matrix_to_mcp_euler_angles() -> N
     assert arguments["yaw"] == 0.0
 
 
+def test_move_to_wrist_viewpoint_returns_fresh_evidence_handoff() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "start": {"xyz": [0.0, 0.0, 0.3]},
+            "end": {"xyz": [0.1, 0.2, 0.3]},
+            "target": {"x": 0.1, "y": 0.2, "z": 0.3},
+            "steps_executed": 4,
+            "reached_target": True,
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call(
+        "move_to",
+        {
+            "target_pose": {
+                "frame": "world",
+                "xyz": [0.1, 0.2, 0.3],
+                "waypoint_role": "wrist_observation_viewpoint",
+                "viewpoint_candidate_id": "wrist_view_00",
+                "camera_frame_id": "robot0_eye_in_hand",
+                "compiled_grasp_id": "compiled-1",
+            }
+        },
+    )
+
+    handoff = result.details["outputs"]["post_motion_evidence_handoff"]
+    assert handoff["status"] == "fresh_wrist_packet_expected"
+    assert handoff["materially_new_view"] is True
+    assert handoff["camera_frame_id"] == "robot0_eye_in_hand"
+    assert handoff["compiled_grasp_id"] == "compiled-1"
+    assert handoff["viewpoint_candidate_id"] == "wrist_view_00"
+    assert handoff["fresh_packet_source"] == (
+        "current_observation.source_packet_id in the next planner context"
+    )
+    assert handoff == result.details["outputs"]["response"][
+        "post_motion_evidence_handoff"
+    ]
+    assert "did not refine the older contact pose" in result.content
+    assert "current_observation.source_packet_id" in result.content
+
+
 def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
     transport = FakeSimulatorMcpTransport(
         {
@@ -732,6 +825,12 @@ def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
             "collision": {"checked": False},
             "path": {"checked": False},
             "suggestions": ["relax_target_orientation"],
+            # A legacy backend is not authoritative for execution permission.
+            "motion_execution_ref": {
+                "tool": "move_to",
+                "ik_receipt_id": "backend-invented",
+            },
+            "execution_authorization": {"authorized_for_move_to": True},
         }
     )
     tools = bind_simulator_mcp_tool_handlers(
@@ -753,6 +852,7 @@ def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
     )
 
     assert result.success is False
+    assert result.details["operational_success"] is True
     assert transport.calls[0]["name"] == "ik_preview_check"
     assert transport.calls[0]["arguments"]["handle"] == "env-1"
     reachability = result.details["outputs"]["reachability"]
@@ -761,8 +861,224 @@ def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
     assert reachability["reason_code"] == "full_pose_infeasible"
     assert reachability["position_only_reachable"] is True
     assert reachability["best_candidate"]["max_axis_position_error_m"] == 0.011
+    receipt = result.details["outputs"]["ik_preview_receipt"]
+    assert receipt["classification"] == "repairable"
+    assert receipt["orientation_policy"] == "explicit_orientation"
+    assert len(receipt["target_signature"]) == 24
+    assert len(receipt["pose_policy_signature"]) == 24
     assert result.details["diagnostics"][0]["candidate_rejection"] is True
+    assert result.details["semantic_outcome"] == "ik_repairable"
+    authorization = result.details["outputs"]["execution_authorization"]
+    assert authorization["authorized_for_move_to"] is False
+    assert authorization["same_pose_retry_disposition"] == (
+        "requires_materially_changed_pose_or_policy"
+    )
+    assert "motion_execution_ref" not in result.details["outputs"]
+    assert "motion_execution_ref" not in result.details["outputs"]["response"]
+    assert "motion_execution_ref" not in result.details["outputs"]["mcp"]
+    assert "Do not pass ik_receipt_id=" in result.content
+    assert "Execution reference:" not in result.content
+    assert any(
+        option["action"] == "preview_modified_pose"
+        for option in result.details["recovery_options"]
+    )
     assert "cannot be satisfied" in result.content
+    contract = build_default_tool_contract_catalog(tools.list()).get("ik_preview_check")
+    assert check_tool_result_conformance(contract, result.details) == ()
+
+
+def test_ik_preview_proxy_preserves_execution_seed_quality_for_agent() -> None:
+    quality = {
+        "risk_level": "critical",
+        "selected_joint_margin_rad": 0.0017,
+        "robust_margin_threshold_rad": 0.1,
+        "distant_robust_solution_count": 5,
+        "interpretation": "Compare another grasp candidate before motion.",
+    }
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": True,
+            "success": True,
+            "status": "reachable",
+            "kinematic_status": "reachable",
+            "feasible": True,
+            "reason_code": "ik_solution_found",
+            "message": "Endpoint feasible but execution-fragile.",
+            "target": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "best_candidate": {
+                "joint_positions": [0.0] * 7,
+                "joint_margin_min_rad": 0.0017,
+            },
+            "execution_seed_quality": quality,
+            "collision": {"checked": True},
+            "path": {"checked": False},
+            "suggestions": ["compare_alternative_grasp_candidate_before_motion"],
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {"target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]}},
+    )
+
+    assert result.success is True
+    assert result.details["outputs"]["reachability"][
+        "execution_seed_quality"
+    ] == quality
+    assert result.details["outputs"]["ik_preview_receipt"]["reachability"][
+        "execution_seed_quality"
+    ] == quality
+    assert result.details["outputs"]["execution_authorization"][
+        "authorized_for_move_to"
+    ] is True
+    assert result.details["outputs"]["motion_execution_ref"]["ik_receipt_id"]
+    world_effect = result.details["outputs"]["world_effect"]
+    assert world_effect == result.details["outputs"]["response"]["world_effect"]
+    assert world_effect["world_mutated"] is False
+    assert world_effect["eef_pose_unchanged"] is True
+    assert world_effect["robot_motion_epoch_unchanged"] is True
+    assert world_effect["object_scene_epoch_unchanged"] is True
+    assert "did not move the robot" in world_effect["interpretation"]
+    assert "did not move the robot" in result.details["outputs"][
+        "motion_execution_ref"
+    ]["instruction"]
+    assert "Execution reference:" in result.content
+    assert "did not move the robot" in result.content
+    assert "execution-fragile" in result.content
+
+
+def test_ik_preview_collision_backend_gap_returns_exact_downgrade_recovery() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": True,
+            "success": True,
+            "status": "unknown",
+            "kinematic_status": "reachable",
+            "feasible": None,
+            "reason_code": "endpoint_collision_check_unavailable",
+            "message": (
+                "IK succeeded, but the requested endpoint collision check was unavailable."
+            ),
+            "position_only_reachable": True,
+            "orientation_only_reachable": True,
+            "target": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "best_candidate": {
+                "joint_positions": [0.0] * 7,
+                "max_axis_position_error_m": 0.0,
+                "orientation_error_rad": 0.0,
+            },
+            "collision": {
+                "checked": False,
+                "reason": "cuRobo not installed or CUDA unavailable",
+            },
+            "path": {"checked": False},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {
+            "target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "preserve_current_orientation": True,
+            "check_endpoint_collision": True,
+        },
+        metadata={
+            "_controller_capabilities_resolver": lambda: {
+                "controller_id": "mink.robosuite_joint_velocity",
+                "goal_executor": "openeta.worker_mink_goal.v1",
+                "collision_scope": (
+                    "worker_per_step_pre_actuation_and_post_step_configuration"
+                ),
+                "motion_owns_trajectory_world_collision": True,
+            }
+        },
+    )
+
+    assert result.success is True
+    assert (
+        result.details["semantic_outcome"]
+        == "ik_kinematically_feasible_collision_deferred"
+    )
+    delegation = result.details["outputs"]["motion_collision_delegation"]
+    assert delegation["available_for_matching_move"] is True
+    assert delegation["controller_id"] == "mink.robosuite_joint_velocity"
+    assert result.details["outputs"]["ik_preview_receipt"][
+        "motion_collision_delegation"
+    ] == delegation
+    assert result.details["outputs"]["execution_authorization"][
+        "authorized_for_move_to"
+    ] is True
+    assert "motion_execution_ref" in result.details["outputs"]
+    actions = {
+        option["action"]: option for option in result.details["recovery_options"]
+    }
+    assert actions["execute_exact_pose_with_verified_motion_collision"][
+        "parameters"
+    ] == {"enable_collision_check": True}
+    assert "repeat_exact_pose_with_kinematics_only" not in actions
+    assert "inspect_fresh_observation" not in actions
+    assert "preview_modified_pose" not in actions
+    assert "current environment controller explicitly owns" in result.content
+
+
+def test_ik_preview_collision_backend_gap_does_not_invent_controller_coverage() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "ok": True,
+            "success": True,
+            "status": "unknown",
+            "kinematic_status": "reachable",
+            "feasible": None,
+            "reason_code": "endpoint_collision_check_unavailable",
+            "message": "IK succeeded, but endpoint collision checking was unavailable.",
+            "target": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "best_candidate": {"joint_positions": [0.0] * 7},
+            "collision": {"checked": False},
+            "path": {"checked": False},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {
+            "target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]},
+            "preserve_current_orientation": True,
+            "check_endpoint_collision": True,
+        },
+    )
+
+    delegation = result.details["outputs"]["motion_collision_delegation"]
+    assert delegation["applicable"] is True
+    assert delegation["available_for_matching_move"] is False
+    actions = {
+        option["action"] for option in result.details["recovery_options"]
+    }
+    assert "execute_exact_pose_with_verified_motion_collision" not in actions
+    assert "delegate_collision_to_verified_motion_controller" in actions
+    assert result.details["outputs"]["execution_authorization"][
+        "authorized_for_move_to"
+    ] is False
+    assert "motion_execution_ref" not in result.details["outputs"]
+    assert "Do not pass ik_receipt_id=" in result.content
+    assert "does not declare the required" in result.content
 
 
 def test_ik_preview_matches_move_to_uncalibrated_grasp_orientation_rule() -> None:
@@ -883,6 +1199,71 @@ def test_move_to_preserves_orientation_for_uncalibrated_grasp_deployment() -> No
     }.isdisjoint(arguments)
 
 
+def test_move_to_privately_forwards_host_resolved_contact_authorization() -> None:
+    transport = FakeSimulatorMcpTransport({"success": True, "reached_target": True})
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("move_to",),
+    )
+    target_pose = {
+        "frame": "world",
+        "xyz": [0.1, 0.2, 0.3],
+        "compiled_grasp_id": "compiled-1",
+        "waypoint_role": "grasp_contact",
+    }
+    authorization = {
+        "schema_version": "openeta.contact_authorization.v1",
+        "compiled_grasp_id": "compiled-1",
+        "waypoint_role": "grasp_contact",
+        "target_anchor_world_xyz": [0.1, 0.2, 0.25],
+        "object_scene_epoch": 2,
+    }
+
+    result = tools.call(
+        "move_to",
+        {"target_pose": target_pose},
+        metadata={"_contact_authorization_resolver": lambda pose: authorization},
+    )
+
+    assert result.success is True
+    assert transport.calls[0]["arguments"]["contact_authorization"] == authorization
+    assert "contact_authorization" not in result.details["parameters"]
+
+
+def test_move_to_privately_forwards_host_resolved_ik_execution_seed() -> None:
+    transport = FakeSimulatorMcpTransport({"success": True, "reached_target": True})
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("move_to",),
+    )
+    parameters = {
+        "target_pose": {
+            "frame": "world",
+            "xyz": [0.1, 0.2, 0.3],
+            "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+    seed = {
+        "schema_version": "openeta.ik_execution_seed.v1",
+        "receipt_id": "ik-1",
+        "joint_positions": [0.1] * 7,
+    }
+
+    result = tools.call(
+        "move_to",
+        parameters,
+        metadata={"_ik_execution_seed_resolver": lambda request: seed},
+    )
+
+    assert result.success is True
+    assert transport.calls[0]["arguments"]["ik_execution_seed"] == seed
+    assert "ik_execution_seed" not in result.details["parameters"]
+
+
 def test_move_to_can_map_anygrasp_world_pose_to_panda_eef_orientation() -> None:
     transport = FakeSimulatorMcpTransport({"success": True, "reached_target": True})
     tools = bind_simulator_mcp_tool_handlers(
@@ -989,7 +1370,7 @@ def test_move_to_preserves_anyplace_orientation_when_grasp_forwarding_enabled() 
     assert result.details["outputs"]["mcp"]["target_orientation_mode"] == ("preserve_current")
 
 
-def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcome(
+def test_move_to_proxy_preserves_transport_success_but_marks_target_miss_operationally(
     tmp_path: Path,
 ) -> None:
     transport = FakeSimulatorMcpTransport(
@@ -1026,16 +1407,17 @@ def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcom
     result = tools.call("move_to", {"target_pose": {"xyz": [0.2, 0.0, 0.5]}})
 
     assert result.success is True
-    assert result.details["operational_success"] is True
+    assert result.details["operational_success"] is False
     assert result.details["semantic_outcome"] == "target_not_reached"
     assert result.details["diagnostics"][0]["code"] == "simulator_mcp_collision"
     assert result.details["diagnostics"][0]["position_error_m"] == pytest.approx(0.18)
     assert {item["action"] for item in result.details["recovery_options"]} == {
-        "inspect_fresh_observation",
+        "classify_collision_visually_before_replanning",
+        "plan_ik_checked_raised_or_lateral_detour",
         "replan_from_actual_pose",
     }
-    assert "NOT reached" in result.content
-    assert "actual_end_xyz=[0.02, 0.0, 0.5]" in result.content
+    assert "stopped for collision" in result.content
+    assert "host-private checker" in result.content
     motion = result.details["outputs"]["response"]["motion_summary"]
     assert motion["collision"]["detected"] is True
     assert motion["reached_target"] is False
@@ -1050,6 +1432,100 @@ def test_move_to_proxy_preserves_motion_summary_without_overriding_remote_outcom
     assert pose_feedback["actual_xyz"] == [0.02, 0.0, 0.5]
     assert pose_feedback["position_error_m"] == pytest.approx(0.18)
     assert "object-relative contact" in pose_feedback["interpretation"]
+    execution_receipt = result.details["host_execution_receipt"]
+    assert execution_receipt["schema_version"] == (
+        "openeta.resolved_tool_execution.v1"
+    )
+    assert execution_receipt["tool"] == "move_to"
+    assert execution_receipt["dispatch_status"] == "response_received"
+    assert execution_receipt["parameters"]["target_pose"] == {
+        "xyz": [0.2, 0.0, 0.5]
+    }
+    assert result.details["host_provenance"]["authority"] == "environment"
+
+
+def test_move_to_promotes_structured_controller_boundary_failure() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "error": "mink_qp_no_solution",
+            "start": {"xyz": [0.0, 0.0, 0.3]},
+            "end": {"xyz": [0.05, 0.0, 0.25]},
+            "target": {"x": 0.1, "y": 0.0, "z": 0.2},
+            "steps_executed": 53,
+            "reached_target": False,
+            "controller_failure": {
+                "schema_version": "openeta.controller_failure.v1",
+                "code": "constraint_escape_preview_rejected",
+                "current_minimum_distance_m": 0.012,
+                "predicted_minimum_distance_m": 0.011,
+                "recovery": "Choose a waypoint that increases clearance.",
+            },
+            "collision": {
+                "detected": False,
+                "trajectory_checked": True,
+                "world_checked": True,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-qp", handle="env-qp"),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.1, 0.0, 0.2]}})
+
+    failure = result.details["outputs"]["motion_summary"]["controller_failure"]
+    assert failure["code"] == "constraint_escape_preview_rejected"
+    assert "controller_failure=constraint_escape_preview_rejected" in result.content
+    assert {item["action"] for item in result.details["recovery_options"]} == {
+        "change_wrist_orientation_or_candidate",
+        "exit_reported_controller_boundary",
+    }
+    assert "Recommended recovery: exit_reported_controller_boundary" in result.content
+    assert '"preserve_current_orientation":true' in result.content
+    serialized = json.dumps(result.details)
+    assert "current_minimum_distance_m" not in serialized
+    assert "predicted_minimum_distance_m" not in serialized
+
+
+def test_move_to_exposes_tentative_attachment_refresh_to_agent() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "start": {"xyz": [0.0, 0.0, 0.2]},
+            "end": {"xyz": [0.0, 0.0, 0.26]},
+            "target": {"x": 0.0, "y": 0.0, "z": 0.26},
+            "reached_target": True,
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "tentative",
+                "reason": "awaiting_independent_co_motion_evidence",
+                "target_object_name": "salad_dressing_1",
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-lift", handle="env-lift"),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.0, 0.0, 0.26]}})
+
+    receipt = result.details["outputs"]["attachment_proxy_receipt"]
+    assert receipt["status"] == "tentative"
+    assert receipt["attachment_proven"] is False
+    assert result.details["semantic_outcome"] == "requires_attachment_confirmation"
+    assert {item["action"] for item in result.details["recovery_options"]} == {
+        "inspect_fresh_dual_view",
+        "withhold_transport_until_visual_confirmation",
+    }
+    assert "Carried-object proxy feedback" in result.content
+    assert "awaiting_independent_co_motion_evidence" in result.content
+    assert "attachment_proven=false" in result.content
 
 
 def test_move_to_proxy_allows_unchanged_baseline_contact() -> None:
@@ -1061,6 +1537,9 @@ def test_move_to_proxy_allows_unchanged_baseline_contact() -> None:
                 "available": True,
                 "detected": True,
                 "new_or_worsened": False,
+                "trajectory_checked": True,
+                "world_checked": True,
+                "world_object_count": 3,
                 "pairs": [],
             },
         }
@@ -1076,10 +1555,370 @@ def test_move_to_proxy_allows_unchanged_baseline_contact() -> None:
 
     assert result.success is True
     assert result.details["diagnostics"] == []
+    assert result.details["outputs"]["collision_coverage"]["coverage_complete"] is True
     motion = result.details["outputs"]["response"]["motion_summary"]
     assert motion["collision"]["detected"] is True
     assert motion["reached_target"] is True
     assert result.details["state_delta"]["motion"] == motion
+
+
+def test_move_to_proxy_exposes_unknown_collision_scope_without_claiming_safety(
+    tmp_path: Path,
+) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": True,
+            "collision": {
+                "detected": False,
+                "trajectory_checked": False,
+                "world_checked": False,
+                "world_object_count": 0,
+            },
+            "end": {"xyz": [0.1, 0.2, 0.3]},
+            "target": {"xyz": [0.1, 0.2, 0.3]},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-coverage",
+            handle="env-coverage",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.1, 0.2, 0.3]}})
+
+    coverage = result.details["outputs"]["collision_coverage"]
+    assert coverage["coverage_status"] == "remote_collision_result_without_coverage"
+    assert coverage["coverage_complete"] is False
+    assert coverage["collision_detected"] is False
+    assert "does not prove" in coverage["interpretation"]
+    assert result.details["diagnostics"][-1]["code"] == "collision_coverage_incomplete"
+
+
+def test_move_to_target_not_reached_is_not_operational_success() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": False,
+            "collision": {"trajectory_checked": False, "world_checked": False},
+            "start": {"xyz": [0.0, 0.0, 0.3]},
+            "end": {"xyz": [0.02, 0.0, 0.3]},
+            "target": {"xyz": [0.1, 0.0, 0.3]},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-miss", handle="env-miss"),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.1, 0.0, 0.3]}})
+
+    assert result.success is True
+    assert result.details["semantic_outcome"] == "target_not_reached"
+    assert result.details["operational_success"] is False
+    assert result.details["recovery_options"]
+
+
+def test_move_to_zero_step_target_hit_reports_unchanged_physical_view() -> None:
+    pose = {"xyz": [0.1, 0.0, 0.3]}
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": True,
+            "steps_executed": 0,
+            "stop_reason": "target_reached",
+            "start": pose,
+            "end": pose,
+            "target": pose,
+            "collision": {
+                "trajectory_checked": True,
+                "world_checked": True,
+                "world_object_count": 4,
+            },
+            "controller_receipt": {
+                "schema_version": "openeta.controller_execution_receipt.v1",
+                "controller_id": "mink.robosuite_joint_velocity",
+                "command_interface": "joint_velocity",
+                "goal_executor": "openeta.worker_mink_goal.v1",
+                "execution_location": "bench_worker",
+                "orientation_policy": "preserve_current",
+                "iteration_budget": 100,
+                "steps_executed": 0,
+                "stop_reason": "target_reached",
+                "reached_target": True,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-noop",
+            handle="env-noop",
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call(
+        "move_to",
+        {"target_pose": pose, "enable_collision_check": True},
+    )
+
+    assert result.success is True
+    assert result.details["operational_success"] is True
+    assert result.details["semantic_outcome"] == "target_already_within_tolerance"
+    assert result.details["outputs"]["motion_outcome"] == "no_state_change"
+    assert "physical camera viewpoint did NOT change" in result.content
+    assert {
+        item["action"] for item in result.details["recovery_options"]
+    } == {
+        "consume_existing_visual_evidence",
+        "propose_materially_distinct_checked_endpoint",
+    }
+
+
+def test_zero_step_attached_collision_is_promoted_to_top_level_content(tmp_path: Path) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": False,
+            "steps_executed": 0,
+            "collision": {
+                "detected": True,
+                "collision_type": "attached_object_world",
+                "attached_object": "bottle_1",
+                "obstacle": "box_1",
+                "message": "Attached object bottle_1 would collide with box_1.",
+            },
+            "start": {"xyz": [0.0, 0.0, 0.15]},
+            "end": {"xyz": [0.0, 0.0, 0.15]},
+            "target": {"x": 0.0, "y": 0.0, "z": 0.25},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-deadlock",
+            handle="env-deadlock",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.0, 0.0, 0.25]}})
+
+    assert "host-private checker" in result.content
+    assert "No controller step executed" in result.content
+    assert "bottle_1" not in json.dumps(result.details)
+    assert "box_1" not in json.dumps(result.details)
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    artifact_text = response_path.read_text(encoding="utf-8")
+    assert "bottle_1" not in artifact_text
+    assert "box_1" not in artifact_text
+    assert not any(
+        item.get("code") == "collision_coverage_incomplete"
+        for item in result.details["diagnostics"]
+    )
+    recovery = {
+        item["action"]: item for item in result.details["recovery_options"]
+    }
+    escape = recovery["escape_current_collision_boundary"]
+    assert escape["parameters"] == {
+        "actual_eef_xyz": [0.0, 0.0, 0.15],
+        "preserve_current_orientation": True,
+        "enable_collision_check": True,
+    }
+    assert escape["evidence"] == {
+        "collision_detected": True,
+        "collision_class": "attached_object_world",
+        "steps_executed": 0,
+        "feedback_scope": "host_private_geometry_withheld",
+    }
+    assert "Re-segmenting the same object does not move the robot" in recovery[
+        "consume_returned_motion_evidence"
+    ]["reason"]
+
+
+def test_partial_motion_collision_recommends_checked_detour_from_actual_pose(
+    tmp_path: Path,
+) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "reached_target": False,
+            "steps_executed": 23,
+            "collision": {
+                "detected": True,
+                "geom1_name": "robot0_link7_collision",
+                "geom2_name": "tomato_sauce_1_g4",
+                "trajectory_checked": True,
+                "world_checked": True,
+                "world_object_count": 4,
+            },
+            "start": {"xyz": [0.0, 0.0, 0.30]},
+            "end": {"xyz": [0.08, -0.04, 0.24]},
+            "target": {"xyz": [0.12, -0.08, 0.18]},
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-partial-collision",
+            handle="env-partial-collision",
+            response_output_root=tmp_path,
+        ),
+        tool_names=("move_to",),
+    )
+
+    result = tools.call("move_to", {"target_pose": {"xyz": [0.12, -0.08, 0.18]}})
+
+    recovery = {item["action"]: item for item in result.details["recovery_options"]}
+    classify = recovery["classify_collision_visually_before_replanning"]
+    assert classify["evidence"]["collision_detected"] is True
+    assert classify["evidence"]["feedback_scope"] == (
+        "host_private_geometry_withheld"
+    )
+    assert classify["evidence"]["actual_eef_xyz"] == [0.08, -0.04, 0.24]
+    serialized = json.dumps(result.details)
+    assert "robot0_link7_collision" not in serialized
+    assert "tomato_sauce_1_g4" not in serialized
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    artifact_text = response_path.read_text(encoding="utf-8")
+    assert "robot0_link7_collision" not in artifact_text
+    assert "tomato_sauce_1_g4" not in artifact_text
+    detour = recovery["plan_ik_checked_raised_or_lateral_detour"]
+    assert detour["parameters"] == {
+        "start_from_actual_eef_xyz": [0.08, -0.04, 0.24],
+        "preserve_current_orientation_for_clearance": True,
+        "preview_each_waypoint_separately": True,
+        "execute_with": "follow_eef_trajectory",
+        "enable_collision_check": True,
+    }
+    assert "arithmetic midpoint" in detour["reason"]
+
+
+def test_ik_proxy_preserves_configuration_collision_scope() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "status": "reachable",
+            "feasible": True,
+            "collision": {
+                "checked": True,
+                "detected": False,
+                "self_checked": True,
+                "trajectory_checked": False,
+                "world_checked": False,
+                "world_object_count": 0,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-ik", handle="env-ik"),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+    )
+
+    coverage = result.details["outputs"]["collision_coverage"]
+    assert coverage["coverage_status"] == "endpoint_only"
+    assert coverage["endpoint_checked"] is True
+    assert coverage["world_checked"] is False
+    assert coverage["coverage_complete"] is False
+    assert result.details["diagnostics"][-1]["code"] == "collision_coverage_incomplete"
+
+
+def test_ik_proxy_fails_world_coverage_closed_on_world_update_error() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "status": "reachable",
+            "feasible": True,
+            "collision": {
+                "available": True,
+                "checked": True,
+                "detected": False,
+                "world_checked": True,
+                "world_update_error": "synthetic cuRobo update failure",
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-ik-world-error",
+            handle="env-ik-world-error",
+        ),
+        tool_names=("ik_preview_check",),
+    )
+
+    result = tools.call(
+        "ik_preview_check",
+        {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+    )
+
+    coverage = result.details["outputs"]["collision_coverage"]
+    assert coverage["endpoint_checked"] is True
+    assert coverage["world_checked"] is False
+    assert coverage["coverage_complete"] is False
+    assert coverage["coverage_status"] == "endpoint_only"
+    assert result.details["diagnostics"][-1]["code"] == "collision_coverage_incomplete"
+
+
+@pytest.mark.parametrize(
+    "failure_fields",
+    [
+        {"error": "synthetic collision backend error"},
+        {"available": False},
+        {"collision": {"available": False}},
+        {"success": False},
+    ],
+)
+def test_collision_coverage_fails_closed_on_failed_receipt(
+    failure_fields: JsonDict,
+) -> None:
+    response: JsonDict = {
+        "success": True,
+        "collision": {
+            "available": True,
+            "checked": True,
+            "endpoint_checked": True,
+            "trajectory_checked": True,
+            "world_checked": True,
+            "detected": False,
+        },
+    }
+    for key, value in failure_fields.items():
+        if key == "collision" and isinstance(value, dict):
+            response["collision"].update(value)
+        else:
+            response[key] = value
+
+    coverage = sim_mcp._collision_coverage_receipt(
+        response,
+        agent_tool="move_to",
+        requested_collision_check=True,
+    )
+
+    assert coverage["endpoint_checked"] is False
+    assert coverage["trajectory_checked"] is False
+    assert coverage["world_checked"] is False
+    assert coverage["coverage_complete"] is False
 
 
 def test_simulator_proxy_uses_immutable_artifact_paths_per_call(tmp_path: Path) -> None:
@@ -1156,7 +1995,10 @@ def test_follow_eef_trajectory_proxy_forwards_to_simulator_mcp() -> None:
 
     result = tools.call(
         "follow_eef_trajectory",
-        {"trajectory": [{"xyz": [0.0, 0.0, 0.4]}]},
+        {
+            "trajectory": [{"xyz": [0.0, 0.0, 0.4]}],
+            "ik_receipt_ids": ["ik-host-only"],
+        },
     )
 
     assert result.success is True
@@ -1171,6 +2013,55 @@ def test_follow_eef_trajectory_proxy_forwards_to_simulator_mcp() -> None:
             "timeout_s": 120.0,
         }
     ]
+    execution_receipt = result.details["host_execution_receipt"]
+    assert execution_receipt["reference_kind"] == "ik_trajectory_receipts"
+    assert execution_receipt["parameters"] == {
+        "trajectory": [{"xyz": [0.0, 0.0, 0.4]}],
+        "ik_receipt_ids": ["ik-host-only"],
+    }
+
+
+def test_condition_c_privately_forwards_sequential_route_bundle(monkeypatch) -> None:
+    monkeypatch.setenv("OPENETA_MOTION_EXPERIMENT_CONDITION", "C")
+    transport = FakeSimulatorMcpTransport(
+        {"success": True, "reached_target": True, "cameras": [], "robot": {}}
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-1", handle="env-1"),
+        tool_names=("follow_eef_trajectory",),
+    )
+    parameters = {
+        "trajectory": [{"frame": "world", "xyz": [0.0, 0.0, 0.4]}],
+        "ik_receipt_ids": ["ik-host-only"],
+    }
+    bundle = {
+        "schema_version": "openeta.experimental_route_execution_bundle.v1",
+        "condition": "C",
+        "authority": "host_memory_exact_receipt_resolution",
+        "entries": [
+            {
+                "source_ik_receipt_id": "ik-host-only",
+                "target_pose": parameters["trajectory"][0],
+            }
+        ],
+    }
+
+    result = tools.call(
+        "follow_eef_trajectory",
+        parameters,
+        metadata={
+            "_ik_trajectory_execution_bundle_resolver": lambda request: bundle
+        },
+    )
+
+    assert result.success is True
+    forwarded = transport.calls[0]["arguments"]
+    assert forwarded["route_execution_bundle"] == bundle
+    assert "ik_receipt_ids" not in forwarded
+    assert "route_execution_bundle" not in result.details["parameters"]
+    assert result.details["parameters"] == parameters
 
 
 def test_follow_eef_trajectory_incomplete_receipt_requires_reconciliation() -> None:
@@ -1575,6 +2466,204 @@ def test_gripper_control_selects_open_or_close_mcp_tool(tmp_path: Path) -> None:
         "session_id": "session-2",
     }
     assert transport.calls[1]["name"] == "gripper_close"
+    close_receipt = close_result.details["outputs"]["attachment_proxy_receipt"]
+    assert close_receipt["status"] == "not_armed"
+    assert close_receipt["reason"] == "no_active_contact_authorization"
+
+
+def test_gripper_close_exposes_stationary_settle_receipt(tmp_path: Path) -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "cameras": [],
+            "robot": {"gripper_state": {"openness": 0.42}},
+            "gripper_actuation_receipt": {
+                "schema_version": "openeta.gripper_actuation_receipt.v1",
+                "command": "close",
+                "command_latched": True,
+                "steps_executed": 60,
+                "settling_policy": "stationary_continuous_position_hold",
+                "measured_open_fraction": 0.42,
+            },
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "tentative",
+                "reason": "non_empty_close_near_bound_target",
+                "target_object_name": "milk_1",
+                "measured_open_fraction": 0.42,
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-settle",
+            handle="env-settle",
+            image_output_root=tmp_path,
+        ),
+        tool_names=("gripper_control",),
+    )
+
+    result = tools.call("gripper_control", {"position": 0})
+
+    receipt = result.details["outputs"]["gripper_actuation_receipt"]
+    assert receipt["steps_executed"] == 60
+    assert receipt["command_latched"] is True
+    assert result.details["outputs"]["attachment_proxy_receipt"]["reason"] == (
+        "non_empty_close_with_tentative_safety_proxy"
+    )
+    assert "stationary_settle_steps=60" in result.content
+    assert "milk_1" not in result.content
+    assert "milk_1" not in json.dumps(result.details)
+    response_path = Path(result.details["outputs"]["response"]["response_path"])
+    assert "milk_1" not in response_path.read_text(encoding="utf-8")
+
+
+def test_missing_remote_attachment_receipt_is_explicit_and_refreshes_on_lift() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "success": True,
+            "cameras": [],
+            "robot": {},
+            "start": {"xyz": [0.0, 0.0, 0.12]},
+            "end": {"xyz": [0.0, 0.0, 0.2]},
+            "target": {"x": 0.0, "y": 0.0, "z": 0.2},
+            "reached_target": True,
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-old", handle="env-old"),
+        tool_names=("gripper_control", "move_to"),
+    )
+    authorization = {
+        "schema_version": "openeta.contact_authorization.v1",
+        "compiled_grasp_id": "compiled-old",
+        "waypoint_role": "grasp_contact",
+        "target_object_name": "milk_1",
+        "target_anchor_world_xyz": [0.0, 0.0, 0.12],
+        "object_scene_epoch": 0,
+    }
+
+    close_result = tools.call(
+        "gripper_control",
+        {"position": 0},
+        metadata={"_attachment_candidate_resolver": lambda: authorization},
+    )
+    lift_result = tools.call(
+        "move_to",
+        {"target_pose": {"xyz": [0.0, 0.0, 0.2]}},
+        metadata={"_contact_authorization_resolver": lambda _pose: authorization},
+    )
+
+    close_receipt = close_result.details["outputs"]["attachment_proxy_receipt"]
+    assert close_receipt["status"] == "backend_contract_missing"
+    assert close_receipt["contact_authorization_forwarded"] is True
+    assert close_receipt["collision_proxy_active"] is None
+    assert close_result.details["semantic_outcome"] == "attachment_contract_unavailable"
+    assert {item["action"] for item in close_result.details["recovery_options"]} == {
+        "inspect_fresh_dual_view",
+        "small_guarded_lift_probe",
+        "upgrade_or_restart_simulator_service",
+    }
+    assert any(
+        item["code"] == "attachment_proxy_backend_contract_missing"
+        for item in close_result.details["diagnostics"]
+    )
+    assert "Physical attachment is unknown" in close_result.content
+
+    lift_receipt = lift_result.details["outputs"]["attachment_proxy_receipt"]
+    assert lift_receipt["status"] == "backend_contract_missing"
+    assert lift_receipt["reason"] == "remote_attachment_proxy_refresh_receipt_missing"
+    assert lift_result.details["semantic_outcome"] == "attachment_contract_unavailable"
+
+
+def test_gripper_close_privately_forwards_active_attachment_target() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "cameras": [],
+            "robot": {},
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "tentative",
+                "target_object_name": "salad_dressing_1",
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-2", handle="env-2"),
+        tool_names=("gripper_control",),
+    )
+    authorization = {
+        "schema_version": "openeta.contact_authorization.v1",
+        "compiled_grasp_id": "compiled-1",
+        "waypoint_role": "grasp_contact",
+        "target_anchor_world_xyz": [0.1, 0.2, 0.12],
+        "target_evidence_id": "sam3:result:target",
+        "object_scene_epoch": 0,
+    }
+
+    result = tools.call(
+        "gripper_control",
+        {"position": 0},
+        metadata={"_attachment_candidate_resolver": lambda: authorization},
+    )
+
+    assert result.success is True
+    assert transport.calls[0]["arguments"]["contact_authorization"] == authorization
+    assert "contact_authorization" not in result.details["parameters"]
+    assert result.details["outputs"]["attachment_proxy_receipt"]["status"] == (
+        "tentative"
+    )
+    assert result.details["semantic_outcome"] == "requires_attachment_probe"
+    assert "attachment_proven=false" in result.content
+    assert "2-5 cm" in result.content
+    assert "do not reuse a prior grasp_clearance" in result.content
+    recovery = next(
+        item
+        for item in result.details["recovery_options"]
+        if item["action"] == "small_lift_probe"
+    )
+    assert recovery["distance_range_m"] == [0.02, 0.05]
+    assert recovery["pose_source"] == "fresh_current_eef_pose"
+
+
+def test_gripper_empty_close_feedback_does_not_recommend_lift_probe() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "cameras": [],
+            "robot": {},
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "not_armed",
+                "reason": "empty_close_or_no_measurable_contact",
+                "measured_open_fraction": 0.03,
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(session_id="session-empty", handle="env-empty"),
+        tool_names=("gripper_control",),
+    )
+
+    result = tools.call("gripper_control", {"position": 0})
+
+    assert result.success is True
+    assert result.details["semantic_outcome"] == "no_attachment_evidence"
+    assert {item["action"] for item in result.details["recovery_options"]} == {
+        "inspect_fresh_dual_view",
+        "reopen_and_repair_contact",
+    }
+    assert "Do NOT treat a lift as an attachment probe" in result.content
+    assert "reopen the gripper" in result.content
 
 
 def test_gripper_control_rejects_fractional_command(tmp_path: Path) -> None:
@@ -1652,6 +2741,11 @@ def test_proxy_reconciles_world_mutation_after_grouped_remote_protocol_failure()
     assert result.details["outputs"]["motion_outcome"] == "unknown"
     assert result.details["outputs"]["reconciliation_required"] is True
     assert result.details["diagnostics"][0]["code"] == ("simulator_mcp_transport_connection_lost")
+    execution_receipt = result.details["host_execution_receipt"]
+    assert execution_receipt["dispatch_status"] == "outcome_unknown"
+    assert execution_receipt["parameters"]["target_pose"] == {
+        "xyz": [0.1, 0.2, 0.3]
+    }
 
 
 def test_proxy_reconciles_world_mutation_when_remote_action_receipt_is_not_json() -> None:

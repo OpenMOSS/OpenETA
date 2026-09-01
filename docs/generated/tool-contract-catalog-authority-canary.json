@@ -1,0 +1,1696 @@
+{
+  "schema_version": "openeta.tool_contract_catalog_authority_canary.v1",
+  "authority": "post_review_request_validation_canary",
+  "passed": true,
+  "session_id": "remaining-catalog-grasp-quality-20260825",
+  "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+  "policy": {
+    "executable_gate_authority": "legacy_runtime",
+    "gate_repair_envelope_authority": [],
+    "request_validation_authority": [
+      "anyplace",
+      "assess_attachment_probe",
+      "camera_pose_to_world",
+      "close_simulator_env",
+      "compact_memory",
+      "compile_grasp_seed",
+      "compute_wrist_alignment",
+      "create_simulator_env",
+      "delete_memory",
+      "enhance_depth",
+      "follow_eef_trajectory",
+      "get_memory",
+      "grasp_pose_estimate",
+      "gripper_control",
+      "ik_preview_check",
+      "molmopoint",
+      "move_to",
+      "observe",
+      "prepare_attachment_probe",
+      "promote_calibration_profile",
+      "promote_grasp_strategy",
+      "propose_calibration_profile",
+      "propose_grasp_strategy",
+      "propose_wrist_viewpoints",
+      "python_exec",
+      "register_skill",
+      "reject_sam3_detections",
+      "retrieve_asset_reference",
+      "sam3",
+      "save_memory",
+      "select_sam3_detection",
+      "update_skill",
+      "web_fetch",
+      "web_search"
+    ],
+    "schema_version": "openeta.tool_contract_runtime_policy.v1"
+  },
+  "planner_pipeline_alignment": {
+    "catalog_match": true,
+    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+    "pipeline_policy": {
+      "executable_gate_authority": "legacy_runtime",
+      "gate_repair_envelope_authority": [],
+      "request_validation_authority": [
+        "anyplace",
+        "assess_attachment_probe",
+        "camera_pose_to_world",
+        "close_simulator_env",
+        "compact_memory",
+        "compile_grasp_seed",
+        "compute_wrist_alignment",
+        "create_simulator_env",
+        "delete_memory",
+        "enhance_depth",
+        "follow_eef_trajectory",
+        "get_memory",
+        "grasp_pose_estimate",
+        "gripper_control",
+        "ik_preview_check",
+        "molmopoint",
+        "move_to",
+        "observe",
+        "prepare_attachment_probe",
+        "promote_calibration_profile",
+        "promote_grasp_strategy",
+        "propose_calibration_profile",
+        "propose_grasp_strategy",
+        "propose_wrist_viewpoints",
+        "python_exec",
+        "register_skill",
+        "reject_sam3_detections",
+        "retrieve_asset_reference",
+        "sam3",
+        "save_memory",
+        "select_sam3_detection",
+        "update_skill",
+        "web_fetch",
+        "web_search"
+      ],
+      "schema_version": "openeta.tool_contract_runtime_policy.v1"
+    },
+    "pipeline_present": true,
+    "policy_match": true
+  },
+  "tool_count": 34,
+  "passed_tool_count": 34,
+  "model_call_count": 68,
+  "tool_execution_count": 0,
+  "world_mutation_count": 0,
+  "tools": [
+    {
+      "tool": "observe",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_additional_field",
+              "message": "parameters does not allow field '__unexpected__'.",
+              "path": "parameters.__unexpected__",
+              "tool": "observe"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "observe received unsupported parameters: __unexpected__."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "observe"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "observe"
+        }
+      ]
+    },
+    {
+      "tool": "enhance_depth",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'source_packet_id'.",
+              "path": "parameters.source_packet_id",
+              "tool": "enhance_depth"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "enhance_depth requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "enhance_depth"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "enhance_depth"
+        }
+      ]
+    },
+    {
+      "tool": "create_simulator_env",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'env_id'.",
+              "path": "parameters.env_id",
+              "tool": "create_simulator_env"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "create_simulator_env requires `parameters.env_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "create_simulator_env"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "create_simulator_env"
+        }
+      ]
+    },
+    {
+      "tool": "close_simulator_env",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_additional_field",
+              "message": "parameters does not allow field '__unexpected__'.",
+              "path": "parameters.__unexpected__",
+              "tool": "close_simulator_env"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "close_simulator_env received unsupported parameters: __unexpected__."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "close_simulator_env"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "close_simulator_env"
+        }
+      ]
+    },
+    {
+      "tool": "python_exec",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'code'.",
+              "path": "parameters.code",
+              "tool": "python_exec"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "python_exec requires a non-empty string `parameters.code`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "python_exec"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "python_exec"
+        }
+      ]
+    },
+    {
+      "tool": "web_search",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'query'.",
+              "path": "parameters.query",
+              "tool": "web_search"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "web_search requires `parameters.query` as 1-512 characters of public search terms without secrets or private user data."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "web_search"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "web_search"
+        }
+      ]
+    },
+    {
+      "tool": "web_fetch",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'url'.",
+              "path": "parameters.url",
+              "tool": "web_fetch"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "web_fetch requires `parameters.url` as an absolute public HTTPS URL of at most 2048 characters."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "web_fetch"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "web_fetch"
+        }
+      ]
+    },
+    {
+      "tool": "sam3",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'source_packet_id'.",
+              "path": "parameters.source_packet_id",
+              "tool": "sam3"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "sam3 requires `parameters.source_packet_id` copied exactly from visible observation evidence. Local image paths are not accepted."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "sam3"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "sam3"
+        }
+      ]
+    },
+    {
+      "tool": "retrieve_asset_reference",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'environment'.",
+              "path": "parameters.environment",
+              "tool": "retrieve_asset_reference"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "retrieve_asset_reference requires `parameters.environment`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "retrieve_asset_reference"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "retrieve_asset_reference"
+        }
+      ]
+    },
+    {
+      "tool": "molmopoint",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'sources'.",
+              "path": "parameters.sources",
+              "tool": "molmopoint"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "molmopoint requires `parameters.sources` as an ordered list of one to four objects containing source_packet_id and optional camera_frame_id."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "molmopoint"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "molmopoint"
+        }
+      ]
+    },
+    {
+      "tool": "select_sam3_detection",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'sam3_result_id'.",
+              "path": "parameters.sam3_result_id",
+              "tool": "select_sam3_detection"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "select_sam3_detection requires `parameters.sam3_result_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "select_sam3_detection"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "select_sam3_detection"
+        }
+      ]
+    },
+    {
+      "tool": "reject_sam3_detections",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'sam3_result_id'.",
+              "path": "parameters.sam3_result_id",
+              "tool": "reject_sam3_detections"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "reject_sam3_detections requires `parameters.sam3_result_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "reject_sam3_detections"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "reject_sam3_detections"
+        }
+      ]
+    },
+    {
+      "tool": "grasp_pose_estimate",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'bundle_id'.",
+              "path": "parameters.bundle_id",
+              "tool": "grasp_pose_estimate"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "grasp_pose_estimate requires `parameters.rgb` as a concrete local path.",
+            "grasp_pose_estimate requires `parameters.depth` as a concrete local path.",
+            "grasp_pose_estimate targeted mode requires `parameters.object_mask` as a complete SAM3 artifact with mask_ref and source_image.",
+            "grasp_pose_estimate `parameters.intrinsics` must contain fx, fy, cx, cy, and scale.",
+            "grasp_pose_estimate requires a concrete camera_frame_id.",
+            "grasp_pose_estimate requires the current non-negative scene_epoch."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "grasp_pose_estimate"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "grasp_pose_estimate"
+        }
+      ]
+    },
+    {
+      "tool": "anyplace",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'bundle_id'.",
+              "path": "parameters.bundle_id",
+              "tool": "anyplace"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "anyplace requires only the host-issued `parameters.bundle_id`; inspect host_resolved_inputs.anyplace and do not reconstruct RGB-D, mask, intrinsics, or selected_grasp fields."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "anyplace"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "anyplace"
+        }
+      ]
+    },
+    {
+      "tool": "camera_pose_to_world",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_type_mismatch",
+              "message": "parameters.placement_result_id must be JSON type string; got integer.",
+              "path": "parameters.placement_result_id",
+              "tool": "camera_pose_to_world"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "camera_pose_to_world AnyPlace handoff requires a non-empty `placement_result_id` returned by anyplace."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "camera_pose_to_world"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "camera_pose_to_world"
+        }
+      ]
+    },
+    {
+      "tool": "propose_calibration_profile",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'profile'.",
+              "path": "parameters.profile",
+              "tool": "propose_calibration_profile"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "propose_calibration_profile requires object `parameters.profile`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_calibration_profile"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_calibration_profile"
+        }
+      ]
+    },
+    {
+      "tool": "promote_calibration_profile",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'proposal_id'.",
+              "path": "parameters.proposal_id",
+              "tool": "promote_calibration_profile"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "promote_calibration_profile requires non-empty string `parameters.proposal_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "promote_calibration_profile"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "promote_calibration_profile"
+        }
+      ]
+    },
+    {
+      "tool": "propose_grasp_strategy",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'strategy'.",
+              "path": "parameters.strategy",
+              "tool": "propose_grasp_strategy"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "propose_grasp_strategy requires object `parameters.strategy`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_grasp_strategy"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_grasp_strategy"
+        }
+      ]
+    },
+    {
+      "tool": "promote_grasp_strategy",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'proposal_id'.",
+              "path": "parameters.proposal_id",
+              "tool": "promote_grasp_strategy"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "promote_grasp_strategy requires non-empty string `parameters.proposal_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "promote_grasp_strategy"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "promote_grasp_strategy"
+        }
+      ]
+    },
+    {
+      "tool": "compile_grasp_seed",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'grasp_result_id'.",
+              "path": "parameters.grasp_result_id",
+              "tool": "compile_grasp_seed"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "compile_grasp_seed requires `parameters.grasp_result_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compile_grasp_seed"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compile_grasp_seed"
+        }
+      ]
+    },
+    {
+      "tool": "compute_wrist_alignment",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'bundle_id'.",
+              "path": "parameters.bundle_id",
+              "tool": "compute_wrist_alignment"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "compute_wrist_alignment requires `parameters.bundle_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compute_wrist_alignment"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compute_wrist_alignment"
+        }
+      ]
+    },
+    {
+      "tool": "propose_wrist_viewpoints",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'compiled_grasp_id'.",
+              "path": "parameters.compiled_grasp_id",
+              "tool": "propose_wrist_viewpoints"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "propose_wrist_viewpoints requires `parameters.compiled_grasp_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_wrist_viewpoints"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "propose_wrist_viewpoints"
+        }
+      ]
+    },
+    {
+      "tool": "prepare_attachment_probe",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'compiled_grasp_id'.",
+              "path": "parameters.compiled_grasp_id",
+              "tool": "prepare_attachment_probe"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "prepare_attachment_probe requires `parameters.compiled_grasp_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "prepare_attachment_probe"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "prepare_attachment_probe"
+        }
+      ]
+    },
+    {
+      "tool": "assess_attachment_probe",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'probe_id'.",
+              "path": "parameters.probe_id",
+              "tool": "assess_attachment_probe"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "assess_attachment_probe requires `parameters.probe_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "assess_attachment_probe"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "assess_attachment_probe"
+        }
+      ]
+    },
+    {
+      "tool": "move_to",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'ik_receipt_id'.",
+              "path": "parameters.ik_receipt_id",
+              "tool": "move_to"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "move_to requires `parameters.ik_receipt_id`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "move_to"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "move_to"
+        }
+      ]
+    },
+    {
+      "tool": "follow_eef_trajectory",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'ik_receipt_ids'.",
+              "path": "parameters.ik_receipt_ids",
+              "tool": "follow_eef_trajectory"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "follow_eef_trajectory requires `parameters.ik_receipt_ids`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "follow_eef_trajectory"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "follow_eef_trajectory"
+        }
+      ]
+    },
+    {
+      "tool": "gripper_control",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'position'.",
+              "path": "parameters.position",
+              "tool": "gripper_control"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "gripper_control requires exactly `parameters.position`; use binary 0=closed or 1=open, not a measured aperture or fractional command."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "gripper_control"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "gripper_control"
+        }
+      ]
+    },
+    {
+      "tool": "ik_preview_check",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_type_mismatch",
+              "message": "parameters.target_pose must be JSON type object; got array.",
+              "path": "parameters.target_pose",
+              "tool": "ik_preview_check"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "ik_preview_check `parameters.target_pose` must be object."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "ik_preview_check"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "ik_preview_check"
+        }
+      ]
+    },
+    {
+      "tool": "save_memory",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'key'.",
+              "path": "parameters.key",
+              "tool": "save_memory"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "save_memory requires `parameters.key`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "save_memory"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "save_memory"
+        }
+      ]
+    },
+    {
+      "tool": "get_memory",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_additional_field",
+              "message": "parameters does not allow field '__unexpected__'.",
+              "path": "parameters.__unexpected__",
+              "tool": "get_memory"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "get_memory received unsupported parameters: __unexpected__."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "get_memory"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "get_memory"
+        }
+      ]
+    },
+    {
+      "tool": "delete_memory",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'key'.",
+              "path": "parameters.key",
+              "tool": "delete_memory"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "delete_memory requires `parameters.key`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "delete_memory"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "delete_memory"
+        }
+      ]
+    },
+    {
+      "tool": "compact_memory",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_additional_field",
+              "message": "parameters does not allow field '__unexpected__'.",
+              "path": "parameters.__unexpected__",
+              "tool": "compact_memory"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "compact_memory received unsupported parameters: __unexpected__."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compact_memory"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "compact_memory"
+        }
+      ]
+    },
+    {
+      "tool": "register_skill",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'name'.",
+              "path": "parameters.name",
+              "tool": "register_skill"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "register_skill requires non-empty string `parameters.name`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "register_skill"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "register_skill"
+        }
+      ]
+    },
+    {
+      "tool": "update_skill",
+      "request_trace_count": 2,
+      "invalid_request_count": 1,
+      "valid_request_count": 1,
+      "enforcing": true,
+      "passed": true,
+      "traces": [
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": false,
+          "contract_maturity": "verified",
+          "contract_violations": [
+            {
+              "code": "request_required_field_missing",
+              "message": "parameters requires field 'name'.",
+              "path": "parameters.name",
+              "tool": "update_skill"
+            }
+          ],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": false,
+          "legacy_errors": [
+            "update_skill requires non-empty string `parameters.name`."
+          ],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "update_skill"
+        },
+        {
+          "acceptance_match": true,
+          "authoritative_validator": "tool_contract",
+          "contract_accepted": true,
+          "contract_maturity": "verified",
+          "contract_violations": [],
+          "enforcing": true,
+          "evaluated": true,
+          "legacy_accepted": true,
+          "legacy_errors": [],
+          "schema_version": "openeta.tool_contract_shadow_validation.v1",
+          "tool": "update_skill"
+        }
+      ]
+    }
+  ],
+  "authority_audit": {
+    "schema_version": "openeta.tool_contract_authority_audit.v1",
+    "source_root": "/tmp/openeta-toolcontract-catalog-canary-20260825",
+    "manifest_count": 1,
+    "auditable_manifest_count": 1,
+    "conformant": true,
+    "violation_count": 0,
+    "violations": [],
+    "runs": [
+      {
+        "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+        "session_id": "remaining-catalog-grasp-quality-20260825",
+        "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+        "request_validation_authority": [
+          "anyplace",
+          "assess_attachment_probe",
+          "camera_pose_to_world",
+          "close_simulator_env",
+          "compact_memory",
+          "compile_grasp_seed",
+          "compute_wrist_alignment",
+          "create_simulator_env",
+          "delete_memory",
+          "enhance_depth",
+          "follow_eef_trajectory",
+          "get_memory",
+          "grasp_pose_estimate",
+          "gripper_control",
+          "ik_preview_check",
+          "molmopoint",
+          "move_to",
+          "observe",
+          "prepare_attachment_probe",
+          "promote_calibration_profile",
+          "promote_grasp_strategy",
+          "propose_calibration_profile",
+          "propose_grasp_strategy",
+          "propose_wrist_viewpoints",
+          "python_exec",
+          "register_skill",
+          "reject_sam3_detections",
+          "retrieve_asset_reference",
+          "sam3",
+          "save_memory",
+          "select_sam3_detection",
+          "update_skill",
+          "web_fetch",
+          "web_search"
+        ],
+        "gate_repair_envelope_authority": [],
+        "request_trace_count": 68,
+        "request_enforcing_trace_count": 68,
+        "gate_trace_count": 0,
+        "gate_enforcing_trace_count": 0
+      }
+    ]
+  },
+  "interpretation": "This post-review canary grants request-validation authority only. It does not compile or dispatch a tool call; gate-repair authority remains empty and executable gates remain legacy_runtime."
+}

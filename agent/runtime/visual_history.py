@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from adapter.protocol import EnvObservation, JsonDict
@@ -278,6 +279,36 @@ class VisualHistoryManager:
                         if value is None
                     ],
                 },
+            }
+            memory.record("visual_delta", record)
+            return record
+
+        # Read-only tool turns still receive a freshly persisted observation,
+        # but the fixed main-camera pixels are commonly byte-identical.  A VLM
+        # call cannot add evidence in that case.  Preserve the adjacent-delta
+        # coverage record while resolving the no-change result deterministically.
+        comparison_started_at_s = time.time()
+        previous_sha256 = _artifact_content_sha256(previous_main)
+        current_sha256 = _artifact_content_sha256(current_main)
+        if (
+            previous_sha256
+            and current_sha256
+            and previous_sha256 == current_sha256
+        ):
+            record = {
+                **envelope,
+                "status": "no_visible_change",
+                "visible_changes": [],
+                "task_progress_evidence": [],
+                "completion_evidence": [],
+                "uncertainties": [],
+                "comparison": {
+                    "method": "sha256",
+                    "identical": True,
+                    "content_sha256": current_sha256,
+                },
+                "derived_by": "host_identical_image_check",
+                "duration_s": max(0.0, time.time() - comparison_started_at_s),
             }
             memory.record("visual_delta", record)
             return record
@@ -643,6 +674,16 @@ def _normalize_artifact(artifact: JsonDict) -> JsonDict:
     if not normalized.get("path") and normalized.get("rgb_path"):
         normalized["path"] = normalized["rgb_path"]
     return normalized
+
+
+def _artifact_content_sha256(artifact: JsonDict) -> str:
+    path_value = artifact.get("path") or artifact.get("rgb_path")
+    if not isinstance(path_value, str) or not path_value:
+        return ""
+    try:
+        return sha256(Path(path_value).read_bytes()).hexdigest()
+    except OSError:
+        return ""
 
 
 def _planner_image_evidence(

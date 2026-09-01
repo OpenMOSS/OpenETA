@@ -1323,7 +1323,7 @@ def action_total_tokens(action: EnvAction) -> int:
 
 def summarize_action(action: EnvAction) -> JsonDict:
     request = action.command.get("request", {})
-    return {
+    summary = {
         "action_type": action.action_type,
         "request_kind": request.get("kind"),
         "request_name": request.get("name"),
@@ -1336,6 +1336,27 @@ def summarize_action(action: EnvAction) -> JsonDict:
         "skill_call": _summarize_skill_call(action.command.get("skill_call")),
         "metadata": summarize_event_payload({"metadata": action.metadata}).get("metadata", {}),
     }
+    if request.get("kind") == "response":
+        parameters = request.get("parameters")
+        parameters = parameters if isinstance(parameters, dict) else {}
+        compact_parameters = {
+            key: parameters[key]
+            for key in (
+                "message",
+                "question",
+                "error_type",
+                "provider_attempts",
+                "provider_error_code",
+                "retryable",
+                "task_complete",
+                "success",
+            )
+            if key in parameters
+            and isinstance(parameters[key], str | int | float | bool | type(None))
+        }
+        if compact_parameters:
+            summary["request_parameters"] = compact_parameters
+    return summary
 
 
 def _summarize_skill_call(skill_call: object) -> object:

@@ -1,0 +1,59 @@
+{
+  "schema_version": "openeta.evaluation_plan.v1",
+  "plan_id": "libero-object-10-pass1-main-group2-xml-20260830",
+  "description": "Fixed-seed pass@1 gate after adopting the main-branch XML planner wire format while preserving evidence-first context partitioning, ToolContract authority, and provider retry/budget semantics. Group 3 remains blocked unless this run reaches the frozen 2/10 baseline.",
+  "episode_manifest": "manifests/libero_object_10_pass1_seed0.json",
+  "variants": [
+    {
+      "variant_id": "main_group2_xml_planner",
+      "runtime": {
+        "visual_history": {
+          "enabled": true,
+          "recent_main_turns": 3,
+          "include_initial_main": true,
+          "include_current_wrist": true,
+          "include_vdm": true,
+          "vdm_recent_delta_limit": 6
+        }
+      },
+      "metadata": {
+        "planner_model": "gpt-5.6-luna",
+        "rollouts_per_task": 1,
+        "code_commit": "f1af1424306bd5631d6ec7d0b68195720119025f",
+        "integration_invariants": [
+          "main planner emits strict XML decisions",
+          "isolated sub-agents retain JSON response contracts",
+          "cache-stable system context precedes growing conversation history",
+          "ToolContract request and receipt authority is unchanged",
+          "provider retry, failover, timeout, and token budgets are unchanged",
+          "unambiguous omitted XML list-container end tags are repaired with a recorded host receipt"
+        ]
+      }
+    }
+  ],
+  "repeats": 1,
+  "schedule": {
+    "shuffle_seed": 20260830
+  },
+  "execution": {
+    "concurrency": 1,
+    "provider_concurrency": 1,
+    "provider_queue_timeout_s": 600,
+    "supervision_profile": "standard",
+    "max_attempts": 2
+  },
+  "metadata": {
+    "benchmark": "LIBERO",
+    "suite": "libero_object",
+    "task_count": 10,
+    "metric": "pass@1",
+    "seed_policy": "fixed seed 0 for every task",
+    "task_failure_retry": false,
+    "baseline_run_id": "libero-object-10-static-reduction-20260828-r02",
+    "baseline_objective_success": "2/10",
+    "group1_gate_run_id": "libero-object-10-main-group1-attachment-remediation-20260830-r02",
+    "group1_objective_success": "3/10",
+    "quality_gate": "objective success must be at least 2/10 before Group 3",
+    "feature_group": "XML main-planner decisions, cache-stable system prefix, and provider thinking controls"
+  }
+}

@@ -200,6 +200,172 @@ def test_python_exec_result_is_projected_into_model_visible_tool_feedback() -> N
     assert projected["candidates"][1]["width"] == 0.079
 
 
+def test_large_ik_receipt_is_semantically_projected_in_conversation() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="check reachability")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "ik_preview_check",
+                    "parameters": {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+                },
+                "tool_calls": [
+                    {
+                        "name": "ik_preview_check",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "reachable",
+                            "details": {
+                                "outputs": {
+                                    "ik_receipt": {
+                                        "receipt_id": "ik-receipt-1",
+                                        "classification": "reachable",
+                                    },
+                                    "motion_summary": {"reached_target": True},
+                                    "raw_solver_trace": [
+                                        {"diagnostic": "x" * 2_000}
+                                        for _ in range(20)
+                                    ],
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    message = memory.model_conversation_messages()[-1]["content"]
+    result = json.loads(message.split("\n", 1)[1])["openeta_host_result"][
+        "tool_calls"
+    ][0]["result"]
+
+    assert result["outputs"]["ik_receipt"]["receipt_id"] == "ik-receipt-1"
+    assert result["outputs"]["projection"]["full_output_omitted"] is True
+    assert "raw_solver_trace" not in result["outputs"]
+    assert len(message) < 12_000
+
+
+def test_attachment_probe_short_handoff_survives_bounded_conversation_projection() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="verify attachment")
+    short_request = {
+        "tool": "ik_preview_check",
+        "parameters": {
+            "probe_id": "probe:short",
+            "waypoint_index": 0,
+            "position_tolerance_m": 0.01,
+            "orientation_tolerance_rad": 0.10,
+            "check_endpoint_collision": True,
+        },
+    }
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "prepare_attachment_probe",
+                    "parameters": {},
+                },
+                "tool_calls": [
+                    {
+                        "name": "prepare_attachment_probe",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "content": "probe prepared",
+                            "details": {
+                                "outputs": {
+                                    "schema_version": "openeta.articulated_attachment_probe.v1",
+                                    "status": "prepared",
+                                    "probe_id": "probe:short",
+                                    "compiled_grasp_id": "compiled-1",
+                                    "scene_epoch": 0,
+                                    "robot_motion_epoch": 0,
+                                    "motion_type": "linear",
+                                    "path_sha256": "short",
+                                    "frozen_path": [
+                                        {"xyz": [0.1, 0.2, 0.3], "trace": "x" * 12_000}
+                                    ],
+                                    "ik_preview_requests": [short_request],
+                                    "execution_handoff": {
+                                        "tool": "move_to",
+                                        "parameters": {"ik_receipt_id": "<receipt>"},
+                                    },
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    feedback = json.loads(memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1])
+    outputs = feedback["openeta_host_result"]["tool_calls"][0]["result"]["outputs"]
+
+    assert outputs["ik_preview_requests"] == [short_request]
+    assert "frozen_path" not in outputs
+
+
+def test_planner_retry_receipt_survives_into_next_turn_host_feedback() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="repair a tool request")
+    action = _action("estimate_depth_prior")
+    action.command["metadata"] = {
+        "planner_metadata": {
+            "validation_attempts": 2,
+            "validation_attempt_history": [
+                {
+                    "attempt": 1,
+                    "decision": {
+                        "kind": "tool_call",
+                        "name": "estimate_depth_prior",
+                    },
+                    "validation_errors": ["source_packet_id is required"],
+                },
+                {
+                    "attempt": 2,
+                    "decision": {
+                        "kind": "tool_call",
+                        "name": "estimate_depth_prior",
+                    },
+                    "validation_errors": [],
+                },
+            ],
+        }
+    }
+
+    memory.add_action(action)
+
+    feedback = json.loads(
+        memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1]
+    )["openeta_host_result"]
+    receipt = feedback["planner_validation_receipt"]
+    assert receipt["schema_version"] == "openeta.planner_validation_receipt.v1"
+    assert receipt["attempt_count"] == 2
+    assert receipt["accepted_attempt"] == 2
+    assert receipt["rejected_attempts"] == [
+        {
+            "attempt": 1,
+            "candidate": {
+                "kind": "tool_call",
+                "name": "estimate_depth_prior",
+            },
+            "accepted": False,
+            "validation_errors": ["source_packet_id is required"],
+        }
+    ]
+    assert "not executed" in receipt["interpretation"]
+
+
 def test_every_tool_projects_bounded_outputs_and_artifact_paths() -> None:
     memory = AgentMemory()
     memory.start_session(task="inspect segmentation")
@@ -312,6 +478,50 @@ def test_large_tool_result_is_bounded_and_keeps_structured_artifact_path() -> No
     assert len(result_message) <= 8_500
     assert artifact_path in result_message
     assert payload["projection"]["bounded"] is True
+
+
+def test_blocked_tool_feedback_keeps_reason_and_structured_repair_bundle() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach a safe pose")
+    reason = "clearance execution did not reach the requested target"
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "blocked",
+                "request": {
+                    "kind": "tool_call",
+                    "name": "move_to",
+                    "parameters": {"target_pose": {"xyz": [0.1, 0.2, 0.3]}},
+                },
+                "tool_calls": [
+                    {
+                        "name": "move_to",
+                        "status": "skipped",
+                        "reason": reason,
+                    }
+                ],
+                "metadata": {
+                    "repair_bundle": {
+                        "schema_version": "openeta.gate_repair.v1",
+                        "code": "clearance_not_reached",
+                        "violated_invariant": reason,
+                        "evidence_ids": ["receipt:move-1"],
+                        "allowed_next_calls": [
+                            {"tool": "observe", "parameters": {}}
+                        ],
+                    }
+                },
+            },
+        )
+    )
+
+    feedback = json.loads(
+        memory.model_conversation_messages()[-1]["content"].split("\n", 1)[1]
+    )["openeta_host_result"]
+    assert feedback["tool_calls"][0]["reason"] == reason
+    assert feedback["repair_bundle"]["code"] == "clearance_not_reached"
+    assert feedback["repair_bundle"]["allowed_next_calls"][0]["tool"] == "observe"
 
 
 def test_environment_assigned_task_survives_many_tool_calls() -> None:
@@ -574,6 +784,70 @@ def test_backend_places_cache_stable_context_before_growing_history() -> None:
     assert layout["stable_context_sha256"] == second_result.details["prompt_layout"][
         "stable_context_sha256"
     ]
+    assert "response_format" not in captured["bodies"][0]
+
+
+def test_backend_collapses_leading_system_messages_without_moving_static_prefix() -> None:
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": (
+                            "<decision><kind>response</kind><name>talk</name>"
+                            "<reasoning>ok</reasoning><parameters/></decision>"
+                        )
+                    },
+                }
+            ],
+            "usage": {"total_tokens": 12},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="test-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+            enable_vision=False,
+        ),
+        transport=fake_transport,
+    )
+    backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "schema_version": "openeta.agent_context.v2",
+                "current_observation": {"step_idx": 1},
+                "available_tools": [{"name": "move_to"}],
+            },
+            system_prompt="return xml",
+            conversation_summary="Earlier move_to calls completed.",
+            conversation_messages=[
+                {"role": "user", "content": "pick milk"},
+                {"role": "assistant", "content": "<decision/>"},
+            ],
+        )
+    )
+
+    messages = captured["body"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    merged_system = messages[0]["content"]
+    assert merged_system.startswith("return xml")
+    assert "openeta.planner_static_context.v1" in merged_system
+    assert "Earlier move_to calls completed." in merged_system
+    assert merged_system.index("openeta.planner_static_context.v1") < merged_system.index(
+        "Earlier move_to calls completed."
+    )
+    assert "response_format" not in captured["body"]
 
 
 def test_backend_collapses_leading_system_messages_by_default() -> None:
@@ -662,6 +936,7 @@ def test_backend_keeps_isolated_context_in_one_user_message() -> None:
             api_base="https://api.example.test",
             api_key="secret-key",
             enable_vision=False,
+            enable_thinking=False,
         ),
         transport=fake_transport,
     )
@@ -683,3 +958,5 @@ def test_backend_keeps_isolated_context_in_one_user_message() -> None:
         {"name": "move_to"}
     ]
     assert result.details["prompt_layout"]["cache_stable_prefix_enabled"] is False
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}

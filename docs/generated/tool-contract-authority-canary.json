@@ -1,0 +1,95 @@
+{
+  "schema_version": "openeta.tool_contract_authority_canary.v1",
+  "passed": true,
+  "tool": "estimate_depth_prior",
+  "session_id": "estimate-depth-prior-grasp-quality-20260825",
+  "manifest": "/tmp/openeta-toolcontract-estimate-canary-20260825/sessions/estimate-depth-prior-grasp-quality-20260825/rollout/manifest.json",
+  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+  "policy": {
+    "executable_gate_authority": "legacy_runtime",
+    "gate_repair_envelope_authority": [],
+    "request_validation_authority": [
+      "estimate_depth_prior"
+    ],
+    "schema_version": "openeta.tool_contract_runtime_policy.v1"
+  },
+  "planner_pipeline_alignment": {
+    "catalog_match": true,
+    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+    "pipeline_policy": {
+      "executable_gate_authority": "legacy_runtime",
+      "gate_repair_envelope_authority": [],
+      "request_validation_authority": [
+        "estimate_depth_prior"
+      ],
+      "schema_version": "openeta.tool_contract_runtime_policy.v1"
+    },
+    "pipeline_present": true,
+    "policy_match": true
+  },
+  "model_call_count": 2,
+  "durable_tool_event_count": 2,
+  "request_traces": [
+    {
+      "acceptance_match": true,
+      "authoritative_validator": "tool_contract",
+      "contract_accepted": false,
+      "contract_maturity": "verified",
+      "contract_violations": [
+        {
+          "code": "request_required_field_missing",
+          "message": "parameters requires field 'source_packet_id'.",
+          "path": "parameters.source_packet_id",
+          "tool": "estimate_depth_prior"
+        }
+      ],
+      "enforcing": true,
+      "evaluated": true,
+      "legacy_accepted": false,
+      "legacy_errors": [
+        "estimate_depth_prior requires `parameters.source_packet_id` copied exactly from visible observation evidence."
+      ],
+      "schema_version": "openeta.tool_contract_shadow_validation.v1",
+      "tool": "estimate_depth_prior"
+    },
+    {
+      "acceptance_match": true,
+      "authoritative_validator": "tool_contract",
+      "contract_accepted": true,
+      "contract_maturity": "verified",
+      "contract_violations": [],
+      "enforcing": true,
+      "evaluated": true,
+      "legacy_accepted": true,
+      "legacy_errors": [],
+      "schema_version": "openeta.tool_contract_shadow_validation.v1",
+      "tool": "estimate_depth_prior"
+    }
+  ],
+  "successful_execution_count": 1,
+  "authority_audit": {
+    "schema_version": "openeta.tool_contract_authority_audit.v1",
+    "source_root": "/tmp/openeta-toolcontract-estimate-canary-20260825",
+    "manifest_count": 1,
+    "auditable_manifest_count": 1,
+    "conformant": true,
+    "violation_count": 0,
+    "violations": [],
+    "runs": [
+      {
+        "manifest": "/tmp/openeta-toolcontract-estimate-canary-20260825/sessions/estimate-depth-prior-grasp-quality-20260825/rollout/manifest.json",
+        "session_id": "estimate-depth-prior-grasp-quality-20260825",
+        "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+        "request_validation_authority": [
+          "estimate_depth_prior"
+        ],
+        "gate_repair_envelope_authority": [],
+        "request_trace_count": 2,
+        "request_enforcing_trace_count": 2,
+        "gate_trace_count": 0,
+        "gate_enforcing_trace_count": 0
+      }
+    ]
+  },
+  "interpretation": "Only estimate_depth_prior request validation is contract-authoritative; gate-repair authority remains empty and executable gates remain legacy."
+}

@@ -15,108 +15,98 @@ allowed_tools:
   - anyplace
   - camera_pose_to_world
   - ik_preview_check
-  - obstacle_avoidance
   - move_to
+  - follow_eef_trajectory
   - gripper_control
 ---
 # Place
 
-Use this skill as text guidance only. Do not treat `place` as an executable
-macro. After each tool result, inspect the returned observation or tool output
-before choosing the next tool call.
+Use this as reusable placement guidance, not an executable macro. It explains
+placement decisions; the live tool contracts exclusively define request fields,
+returned references, validity rules, and repair payloads.
 
-## Recommended Tool Sequence
+## Plan placement evidence early
 
-1. For a combined pick-and-place task, plan placement before the first grasp
-   motion. AnyPlace requires the object and placement region from one aligned
-   pre-grasp RGBD observation. Do not wait until the object has moved.
-2. Compile the targeted `grasp_pose_estimate` candidate chosen for pickup so the
-   host evidence graph can bind that exact candidate to `details.outputs.source`.
-   On the same original RGB image, call
-   `sam3` for the basket, bin, or other placement region with
-   `evidence_role="placement_region"`, then resolve its selection obligation with
-   `select_sam3_detection`. Target-object and placement-region selections occupy
-   separate semantic evidence slots; never reuse the default `target_object` role
-   for a receptacle. After object selection, use the RGB, depth, intrinsics, and
-   mask from that aligned observation directly; do not call `observe` merely to
-   refresh unchanged artifact paths.
-3. When `host_resolved_inputs.anyplace.status=ready`, call `anyplace` with only
-   its exact `bundle_id`. The host resolves the frozen RGB, depth, intrinsics,
-   selected object mask, placement-region mask, grasp candidate, and source
-   provenance atomically. Never copy, shorten, reconstruct, or override those
-   fields in model output. A ready bundle may report
-   `placement_evidence_reuse.mode=fixed_camera_identity`: the host has safely
-   retained the unchanged receptacle mask while rebinding RGB-D to a newer grasp
-   source on the same fixed scene camera, so do not segment it again. If the bundle
-   reports `placement_source_mismatch`, execute its exact `repair_call` parameters
-   instead of choosing a current or remembered image path yourself. The repair
-   may request `placement_region` on the grasp source, or `target_object` on a
-   fixed scene camera when the active grasp came from wrist. In the latter case,
-   select the target, estimate and compile a grasp from the refreshed host bundle,
-   and retain the existing placement selection so the resolver can form a
-   same-camera bundle. Wrist/hand cameras move and therefore do not qualify for
-   fixed-camera reuse.
-   Never run grasp estimation on the receptacle as a substitute for AnyPlace.
-4. Complete the pickup using the selected grasp. After closing the gripper,
-   call `observe` and require positive evidence that the object moved with the
-   end effector before starting placement.
-5. Choose one complete `placement_candidates[i].place_grasp_pose` from the
-   retained AnyPlace result as the placement reference. When matching
-   intrinsics and a receptacle mask are available, prefer the compatible
-   candidate whose projected gripper tip has the greatest interior mask
-   clearance; score/rank remains a fallback, not proof of a safe release.
-   Transform the selected pose with
-   `camera_pose_to_world` using the matching original camera extrinsics; do not
-   reuse a receptacle grasp pose or invent an unrelated world-frame coordinate.
-6. Treat the transformed AnyPlace pose as the low release reference, not as a
-   one-step carry trajectory. First move the closed gripper to the profile-derived
-   pre-place hover over the same world X/Y. Raise to the supplied clearance before
-   translating, then use the bounded horizontal waypoints from
-   `placement_motion_guidance` rather than one long carry. Preserve the current
-   EEF orientation and do not combine lateral carry with receptacle descent. A
-   planned endpoint should pass `ik_preview_check` before motion. Use its
-   position/orientation residuals to adjust an unreachable waypoint; do not treat
-   `unknown` as proof of safety. This is endpoint IK only, so retain separate
-   `obstacle_avoidance` evidence for the carry path. A
-   confirmed held object participates in the collision envelope. If motion is
-   rejected with `collision_type=attached_object_world`, use the named obstacle
-   and predicted pose to choose a higher or more central waypoint; do not repeat
-   the same diagonal path.
-7. Inspect the fresh image after every carry waypoint. The earlier lift-probe
-   PASS is stale after motion: continue only when the target is still co-located
-   with the gripper and its source location remains vacant. If the target is
-   visible elsewhere and the closed-gripper openness has collapsed to the empty
-   threshold, follow the `attachment_lost` recovery action so the current grasp
-   candidate is rejected before regrasping.
-8. Treat the transformed AnyPlace Z as a low geometric reference. Descend only
-   to the profile-derived `placement_motion_guidance.release_pose`, so the held
-   object enters the receptacle without
-   driving the gripper or object into its rim. A bounded world-frame adjustment
-   is allowed when fresh visual feedback improves receptacle clearance. Centre
-   the held object inside the receptacle's reported placement corridor before
-   descending; corridor entry permits intentional insertion but not rim overlap.
-9. Call `gripper_control` with `position=1` only after the vertical placement
-   motion succeeds and fresh evidence still supports attachment over the
-   receptacle.
-10. Retreat with `move_to`, then call `observe` to verify the object was released
-    in the intended place and check the official task reward.
+1. In a combined pick-and-place task, establish placement evidence before the
+   first grasp motion when the placement estimator requires the object and
+   receptacle from the same aligned pre-grasp scene. Do not wait until the held
+   object occludes or changes that evidence.
+2. Segment and visually confirm the receptacle or support region separately from
+   the grasp target. A high segmentation score does not prove that the region is
+   the requested destination. Keep object identity and placement-region identity
+   as distinct evidence.
+3. Use host-prepared placement evidence when it is ready. If it is stale or
+   mismatched, follow the structured repair offered by the tool rather than
+   choosing remembered image paths or rebuilding calibration. Fixed scene-camera
+   evidence may remain reusable when the host proves its identity and geometry
+   unchanged; moving wrist-camera evidence does not receive that assumption.
+4. An exact-task playbook may identify the destination or describe a previously
+   successful carry pattern. Treat that as a scoped prior only and re-verify the
+   current scene, free space, attachment, and destination before acting.
 
-## Recovery Notes
+## Choose a release reference
 
-- If the target receptacle or surface is ambiguous, call `ask_human` before
-  moving.
-- If an already-held object has no retained targeted grasp-estimation provenance or
-  pre-grasp aligned placement mask, do not fabricate AnyPlace inputs. Ask for a
-  new supported plan or use an explicit task-provided release pose.
-- If the target is occluded, observe from another camera or request a broader
-  scene query before choosing a release pose.
-- If the simulator reports an unreachable or colliding path, choose a higher
-  pre-place pose or a different approach direction.
-- If the object remains in the gripper after opening, retry `gripper_control`
-  once, observe, then ask for help or replan.
-- Never release an object from stale perception. Observe again after every
-  world-mutating tool call.
+5. Select a complete placement candidate using visible containment, clearance
+   from receptacle walls or support edges, object footprint, and estimator
+   ranking. Prefer an interior candidate with robust clearance when that evidence
+   is available. Ranking is a heuristic, not proof that the carried object will
+   fit or remain stable.
+6. Transform the selected placement reference with the matching camera
+   calibration before motion. Treat the transformed pose as a low geometric
+   release reference, not as a one-step carry trajectory or immutable command.
+   Never substitute a grasp pose on the receptacle for a placement estimate.
 
-For explicit clearance or controller-profile discovery, use the
-`embodiment_explore` skill outside the benchmark episode. Do not copy a
-successful value from another robot or environment into this task.
+## Carry and approach
+
+7. Begin placement only after fresh evidence still supports attachment. Keep the
+   gripper latched throughout the carry and reason about collisions using the
+   full held-object extent, not only the fingers.
+8. Decompose transport according to current geometry: first obtain vertical
+   clearance, then use bounded lateral motion above clutter, and perform descent
+   as a separate edge. Preserve the current orientation unless an explicitly
+   checked change is useful. Avoid diagonal motion through a receptacle rim or
+   nearby object.
+9. Check every chosen endpoint before execution and inspect the actual motion
+   result. Endpoint reachability does not prove path clearance. When attached-
+   object collision is reported, use the named obstacle and predicted geometry
+   to choose a higher, more central, or lateral detour. If the conservative
+   envelope starts in overlap, choose a monotonic escape that reduces it rather
+   than disabling collision checks.
+10. Reassess attachment after carry waypoints. A probe result from before a long
+    motion is historical evidence; visible separation, source reappearance, or
+    empty-gripper evidence requires stopping placement and reacquiring the object.
+
+## Release
+
+11. Refine the low placement reference with current visual evidence while staying
+    inside the runtime safety envelope. Choose the release geometry from the
+    object, receptacle, and corridor rather than treating one method as a fixed
+    phase:
+
+    - Use controlled descent when the opening or support surface is clear and
+      the carried object can enter without rim contact.
+    - A bounded raised drop can be reasonable for a visibly open container and a
+      non-fragile object that clearly fits when descent adds more rim risk. Do not
+      use it for surface placement, fragile objects, narrow openings, or uncertain
+      containment.
+
+12. Stop lateral motion before release. Open only after the selected endpoint was
+    actually reached and fresh evidence still shows the object attached over the
+    intended destination. A failed carry or descent is not a valid release premise.
+13. Retreat to reveal the result, observe, and verify that the object is no
+    longer held and is stably on or inside the intended target. In benchmark
+    episodes, use the official environment reward as the completion authority.
+
+## Recovery choices
+
+- Ambiguous destination: obtain another view or ask for clarification.
+- Missing compatible pre-grasp placement evidence: use the structured repair or
+  report the capability gap; do not fabricate a placement pose.
+- Blocked carry: raise or route around the named obstacle using newly checked
+  geometry rather than replaying the failed diagonal path.
+- Object lost in transit: stop, re-ground the target, and return to pick guidance.
+- Object remains held after release: observe the contact and receptacle geometry,
+  then retry only if evidence supports a safe release adjustment.
+
+For explicit controller-profile or clearance characterization, use the
+`embodiment_explore` skill outside the benchmark episode.

@@ -1,0 +1,187 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "gripper_control",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-gripper-control-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.tools.sim_mcp.SimulatorMcpToolProxy.handler_for",
+  "host_resolver_id": "",
+  "host_resolver_implementation": "",
+  "cases": [
+    {
+      "case": "handler_success_1",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "mutation_acknowledged",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-gripper-control-r5/open/responses/fixture-sim-session-456916ecdf-0001-gripper_open/gripper_open-response.json"
+      ],
+      "environment_receipt_present": true,
+      "state_delta_keys": [
+        "motion"
+      ],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_success_2",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "requires_attachment_probe",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-gripper-control-r5/tentative/responses/fixture-sim-session-6708920001-0001-gripper_close/gripper_close-response.json"
+      ],
+      "environment_receipt_present": true,
+      "state_delta_keys": [
+        "motion"
+      ],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_success_3",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "no_attachment_evidence",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-gripper-control-r5/empty/responses/fixture-sim-session-e62efa77a4-0001-gripper_close/gripper_close-response.json"
+      ],
+      "environment_receipt_present": true,
+      "state_delta_keys": [
+        "motion"
+      ],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_success_4",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "attachment_contract_unavailable",
+      "diagnostic_codes": [
+        "attachment_proxy_backend_contract_missing"
+      ],
+      "diagnostic_messages": [
+        "The simulator accepted host contact authorization but did not return an attachment-proxy receipt. Physical attachment and carried-object collision coverage remain unknown."
+      ],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/.openeta_eval/audits/toolcontract-fixture-gripper-control-r5/missing/responses/fixture-sim-session-6fa05c818a-0001-gripper_close/gripper_close-response.json"
+      ],
+      "environment_receipt_present": true,
+      "state_delta_keys": [
+        "motion"
+      ],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_dependency_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "simulator_mcp_call_failed"
+      ],
+      "diagnostic_messages": [
+        "deterministic simulator fixture failure: gripper_open"
+      ],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "motion_reconciliation_gate_rejection",
+      "boundary": "ActionPipeline -> host gate",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "motion_reconciliation_required",
+      "matched_gate_check_ids": [
+        "runtime.motion_reconciliation"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "gripper_control",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "command is exactly binary",
+          "contact close does not rely on superseded target provenance"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.motion_reconciliation",
+            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+            "repair_codes": [
+              "motion_reconciliation_required"
+            ],
+            "applies_when": "motion reconciliation status is required or unresolved"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "attachment_contract_unavailable",
+      "mutation_acknowledged",
+      "no_attachment_evidence",
+      "requires_attachment_probe"
+    ],
+    "observed_success_outcomes": [
+      "attachment_contract_unavailable",
+      "mutation_acknowledged",
+      "no_attachment_evidence",
+      "requires_attachment_probe"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "attachment_contract_unavailable",
+      "mutation_acknowledged",
+      "no_attachment_evidence",
+      "operational_failure",
+      "requires_attachment_probe"
+    ],
+    "observed_declared_outcomes": [
+      "attachment_contract_unavailable",
+      "mutation_acknowledged",
+      "no_attachment_evidence",
+      "operational_failure",
+      "requires_attachment_probe"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": true,
+    "matched_gate_check_ids": [
+      "runtime.motion_reconciliation"
+    ],
+    "freshness_and_invalidation_covered": false,
+    "remote_backend_semantics_covered": false,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

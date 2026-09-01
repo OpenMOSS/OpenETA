@@ -1,0 +1,131 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "estimate_depth_prior",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.tools.handlers.build_depth_prior_handler",
+  "host_resolver_id": "openeta.host_resolver.estimate_depth_prior.v1",
+  "host_resolver_implementation": "agent.tools.runtime_contract_bindings._resolve_estimate_depth_prior_input",
+  "cases": [
+    {
+      "case": "handler_success",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "completed",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-confidence.npy",
+        ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/agentview-depth.npy",
+        ".openeta_eval/audits/toolcontract-fixture-estimate-depth-prior-r5/success/fixture-success/20260820T140157055080Z-994e84eb/tool_result.json"
+      ],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "mcp_call_failed"
+      ],
+      "diagnostic_messages": [],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "host_resolution_gate_rejection",
+      "boundary": "ActionPipeline -> host resolver",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "invalid_source_packet",
+      "matched_gate_check_ids": [
+        "runtime.source_packet_resolution"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "host_resolution_receipt": {
+        "schema_version": "openeta.host_resolution_receipt.v1",
+        "status": "rejected",
+        "tool": "estimate_depth_prior",
+        "resolver_id": "openeta.host_resolver.estimate_depth_prior.v1",
+        "implementation": "agent.tools.runtime_contract_bindings._resolve_estimate_depth_prior_input",
+        "dispatch_authority": "tool_contract",
+        "repair_code": "invalid_source_packet",
+        "public_parameter_keys": [
+          "camera_frame_id",
+          "source_packet_id"
+        ]
+      },
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "estimate_depth_prior",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "source packet and camera frame resolve",
+          "resolution level is in [0, 10)",
+          "returned metric depth is a numeric HxW artifact",
+          "confidence semantics are explicit"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.source_packet_resolution",
+            "description": "Opaque packet and camera ids resolve to one immutable host packet.",
+            "implementation": "agent/tools/runtime_contract_bindings.py:resolve_host_parameters",
+            "repair_codes": [
+              "invalid_source_packet",
+              "same_view_packet_mismatch"
+            ],
+            "applies_when": "the public request contains source packet references"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "completed"
+    ],
+    "observed_success_outcomes": [
+      "completed"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "observed_declared_outcomes": [
+      "completed",
+      "operational_failure"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": true,
+    "matched_gate_check_ids": [
+      "runtime.source_packet_resolution"
+    ],
+    "freshness_and_invalidation_covered": true,
+    "remote_backend_semantics_covered": true,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

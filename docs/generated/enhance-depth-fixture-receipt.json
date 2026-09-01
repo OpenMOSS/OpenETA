@@ -1,0 +1,183 @@
+{
+  "schema_version": "openeta.tool_contract_fixture_receipt.v1",
+  "tool": "enhance_depth",
+  "authority": "promotion_evidence_only",
+  "artifact_root": ".openeta_eval/audits/toolcontract-fixture-enhance-depth-r5",
+  "contract_schema_version": "openeta.tool_contract.v1",
+  "contract_maturity": "verified",
+  "handler_implementation": "agent.runtime.runtime.OpenEtaAgentRuntime._enhance_depth_tool",
+  "host_resolver_id": "openeta.host_resolver.enhance_depth.v1",
+  "host_resolver_implementation": "agent.tools.runtime_contract_bindings._resolve_enhance_depth_input",
+  "cases": [
+    {
+      "case": "handler_success_1",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "depth_enhanced",
+      "diagnostic_codes": [],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/tmp/tool_result/depth_enhancement/depth-fixture-enhanced/enhanced-fixture/wrist-depth-enhancement.json"
+      ],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_success_2",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": true,
+      "semantic_outcome": "requires_depth_alignment_repair",
+      "diagnostic_codes": [
+        "alignment_scale_out_of_bounds"
+      ],
+      "diagnostic_messages": [],
+      "artifact_paths": [
+        "/media/user/B29202FA9202C2B91/Stage2-OpenETA/OpenETA/tmp/tool_result/depth_enhancement/depth-fixture-repair/repair-fixture/wrist-depth-enhancement.json"
+      ],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "handler_dependency_failure",
+      "boundary": "ToolRegistry -> production handler",
+      "executed": true,
+      "operational_success": false,
+      "semantic_outcome": "operational_failure",
+      "diagnostic_codes": [
+        "depth_enhancement_failed"
+      ],
+      "diagnostic_messages": [
+        ".openeta_eval/audits/toolcontract-fixture-enhance-depth-r5/missing-depth.png"
+      ],
+      "artifact_paths": [],
+      "environment_receipt_present": false,
+      "state_delta_keys": [],
+      "conformant": true,
+      "violations": []
+    },
+    {
+      "case": "motion_reconciliation_gate_rejection",
+      "boundary": "ActionPipeline -> host gate",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "motion_reconciliation_required",
+      "matched_gate_check_ids": [
+        "runtime.motion_reconciliation"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "enhance_depth",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "RGB and sensor depth are aligned and share packet provenance",
+          "intrinsics and scale are complete",
+          "optional prior matches the same source",
+          "sensor depth remains the hard safety constraint"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.motion_reconciliation",
+            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+            "repair_codes": [
+              "motion_reconciliation_required"
+            ],
+            "applies_when": "motion reconciliation status is required or unresolved"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    },
+    {
+      "case": "freshness_or_provenance_gate_rejection",
+      "boundary": "ActionPipeline -> host resolver",
+      "blocked": true,
+      "tool_execution_count": 0,
+      "repair_code": "invalid_source_packet",
+      "matched_gate_check_ids": [
+        "runtime.source_packet_resolution"
+      ],
+      "authoritative_gate": "legacy_runtime",
+      "enforcing": false,
+      "conformant": true,
+      "contract_shadow_validation": {
+        "schema_version": "openeta.gate_contract_shadow_validation.v1",
+        "evaluated": true,
+        "enforcing": false,
+        "authoritative_gate": "legacy_runtime",
+        "repair_envelope_authority": "legacy_runtime",
+        "tool": "enhance_depth",
+        "contract_maturity": "verified",
+        "contract_gate_checks": [
+          "RGB and sensor depth are aligned and share packet provenance",
+          "intrinsics and scale are complete",
+          "optional prior matches the same source",
+          "sensor depth remains the hard safety constraint"
+        ],
+        "contract_gate_binding_count": 3,
+        "matched_gate_bindings": [
+          {
+            "check_id": "runtime.source_packet_resolution",
+            "description": "Opaque packet and camera ids resolve to one immutable host packet.",
+            "implementation": "agent/tools/runtime_contract_bindings.py:resolve_host_parameters",
+            "repair_codes": [
+              "invalid_source_packet",
+              "same_view_packet_mismatch"
+            ],
+            "applies_when": "the public request contains source packet references"
+          }
+        ],
+        "conformant": true,
+        "violations": []
+      }
+    }
+  ],
+  "coverage": {
+    "expected_success_outcomes": [
+      "depth_enhanced",
+      "requires_depth_alignment_repair"
+    ],
+    "observed_success_outcomes": [
+      "depth_enhanced",
+      "requires_depth_alignment_repair"
+    ],
+    "all_success_outcomes_covered": true,
+    "expected_declared_outcomes": [
+      "depth_enhanced",
+      "operational_failure",
+      "requires_depth_alignment_repair"
+    ],
+    "observed_declared_outcomes": [
+      "depth_enhanced",
+      "operational_failure",
+      "requires_depth_alignment_repair"
+    ],
+    "all_declared_outcomes_covered": true,
+    "representative_failure_covered": true,
+    "runtime_gate_evidence_observed": true,
+    "runtime_gate_rejection_observed": true,
+    "matched_gate_check_ids": [
+      "runtime.motion_reconciliation",
+      "runtime.source_packet_resolution"
+    ],
+    "freshness_and_invalidation_covered": true,
+    "remote_backend_semantics_covered": true,
+    "world_mutating_execution_receipt_covered": true
+  },
+  "conformant": true
+}

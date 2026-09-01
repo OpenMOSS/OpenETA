@@ -200,21 +200,32 @@ def test_thin_object_still_arms_a_proxy() -> None:
             }
         ]
     }
-    _arm_attachment_proxy(meta, _observation([0.0, 0.0, 0.13], 0.02))
+    target = meta["_collision_objects"][0]
+    receipt = _arm_attachment_proxy(
+        meta,
+        _observation([0.0, 0.0, 0.13], 0.02),
+        authorized_object=target,
+    )
     assert meta["_attachment_proxy"]["status"] == "tentative"
-    assert meta["_attachment_proxy"]["measured_aperture"] == 0.02
-    assert meta["_attachment_probe"]["armed"] is True
+    assert meta["_attachment_proxy"]["binding_source"] == "host_compiled_target_provenance"
+    assert meta["_attachment_proxy"]["measured_open_fraction"] == 0.02
+    assert receipt["measured_open_fraction"] == 0.02
+    assert receipt["attachment_proven"] is False
 
 
 def test_failed_arming_leaves_a_diagnostic() -> None:
     meta = {"_collision_objects": [
         {"name": "far_1", "category": "box", "position": [1.0, 1.0, 1.0], "dims": [0.05] * 3}
     ]}
-    _arm_attachment_proxy(meta, _observation([0.0, 0.0, 0.17], 0.63))
+    receipt = _arm_attachment_proxy(
+        meta,
+        _observation([0.0, 0.0, 0.17], 0.63),
+        authorized_object=meta["_collision_objects"][0],
+    )
     assert "_attachment_proxy" not in meta
-    probe = meta["_attachment_probe"]
-    assert probe["armed"] is False
-    assert probe["reason"] == "no_object_within_grasp_radius"
+    assert receipt["status"] == "not_armed"
+    assert receipt["reason"] == "authorized_target_outside_contact_envelope"
+    assert receipt["attachment_proven"] is False
 
 
 # ── safety obstacles: populated world, target exclusion ──────────────

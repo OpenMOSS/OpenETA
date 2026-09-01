@@ -148,6 +148,9 @@ def classify_evaluation_failure(outcome: JsonDict) -> JsonDict:
             "code": "",
             "retryable": False,
         }
+    provider_pause = _provider_failure_pause(outcome)
+    if provider_pause:
+        return provider_pause
     if outcome.get("status") == "need_human":
         return {
             "class": "human_intervention",
@@ -222,6 +225,49 @@ def classify_evaluation_failure(outcome: JsonDict) -> JsonDict:
         "stage": "episode",
         "code": code or error_type or "episode_failed",
         "retryable": False,
+    }
+
+
+def _provider_failure_pause(outcome: JsonDict) -> JsonDict:
+    """Distinguish provider exhaustion from a real Agent clarification request."""
+
+    if outcome.get("status") != "need_human":
+        return {}
+    episode = outcome.get("episode")
+    episode = episode if isinstance(episode, dict) else {}
+    steps = episode.get("steps")
+    steps = steps if isinstance(steps, list) else []
+    if not steps or not isinstance(steps[-1], dict):
+        return {}
+    action = steps[-1].get("action")
+    action = action if isinstance(action, dict) else {}
+    parameters = action.get("request_parameters")
+    parameters = parameters if isinstance(parameters, dict) else {}
+    message = str(parameters.get("message") or "").strip().lower()
+    error_type = str(parameters.get("error_type") or "").strip()
+    provider_error_code = str(
+        parameters.get("provider_error_code") or ""
+    ).strip()
+    provider_attempts = parameters.get("provider_attempts")
+    if action.get("request_name") != "ask_human" or not (
+        message == "planner provider request failed."
+        and isinstance(provider_attempts, int)
+        and provider_attempts > 0
+    ):
+        return {}
+    retryable_value = parameters.get("retryable")
+    retryable = retryable_value if isinstance(retryable_value, bool) else True
+    external_dependency = provider_error_code in {
+        "insufficient_provider_quota",
+        "provider_credentials_or_access_denied",
+    }
+    return {
+        "class": "external_dependency" if external_dependency else "infrastructure",
+        "stage": "provider",
+        "code": provider_error_code or "planner_provider_request_failed",
+        "retryable": retryable,
+        "error_type": error_type or None,
+        "provider_attempts": provider_attempts,
     }
 
 

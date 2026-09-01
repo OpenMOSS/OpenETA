@@ -195,6 +195,39 @@ def test_main_view_vdm_and_bounded_camera_window(tmp_path: Path) -> None:
     ]
 
 
+def test_identical_main_view_skips_vdm_but_preserves_delta_coverage(
+    tmp_path: Path,
+) -> None:
+    memory = AgentMemory(store=JsonMemoryStore(tmp_path / "memory"))
+    memory.start_session(task="inspect without moving", session_id="episode")
+    backend = RecordingVdmBackend()
+    manager = VisualHistoryManager(config=VisualHistoryConfig(), backend=backend)
+    first = _observation(tmp_path, 0)
+    second = _observation(tmp_path, 1)
+    first_main = Path(first.metadata["image_artifacts"][0]["path"])
+    second_main = Path(second.metadata["image_artifacts"][0]["path"])
+    second_main.write_bytes(first_main.read_bytes())
+
+    memory.add_observation(first)
+    assert manager.observe(first, memory=memory) is None
+    memory.add_observation(second)
+    record = manager.observe(second, memory=memory)
+
+    assert backend.requests == []
+    assert record is not None
+    assert record["status"] == "no_visible_change"
+    assert record["derived_by"] == "host_identical_image_check"
+    assert record["comparison"] == {
+        "method": "sha256",
+        "identical": True,
+        "content_sha256": record["comparison"]["content_sha256"],
+    }
+    assert record["comparison"]["content_sha256"]
+    assert record.get("usage") is None
+    assert len(observation_history(memory)) == 2
+    assert len(visual_delta_history(memory)) == 1
+
+
 def test_initial_overlap_and_recent_window_are_deduplicated(tmp_path: Path) -> None:
     memory, _backend, observations = _record_trajectory(tmp_path, count=3)
     projection = build_visual_history_projection(

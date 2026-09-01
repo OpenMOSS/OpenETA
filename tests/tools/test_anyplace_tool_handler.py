@@ -218,6 +218,19 @@ def test_anyplace_handler_encodes_inputs_and_materializes_success(tmp_path: Path
     )
     assert result.details["selected_grasp_id"] == "grasp_003"
     assert result.details["selected_grasp_source"]["source_tool"] == "anygrasp"
+    assert result.details["result_id"].startswith("anyplace-result:")
+    assert result.details["camera_pose_to_world_handoff"] == {
+        "tool": "camera_pose_to_world",
+        "placement_result_id": result.details["result_id"],
+        "valid_candidate_ids": [f"placement_{index:03d}" for index in range(5)],
+        "required_parameters": ["placement_result_id", "candidate_id"],
+        "host_resolves": [
+            "place_grasp_pose",
+            "source_observation_packet",
+            "camera_extrinsics",
+        ],
+    }
+    assert "with only placement_result_id=" in result.content
     assert all(
         item["place_grasp_pose"]["source_tool"] == "anygrasp"
         for item in result.details["placement_candidates"]

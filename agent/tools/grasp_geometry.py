@@ -34,12 +34,20 @@ SUPPORTED_GRASP_CALIBRATION_SCHEMAS = {
 }
 COMPILED_GRASP_SCHEMA = "openeta.compiled_grasp_seed.v1"
 WRIST_ALIGNMENT_SCHEMA = "openeta.wrist_alignment.v1"
+WRIST_ALIGNMENT_OPERATING_REGION_SCHEMA = (
+    "openeta.wrist_alignment_operating_region.v1"
+)
+TARGET_MASK_QUALITY_SCHEMA = "openeta.target_mask_quality.v1"
+WRIST_VIEWPOINT_PROPOSAL_SCHEMA = "openeta.wrist_viewpoint_proposal.v1"
 DEFAULT_GRASP_PROFILE = DEFAULT_GRASP_CALIBRATION_PROFILE
 _OPENCV_TO_OPENGL = [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]
 _PANDA_TOP_DOWN_ROTATION = [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]
 _WORLD_NEGATIVE_Z = [0.0, 0.0, -1.0]
 _MIN_SAFE_HOVER_DISTANCE_M = 0.15
 _DEFAULT_REFINEMENT_HOVER_CLEARANCE_M = 0.20
+_DEFAULT_WRIST_ALIGNMENT_MAX_REFERENCE_DISTANCE_M = 0.08
+_DEFAULT_WRIST_ALIGNMENT_RESIDUAL_STEP_LIMIT_M = 0.02
+_DEFAULT_WRIST_ALIGNMENT_RESIDUAL_CUMULATIVE_LIMIT_M = 0.10
 _ARTICULATED_HANDLE_APPROACH_MODES = {"top_down", "front", "side"}
 
 
@@ -60,6 +68,102 @@ class GraspCandidateRejected(GraspGeometryError):
         super().__init__(message)
         self.rejection_code = rejection_code
         self.recovery_class = recovery_class
+
+
+def rebase_camera_grasp_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    source_camera_extrinsics: Mapping[str, Any],
+    target_camera_extrinsics: Mapping[str, Any],
+) -> JsonDict:
+    """Express one OpenCV camera-frame grasp in another calibrated camera.
+
+    The grasp itself is unchanged in world space.  This host-side transform is
+    used when a moving wrist camera produced the best pickup candidate but a
+    fixed scene camera owns the aligned object/placement masks required by
+    AnyPlace.  It must never be used without exact packet-owned extrinsics for
+    both cameras.
+    """
+
+    if str(candidate.get("frame") or "") != "camera":
+        raise GraspGeometryError("candidate.frame must be 'camera'")
+    if str(candidate.get("camera_frame") or "opencv").lower() != "opencv":
+        raise GraspGeometryError("candidate.camera_frame must be 'opencv'")
+    source_rotation = _rotation(
+        candidate.get("rotation_matrix"), "candidate.rotation_matrix"
+    )
+    source_translation = _vector(
+        candidate.get("translation_xyz"), 3, "candidate.translation_xyz"
+    )
+    source_tip = _vector(
+        candidate.get("gripper_tip_position_xyz"),
+        3,
+        "candidate.gripper_tip_position_xyz",
+    )
+    source_execution_center = _vector(
+        candidate.get("execution_contact_center_xyz", source_translation),
+        3,
+        "candidate.execution_contact_center_xyz",
+    )
+    world_from_source, world_source_position = _opencv_camera_to_world(
+        source_camera_extrinsics
+    )
+    world_from_target, world_target_position = _opencv_camera_to_world(
+        target_camera_extrinsics
+    )
+    target_from_world = _transpose3(world_from_target)
+
+    world_rotation = _matmul3(world_from_source, source_rotation)
+    target_rotation = _matmul3(target_from_world, world_rotation)
+
+    def rebase_point(point: Sequence[float]) -> list[float]:
+        world_point = _add(_matvec3(world_from_source, point), world_source_position)
+        relative_world = [
+            world_point[index] - world_target_position[index] for index in range(3)
+        ]
+        return _matvec3(target_from_world, relative_world)
+
+    rebased = json.loads(json.dumps(dict(candidate), ensure_ascii=False))
+    rebased_translation = _round_vector(rebase_point(source_translation))
+    rebased_rotation = _round_matrix(target_rotation)
+    rebased["translation_xyz"] = rebased_translation
+    rebased["gripper_tip_position_xyz"] = _round_vector(rebase_point(source_tip))
+    rebased["execution_contact_center_xyz"] = _round_vector(
+        rebase_point(source_execution_center)
+    )
+    rebased["rotation_matrix"] = rebased_rotation
+    if "transform_matrix" in rebased:
+        rebased["transform_matrix"] = [
+            [*rebased_rotation[row], rebased_translation[row]] for row in range(3)
+        ] + [[0.0, 0.0, 0.0, 1.0]]
+    # This nested pose uses the estimator's native grasp basis in the original
+    # source camera.  It is rendering provenance, not executable geometry, and
+    # retaining it after a cross-camera rebase would publish contradictory
+    # coordinate frames inside one candidate.
+    rebased.pop("model_native_grasp_pose", None)
+    rebased["frame"] = "camera"
+    rebased["camera_frame"] = "opencv"
+    return rebased
+
+
+def rebase_camera_direction(
+    direction: Sequence[float],
+    *,
+    source_camera_extrinsics: Mapping[str, Any],
+    target_camera_extrinsics: Mapping[str, Any],
+) -> list[float]:
+    """Express a direction vector in another calibrated OpenCV camera."""
+
+    source_direction = _normalise(
+        _vector(direction, 3, "camera_direction"), "camera_direction"
+    )
+    world_from_source, _ = _opencv_camera_to_world(source_camera_extrinsics)
+    world_from_target, _ = _opencv_camera_to_world(target_camera_extrinsics)
+    target_direction = _matvec3(
+        _transpose3(world_from_target),
+        _matvec3(world_from_source, source_direction),
+    )
+    return _round_vector(_normalise(target_direction, "rebased_camera_direction"))
 
 
 def build_compile_grasp_seed_handler(
@@ -131,10 +235,34 @@ def build_compile_grasp_seed_handler(
                     }
                 ],
             )
+        refinement = outputs.get("execution_guidance", {}).get(
+            "near_field_refinement", {}
+        )
+        refinement_note = (
+            "; near-field wrist refinement is recommended by current mask/candidate "
+            "evidence before first close"
+            if isinstance(refinement, Mapping)
+            and refinement.get("recommended") is True
+            else ""
+        )
+        strategy_note = (
+            "; the explicitly selected strategy remains the active contact branch; "
+            "a later wrist estimate is separate raw evidence and must not silently "
+            "replace or inherit it"
+            if outputs.get("strategy_selection") == "explicit"
+            else ""
+        )
         return make_tool_result(
             context,
             success=True,
-            content="normalized grasp seed compiled to staged world-frame EEF poses",
+            content=(
+                "normalized grasp seed compiled to world-frame EEF references; "
+                "for the precision-critical contact reference, start with "
+                "move_to tolerance=0.005 m and inspect the returned actual pose plus "
+                "fresh wrist image before closing"
+                + refinement_note
+                + strategy_note
+            ),
             outputs=outputs,
         )
 
@@ -170,10 +298,98 @@ def build_wrist_alignment_handler(
                     }
                 ],
             )
+        operating_region = outputs.get("operating_region")
+        if outputs.get("executable_reference") is not True:
+            failed_checks = (
+                operating_region.get("failed_checks", [])
+                if isinstance(operating_region, dict)
+                else []
+            )
+            return make_tool_result(
+                context,
+                success=True,
+                content=(
+                    "wrist alignment is non-executable; the geometry calculation "
+                    "produced no motion pose. Do not repeat SAM3 on unchanged wrist "
+                    "pixels. If the selected target mask is usable and the target is "
+                    "visible, consume the ready wrist grasp_pose_estimate bundle for "
+                    "a full 6-DoF re-estimate now. Reposition only when the target is "
+                    "clipped/out of view or that bundle is unavailable"
+                ),
+                outputs=outputs,
+                diagnostics=[
+                    {
+                        "code": "wrist_alignment_outside_operating_region",
+                        "message": (
+                            "one or more geometric work-envelope checks failed; inspect "
+                            "outputs.operating_region.failed_checks"
+                        ),
+                        "failed_checks": failed_checks,
+                    }
+                ],
+                semantic_outcome="requires_better_view",
+                recovery_options=[
+                    {
+                        "action": "run_full_wrist_grasp_estimate",
+                        "reason": (
+                            "reuse the already selected fresh wrist mask through the "
+                            "host-resolved grasp bundle when orientation, approach "
+                            "direction, axial depth, or a clamped correction is uncertain; "
+                            "do not segment the unchanged image again"
+                        ),
+                    },
+                    {
+                        "action": "gather_fresh_near_field_wrist_view",
+                        "reason": (
+                            "only when current evidence is clipped, out of view, or has "
+                            "no ready full-estimate bundle, choose a new safe target-facing "
+                            "view and then ground the same target instance"
+                        ),
+                    },
+                ],
+            )
         return make_tool_result(
             context,
             success=True,
-            content="bounded wrist alignment correction computed",
+            content="bounded wrist alignment correction computed inside its work envelope",
+            outputs=outputs,
+        )
+
+    return handler
+
+
+def build_wrist_viewpoint_proposal_handler() -> ToolHandler:
+    """Build a read-only target-facing wrist-viewpoint proposer."""
+
+    def handler(context: ToolExecutionContext) -> ToolResult:
+        try:
+            outputs = propose_wrist_viewpoints(context.parameters)
+        except (OSError, GraspGeometryError) as exc:
+            return make_tool_result(
+                context,
+                success=False,
+                content=f"wrist viewpoint proposal failed: {exc}",
+                outputs={"reason": "wrist_viewpoint_proposal_failed"},
+                diagnostics=[
+                    {
+                        "code": "wrist_viewpoint_proposal_failed",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                ],
+            )
+        return make_tool_result(
+            context,
+            success=True,
+            content=(
+                "target-facing wrist viewpoint candidates proposed; preview one exact "
+                "candidate with ik_preview_check before moving. The proposal remains "
+                "valid across packet-id-only refreshes while its geometry epochs stay "
+                "unchanged; consume it instead of requesting it again. After reaching "
+                "the viewpoint, use the fresh post-motion wrist packet for target "
+                "segmentation and alignment or a full wrist grasp estimate; reaching "
+                "the viewpoint alone does not refine the older contact pose."
+            ),
             outputs=outputs,
         )
 
@@ -192,7 +408,26 @@ def compile_grasp_seed(
     target_geometry_family = str(
         parameters.get("target_geometry_family") or parameters.get("target_class") or ""
     ).strip()
-    approach_mode = str(parameters.get("approach_mode") or "").strip().lower()
+    articulated_options = parameters.get("articulated_handle_options")
+    if articulated_options is not None and not isinstance(articulated_options, Mapping):
+        raise GraspGeometryError("articulated_handle_options must be an object")
+    nested_approach_mode = (
+        articulated_options.get("approach_mode")
+        if isinstance(articulated_options, Mapping)
+        else None
+    )
+    if parameters.get("approach_mode") is not None and nested_approach_mode is not None:
+        raise GraspGeometryError(
+            "provide approach_mode only inside articulated_handle_options"
+        )
+    # The top-level spelling remains a host-side compatibility input for stored
+    # artifacts; it is intentionally absent from the planner-facing ToolSpec.
+    approach_mode = str(
+        nested_approach_mode
+        if nested_approach_mode is not None
+        else parameters.get("approach_mode")
+        or ""
+    ).strip().lower()
     if approach_mode and approach_mode not in _ARTICULATED_HANDLE_APPROACH_MODES:
         raise GraspGeometryError(
             "approach_mode must be one of front, side, or top_down"
@@ -286,7 +521,19 @@ def compile_grasp_seed(
         )
 
     r_camera_grasp = _rotation(candidate.get("rotation_matrix"), "camera_pose.rotation_matrix")
-    p_camera_grasp = _vector(candidate.get("translation_xyz"), 3, "camera_pose.translation_xyz")
+    # AnyGrasp and GraspGenX expose different native origins. The normalized
+    # candidate resolves the physical grip-site contact point explicitly.
+    execution_reference_point = str(
+        candidate.get("execution_reference_point") or "translation_xyz"
+    )
+    p_camera_grasp = _vector(
+        candidate.get(
+            "execution_contact_center_xyz",
+            candidate.get(execution_reference_point),
+        ),
+        3,
+        "camera_pose.execution_contact_center_xyz",
+    )
     r_world_cv, p_world_camera = _opencv_camera_to_world(extrinsics)
 
     transform = _mapping(profile.get("T_grasp_eef"), "T_grasp_eef")
@@ -329,6 +576,89 @@ def compile_grasp_seed(
         approach_world = list(_WORLD_NEGATIVE_Z)
         orientation_clamped = True
     p_hover = [p_world_eef[index] - pregrasp_distance * approach_world[index] for index in range(3)]
+    target_mask_quality = parameters.get("target_mask_quality")
+    target_mask_quality = (
+        dict(target_mask_quality)
+        if isinstance(target_mask_quality, Mapping)
+        else {}
+    )
+    mask_area_fraction = target_mask_quality.get("area_fraction")
+    mask_area_fraction = (
+        float(mask_area_fraction)
+        if isinstance(mask_area_fraction, int | float)
+        and not isinstance(mask_area_fraction, bool)
+        and math.isfinite(float(mask_area_fraction))
+        else None
+    )
+    source_camera_frame = str(parameters.get("camera_frame_id") or "")
+    source_is_wrist = "wrist" in source_camera_frame.lower()
+    refinement_reasons: list[str] = []
+    if (
+        not source_is_wrist
+        and strategy is None
+        and mask_area_fraction is not None
+        and mask_area_fraction < 0.02
+    ):
+        refinement_reasons.append(
+            "scene-view target mask occupies less than 2% of the image"
+        )
+    selection_advice = parameters.get("grasp_selection_advice")
+    selection_advice = (
+        dict(selection_advice) if isinstance(selection_advice, Mapping) else {}
+    )
+    if (
+        not source_is_wrist
+        and strategy is None
+        and str(selection_advice.get("status") or "") == "skipped_single_candidate"
+    ):
+        refinement_reasons.append(
+            "only one host-executable scene-view candidate was available for ranking"
+        )
+    near_field_refinement = {
+        "recommended": bool(refinement_reasons),
+        "reasons": refinement_reasons,
+        "source_camera_frame_id": source_camera_frame,
+        "target_mask_area_fraction": mask_area_fraction,
+        "grasp_candidate_count": _nonnegative_int(
+            parameters.get("grasp_candidate_count", 0),
+            "grasp_candidate_count",
+        ),
+        "agent_discretion": True,
+        "active_strategy_id": (
+            strategy.get("strategy_id") if strategy is not None else None
+        ),
+        "strategy_continuity": (
+            "This explicitly selected strategy remains the active contact branch. "
+            "A later wrist grasp estimate is separate raw evidence: it neither "
+            "inherits nor silently replaces this strategy. If the observed object "
+            "posture still satisfies the strategy geometry, explicitly pass the "
+            "same strategy_id when compiling a wrist candidate; otherwise abandon "
+            "or change the strategy using fresh visual evidence."
+            if strategy is not None
+            else None
+        ),
+        "suggested_actions": [
+            {
+                "tool": "compute_wrist_alignment",
+                "when": (
+                    "fresh wrist mask is complete and only lateral contact placement "
+                    "needs correction"
+                ),
+            },
+            {
+                "tool": "grasp_pose_estimate",
+                "when": (
+                    "fresh wrist evidence makes approach direction, orientation, or "
+                    "contact depth uncertain"
+                ),
+            },
+        ],
+        "interpretation": (
+            "This is evidence-based workflow advice, not a required task phase or "
+            "movement authorization. If skipped, verify and state why current "
+            "dual-view evidence already supports contact."
+        ),
+    }
     compiled_identity: JsonDict = {
         "candidate_id": candidate_id,
         "candidate": candidate,
@@ -380,9 +710,11 @@ def compile_grasp_seed(
         "target_geometry_family": target_geometry_family,
         **({"approach_mode": approach_mode} if approach_mode else {}),
         "calibration_id": calibration_id,
+        "execution_reference_point": execution_reference_point,
         "calibration_status": str(profile.get("status") or ""),
         "not_validated": profile.get("status") != "validated",
         "profile_sha256": profile_sha256,
+        "target_anchor_world_xyz": _round_vector(p_world_grasp),
         "approach_world_xyz": _round_vector(approach_world),
         "native_downward_alignment": round(native_downward_alignment, 6),
         "hover_offset_world_xyz": _round_vector(
@@ -409,6 +741,31 @@ def compile_grasp_seed(
             "waypoint_role": "grasp_contact",
         },
         "precontact_pose": precontact_pose,
+        "execution_guidance": {
+            "schema_version": "openeta.compiled_grasp_motion_guidance.v1",
+            "clearance": {
+                "recommended_position_tolerance_m": 0.01,
+                "interpretation": "coarse collision-clearance waypoint",
+            },
+            "contact": {
+                "recommended_position_tolerance_m": 0.005,
+                "recommended_orientation_tolerance_rad": 0.10,
+                "precision_metric": "max_axis_absolute_error",
+                "verify_fresh_wrist_contact_before_close": True,
+                "interpretation": (
+                    "A controller-level reached_target receipt at a looser tolerance "
+                    "does not by itself establish object-relative finger engagement."
+                ),
+            },
+            "lift_probe": {
+                "recommended_position_tolerance_m": 0.01,
+                "interpretation": (
+                    "small Agent-chosen probe; attachment still requires visual "
+                    "co-motion and source-vacancy evidence"
+                ),
+            },
+            "near_field_refinement": near_field_refinement,
+        },
         "grasp_strategy": public_grasp_strategy(strategy),
         "alignment_policy": alignment_policy,
         "motion_policy": motion_policy,
@@ -455,6 +812,16 @@ def camera_optical_forward_world(camera_extrinsics: Mapping[str, Any]) -> list[f
     return _normalise([r_world_cv[row][2] for row in range(3)], "camera optical forward")
 
 
+def world_up_direction_camera(camera_extrinsics: Mapping[str, Any]) -> list[float]:
+    """Express world +Z in the source camera's OpenCV coordinate frame."""
+
+    r_world_cv, _ = _opencv_camera_to_world(camera_extrinsics)
+    return _normalise(
+        [r_world_cv[2][column] for column in range(3)],
+        "world up in camera frame",
+    )
+
+
 def grasp_refinement_hover_pose(
     camera_pose: Mapping[str, Any],
     camera_extrinsics: Mapping[str, Any],
@@ -498,6 +865,335 @@ def grasp_refinement_hover_pose(
         "source_grasp_id": candidate_id,
         "recovery_id": recovery_id,
         "scene_epoch": _nonnegative_int(scene_epoch, "scene_epoch"),
+    }
+
+
+def assess_target_mask_quality(
+    mask_path: str | Path,
+    *,
+    depth_path: str | Path | None = None,
+    minimum_valid_depth_pixels: int = 5,
+    minimum_depth_coverage: float = 0.5,
+    minimum_border_clearance_fraction: float = 0.02,
+) -> JsonDict:
+    """Assess whether a selected mask is complete enough for targeted geometry.
+
+    The verdict treats image-boundary contact or only a sliver of border margin
+    as a hard visibility failure. A nearly full-frame mask can otherwise include
+    foreground gripper/table pixels while appearing technically unclipped. Area
+    and depth statistics remain explicit so callers and the Agent can distinguish
+    a clipped view from a tiny or depth-poor target.
+    """
+
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - runtime dependency is required.
+        raise GraspGeometryError("Pillow is required for target-mask quality checks") from exc
+
+    resolved_mask = Path(mask_path)
+    if not resolved_mask.is_file():
+        raise GraspGeometryError("target mask must be an existing local file")
+    resolved_depth = Path(depth_path) if depth_path is not None else None
+    if resolved_depth is not None and not resolved_depth.is_file():
+        raise GraspGeometryError("aligned depth must be an existing local file")
+
+    with Image.open(resolved_mask) as mask_image:
+        mask = mask_image.convert("L")
+        width, height = mask.size
+        mask_values = list(mask.get_flattened_data())
+    foreground_indices = [
+        index for index, value in enumerate(mask_values) if int(value) > 0
+    ]
+    if not foreground_indices:
+        return {
+            "schema_version": TARGET_MASK_QUALITY_SCHEMA,
+            "status": "empty_mask",
+            "usable_for_targeted_geometry": False,
+            "image_size_wh": [width, height],
+            "foreground_pixel_count": 0,
+            "area_fraction": 0.0,
+            "bbox_xyxy": None,
+            "border_clearance_px": None,
+            "touches_image_boundary": False,
+            "valid_depth_pixel_count": 0 if resolved_depth is not None else None,
+            "depth_coverage": 0.0 if resolved_depth is not None else None,
+            "failed_checks": ["mask_nonempty"],
+        }
+
+    xs = [index % width for index in foreground_indices]
+    ys = [index // width for index in foreground_indices]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    border_clearance = min(min_x, min_y, width - 1 - max_x, height - 1 - max_y)
+    border_clearance_fraction = border_clearance / max(1, min(width, height))
+    valid_depth_count: int | None = None
+    depth_coverage: float | None = None
+    if resolved_depth is not None:
+        with Image.open(resolved_depth) as depth_image:
+            depth = depth_image.convert("I")
+            if depth.size != (width, height):
+                raise GraspGeometryError("target mask and aligned depth dimensions differ")
+            depth_values = list(depth.get_flattened_data())
+        valid_depth_count = sum(
+            1
+            for index in foreground_indices
+            if float(depth_values[index]) > 0 and math.isfinite(float(depth_values[index]))
+        )
+        depth_coverage = valid_depth_count / len(foreground_indices)
+
+    failed_checks: list[str] = []
+    if border_clearance <= 0:
+        failed_checks.append("mask_not_clipped")
+    elif border_clearance_fraction < minimum_border_clearance_fraction:
+        failed_checks.append("minimum_border_clearance")
+    if valid_depth_count is not None and valid_depth_count < minimum_valid_depth_pixels:
+        failed_checks.append("minimum_valid_depth_pixels")
+    if depth_coverage is not None and depth_coverage < minimum_depth_coverage:
+        failed_checks.append("minimum_depth_coverage")
+    status = (
+        "clipped_mask"
+        if {"mask_not_clipped", "minimum_border_clearance"}.intersection(failed_checks)
+        else "insufficient_depth"
+        if failed_checks
+        else "usable"
+    )
+    return {
+        "schema_version": TARGET_MASK_QUALITY_SCHEMA,
+        "status": status,
+        "usable_for_targeted_geometry": not failed_checks,
+        "image_size_wh": [width, height],
+        "foreground_pixel_count": len(foreground_indices),
+        "area_fraction": round(len(foreground_indices) / (width * height), 8),
+        # SAM3 and public tool contracts use right/bottom-exclusive boxes.
+        "bbox_xyxy": [min_x, min_y, max_x + 1, max_y + 1],
+        "bbox_fill_fraction": round(
+            len(foreground_indices)
+            / ((max_x - min_x + 1) * (max_y - min_y + 1)),
+            8,
+        ),
+        "border_clearance_px": border_clearance,
+        "border_clearance_fraction": round(
+            border_clearance_fraction, 8
+        ),
+        "minimum_border_clearance_fraction": round(
+            minimum_border_clearance_fraction, 8
+        ),
+        "touches_image_boundary": border_clearance <= 0,
+        "valid_depth_pixel_count": valid_depth_count,
+        "depth_coverage": round(depth_coverage, 8) if depth_coverage is not None else None,
+        "failed_checks": failed_checks,
+    }
+
+
+def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
+    """Generate target-facing wrist-camera poses from current eye-in-hand geometry."""
+
+    compiled = _mapping(parameters.get("compiled_grasp"), "compiled_grasp")
+    if compiled.get("schema_version") != COMPILED_GRASP_SCHEMA:
+        raise GraspGeometryError("compiled_grasp has an unsupported schema")
+    current_pose = _mapping(parameters.get("current_eef_pose"), "current_eef_pose")
+    camera_extrinsics = _mapping(
+        parameters.get("camera_extrinsics"), "camera_extrinsics"
+    )
+    object_epoch = _nonnegative_int(
+        parameters.get("object_scene_epoch"), "object_scene_epoch"
+    )
+    robot_epoch = _nonnegative_int(
+        parameters.get("robot_motion_epoch"), "robot_motion_epoch"
+    )
+    compiled_epoch = _nonnegative_int(
+        compiled.get("scene_epoch"), "compiled_grasp.scene_epoch"
+    )
+    if compiled_epoch != object_epoch:
+        raise GraspGeometryError(
+            "compiled grasp belongs to a stale object-scene epoch; re-estimate the target"
+        )
+
+    target_anchor = compiled.get("target_anchor_world_xyz")
+    if target_anchor is None:
+        contact = _mapping(compiled.get("contact_pose"), "compiled_grasp.contact_pose")
+        target_anchor = contact.get("xyz")
+    p_world_target = _vector(target_anchor, 3, "compiled_grasp.target_anchor_world_xyz")
+    p_world_eef = _vector(current_pose.get("xyz"), 3, "current_eef_pose.xyz")
+    r_world_eef, orientation_source = _eef_rotation(current_pose)
+    r_world_camera, p_world_camera, extrinsics_source = (
+        _resolve_current_opencv_camera_to_world(
+            camera_extrinsics,
+            p_world_eef=p_world_eef,
+            r_world_eef=r_world_eef,
+        )
+    )
+    r_eef_camera = _matmul3(_transpose3(r_world_eef), r_world_camera)
+    p_eef_camera = _matvec3(
+        _transpose3(r_world_eef),
+        [p_world_camera[index] - p_world_eef[index] for index in range(3)],
+    )
+
+    standoffs_value = parameters.get("standoff_m", [0.18, 0.22])
+    if isinstance(standoffs_value, (int, float)) and not isinstance(standoffs_value, bool):
+        standoffs_value = [standoffs_value]
+    if not isinstance(standoffs_value, Sequence) or isinstance(
+        standoffs_value, (str, bytes)
+    ):
+        raise GraspGeometryError("standoff_m must be one number or a list of numbers")
+    standoffs = [
+        _bounded_float(value, "standoff_m", 0.12, 0.35)
+        for value in list(standoffs_value)[:3]
+    ]
+    if not standoffs:
+        raise GraspGeometryError("standoff_m must contain at least one value")
+
+    # Candidate offsets are observation choices, not a hidden motion sequence.
+    lateral_offsets = [0.0, -0.04, 0.04]
+    current_camera_x = [r_world_camera[row][0] for row in range(3)]
+    candidates: list[JsonDict] = []
+    for standoff in standoffs:
+        for lateral in lateral_offsets:
+            p_world_camera_goal = [
+                p_world_target[0] + lateral,
+                p_world_target[1],
+                p_world_target[2] + standoff,
+            ]
+            optical_forward = _normalise(
+                [
+                    p_world_target[index] - p_world_camera_goal[index]
+                    for index in range(3)
+                ],
+                "target-facing optical axis",
+            )
+            camera_x = _orthogonal_unit(current_camera_x, optical_forward)
+            camera_y = _cross3(optical_forward, camera_x)
+            r_world_camera_goal = [
+                [camera_x[row], camera_y[row], optical_forward[row]]
+                for row in range(3)
+            ]
+            r_world_eef_goal = _matmul3(
+                r_world_camera_goal,
+                _transpose3(r_eef_camera),
+            )
+            p_world_eef_goal = [
+                p_world_camera_goal[index]
+                - _matvec3(r_world_eef_goal, p_eef_camera)[index]
+                for index in range(3)
+            ]
+            candidate_id = f"wrist_view_{len(candidates):02d}"
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "target_pose": {
+                        "frame": "world",
+                        "xyz": _round_vector(p_world_eef_goal),
+                        "rotation_matrix": _round_matrix(r_world_eef_goal),
+                        "waypoint_role": "wrist_observation_viewpoint",
+                        "viewpoint_candidate_id": candidate_id,
+                        "camera_frame_id": parameters.get("camera_frame_id"),
+                        "compiled_grasp_id": compiled.get("compiled_grasp_id"),
+                        "object_scene_epoch": object_epoch,
+                    },
+                    "camera_goal": {
+                        "xyz": _round_vector(p_world_camera_goal),
+                        "optical_forward_world_xyz": _round_vector(optical_forward),
+                        "target_anchor_world_xyz": _round_vector(p_world_target),
+                        "standoff_m": round(standoff, 6),
+                        "lateral_offset_m": round(lateral, 6),
+                    },
+                    "requires_ik_preview": True,
+                }
+            )
+
+    proposal_id = "wrist_viewpoint:" + hashlib.sha256(
+        json.dumps(
+            {
+                "compiled_grasp_id": compiled.get("compiled_grasp_id"),
+                "object_scene_epoch": object_epoch,
+                "robot_motion_epoch": robot_epoch,
+                "camera_frame_id": parameters.get("camera_frame_id"),
+                "target_anchor_world_xyz": _round_vector(p_world_target),
+                "current_eef_xyz": _round_vector(p_world_eef),
+                "camera_mount_translation": _round_vector(p_eef_camera),
+                "standoffs": standoffs,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:20]
+
+    return {
+        "schema_version": WRIST_VIEWPOINT_PROPOSAL_SCHEMA,
+        "proposal_id": proposal_id,
+        "compiled_grasp_id": compiled.get("compiled_grasp_id"),
+        "source_packet_id": parameters.get("source_packet_id"),
+        "camera_frame_id": parameters.get("camera_frame_id"),
+        "object_scene_epoch": object_epoch,
+        "robot_motion_epoch": robot_epoch,
+        "target_anchor_world_xyz": _round_vector(p_world_target),
+        "camera_mount": {
+            "eef_orientation_source": orientation_source,
+            "camera_extrinsics_source": extrinsics_source,
+            "eef_to_camera_translation_xyz": _round_vector(p_eef_camera),
+            "eef_to_camera_rotation_matrix": _round_matrix(r_eef_camera),
+        },
+        "candidates": candidates,
+        "selection_policy": (
+            "Agent chooses one candidate using workspace/collision evidence, runs an "
+            "exact full-pose ik_preview_check, then moves only if that preview supports it"
+        ),
+        "validity": {
+            "reusable_across_observation_packet_refresh": True,
+            "invalidated_by": [
+                "compiled_grasp_id_change",
+                "object_scene_epoch_change",
+                "robot_motion_epoch_change",
+                "camera_mount_change",
+            ],
+            "interpretation": (
+                "A newer source_packet_id alone does not invalidate this proposal. "
+                "Reuse these candidates until the named geometry evidence changes."
+            ),
+        },
+        "next_action_contract": {
+            "consume_existing_proposal": True,
+            "recommended_tool": "ik_preview_check",
+            "parameter": "target_pose",
+            "instruction": (
+                "Copy one candidate.target_pose exactly into ik_preview_check. Do not "
+                "call propose_wrist_viewpoints again only because a read-only turn "
+                "created a newer observation packet."
+            ),
+        },
+        "post_reach_evidence_contract": {
+            "schema_version": "openeta.wrist_viewpoint_post_reach.v1",
+            "agent_discretion": True,
+            "viewpoint_reached_is_not_contact_refined": True,
+            "fresh_packet_source": "current_observation.source_packet_id_after_move",
+            "camera_frame_id": parameters.get("camera_frame_id"),
+            "recommended_sequence": [
+                {
+                    "tool": "sam3",
+                    "instruction": (
+                        "segment the same target on the fresh post-motion wrist packet"
+                    ),
+                },
+                {
+                    "tool": "select_sam3_detection",
+                    "instruction": (
+                        "confirm cross-view identity continuity for the wrist mask"
+                    ),
+                },
+                {
+                    "tool": "compute_wrist_alignment_or_grasp_pose_estimate",
+                    "instruction": (
+                        "use bounded lateral alignment when orientation/depth remain "
+                        "credible; otherwise run a full wrist-view grasp estimate"
+                    ),
+                },
+            ],
+            "interpretation": (
+                "Reaching an observation viewpoint only gathers better evidence. Do "
+                "not treat the older scene-view contact pose as newly verified merely "
+                "because the viewpoint motion succeeded."
+            ),
+        },
     }
 
 
@@ -552,11 +1248,37 @@ def compute_wrist_alignment(
         0.005,
         0.05,
     )
+    max_reference_distance = _bounded_float(
+        parameters.get(
+            "max_reference_distance_m",
+            _DEFAULT_WRIST_ALIGNMENT_MAX_REFERENCE_DISTANCE_M,
+        ),
+        "max_reference_distance_m",
+        0.01,
+        0.20,
+    )
+    scene_epoch = _nonnegative_int(parameters.get("scene_epoch"), "scene_epoch")
+    source_object_epoch = _nonnegative_int(
+        parameters.get("source_object_scene_epoch", scene_epoch),
+        "source_object_scene_epoch",
+    )
+    current_object_epoch = _nonnegative_int(
+        parameters.get("current_object_scene_epoch", scene_epoch),
+        "current_object_scene_epoch",
+    )
+    source_robot_epoch = _nonnegative_int(
+        parameters.get("source_robot_motion_epoch", 0),
+        "source_robot_motion_epoch",
+    )
+    current_robot_epoch = _nonnegative_int(
+        parameters.get("current_robot_motion_epoch", source_robot_epoch),
+        "current_robot_motion_epoch",
+    )
 
     alignment_policy = compiled.get("alignment_policy")
     alignment_policy = alignment_policy if isinstance(alignment_policy, dict) else {}
     target_region = str(alignment_policy.get("target_region") or "mask_centroid")
-    u, v, depth_m, width, height = _mask_depth_target(
+    u, v, depth_m, width, height, mask_geometry = _mask_depth_target(
         target_mask,
         depth_path,
         scale=scale,
@@ -580,14 +1302,22 @@ def compute_wrist_alignment(
         (v - desired_xy[1]) * depth_m / fy,
         0.0,
     ]
-    delta_world = _matvec3(r_world_cv, delta_camera)
-    norm = math.sqrt(sum(value * value for value in delta_world))
-    if norm > max_correction:
-        scale_factor = max_correction / norm
-        delta_world = [value * scale_factor for value in delta_world]
+    raw_delta_world = _matvec3(r_world_cv, delta_camera)
+    raw_correction_norm = math.sqrt(
+        sum(value * value for value in raw_delta_world)
+    )
+    delta_world = list(raw_delta_world)
+    if raw_correction_norm > max_correction:
+        scale_factor = max_correction / raw_correction_norm
+        delta_world = [value * scale_factor for value in raw_delta_world]
     residual_px = math.hypot(u - desired_xy[0], v - desired_xy[1])
 
     current_xyz = _vector(current_pose.get("xyz"), 3, "current_eef_pose.xyz")
+    hover_pose = _mapping(compiled.get("hover_pose"), "compiled_grasp.hover_pose")
+    hover_xyz = _vector(hover_pose.get("xyz"), 3, "compiled_grasp.hover_pose.xyz")
+    reference_distance = math.sqrt(
+        sum((current_xyz[index] - hover_xyz[index]) ** 2 for index in range(3))
+    )
     contact_pose = _mapping(compiled.get("contact_pose"), "compiled_grasp.contact_pose")
     contact_xyz = _vector(contact_pose.get("xyz"), 3, "compiled_grasp.contact_pose.xyz")
     aligned_hover = dict(contact_pose)
@@ -637,23 +1367,153 @@ def compute_wrist_alignment(
     adjusted_contact["alignment_id"] = alignment_id
     if adjusted_precontact is not None:
         adjusted_precontact["alignment_id"] = alignment_id
+
+    residual_budget = parameters.get("residual_budget")
+    residual_budget = residual_budget if isinstance(residual_budget, Mapping) else {}
+    per_call_limit = _positive_float(
+        residual_budget.get(
+            "per_call_limit_m", _DEFAULT_WRIST_ALIGNMENT_RESIDUAL_STEP_LIMIT_M
+        ),
+        "residual_budget.per_call_limit_m",
+    )
+    cumulative_limit = _positive_float(
+        residual_budget.get(
+            "cumulative_limit_m",
+            _DEFAULT_WRIST_ALIGNMENT_RESIDUAL_CUMULATIVE_LIMIT_M,
+        ),
+        "residual_budget.cumulative_limit_m",
+    )
+    cumulative_translation = _finite_float(
+        residual_budget.get("cumulative_translation_m", 0.0),
+        "residual_budget.cumulative_translation_m",
+    )
+    if cumulative_translation < 0.0:
+        raise GraspGeometryError(
+            "residual_budget.cumulative_translation_m must be non-negative"
+        )
+    previous_residual = _vector(
+        residual_budget.get("last_residual_xyz_m", [0.0, 0.0, 0.0]),
+        3,
+        "residual_budget.last_residual_xyz_m",
+    )
+    pose_residuals = {
+        "aligned_hover_pose": [
+            float(aligned_hover["xyz"][index]) - hover_xyz[index]
+            for index in range(3)
+        ],
+        "adjusted_contact_pose": list(delta_world),
+    }
+    if adjusted_precontact is not None:
+        pose_residuals["adjusted_precontact_pose"] = list(delta_world)
+    residual_steps = {
+        name: math.sqrt(
+            sum(
+                (residual[index] - previous_residual[index]) ** 2
+                for index in range(3)
+            )
+        )
+        for name, residual in pose_residuals.items()
+    }
+    max_residual_step = max(residual_steps.values())
+    projected_cumulative = cumulative_translation + max_residual_step
+
+    checks = [
+        {
+            "code": "object_scene_epoch_current",
+            "passed": (
+                source_object_epoch == current_object_epoch
+                and _nonnegative_int(compiled.get("scene_epoch"), "compiled_grasp.scene_epoch")
+                == current_object_epoch
+            ),
+            "source_epoch": source_object_epoch,
+            "compiled_epoch": compiled.get("scene_epoch"),
+            "current_epoch": current_object_epoch,
+        },
+        {
+            "code": "robot_motion_epoch_current",
+            "passed": source_robot_epoch == current_robot_epoch,
+            "source_epoch": source_robot_epoch,
+            "current_epoch": current_robot_epoch,
+        },
+        {
+            "code": "target_mask_not_clipped",
+            "passed": mask_geometry["touches_image_boundary"] is False,
+            "bbox_xyxy": mask_geometry["bbox_xyxy"],
+            "border_clearance_px": mask_geometry["border_clearance_px"],
+        },
+        {
+            "code": "eef_near_compiled_clearance",
+            "passed": reference_distance <= max_reference_distance,
+            "distance_m": round(reference_distance, 6),
+            "max_distance_m": round(max_reference_distance, 6),
+            "current_eef_xyz": _round_vector(current_xyz),
+            "compiled_clearance_xyz": _round_vector(hover_xyz),
+        },
+        {
+            "code": "correction_within_limit",
+            "passed": raw_correction_norm <= max_correction,
+            "raw_correction_m": round(raw_correction_norm, 6),
+            "max_correction_m": round(max_correction, 6),
+        },
+        {
+            "code": "aligned_references_within_residual_budget",
+            "passed": (
+                max_residual_step <= per_call_limit + 1e-6
+                and projected_cumulative <= cumulative_limit + 1e-6
+            ),
+            "per_pose_increment_m": {
+                name: round(value, 6) for name, value in residual_steps.items()
+            },
+            "max_increment_m": round(max_residual_step, 6),
+            "per_call_limit_m": round(per_call_limit, 6),
+            "projected_cumulative_m": round(projected_cumulative, 6),
+            "cumulative_limit_m": round(cumulative_limit, 6),
+        },
+    ]
+    failed_checks = [check for check in checks if check["passed"] is not True]
+    executable_reference = not failed_checks
+    operating_region = {
+        "schema_version": WRIST_ALIGNMENT_OPERATING_REGION_SCHEMA,
+        "status": (
+            "within_operating_region"
+            if executable_reference
+            else "requires_better_view"
+        ),
+        "checks": checks,
+        "failed_checks": failed_checks,
+    }
     return {
         "schema_version": WRIST_ALIGNMENT_SCHEMA,
+        "status": (
+            "aligned_reference_ready"
+            if executable_reference
+            else "requires_better_view"
+        ),
+        "executable_reference": executable_reference,
         "alignment_id": alignment_id,
         "compiled_grasp_id": compiled.get("compiled_grasp_id"),
         "candidate_id": compiled.get("candidate_id"),
-        "scene_epoch": _nonnegative_int(parameters.get("scene_epoch"), "scene_epoch"),
+        "scene_epoch": scene_epoch,
+        "source_object_scene_epoch": source_object_epoch,
+        "current_object_scene_epoch": current_object_epoch,
+        "source_robot_motion_epoch": source_robot_epoch,
+        "current_robot_motion_epoch": current_robot_epoch,
         "target_pixel_xy": [round(u, 3), round(v, 3)],
         "desired_pixel_xy": _round_vector(desired_xy),
         "gripper_center_projection": gripper_projection,
         "target_depth_m": round(depth_m, 6),
         "target_region": target_region,
         "residual_px_before": round(residual_px, 3),
+        "raw_correction_world_xyz": _round_vector(raw_delta_world),
         "correction_world_xyz": _round_vector(delta_world),
-        "correction_clamped": norm > max_correction,
-        "aligned_hover_pose": aligned_hover,
-        "adjusted_contact_pose": adjusted_contact,
-        "adjusted_precontact_pose": adjusted_precontact,
+        "correction_clamped": raw_correction_norm > max_correction,
+        "mask_geometry": mask_geometry,
+        "operating_region": operating_region,
+        "aligned_hover_pose": aligned_hover if executable_reference else None,
+        "adjusted_contact_pose": adjusted_contact if executable_reference else None,
+        "adjusted_precontact_pose": (
+            adjusted_precontact if executable_reference else None
+        ),
     }
 
 
@@ -929,7 +1789,7 @@ def _mask_depth_target(
     scale: float,
     desired_xy: Sequence[float],
     target_region: str,
-) -> tuple[float, float, float, int, int]:
+) -> tuple[float, float, float, int, int, JsonDict]:
     try:
         from PIL import Image
     except ImportError as exc:  # pragma: no cover - runtime dependency is already required.
@@ -941,16 +1801,30 @@ def _mask_depth_target(
             raise GraspGeometryError("target mask and depth dimensions differ")
         width, height = mask.size
         foreground: list[tuple[int, int, float]] = []
+        mask_coordinates: list[tuple[int, int]] = []
         mask_values = list(mask.get_flattened_data())
         depth_values = list(depth.get_flattened_data())
         for index, mask_value in enumerate(mask_values):
             if int(mask_value) <= 0:
                 continue
+            mask_coordinates.append((index % width, index // width))
             raw_depth = float(depth_values[index])
             if raw_depth > 0 and math.isfinite(raw_depth):
                 foreground.append((index % width, index // width, raw_depth / scale))
     if len(foreground) < 5:
         raise GraspGeometryError("target mask has too few valid depth pixels")
+    min_x = min(sample[0] for sample in mask_coordinates)
+    max_x = max(sample[0] for sample in mask_coordinates)
+    min_y = min(sample[1] for sample in mask_coordinates)
+    max_y = max(sample[1] for sample in mask_coordinates)
+    border_clearance = min(min_x, min_y, width - 1 - max_x, height - 1 - max_y)
+    mask_geometry: JsonDict = {
+        "bbox_xyxy": [min_x, min_y, max_x, max_y],
+        "foreground_pixel_count": len(mask_coordinates),
+        "valid_depth_pixel_count": len(foreground),
+        "border_clearance_px": border_clearance,
+        "touches_image_boundary": border_clearance <= 0,
+    }
     depths = sorted(sample[2] for sample in foreground)
     if target_region == "nearest_shallow_surface":
         shallow_depth = depths[max(0, int(len(depths) * 0.05) - 1)]
@@ -967,7 +1841,7 @@ def _mask_depth_target(
                 sample[0],
             ),
         )
-        return selected[0], selected[1], selected[2], width, height
+        return selected[0], selected[1], selected[2], width, height, mask_geometry
     if target_region != "mask_centroid":
         raise GraspGeometryError(f"unsupported alignment target region: {target_region}")
     median_depth = depths[len(depths) // 2]
@@ -981,6 +1855,7 @@ def _mask_depth_target(
         median_depth,
         width,
         height,
+        mask_geometry,
     )
 
 
@@ -1077,6 +1952,33 @@ def _matmul3(
         [sum(left[row][k] * right[k][col] for k in range(3)) for col in range(3)]
         for row in range(3)
     ]
+
+
+def _transpose3(matrix: Sequence[Sequence[float]]) -> list[list[float]]:
+    return [[float(matrix[column][row]) for column in range(3)] for row in range(3)]
+
+
+def _cross3(left: Sequence[float], right: Sequence[float]) -> list[float]:
+    return [
+        float(left[1]) * float(right[2]) - float(left[2]) * float(right[1]),
+        float(left[2]) * float(right[0]) - float(left[0]) * float(right[2]),
+        float(left[0]) * float(right[1]) - float(left[1]) * float(right[0]),
+    ]
+
+
+def _orthogonal_unit(preferred: Sequence[float], normal: Sequence[float]) -> list[float]:
+    projection = sum(float(preferred[index]) * float(normal[index]) for index in range(3))
+    tangent = [
+        float(preferred[index]) - projection * float(normal[index])
+        for index in range(3)
+    ]
+    if math.sqrt(sum(value * value for value in tangent)) < 1e-6:
+        fallback = [1.0, 0.0, 0.0] if abs(float(normal[0])) < 0.8 else [0.0, 1.0, 0.0]
+        projection = sum(fallback[index] * float(normal[index]) for index in range(3))
+        tangent = [
+            fallback[index] - projection * float(normal[index]) for index in range(3)
+        ]
+    return _normalise(tangent, "camera roll reference")
 
 
 def _matvec3(matrix: Sequence[Sequence[float]], vector: Sequence[float]) -> list[float]:

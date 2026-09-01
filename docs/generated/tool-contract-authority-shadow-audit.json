@@ -1,0 +1,22 @@
+{
+  "schema_version": "openeta.tool_contract_authority_audit.v1",
+  "source_root": "/tmp/openeta-toolcontract-grasp-quality-20260825",
+  "manifest_count": 1,
+  "auditable_manifest_count": 1,
+  "conformant": true,
+  "violation_count": 0,
+  "violations": [],
+  "runs": [
+    {
+      "manifest": "/tmp/openeta-toolcontract-grasp-quality-20260825/sessions/grasp-quality-baseline-20260825/rollout/manifest.json",
+      "session_id": "grasp-quality-baseline-20260825",
+      "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+      "request_validation_authority": [],
+      "gate_repair_envelope_authority": [],
+      "request_trace_count": 0,
+      "request_enforcing_trace_count": 0,
+      "gate_trace_count": 0,
+      "gate_enforcing_trace_count": 0
+    }
+  ]
+}

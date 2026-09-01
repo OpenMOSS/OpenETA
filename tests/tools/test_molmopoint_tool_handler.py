@@ -97,7 +97,7 @@ def test_molmopoint_spec_is_visible_without_dummy_handler() -> None:
     assert spec.category == "perception"
     assert spec.effect == ToolEffect.READ_ONLY
     assert spec.batchable is False
-    assert set(spec.parameters) == {"images", "prompt"}
+    assert set(spec.parameters) == {"sources", "prompt"}
     assert tools.can_execute("molmopoint") is False
 
 
@@ -216,6 +216,20 @@ def test_transport_failure_is_persisted_without_exception_text(tmp_path: Path) -
     text = Path(raw_artifact["path"]).read_text()
     assert json.loads(text) == {"mcp_called": True, "reason": "mcp_call_failed"}
     assert "private transport detail" not in text
+
+
+def test_transport_timeout_has_distinct_agent_diagnostic(tmp_path: Path) -> None:
+    def fail(_request):
+        raise RuntimeError("call_tool:point_image failed: TimeoutError")
+
+    result = build_molmopoint_handler(fail, output_root=tmp_path / "runs")(
+        _context(_parameters(tmp_path))
+    )
+
+    assert result.success is False
+    diagnostic = result.details["diagnostics"][0]
+    assert diagnostic["code"] == "mcp_timeout"
+    assert diagnostic["error_type"] == "RuntimeError"
 
 
 @pytest.mark.parametrize(

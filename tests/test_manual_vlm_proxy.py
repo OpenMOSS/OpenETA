@@ -319,6 +319,43 @@ def test_tool_form_catalog_extracts_required_optional_defaults_and_choices() -> 
     assert sam_fields["points"]["default"] == []
 
 
+def test_tool_form_catalog_unwraps_json_schema_properties() -> None:
+    stable = {
+        "schema_version": "openeta.planner_static_context.v1",
+        "available_tools": [
+            {
+                "name": "create_simulator_env",
+                "description": "Create an environment.",
+                "parameters": {
+                    "additionalProperties": False,
+                    "type": "object",
+                    "properties": {
+                        "env_id": {
+                            "type": "string",
+                            "description": "Exact environment id.",
+                        },
+                        "seed": {"type": "integer"},
+                        "task": {"type": "string"},
+                    },
+                    "required": ["env_id"],
+                },
+            }
+        ],
+    }
+    body = {"messages": [{"role": "system", "content": json.dumps(stable)}]}
+
+    catalog = build_tool_form_catalog(body)
+    fields = catalog[0]["fields"]
+    assert [field["name"] for field in fields] == ["env_id", "seed", "task"]
+    assert fields[0]["required"] is True
+    assert fields[1]["required"] is False
+    assert fields[1]["value_type"] == "integer"
+    assert fields[2]["required"] is False
+
+    presentation = OpenETAProtocolAdapter().presentation(body, request_id="request-1")
+    assert presentation["composer"]["tools"][0]["fields"] == fields
+
+
 def test_response_mode_detects_isolated_json_request() -> None:
     assert (
         detect_response_mode(

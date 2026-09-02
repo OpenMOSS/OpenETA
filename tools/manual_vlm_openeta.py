@@ -206,7 +206,12 @@ def _parameter_choices(description: str) -> list[str]:
     return values
 
 
-def _normalize_parameter_field(name: str, spec: Any) -> JsonObject:
+def _normalize_parameter_field(
+    name: str,
+    spec: Any,
+    *,
+    required_override: bool | None = None,
+) -> JsonObject:
     if isinstance(spec, dict):
         description = str(spec.get("description") or spec.get("help") or "")
         declared_type = str(spec.get("type") or "")
@@ -224,7 +229,9 @@ def _normalize_parameter_field(name: str, spec: Any) -> JsonObject:
         default = default_match.group(1).strip() if default_match else None
         choices = _parameter_choices(description)
     lowered = description.lower()
-    if isinstance(explicit_required, bool):
+    if isinstance(required_override, bool):
+        required: bool | None = required_override
+    elif isinstance(explicit_required, bool):
         required: bool | None = explicit_required
     elif re.search(r"\brequired\b", lowered):
         required = True
@@ -249,13 +256,33 @@ def build_tool_form_catalog(body: JsonObject) -> list[JsonObject]:
     for tool in extract_tool_catalog(body):
         raw_parameters = tool.get("parameters")
         raw_parameters = raw_parameters if isinstance(raw_parameters, dict) else {}
+        schema_properties = raw_parameters.get("properties")
+        if isinstance(schema_properties, dict):
+            field_specs = schema_properties
+            raw_required = raw_parameters.get("required")
+            required_names = (
+                {str(name) for name in raw_required if isinstance(name, str)}
+                if isinstance(raw_required, list)
+                else set()
+            )
+            schema_required = True
+        else:
+            field_specs = raw_parameters
+            required_names = set()
+            schema_required = False
         output.append(
             {
                 "name": tool.get("name"),
                 "description": tool.get("description") or tool.get("category") or "",
                 "fields": [
-                    _normalize_parameter_field(str(name), spec)
-                    for name, spec in raw_parameters.items()
+                    _normalize_parameter_field(
+                        str(name),
+                        spec,
+                        required_override=(str(name) in required_names)
+                        if schema_required
+                        else None,
+                    )
+                    for name, spec in field_specs.items()
                 ],
             }
         )

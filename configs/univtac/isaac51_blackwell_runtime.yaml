@@ -34,13 +34,16 @@ protected_runtime:
   setuptools:
     version: 75.8.2
   setuptools-scm:
-    version: 8.1.0
+    version: 10.2.2
   wheel:
     version: 0.42.0
   packaging:
-    version: 23.0
+    version: 26.3
   filelock:
-    version: 3.13.1
+    version: 3.32.3
+
+protected_baseline_source: r08_validated_actual_environment
+installation_method_label: flatdict_4_0_1_verified_sdist_wheel_bridge_v1
 
 install:
   isaaclab_requirement: isaaclab[isaacsim,all]==2.3.0

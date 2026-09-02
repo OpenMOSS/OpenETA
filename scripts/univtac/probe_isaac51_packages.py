@@ -14,11 +14,12 @@ from pathlib import Path
 
 
 DISTRIBUTIONS = (
+    "flatdict",
     "torch", "torchvision", "warp-lang", "pyuipc", "nvidia-curobo", "setuptools",
     "setuptools-scm", "wheel", "packaging", "filelock", "isaacsim", "isaaclab",
-    "tacex", "tacex-assets",
+    "tacex", "tacex-assets", "tacex-uipc",
 )
-MODULES = ("torch", "torchvision", "warp", "uipc", "curobo", "isaacsim", "isaaclab", "tacex", "tacex_assets")
+MODULES = ("torch", "torchvision", "warp", "uipc", "curobo", "isaacsim", "isaaclab", "tacex", "tacex_assets", "tacex_uipc", "flatdict")
 
 
 def version(name: str) -> str | None:
@@ -54,6 +55,14 @@ def main() -> None:
         "python_executable": str(python),
         "python_version": platform.python_version(),
         "distributions": {name: version(name) for name in DISTRIBUTIONS},
+        "all_distributions": {
+            distribution.metadata["Name"]: distribution.version
+            for distribution in sorted(
+                importlib.metadata.distributions(),
+                key=lambda item: (item.metadata.get("Name") or "").lower(),
+            )
+            if distribution.metadata.get("Name")
+        },
         "module_origins": {name: module_origin(name) for name in MODULES},
         "nvidia_curobo_editable_source": editable_source(python),
         "openeta_imported": any(name == "openeta" or name.startswith("openeta.") for name in sys.modules),

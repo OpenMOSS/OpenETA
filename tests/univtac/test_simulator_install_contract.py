@@ -61,7 +61,11 @@ def test_clone_command_is_exact_r08_to_r09() -> None:
 
 def test_constraints_are_deterministic_and_do_not_pin_isaac() -> None:
     text = constraints_text(config())
-    assert text == "torch==2.7.0+cu128\ntorchvision==0.22.0+cu128\nwarp-lang==1.17.0\npyuipc==0.9.0\n"
+    assert text == (
+        "torch==2.7.0+cu128\ntorchvision==0.22.0+cu128\nwarp-lang==1.17.0\n"
+        "pyuipc==0.9.0\nsetuptools==75.8.2\nsetuptools-scm==10.2.2\n"
+        "wheel==0.42.0\npackaging==26.3\nfilelock==3.32.3\n"
+    )
     assert "isaac" not in text
 
 
@@ -80,7 +84,18 @@ def test_installed_version_audit_is_exact() -> None:
     changed["packaging"] = "99"
     result = audit_installed_versions(changed, required)
     assert result["success"] is False
-    assert result["mismatches"] == [{"name": "packaging", "required": "23.0", "observed": "99"}]
+    assert result["mismatches"] == [{"name": "packaging", "required": "26.3", "observed": "99"}]
+
+
+def test_old_unvalidated_build_tool_versions_are_rejected() -> None:
+    payload = config()
+    assert "8.1.0" not in json.dumps(payload)
+    assert '"23.0"' not in json.dumps(payload)
+    assert "3.13.1" not in json.dumps(payload)
+    changed = copy.deepcopy(payload)
+    changed["protected_runtime"]["packaging"]["version"] = "23.0"
+    with pytest.raises(ValueError, match="protected runtime"):
+        validate_config(changed)
 
 
 def test_marker_and_order_are_fail_closed() -> None:

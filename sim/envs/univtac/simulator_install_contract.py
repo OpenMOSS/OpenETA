@@ -38,11 +38,13 @@ EXPECTED_CONSTRAINTS = {
 EXPECTED_RUNTIME_VERSIONS = {
     "nvidia-curobo": "0.7.7.post1.dev5+dirty",
     "setuptools": "75.8.2",
-    "setuptools-scm": "8.1.0",
+    "setuptools-scm": "10.2.2",
     "wheel": "0.42.0",
-    "packaging": "23.0",
-    "filelock": "3.13.1",
+    "packaging": "26.3",
+    "filelock": "3.32.3",
 }
+PROTECTED_BASELINE_SOURCE = "r08_validated_actual_environment"
+INSTALLATION_METHOD_LABEL = "flatdict_4_0_1_verified_sdist_wheel_bridge_v1"
 EXPECTED_COLLECTION = {
     "G0": ("grasp_classify", 0, "official_isaac51_phase1_collection_smoke", "grasp_classify_seed0"),
     "L0": ("lift_can", 1_000_000, "legacy_ftp1_eval_seed_index_aligned", "lift_can_seed1000000"),
@@ -82,6 +84,10 @@ def validate_config(config: Mapping[str, Any]) -> None:
             raise ValueError(f"environment.{key} must be {value}")
     if config.get("protected_constraints") != EXPECTED_CONSTRAINTS:
         raise ValueError("protected constraints changed")
+    if config.get("protected_baseline_source") != PROTECTED_BASELINE_SOURCE:
+        raise ValueError("protected_baseline_source changed")
+    if config.get("installation_method_label") != INSTALLATION_METHOD_LABEL:
+        raise ValueError("installation_method_label changed")
     protected_runtime = config.get("protected_runtime", {})
     actual_versions = {
         canonical_name(name): str(record.get("version"))
@@ -110,8 +116,12 @@ def clone_command(conda: Path, source: str, target: str) -> list[str]:
 
 
 def constraints_text(config: Mapping[str, Any]) -> str:
-    constraints = config["protected_constraints"]
-    return "".join(f"{name}=={constraints[name]}\n" for name in EXPECTED_CONSTRAINTS)
+    constraints = required_runtime_versions(config)
+    constrained_names = (
+        "torch", "torchvision", "warp-lang", "pyuipc", "setuptools",
+        "setuptools-scm", "wheel", "packaging", "filelock",
+    )
+    return "".join(f"{name}=={constraints[name]}\n" for name in constrained_names)
 
 
 def required_runtime_versions(config: Mapping[str, Any]) -> dict[str, str]:

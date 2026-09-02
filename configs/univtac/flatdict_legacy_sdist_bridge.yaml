@@ -1,0 +1,23 @@
+schema_version: openeta.univtac.flatdict_sdist_bridge.v1
+installation_method_label: flatdict_4_0_1_verified_sdist_wheel_bridge_v1
+package: flatdict
+version: 4.0.1
+pypi_json_url: https://pypi.org/pypi/flatdict/4.0.1/json
+allowed_file_host: files.pythonhosted.org
+filename: flatdict-4.0.1.tar.gz
+packagetype: sdist
+expected_size: 8341
+expected_sha256: cd32f08fd31ed21eb09ebc76f06b6bd12046a24f77beb1fd0281917e47f26742
+wheel_build:
+  no_deps: true
+  no_build_isolation: true
+  expected_purelib: true
+  expected_tag_suffix: none-any
+smoke:
+  nested_input:
+    tactile:
+      left: 1
+      right: 2
+  expected_flat:
+    tactile.left: 1
+    tactile.right: 2

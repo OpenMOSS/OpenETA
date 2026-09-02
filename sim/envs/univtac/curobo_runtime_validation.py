@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 IK_LINE = re.compile(
@@ -43,3 +44,19 @@ def apply_environment_gate(
                 "author_contact_recommendation": "not_applicable",
             }
         )
+
+
+def static_audit_process_usable(process: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
+    """Accept the auditor's raw-ldd warning exit while rejecting execution failures."""
+    return bool(
+        process.get("returncode") in {0, 1}
+        and not process.get("timed_out")
+        and process.get("cleanup_complete") is True
+        and payload.get("records")
+    )
+
+
+def static_audit_covers_binaries(payload: Mapping[str, Any], binaries: list[Path]) -> bool:
+    recorded = {str(Path(item["path"]).resolve()) for item in payload.get("records", [])}
+    expected = {str(path.resolve()) for path in binaries}
+    return recorded == expected

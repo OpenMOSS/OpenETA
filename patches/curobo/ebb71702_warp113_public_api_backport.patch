@@ -1,0 +1,11 @@
+--- a/src/curobo/geom/sdf/world_mesh.py
++++ b/src/curobo/geom/sdf/world_mesh.py
+@@ -64,7 +64,7 @@
+         self._env_n_mesh = None
+         self._mesh_tensor_list = None
+         self._env_mesh_names = None
+-        self._wp_device = wp.torch.device_from_torch(self.tensor_args.device)
++        self._wp_device = wp.device_from_torch(self.tensor_args.device)
+         self._wp_mesh_cache = {}  # stores warp meshes across environments
+
+         super().__init__(config)

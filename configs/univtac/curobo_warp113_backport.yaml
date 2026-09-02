@@ -1,0 +1,22 @@
+schema_version: openeta.univtac.curobo_warp113_backport.v1
+runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+conda_cuda_target_include_bridge_v1+curobo_warp113_public_api_backport_v1
+source:
+  univtac_commit: 371fac67917307026be8f00869fcc1b61c623a9f
+  curobo_base_commit: ebb71702f3f70e767f40fd8e050674af0288abe8
+  upstream_reference_commit: 0c1de0fc90de59d95a2627ec8ed3955d2d96c07c
+environment:
+  conda_name: UniVTAC-isaac51-sm120-r08
+  torch_cuda_arch_list: "12.0"
+  cuda_arch: "120"
+  build_jobs: 4
+timeouts_seconds:
+  warp_api: 300
+  warp_kernel: 600
+  curobo_build: 3600
+  loader_probe: 300
+  combined_import: 600
+  kinematics: 600
+  ik: 900
+  collision: 600
+  collision_finite: 600
+  libuipc_regression: 300

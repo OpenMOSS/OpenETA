@@ -1,0 +1,58 @@
+schema_version: openeta.univtac.legacy_sdist_wheel_bridge.v1
+build_method_label: legacy_sdist_reproducible_wheel_bridge_v1
+environment: UniVTAC-isaac51-sm120-r09
+packages:
+  idna-ssl:
+    canonical_name: idna-ssl
+    version: 1.1.0
+    source_filename: idna-ssl-1.1.0.tar.gz
+    source_sha256: a933e3bb13da54383f9e8f35dc4f9cb9eb9b3b78c6b36f311254d6d0d92c6c7c
+    import_name: idna_ssl
+  pyperclip:
+    canonical_name: pyperclip
+    version: 1.8.0
+    source_filename: pyperclip-1.8.0.tar.gz
+    source_sha256: b75b975160428d84608c26edba2dec146e7799566aea42c1fe1b32e72b6028f2
+    import_name: pyperclip
+  antlr4-python3-runtime:
+    canonical_name: antlr4-python3-runtime
+    version: 4.9.3
+    source_filename: antlr4-python3-runtime-4.9.3.tar.gz
+    source_sha256: f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b
+    import_name: antlr4
+builder_tools:
+  pip:
+    version: 26.2.1
+    filename: pip-26.2.1-py3-none-any.whl
+    size: 1816632
+    sha256: 71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e
+  setuptools:
+    version: 75.8.2
+    filename: setuptools-75.8.2-py3-none-any.whl
+    size: 1229385
+    sha256: 558e47c15f1811c1fa7adbd0096669bf76c1d3f433f58324df69f3f5ecac4e8f
+  wheel:
+    version: 0.42.0
+    filename: wheel-0.42.0-py3-none-any.whl
+    size: 65375
+    sha256: 177f9c9b0d45c47873b619f5b650346d632cdc35fb5e4d25058e09c9e581433d
+  packaging:
+    version: 23.0
+    filename: packaging-23.0-py3-none-any.whl
+    size: 42678
+    sha256: 714ac14496c3e68c99c29b00845f7a2b85f3bb6f1078fd9f72fd20f0570002b2
+allowed_host: files.pythonhosted.org
+source_date_epoch: 315532800
+builder_environment:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  PIP_NO_INDEX: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_CACHE_DIR: "1"
+  PYTHONNOUSERSITE: "1"
+build_count: 2
+maximum_source_bytes: 104857600
+maximum_archive_members: 10000
+source_download_attempts: 3

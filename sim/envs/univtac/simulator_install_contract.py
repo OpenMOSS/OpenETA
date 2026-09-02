@@ -38,9 +38,9 @@ EXPECTED_CONSTRAINTS = {
 EXPECTED_RUNTIME_VERSIONS = {
     "nvidia-curobo": "0.7.7.post1.dev5+dirty",
     "setuptools": "75.8.2",
-    "setuptools-scm": "10.2.2",
+    "setuptools-scm": "8.1.0",
     "wheel": "0.42.0",
-    "packaging": "26.3",
+    "packaging": "23.0",
     "filelock": "3.32.3",
 }
 PROTECTED_BASELINE_SOURCE = "r08_validated_actual_environment"

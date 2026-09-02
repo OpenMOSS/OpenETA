@@ -23,7 +23,7 @@ def test_config_must_equal_source_and_target_actual_versions() -> None:
     versions = required_runtime_versions(CONFIG)
     assert compare_config_to_source(CONFIG, versions, versions)["success"] is True
     source = dict(versions)
-    source["packaging"] = "23.0"
+    source["packaging"] = "26.3"
     assert compare_config_to_source(CONFIG, source, versions)["success"] is False
 
 

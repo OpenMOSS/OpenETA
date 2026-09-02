@@ -34,15 +34,18 @@ protected_runtime:
   setuptools:
     version: 75.8.2
   setuptools-scm:
-    version: 10.2.2
+    version: 8.1.0
   wheel:
     version: 0.42.0
   packaging:
-    version: 26.3
+    version: 23.0
   filelock:
     version: 3.32.3
 
 protected_baseline_source: r08_validated_actual_environment
+native_reference_packaging: 26.3
+simulator_integration_packaging: 23.0
+packaging_baseline_source: isaaclab_2_3_metadata_and_pinned_univtac_isaac51_install_recipe
 installation_method_label: flatdict_4_0_1_verified_sdist_wheel_bridge_v1
 
 install:

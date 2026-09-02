@@ -1,0 +1,33 @@
+schema_version: openeta.univtac.isaaclab_build_tool_bridge.v1
+applied_label: isaaclab_setuptools_scm8_packaging23_bridge_v1
+superseded_label: isaaclab_packaging23_compatibility_bridge_v1
+environment: UniVTAC-isaac51-sm120-r09
+before:
+  setuptools-scm: 10.2.2
+  vcs-versioning: 2.3.2
+  packaging: "26.3"
+after:
+  setuptools: 75.8.2
+  setuptools-scm: 8.1.0
+  vcs-versioning: null
+  packaging: "23.0"
+  wheel: 0.42.0
+  filelock: 3.32.3
+wheels:
+  setuptools-scm:
+    version: 8.1.0
+    filename: setuptools_scm-8.1.0-py3-none-any.whl
+    size: 43666
+    sha256: 897a3226a6fd4a6eb2f068745e49733261a21f70b1bb28fce0339feb978d9af3
+    pypi_json_url: https://pypi.org/pypi/setuptools-scm/8.1.0/json
+  packaging:
+    version: 23.0
+    filename: packaging-23.0-py3-none-any.whl
+    size: 42678
+    sha256: 714ac14496c3e68c99c29b00845f7a2b85f3bb6f1078fd9f72fd20f0570002b2
+    pypi_json_url: https://pypi.org/pypi/packaging/23.0/json
+allowed_host: files.pythonhosted.org
+mutation_order:
+  - install_setuptools_scm_8_1_0
+  - uninstall_vcs_versioning_2_3_2
+  - install_packaging_23_0

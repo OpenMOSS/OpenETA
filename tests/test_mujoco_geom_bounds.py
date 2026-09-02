@@ -8,6 +8,7 @@ into the carried-object collision box and the receptacle placement corridor.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -19,10 +20,34 @@ from sim.unified_env import UnifiedEnv
 _IDENTITY = np.eye(3, dtype=np.float64)
 
 
-def _half(geom_type, size, rot=_IDENTITY, rbound=1.0):
-    return UnifiedEnv._mujoco_geom_world_half_extent(
-        int(geom_type), np.asarray(size, dtype=np.float64), rot, float(rbound)
+def _half(
+    geom_type,
+    size,
+    rot=_IDENTITY,
+    rbound=1.0,
+    *,
+    mesh_vertices=None,
+):
+    vertices = np.asarray(mesh_vertices or [], dtype=np.float64).reshape(-1, 3)
+    mesh_data_id = 0 if vertices.size else -1
+    model = SimpleNamespace(
+        geom_type=np.asarray([int(geom_type)], dtype=np.int32),
+        geom_size=np.asarray([size], dtype=np.float64),
+        geom_dataid=np.asarray([mesh_data_id], dtype=np.int32),
+        geom_rbound=np.asarray([rbound], dtype=np.float64),
+        mesh_vertadr=np.asarray([0], dtype=np.int32),
+        mesh_vertnum=np.asarray([len(vertices)], dtype=np.int32),
+        mesh_vert=vertices,
     )
+    data = SimpleNamespace(
+        geom_xpos=np.zeros((1, 3), dtype=np.float64),
+        geom_xmat=np.asarray([rot], dtype=np.float64),
+    )
+    bounds = UnifiedEnv._mujoco_geom_world_aabb(model, data, 0)
+    if bounds is None:
+        return None
+    minimum, maximum = bounds
+    return (maximum - minimum) / 2.0
 
 
 def test_axis_aligned_box_is_exact_not_sphere_inflated() -> None:
@@ -77,9 +102,20 @@ def test_cylinder_has_flat_faces_without_cap_padding() -> None:
     assert np.allclose(half, [radius, radius, half_len])
 
 
-def test_mesh_falls_back_to_the_bounding_sphere() -> None:
-    half = _half(mujoco.mjtGeom.mjGEOM_MESH, [0.0, 0.0, 0.0], rbound=0.07)
-    assert np.allclose(half, [0.07] * 3)
+def test_mesh_uses_compiled_vertices_instead_of_bounding_sphere() -> None:
+    vertices = [
+        [x, y, z]
+        for x in (-0.07, 0.07)
+        for y in (-0.03, 0.03)
+        for z in (-0.02, 0.02)
+    ]
+    half = _half(
+        mujoco.mjtGeom.mjGEOM_MESH,
+        [0.0, 0.0, 0.0],
+        rbound=0.08,
+        mesh_vertices=vertices,
+    )
+    assert np.allclose(half, [0.07, 0.03, 0.02])
 
 
 def test_degenerate_geom_is_skipped() -> None:

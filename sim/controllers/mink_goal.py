@@ -297,7 +297,11 @@ def execute_libero_mink_goal(
             else []
         )
         current_attached_distances = (
-            _collision_pair_distances(configuration, attached_pairs)
+            _collision_pair_distances(
+                configuration,
+                attached_pairs,
+                refresh_contacts=False,
+            )
             if attached_pairs
             else {}
         )
@@ -427,6 +431,7 @@ def execute_libero_mink_goal(
                 predicted,
                 collision_policy["protected_pairs"],
                 distance_limit_m=collision_policy["hard_stop_distance_m"],
+                pair_distances=predicted_pair_distances,
             )
             collision_policy["minimum_distance_m"] = min(
                 float(collision_policy.get("minimum_distance_m", math.inf)),
@@ -490,6 +495,7 @@ def execute_libero_mink_goal(
                     predicted_attached,
                     attached_pairs,
                     distance_limit_m=collision_policy["hard_stop_distance_m"],
+                    pair_distances=predicted_attached_distances,
                 )
                 collision_policy["minimum_attached_object_distance_m"] = min(
                     float(
@@ -753,6 +759,7 @@ def execute_libero_mink_goal(
                 actual,
                 collision_policy["protected_pairs"],
                 distance_limit_m=collision_policy["hard_stop_distance_m"],
+                pair_distances=actual_pair_distances,
             )
             collision_policy["minimum_distance_m"] = min(
                 float(collision_policy.get("minimum_distance_m", math.inf)),
@@ -792,11 +799,13 @@ def execute_libero_mink_goal(
                 actual_attached_distances = _collision_pair_distances(
                     actual,
                     attached_pairs,
+                    refresh_contacts=False,
                 )
                 actual_attached_report = _collision_distance_report(
                     actual,
                     attached_pairs,
                     distance_limit_m=collision_policy["hard_stop_distance_m"],
+                    pair_distances=actual_attached_distances,
                 )
                 collision_policy["minimum_attached_object_distance_m"] = min(
                     float(
@@ -1462,21 +1471,22 @@ def _collision_distance_report(
     pairs: list[tuple[int, int]],
     *,
     distance_limit_m: float,
+    pair_distances: dict[tuple[int, int], float] | None = None,
 ) -> dict[str, Any]:
-    import mujoco
-
     model = configuration.model
-    data = configuration.data
+    distances = (
+        pair_distances
+        if pair_distances is not None
+        else _collision_pair_distances(configuration, pairs)
+    )
     minimum = math.inf
     worst: tuple[int, int] | None = None
-    fromto = np.empty(6, dtype=np.float64)
     for geom1, geom2 in pairs:
-        distance = float(
-            mujoco.mj_geomDistance(model, data, geom1, geom2, 0.02, fromto)
-        )
+        pair = (int(geom1), int(geom2))
+        distance = distances[pair]
         if distance < minimum:
             minimum = distance
-            worst = (geom1, geom2)
+            worst = pair
     if not math.isfinite(minimum):
         minimum = 0.02
     report: dict[str, Any] = {
@@ -1499,6 +1509,8 @@ def _collision_distance_report(
 def _collision_pair_distances(
     configuration: Any,
     pairs: list[tuple[int, int]],
+    *,
+    refresh_contacts: bool = True,
 ) -> dict[tuple[int, int], float]:
     """Return signed distances for deterministic penetration-recovery checks."""
 
@@ -1506,13 +1518,80 @@ def _collision_pair_distances(
 
     model = configuration.model
     data = configuration.data
-    fromto = np.empty(6, dtype=np.float64)
+
+    # ``mink.Configuration.update`` intentionally runs only kinematics, centre
+    # of mass and constraint preparation.  It does not populate ``data.contact``.
+    # Generate contacts explicitly for this hypothetical configuration before
+    # combining them with mj_geomDistance; otherwise MuJoCo 3.3.0's orthogonal
+    # box degeneracy can still authorize a deeply penetrating predicted step.
+    if refresh_contacts:
+        mujoco.mj_collision(model, data)
+    contact_distances = _contact_pair_minimum_distances(data)
     return {
-        (int(geom1), int(geom2)): float(
-            mujoco.mj_geomDistance(model, data, geom1, geom2, 0.02, fromto)
+        (int(geom1), int(geom2)): _signed_geom_pair_distance(
+            model,
+            data,
+            geom1,
+            geom2,
+            contact_distances=contact_distances,
         )
         for geom1, geom2 in pairs
     }
+
+
+def _signed_geom_pair_distance(
+    model: Any,
+    data: Any,
+    geom1: int,
+    geom2: int,
+    *,
+    contact_distances: dict[tuple[int, int], float] | None = None,
+) -> float:
+    """Return the most conservative signed distance available for one pair.
+
+    MuJoCo 3.3.0 can return exactly zero from ``mj_geomDistance`` for deeply
+    penetrating boxes near an orthogonal orientation, even though an explicit
+    collision pass produces negative-distance contacts for the same geom pair.
+    A zero distance is above OpenETA's -1 mm hard-stop threshold and would
+    therefore authorize the colliding step.  Contact distances are an
+    independent production signal, so retain the smaller of both values.
+    """
+
+    import mujoco
+
+    first = int(geom1)
+    second = int(geom2)
+    fromto = np.empty(6, dtype=np.float64)
+    distance = float(
+        mujoco.mj_geomDistance(model, data, first, second, 0.02, fromto)
+    )
+    contact_distance = (contact_distances or {}).get(
+        (min(first, second), max(first, second))
+    )
+    if contact_distance is not None:
+        distance = min(distance, contact_distance)
+    return distance
+
+
+def _contact_pair_minimum_distances(data: Any) -> dict[tuple[int, int], float]:
+    """Index finite MuJoCo contact distances once for all protected pairs."""
+
+    distances: dict[tuple[int, int], float] = {}
+    for index in range(int(getattr(data, "ncon", 0))):
+        contact = data.contact[index]
+        contact_first = int(contact.geom1)
+        contact_second = int(contact.geom2)
+        if contact_first < 0 or contact_second < 0:
+            continue
+        contact_distance = float(contact.dist)
+        if not math.isfinite(contact_distance):
+            continue
+        key = (
+            min(contact_first, contact_second),
+            max(contact_first, contact_second),
+        )
+        distances[key] = min(distances.get(key, math.inf), contact_distance)
+    return distances
 
 
 def _robot_joint_limit_state(

@@ -24,7 +24,7 @@ The worker exposes a subset of the REST API:
 
 from __future__ import annotations
 
-import argparse, asyncio, base64, io, json, math, os, queue, sys, threading, uuid, warnings
+import argparse, asyncio, base64, copy, io, json, math, os, queue, sys, threading, uuid, warnings
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import contextlib
 
@@ -103,6 +103,10 @@ _obs_locks_guard = threading.Lock()
 # return the last observation instead (the client must reset_env to continue).
 # Guarded implicitly by the per-handle obs lock (step/reset/close serialise).
 _done_handles: set[str] = set()
+# Exact terminal StepResult for each done handle.  Repeated step requests are
+# idempotent reads of this result: they must never replace an official positive
+# terminal reward with a newly synthesized zero.
+_terminal_step_results: dict[str, dict] = {}
 
 
 def _obs_lock_for(handle: str) -> threading.Lock:
@@ -412,22 +416,34 @@ def _env_obs_to_mcp(obs: dict) -> dict:
 def _terminated_step_result(handle: str) -> dict:
     """Build a StepResult for a handle whose episode already finished.
 
-    Returns the last cached observation (no new step) with ``terminated``
-    set, so a client that keeps calling step after done gets a clean signal
-    instead of an HTTP 500 from robosuite's "terminated episode" guard.
+    Replays the exact terminal result (no new step), so a client that keeps
+    calling step after done gets a clean and reward-preserving signal instead
+    of an HTTP 500 from robosuite's "terminated episode" guard.
     Caller must hold the per-handle obs lock.
     """
-    from adapter.protocol import EnvObservation, StepResult
-
-    obs = _last_obs.get(handle, {})
-    try:
-        env_obs = EnvObservation.from_dict(obs) if obs else EnvObservation.from_dict({})
-    except Exception:
-        env_obs = EnvObservation.from_dict({})
-    return StepResult(
-        observation=env_obs, reward=0.0, terminated=True, truncated=False,
-        info={"note": "episode already terminated — call reset_env to continue"},
-    ).to_mcp_dict()
+    cached = _terminal_step_results.get(handle)
+    if cached is None:
+        # This state should be unreachable because _done_handles and the cache
+        # are written and cleared atomically under the same per-handle lock.
+        return {
+            "error": "episode terminated but its terminal result is unavailable",
+            "handle": handle,
+            "terminated": True,
+            "truncated": False,
+            "info": {
+                "terminal_result_replayed": False,
+                "terminal_result_cache_missing": True,
+                "note": "call reset_env to continue",
+            },
+        }
+    replayed = copy.deepcopy(cached)
+    original_info = replayed.get("info")
+    replayed["info"] = {
+        **(original_info if isinstance(original_info, dict) else {}),
+        "terminal_result_replayed": True,
+        "note": "episode already terminated — replaying the terminal result; call reset_env to continue",
+    }
+    return replayed
 
 
 def _step_with_image(env, act, handle: str = "", render: bool = True) -> dict:
@@ -474,27 +490,32 @@ def _step_with_image(env, act, handle: str = "", render: bool = True) -> dict:
                     pass  # render is best-effort; don't lose the step result
         if handle:
             _last_obs[handle] = obs
-            if term or trunc:
-                _done_handles.add(handle)
         env_obs = EnvObservation.from_dict(obs)
-    # Sanitise info: drop non-serialisable values
-    safe_info: dict = {}
-    if isinstance(info, dict):
-        for k, v in info.items():
-            try:
-                json.dumps({k: v})
-                safe_info[k] = v
-            except (TypeError, ValueError):
-                safe_info[k] = str(v)
-    else:
-        safe_info = {"raw_info": str(info)}
-    return StepResult(
-        observation=env_obs,
-        reward=float(rew),
-        terminated=bool(term),
-        truncated=bool(trunc),
-        info=safe_info,
-    ).to_mcp_dict()
+        # Sanitise info: drop non-serialisable values while still holding the
+        # handle lock, then publish the done bit and its exact terminal result
+        # atomically so a concurrent repeated request cannot observe one
+        # without the other.
+        safe_info: dict = {}
+        if isinstance(info, dict):
+            for k, v in info.items():
+                try:
+                    json.dumps({k: v})
+                    safe_info[k] = v
+                except (TypeError, ValueError):
+                    safe_info[k] = str(v)
+        else:
+            safe_info = {"raw_info": str(info)}
+        result = StepResult(
+            observation=env_obs,
+            reward=float(rew),
+            terminated=bool(term),
+            truncated=bool(trunc),
+            info=safe_info,
+        ).to_mcp_dict()
+        if handle and (term or trunc):
+            _terminal_step_results[handle] = copy.deepcopy(result)
+            _done_handles.add(handle)
+        return result
 
 
 def _reset_with_image(env, seed=None, handle: str = "") -> dict:
@@ -511,6 +532,7 @@ def _reset_with_image(env, seed=None, handle: str = "") -> dict:
         if handle:
             _last_obs[handle] = obs
             _done_handles.discard(handle)  # fresh episode — stepping allowed again
+            _terminal_step_results.pop(handle, None)
         return EnvObservation.from_dict(obs).to_mcp_dict()
 
 
@@ -781,6 +803,7 @@ async def close_env(request):
         env = _envs.pop(h, None)
         _last_obs.pop(h, None)
         _done_handles.discard(h)
+        _terminal_step_results.pop(h, None)
         if env:
             if request.app.state.bench == "behavior":
                 # Sending og.shutdown() from inside this HTTP handler closes Kit's

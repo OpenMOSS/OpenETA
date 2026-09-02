@@ -1,0 +1,63 @@
+schema_version: openeta.univtac.blackwell_native_bridge.v1
+runtime_variant: blackwell_compat_adaptation_v1
+official_recipe_exact: false
+benchmark_reproduction: false
+
+source:
+  repository: univtac/UniVTAC
+  commit: 371fac67917307026be8f00869fcc1b61c623a9f
+  tacex_commit: f2051944e469a961241271fbf6fb60e272fc336b
+  libuipc_commit: 1a7e93ef68765e4d3c15d5583f5c387e89af5183
+  muda_commit: 8f9e17d8e76a658df3b6ffeeffbbc9ac47ac54bf
+  symeigen_commit: c72a0082e44b3b8062727b25c33ce7450f9fa933
+  curobo_commit: ebb71702f3f70e767f40fd8e050674af0288abe8
+  vcpkg_commit: dd3097e305afa53f7b4312371f62058d2e665320
+
+environment:
+  conda_name: UniVTAC-isaac51-sm120-r08
+  python: "3.11"
+  setuptools: "75.8.2"
+  wheel: "0.42.0"
+  torch: "2.7.0"
+  torchvision: "0.22.0"
+  torch_index_url: https://download.pytorch.org/whl/cu128
+  torch_cuda: "12.8"
+  cuda_toolkit: "12.8"
+  cuda_arch: "120"
+  torch_cuda_arch_list: "12.0"
+  build_jobs: 4
+
+authorized_adaptations:
+  torch_wheel: 2.7.0+cu126 -> 2.7.0+cu128
+  torchvision_wheel: 0.22.0+cu126 -> 0.22.0+cu128
+  cuda_toolkit: "12.6 -> 12.8"
+  cuda_architecture: 89 -> 120
+
+resource_gates:
+  minimum_disk_free_gib: 60
+  minimum_available_ram_gib: 24
+  minimum_gpu_free_ratio: 0.70
+  required_compute_capability: [12, 0]
+  minimum_driver: "570.26"
+
+timeouts_seconds:
+  torch: 1800
+  environment_update: 3600
+  vcpkg: 3600
+  libuipc_build: 7200
+  libuipc_core_first: 600
+  libuipc_core_second: 300
+  curobo_build: 3600
+  curobo_smoke: 600
+
+gate_order:
+  - P0
+  - T0
+  - E0
+  - U0
+  - B0
+  - U1_RUN1
+  - U1_RUN2
+  - C0_BUILD
+  - C0_AUDIT
+  - C0_SMOKE

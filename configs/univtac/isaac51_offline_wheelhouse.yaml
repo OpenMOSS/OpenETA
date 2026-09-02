@@ -1,0 +1,27 @@
+schema_version: openeta.univtac.isaac51_offline_wheelhouse.v1
+installation_method_label: isaac51_hash_locked_offline_wheelhouse_v1
+environment: UniVTAC-isaac51-sm120-r09
+source_report:
+  relative_path: dependency_plan/isaac_report.json
+  pip_version: 26.2.1
+  requirement: isaaclab[isaacsim,all]==2.3.0
+allowed_remote_hosts:
+  - files.pythonhosted.org
+  - pypi.nvidia.com
+flatdict:
+  version: 4.0.1
+  sha256: 94614060d175f1acbff62a4bca3051e5145f4ed9c880a36861e47533f82ba212
+cache_mode: "0700"
+artifact_mode: "0444"
+max_transport_attempts_per_artifact: 20
+download:
+  connect_timeout_seconds: 60
+  max_time_seconds: 3600
+  speed_time_seconds: 180
+  speed_limit_bytes_per_second: 1024
+  retry_wait_seconds: 30
+install_accounting:
+  prior_online_invocations: 1
+  authorized_offline_retry_invocations: 1
+  total_authorized_invocations: 2
+  additional_install_retry_allowed: false

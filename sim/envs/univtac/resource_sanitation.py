@@ -45,6 +45,8 @@ RUNTIME_ENTRYPOINTS = (
     "rerun_clean_reset_gates.py",
     "probe_uipc_device.py",
     "sim/bench_worker.py",
+    "scripts/smoke_isaac51.py",
+    "scripts/collect_data.py",
     "isaacsim.simulation_app",
     "kit_",
 )

@@ -1,0 +1,128 @@
+schema_version: openeta.univtac.isaac51_blackwell_runtime.v1
+runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+conda_cuda_target_include_bridge_v1+curobo_warp113_public_api_backport_v1+isaac51_blackwell_simulator_integration_v1
+
+claims:
+  official_univtac_recipe_exact: false
+  legacy_ftp1_reproduction: false
+  benchmark_version: UniVTAC-Isaac51
+  within_version_experiment_target: true
+  cross_version_numeric_parity: false
+
+source:
+  univtac_commit: 371fac67917307026be8f00869fcc1b61c623a9f
+  curobo_commit: ebb71702f3f70e767f40fd8e050674af0288abe8
+  curobo_upstream_backport_commit: 0c1de0fc90de59d95a2627ec8ed3955d2d96c07c
+
+environment:
+  clone_from: UniVTAC-isaac51-sm120-r08
+  conda_name: UniVTAC-isaac51-sm120-r09
+  python: "3.11"
+  cuda_toolkit: "12.8"
+  cuda_arch: "120"
+  torch_cuda_arch_list: "12.0"
+
+protected_constraints:
+  torch: 2.7.0+cu128
+  torchvision: 0.22.0+cu128
+  warp-lang: 1.17.0
+  pyuipc: 0.9.0
+
+protected_runtime:
+  nvidia-curobo:
+    version: 0.7.7.post1.dev5+dirty
+    editable_source_required: true
+  setuptools:
+    version: 75.8.2
+  setuptools-scm:
+    version: 8.1.0
+  wheel:
+    version: 0.42.0
+  packaging:
+    version: 23.0
+  filelock:
+    version: 3.13.1
+
+install:
+  isaaclab_requirement: isaaclab[isaacsim,all]==2.3.0
+  isaac_extra_index_url: https://pypi.nvidia.com
+  tacex_dependencies:
+    - flatdict==4.0.1
+    - pybind11
+    - mypy
+    - transforms3d
+    - tetgen
+    - polyscope>=2.5,<3
+  vendored_editables:
+    - third_party/TacEx/source/tacex
+    - third_party/TacEx/source/tacex_assets
+
+resource_gates:
+  minimum_driver: 580.65.06
+  minimum_disk_free_gib: 100
+  minimum_available_ram_gib: 32
+  minimum_gpu_free_ratio: 0.70
+  required_compute_capability: [12, 0]
+  required_inotify_instances: 1024
+  required_inotify_watches: 524288
+  maximum_inotify_usage_ratio: 0.75
+
+timeouts_seconds:
+  environment_clone: 1800
+  native_torch: 900
+  native_warp: 900
+  native_imports: 600
+  native_kinematics: 900
+  native_ik: 1200
+  native_collision: 900
+  native_libuipc: 600
+  pip_dry_run: 1800
+  isaac_install: 7200
+  dependency_install: 1800
+  editable_install: 1800
+  package_check: 600
+  smoke_first: 2400
+  smoke_second: 1200
+  collection: 3600
+
+gate_order:
+  - E0
+  - P0
+  - I0
+  - I1
+  - I2
+  - N0
+  - S0
+  - S1
+  - G0
+  - L0
+  - C0
+  - H0
+
+runtime:
+  gpu: "0"
+  headless: true
+  tactile_backend: taxim
+
+collection_gates:
+  - id: G0
+    task: grasp_classify
+    seed: 0
+    label: official_isaac51_phase1_collection_smoke
+    output_dir: grasp_classify_seed0
+  - id: L0
+    task: lift_can
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: lift_can_seed1000000
+  - id: C0
+    task: pull_out_key
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: pull_out_key_seed1000000
+  - id: H0
+    task: insert_hole
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: insert_hole_seed1000000
+    conditional: true
+    requires: C0_runtime_and_tactile_valid

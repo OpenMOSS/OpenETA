@@ -1490,12 +1490,8 @@ def test_agent_visible_tools_use_contract_schema_and_keep_host_only_audit() -> N
         "openeta.agent_tool_contract.v2"
     )
     assert gripper["parameters"]["required"] == ["position"]
-    assert gripper["parameters"]["properties"]["position"]["enum"] == [
-        0,
-        1,
-        False,
-        True,
-    ]
+    assert gripper["parameters"]["properties"]["position"]["type"] == "integer"
+    assert gripper["parameters"]["properties"]["position"]["enum"] == [0, 1]
     assert "position" not in gripper["parameters"]
 
     audit = context["tool_contract_projection_audit"]

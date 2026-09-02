@@ -12,7 +12,7 @@
     },
     "coverage_gap_counts": {}
   },
-  "catalog_sha256": "7854f7efaabefcb27ff11753e82a95b2745b7f92761f8640d312c3c6c47301a9",
+  "catalog_sha256": "d957c3a33e5e41866d880468c3d7225c4cd1e261ec8a63ddb782e78ec0b797b4",
   "local_checks": {
     "catalog_inventory": true,
     "declared_contract_structure": true,
@@ -223,9 +223,9 @@
   "external_blockers": [],
   "next_action": "Keep gate-repair-envelope authority empty and executable gates on legacy_runtime until a separately reviewed authority change is approved.",
   "test_summary": {
-    "passed": 255,
-    "skipped": 0,
-    "warnings": 0
+    "passed": 1600,
+    "skipped": 17,
+    "warnings": 36
   },
   "harness_wiki": {
     "url": "https://sii-czxy.feishu.cn/wiki/A6M9wTBoCiOYPwkT9rWcwgfon2f",

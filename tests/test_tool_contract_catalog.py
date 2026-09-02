@@ -453,13 +453,19 @@ def test_request_conformance_checks_nested_types_bounds_and_extra_fields() -> No
         catalog.get("gripper_control"),
         {"position": 0},
     ) == ()
+    for noncanonical_binary in (False, True, 0.0, 1.0):
+        violations = check_tool_request_conformance(
+            catalog.get("gripper_control"),
+            {"position": noncanonical_binary},
+        )
+        assert {item.code for item in violations} == {"request_type_mismatch"}
     violations = check_tool_request_conformance(
         catalog.get("gripper_control"),
         {"position": 0.5, "measured_aperture": 0.103},
     )
 
     assert {item.code for item in violations} == {
-        "request_enum_mismatch",
+        "request_type_mismatch",
         "request_additional_field",
     }
 
@@ -470,8 +476,10 @@ def test_agent_projection_preserves_gripper_command_direction() -> None:
     projected = project_agent_tool_contract(catalog.get("gripper_control"))
 
     position = projected["parameters"]["properties"]["position"]
-    assert "0 or false closes" in position["description"]
-    assert "1 or true opens" in position["description"]
+    assert position["type"] == "integer"
+    assert position["enum"] == [0, 1]
+    assert "integer 0 closes" in position["description"]
+    assert "integer 1 opens" in position["description"]
 
 
 def test_request_conformance_checks_exactly_one_request_branch() -> None:
@@ -533,17 +541,10 @@ def test_agent_tool_projection_uses_contract_request_schema() -> None:
         "returns",
         "semantic_limits",
     }
-    parameters_without_annotations = json.loads(json.dumps(projection["parameters"]))
-    parameters_without_annotations["properties"]["position"].pop("description")
-    assert parameters_without_annotations == contract.request_schema
-    assert "description" not in contract.request_schema["properties"]["position"]
+    assert projection["parameters"] == contract.request_schema
     assert projection["parameters"]["required"] == ["position"]
-    assert projection["parameters"]["properties"]["position"]["enum"] == [
-        0,
-        1,
-        False,
-        True,
-    ]
+    assert projection["parameters"]["properties"]["position"]["type"] == "integer"
+    assert projection["parameters"]["properties"]["position"]["enum"] == [0, 1]
     assert projection["returns"] == {
         "outcomes": [
             "mutation_acknowledged",
@@ -601,6 +602,20 @@ def test_planner_contract_validation_is_shadow_only_and_records_parity() -> None
     assert report["legacy_accepted"] is False
     assert report["contract_accepted"] is False
     assert report["acceptance_match"] is True
+
+    for noncanonical_binary in (False, True, 0.0, 1.0):
+        report = _tool_contract_shadow_validation(
+            PlannerDecision(
+                action_type="tool_call",
+                action="gripper_control",
+                parameters={"position": noncanonical_binary},
+            ),
+            tools=registry,
+        )
+        assert report is not None
+        assert report["legacy_accepted"] is False
+        assert report["contract_accepted"] is False
+        assert report["acceptance_match"] is True
 
 
 def test_planner_shadow_ignores_removed_non_public_tool() -> None:

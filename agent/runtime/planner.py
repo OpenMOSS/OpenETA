@@ -1606,15 +1606,16 @@ def _validate_gripper_control_parameters(parameters: JsonDict) -> list[str]:
             "0=closed or 1=open, not a measured aperture or fractional command."
         ]
     position = parameters.get("position")
-    if isinstance(position, bool):
+    if (
+        isinstance(position, int)
+        and not isinstance(position, bool)
+        and position in {0, 1}
+    ):
         return []
-    if isinstance(position, int | float) and not isinstance(position, bool):
-        numeric = float(position)
-        if math.isfinite(numeric) and numeric in {0.0, 1.0}:
-            return []
     return [
-        "gripper_control `parameters.position` must be exactly binary 0=closed "
-        "or 1=open; measured gripper aperture is observation-only."
+        "gripper_control `parameters.position` must be the integer 0=closed or "
+        "integer 1=open; booleans, floats, and measured aperture values are not "
+        "Agent-facing commands."
     ]
 
 

@@ -339,21 +339,48 @@ def test_tool_form_catalog_unwraps_json_schema_properties() -> None:
                     },
                     "required": ["env_id"],
                 },
-            }
+            },
+            {
+                "name": "gripper_control",
+                "description": "Latch the gripper command.",
+                "parameters": {
+                    "additionalProperties": False,
+                    "type": "object",
+                    "properties": {
+                        "position": {
+                            "type": "integer",
+                            "enum": [0, 1],
+                            "description": "Integer 0 closes; integer 1 opens.",
+                        }
+                    },
+                    "required": ["position"],
+                },
+            },
         ],
     }
     body = {"messages": [{"role": "system", "content": json.dumps(stable)}]}
 
     catalog = build_tool_form_catalog(body)
-    fields = catalog[0]["fields"]
+    forms = {item["name"]: item for item in catalog}
+    fields = forms["create_simulator_env"]["fields"]
     assert [field["name"] for field in fields] == ["env_id", "seed", "task"]
     assert fields[0]["required"] is True
     assert fields[1]["required"] is False
     assert fields[1]["value_type"] == "integer"
     assert fields[2]["required"] is False
 
+    gripper_position = forms["gripper_control"]["fields"][0]
+    assert gripper_position["name"] == "position"
+    assert gripper_position["required"] is True
+    assert gripper_position["value_type"] == "integer"
+    assert gripper_position["choices"] == ["0", "1"]
+
     presentation = OpenETAProtocolAdapter().presentation(body, request_id="request-1")
-    assert presentation["composer"]["tools"][0]["fields"] == fields
+    presented = {
+        item["name"]: item for item in presentation["composer"]["tools"]
+    }
+    assert presented["create_simulator_env"]["fields"] == fields
+    assert presented["gripper_control"]["fields"][0] == gripper_position
 
 
 def test_response_mode_detects_isolated_json_request() -> None:

@@ -3,8 +3,8 @@
   "authority": "post_review_request_validation_canary",
   "passed": true,
   "session_id": "remaining-catalog-grasp-quality-20260825",
-  "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
-  "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+  "manifest": "/tmp/openeta-gripper-schema-catalog-canary-20260902-r2/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+  "catalog_sha256": "d957c3a33e5e41866d880468c3d7225c4cd1e261ec8a63ddb782e78ec0b797b4",
   "policy": {
     "executable_gate_authority": "legacy_runtime",
     "gate_repair_envelope_authority": [],
@@ -48,7 +48,7 @@
   },
   "planner_pipeline_alignment": {
     "catalog_match": true,
-    "pipeline_catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+    "pipeline_catalog_sha256": "d957c3a33e5e41866d880468c3d7225c4cd1e261ec8a63ddb782e78ec0b797b4",
     "pipeline_policy": {
       "executable_gate_authority": "legacy_runtime",
       "gate_repair_envelope_authority": [],
@@ -1637,7 +1637,7 @@
   ],
   "authority_audit": {
     "schema_version": "openeta.tool_contract_authority_audit.v1",
-    "source_root": "/tmp/openeta-toolcontract-catalog-canary-20260825",
+    "source_root": "/tmp/openeta-gripper-schema-catalog-canary-20260902-r2",
     "manifest_count": 1,
     "auditable_manifest_count": 1,
     "conformant": true,
@@ -1645,9 +1645,9 @@
     "violations": [],
     "runs": [
       {
-        "manifest": "/tmp/openeta-toolcontract-catalog-canary-20260825/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
+        "manifest": "/tmp/openeta-gripper-schema-catalog-canary-20260902-r2/sessions/remaining-catalog-grasp-quality-20260825/rollout/manifest.json",
         "session_id": "remaining-catalog-grasp-quality-20260825",
-        "catalog_sha256": "367f4ca47e1fa02f7e20fca06e31f79fa890d0e2916340ddec5a90623ef9ad9b",
+        "catalog_sha256": "d957c3a33e5e41866d880468c3d7225c4cd1e261ec8a63ddb782e78ec0b797b4",
         "request_validation_authority": [
           "anyplace",
           "assess_attachment_probe",

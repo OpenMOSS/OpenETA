@@ -341,8 +341,8 @@
     {
       "tool": "gripper_control",
       "maturity": "verified",
-      "case_count": 4,
-      "invalid_class_count": 3,
+      "case_count": 5,
+      "invalid_class_count": 4,
       "valid_fixture_accepted_by_both": true,
       "acceptance_mismatch_count": 0,
       "deterministic_request_parity": true,
@@ -3447,6 +3447,27 @@
     },
     {
       "tool": "gripper_control",
+      "case": "wrong_type:position",
+      "parameters": {
+        "position": "not-an-integer"
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "gripper_control `parameters.position` must be the integer 0=closed or integer 1=open; booleans, floats, and measured aperture values are not Agent-facing commands."
+      ],
+      "contract_violations": [
+        {
+          "tool": "gripper_control",
+          "code": "request_type_mismatch",
+          "path": "parameters.position",
+          "message": "parameters.position must be JSON type integer; got string."
+        }
+      ]
+    },
+    {
+      "tool": "gripper_control",
       "case": "invalid_enum:position",
       "parameters": {
         "position": "__invalid_enum__"
@@ -3455,14 +3476,14 @@
       "contract_accepted": false,
       "acceptance_match": true,
       "legacy_errors": [
-        "gripper_control `parameters.position` must be exactly binary 0=closed or 1=open; measured gripper aperture is observation-only."
+        "gripper_control `parameters.position` must be the integer 0=closed or integer 1=open; booleans, floats, and measured aperture values are not Agent-facing commands."
       ],
       "contract_violations": [
         {
           "tool": "gripper_control",
-          "code": "request_enum_mismatch",
+          "code": "request_type_mismatch",
           "path": "parameters.position",
-          "message": "parameters.position must be one of [0, 1, False, True]; got '__invalid_enum__'."
+          "message": "parameters.position must be JSON type integer; got string."
         }
       ]
     },

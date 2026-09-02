@@ -2056,7 +2056,17 @@ def _gripper_control(spec: ToolSpecLike) -> ToolContract:
     return _explicit_contract(
         spec,
         request_schema=_object(
-            {"position": {"type": ["integer", "boolean"], "enum": [0, 1, False, True]}},
+            {
+                "position": {
+                    "type": "integer",
+                    "enum": [0, 1],
+                    "description": (
+                        "Required binary command: integer 0 closes and latches the "
+                        "gripper; integer 1 opens and latches it. This is not a "
+                        "measured aperture or fractional opening."
+                    ),
+                }
+            },
             required=("position",),
         ),
         outcomes=(

@@ -1024,7 +1024,7 @@ Transition the simulator's latched gripper command state. The command remains ac
 
 | Parameter | Required | Schema / description |
 |---|:---:|---|
-| `position` | yes | `['integer', 'boolean']` —  — `{"enum": [0, 1, false, true]}` |
+| `position` | yes | `integer` — Required binary command: integer 0 closes and latches the gripper; integer 1 opens and latches it. This is not a measured aperture or fractional opening. — `{"enum": [0, 1]}` |
 
 ### Host resolution
 

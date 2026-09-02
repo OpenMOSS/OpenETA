@@ -1,0 +1,27 @@
+schema_version: openeta.univtac.isaacsim_filelock3131_bridge.v1
+applied_label: isaacsim_filelock3131_compatibility_bridge_v1
+environment: UniVTAC-isaac51-sm120-r09
+before:
+  filelock: 3.32.3
+after:
+  filelock: 3.13.1
+wheel:
+  version: 3.13.1
+  filename: filelock-3.13.1-py3-none-any.whl
+  size: 11740
+  sha256: 57dbda9b35157b05fb3e58ee91448612eb674172fab98ee235ccb0b5bee19a1c
+  pypi_json_url: https://pypi.org/pypi/filelock/3.13.1/json
+allowed_host: files.pythonhosted.org
+mutation_command:
+  - python
+  - -m
+  - pip
+  - install
+  - --no-index
+  - --no-deps
+  - VERIFIED_WHEEL
+security_exception:
+  isolated_research_environment: true
+  production: false
+  untrusted_code: false
+  private_project_directories_required: true

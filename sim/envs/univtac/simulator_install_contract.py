@@ -13,7 +13,9 @@ SCHEMA_VERSION = "openeta.univtac.isaac51_blackwell_runtime.v1"
 RUNTIME_VARIANT = (
     "blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+"
     "conda_cuda_target_include_bridge_v1+curobo_warp113_public_api_backport_v1+"
-    "isaac51_blackwell_simulator_integration_v1"
+    "isaac51_blackwell_simulator_integration_v1+"
+    "isaaclab_setuptools_scm8_packaging23_bridge_v1+"
+    "isaacsim_filelock3131_compatibility_bridge_v1"
 )
 EXPECTED_GATE_ORDER = (
     "E0", "P0", "I0", "I1", "I2", "N0", "S0", "S1", "G0", "L0", "C0", "H0"
@@ -41,7 +43,7 @@ EXPECTED_RUNTIME_VERSIONS = {
     "setuptools-scm": "8.1.0",
     "wheel": "0.42.0",
     "packaging": "23.0",
-    "filelock": "3.32.3",
+    "filelock": "3.13.1",
 }
 PROTECTED_BASELINE_SOURCE = "r08_validated_actual_environment"
 INSTALLATION_METHOD_LABEL = "flatdict_4_0_1_verified_sdist_wheel_bridge_v1"

@@ -1,5 +1,5 @@
 schema_version: openeta.univtac.isaac51_blackwell_runtime.v1
-runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+conda_cuda_target_include_bridge_v1+curobo_warp113_public_api_backport_v1+isaac51_blackwell_simulator_integration_v1
+runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+conda_cuda_target_include_bridge_v1+curobo_warp113_public_api_backport_v1+isaac51_blackwell_simulator_integration_v1+isaaclab_setuptools_scm8_packaging23_bridge_v1+isaacsim_filelock3131_compatibility_bridge_v1
 
 claims:
   official_univtac_recipe_exact: false
@@ -40,7 +40,7 @@ protected_runtime:
   packaging:
     version: 23.0
   filelock:
-    version: 3.32.3
+    version: 3.13.1
 
 protected_baseline_source: r08_validated_actual_environment
 native_reference_packaging: 26.3

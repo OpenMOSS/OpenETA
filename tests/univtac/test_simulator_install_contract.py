@@ -64,7 +64,7 @@ def test_constraints_are_deterministic_and_do_not_pin_isaac() -> None:
     assert text == (
         "torch==2.7.0+cu128\ntorchvision==0.22.0+cu128\nwarp-lang==1.17.0\n"
         "pyuipc==0.9.0\nsetuptools==75.8.2\nsetuptools-scm==8.1.0\n"
-        "wheel==0.42.0\npackaging==23.0\nfilelock==3.32.3\n"
+        "wheel==0.42.0\npackaging==23.0\nfilelock==3.13.1\n"
     )
     assert "isaac" not in text
 
@@ -91,7 +91,7 @@ def test_old_unvalidated_build_tool_versions_are_rejected() -> None:
     payload = config()
     assert "10.2.2" not in json.dumps(payload["protected_runtime"])
     assert '"26.3"' not in json.dumps(payload["protected_runtime"])
-    assert "3.13.1" not in json.dumps(payload)
+    assert payload["protected_runtime"]["filelock"]["version"] == "3.13.1"
     changed = copy.deepcopy(payload)
     changed["protected_runtime"]["packaging"]["version"] = "26.3"
     with pytest.raises(ValueError, match="protected runtime"):

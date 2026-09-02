@@ -199,6 +199,27 @@ def classify_uipc_runs(runs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if any(passed(first) and passed(second) for first, second in zip(values, values[1:]))
     )
     all_invalid = bool(records) and all(record.get("invalid_device") for record in records)
+    all_timed_out_cleanly = bool(records) and all(
+        record.get("timed_out") is True
+        and record.get("invalid_device") is False
+        and record.get("cleanup_complete") is True
+        and not record.get("final_process_group_members")
+        and not record.get("new_gpu_pids_after")
+        for record in records
+    )
+    all_clean_no_step = bool(records) and all(
+        record.get("returncode") == 0
+        and record.get("completed_step") is False
+        and record.get("invalid_device") is False
+        and record.get("cleanup_complete") is True
+        and (
+            record.get("native_result_missing") is True
+            or record.get("native_result", {}).get("error") is None
+        )
+        and record.get("stage")
+        in {"official_main_started", "official_main_returned", "pre_close_result_written"}
+        for record in records
+    )
     return {
         "runs": records,
         "passing_run_count": len(passing),
@@ -207,6 +228,10 @@ def classify_uipc_runs(runs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "classification": (
             "persistent_uipc_invalid_device_clean_state"
             if all_invalid
+            else "uipc_sentinel_timeout_clean_state"
+            if all_timed_out_cleanly
+            else "uipc_no_step_clean_state"
+            if all_clean_no_step
             else "uipc_sentinel_passed"
             if stable_modes
             else "uipc_sentinel_not_stable"

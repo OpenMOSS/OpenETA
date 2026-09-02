@@ -16,6 +16,7 @@ from sim.envs.univtac.resource_sanitation import (
     _read_link,
     apply_cleanup_plan,
     build_cleanup_plan,
+    build_restore_ready,
     cleanup_action_for_record,
     decide_inotify_change,
     run_managed_process,
@@ -91,6 +92,52 @@ def test_inotify_change_threshold() -> None:
     assert decide_inotify_change({"instance_usage_ratio": 0.75})[
         "instances_change_required"
     ] is True
+
+
+def test_restore_ready_requires_clean_resources_and_low_reliable_counts() -> None:
+    ready = build_restore_ready(
+        original_instances=128,
+        original_watches=65536,
+        inotify_inventory={
+            "max_user_instances": 1024,
+            "max_user_watches": 524288,
+            "instance_count": 120,
+            "watch_count": 64000,
+            "watch_count_reliable": True,
+        },
+        process_inventory={"processes": []},
+        gpu_inventory={"compute_processes": []},
+    )
+    assert ready["safe_for_manual_restore"] is True
+    assert ready["not_ready_reasons"] == []
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"instance_count": 128}, "instance_count_not_below_original_limit"),
+        ({"watch_count": 65536}, "watch_count_not_below_original_limit"),
+        ({"watch_count_reliable": False}, "watch_count_unreliable"),
+    ],
+)
+def test_restore_ready_rejects_unsafe_inotify_state(override, reason) -> None:
+    inventory = {
+        "max_user_instances": 1024,
+        "max_user_watches": 524288,
+        "instance_count": 120,
+        "watch_count": 64000,
+        "watch_count_reliable": True,
+        **override,
+    }
+    ready = build_restore_ready(
+        original_instances=128,
+        original_watches=65536,
+        inotify_inventory=inventory,
+        process_inventory={"processes": []},
+        gpu_inventory={"compute_processes": []},
+    )
+    assert ready["safe_for_manual_restore"] is False
+    assert reason in ready["not_ready_reasons"]
 
 
 def test_managed_process_uses_process_group_and_reaps_timeout(tmp_path: Path) -> None:

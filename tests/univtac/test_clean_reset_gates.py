@@ -21,6 +21,27 @@ def test_gate_failure_does_not_mark_followups_as_run() -> None:
         )
 
 
+def test_external_inotify_precondition_checks_both_limits_and_usage() -> None:
+    config = {
+        "external_inotify_minimums": {
+            "max_user_instances": 1024,
+            "max_user_watches": 524288,
+        }
+    }
+    inventory = {
+        "max_user_instances": 1024,
+        "max_user_watches": 524288,
+        "instance_usage_ratio": 0.2,
+        "watch_usage_ratio": 0.3,
+    }
+    assert gates._validate_external_inotify(inventory, config)["satisfied"] is True
+    failed = gates._validate_external_inotify(
+        {**inventory, "watch_usage_ratio": 0.75}, config
+    )
+    assert failed["satisfied"] is False
+    assert "inotify_watch_usage_at_or_above_75_percent" in failed["failures"]
+
+
 def test_runtime_abort_never_passes_a_gate() -> None:
     runtime_failure = {
         "failure_stage": "reset_runtime_error",

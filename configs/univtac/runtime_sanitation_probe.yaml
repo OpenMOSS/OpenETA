@@ -17,5 +17,12 @@ reset_timeout_seconds: 1800
 cleanup_wait_seconds: 15
 post_run_stabilization_seconds: 5
 gpu_free_ratio_required: 0.70
+inotify_management: external
+external_inotify_minimums:
+  max_user_instances: 1024
+  max_user_watches: 524288
+manual_restore_original:
+  max_user_instances: 128
+  max_user_watches: 65536
 inotify_instances_temporary_limit: 1024
 inotify_watches_temporary_limit: 524288

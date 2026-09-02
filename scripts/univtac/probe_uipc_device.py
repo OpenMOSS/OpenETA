@@ -28,6 +28,13 @@ OFFICIAL_EXAMPLE_RELATIVE = Path(
 )
 
 
+def _ensure_simulation_playing(instance: Any, original_is_playing: Any) -> tuple[bool, bool]:
+    if bool(original_is_playing(instance)):
+        return True, False
+    instance.play()
+    return bool(original_is_playing(instance)), True
+
+
 def run_cuda(output: Path, mode_label: str) -> int:
     payload = collect_cuda_diagnostic()
     payload["mode"] = mode_label
@@ -60,7 +67,17 @@ def run_uipc(output: Path, task_root: Path, mode_label: str) -> int:
     module: Any = None
     steps = 0
     loop_checks = 0
+    original_running_samples: list[bool] = []
+    timeline_started_by_harness = False
     error: dict[str, str] | None = None
+    stage_output = output.parent / "stage.json"
+    stage = {
+        "schema_version": "openeta.univtac.uipc_sentinel_stage.v1",
+        "mode": mode_label,
+        "stage": "pre_import",
+        "captured_at": utc_now(),
+    }
+    write_json(stage_output, stage)
     try:
         os.chdir(task_root / "third_party/TacEx")
         sys.argv = [str(example), "--headless", "--livestream", "0"]
@@ -69,26 +86,76 @@ def run_uipc(output: Path, task_root: Path, mode_label: str) -> int:
             raise RuntimeError(f"could not load official example: {example}")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        stage.update({"stage": "official_module_imported", "captured_at": utc_now()})
+        write_json(stage_output, stage)
         original_step = module.UipcSim.step
         original_is_running = module.simulation_app.is_running
+        original_is_playing = module.sim_utils.SimulationContext.is_playing
 
         def counted_step(instance, *args, **kwargs):
             nonlocal steps
+            stage.update({"stage": "uipc_step_started", "captured_at": utc_now()})
+            write_json(stage_output, stage)
             returned = original_step(instance, *args, **kwargs)
             steps += 1
+            stage.update({"stage": "uipc_step_completed", "captured_at": utc_now()})
+            write_json(stage_output, stage)
             return returned
 
         def bounded_is_running() -> bool:
             nonlocal loop_checks
             loop_checks += 1
-            return steps < 1 and loop_checks <= 20 and bool(original_is_running())
+            running = bool(original_is_running())
+            original_running_samples.append(running)
+            return steps < 1 and loop_checks <= 20 and running
+
+        def ensured_is_playing(instance) -> bool:
+            nonlocal timeline_started_by_harness
+            playing, started = _ensure_simulation_playing(
+                instance, original_is_playing
+            )
+            timeline_started_by_harness = timeline_started_by_harness or started
+            if started:
+                stage.update(
+                    {"stage": "headless_timeline_started", "captured_at": utc_now()}
+                )
+                write_json(stage_output, stage)
+            return playing
 
         module.UipcSim.step = counted_step
         module.simulation_app.is_running = bounded_is_running
+        module.sim_utils.SimulationContext.is_playing = ensured_is_playing
+        stage.update({"stage": "official_main_started", "captured_at": utc_now()})
+        write_json(stage_output, stage)
         module.main()
+        stage.update({"stage": "official_main_returned", "captured_at": utc_now()})
+        write_json(stage_output, stage)
     except BaseException as exc:
         error = {"type": type(exc).__name__, "message": str(exc)}
     finally:
+        provisional = {
+            "schema_version": "openeta.univtac.uipc_sentinel.v1",
+            "captured_at": utc_now(),
+            "mode": mode_label,
+            "official_example": str(example),
+            "official_source_unmodified": True,
+            "bounded_harness_only": True,
+            "completed_steps": steps,
+            "completed_step": steps >= 1,
+            "loop_checks": loop_checks,
+            "original_is_running_samples": original_running_samples,
+            "timeline_started_by_harness": timeline_started_by_harness,
+            "ftp1_model_loaded": False,
+            "openeta_imported": False,
+            "error": error,
+            "success": steps >= 1 and error is None,
+            "write_stage": "before_simulation_app_close",
+        }
+        write_json(output, provisional)
+        stage.update(
+            {"stage": "pre_close_result_written", "captured_at": utc_now()}
+        )
+        write_json(stage_output, stage)
         if module is not None and getattr(module, "simulation_app", None) is not None:
             try:
                 module.simulation_app.close()
@@ -107,12 +174,17 @@ def run_uipc(output: Path, task_root: Path, mode_label: str) -> int:
         "completed_steps": steps,
         "completed_step": steps >= 1,
         "loop_checks": loop_checks,
+        "original_is_running_samples": original_running_samples,
+        "timeline_started_by_harness": timeline_started_by_harness,
         "ftp1_model_loaded": False,
         "openeta_imported": False,
         "error": error,
         "success": steps >= 1 and error is None,
+        "write_stage": "after_simulation_app_close",
     }
     write_json(output, payload)
+    stage.update({"stage": "result_written", "captured_at": utc_now()})
+    write_json(stage_output, stage)
     print(json.dumps(payload, sort_keys=True))
     return 0 if payload["success"] else 1
 

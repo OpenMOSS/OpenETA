@@ -238,12 +238,13 @@ def collect_inotify_inventory(uid: int | None = None) -> dict[str, Any]:
             }
         )
     maximum = read_sysctl("fs.inotify.max_user_instances")
+    maximum_watches = read_sysctl("fs.inotify.max_user_watches")
     return {
         "schema_version": RESOURCE_SCHEMA_VERSION,
         "captured_at": utc_now(),
         "uid": uid,
         "max_user_instances": maximum,
-        "max_user_watches": read_sysctl("fs.inotify.max_user_watches"),
+        "max_user_watches": maximum_watches,
         "max_queued_events": read_sysctl("fs.inotify.max_queued_events"),
         "instance_count": instances,
         "instance_usage_ratio": (
@@ -251,7 +252,71 @@ def collect_inotify_inventory(uid: int | None = None) -> dict[str, Any]:
         ),
         "watch_count": watches if watches_reliable else None,
         "watch_count_reliable": watches_reliable,
+        "watch_usage_ratio": (
+            watches / maximum_watches
+            if watches_reliable and maximum_watches and maximum_watches > 0
+            else None
+        ),
         "owners": sorted(owners, key=lambda item: item["pid"]),
+    }
+
+
+def build_restore_ready(
+    *,
+    original_instances: int,
+    original_watches: int,
+    inotify_inventory: Mapping[str, Any],
+    process_inventory: Mapping[str, Any],
+    gpu_inventory: Mapping[str, Any],
+    process_group_residual: Sequence[int] = (),
+) -> dict[str, Any]:
+    eligible = sorted(
+        int(item["pid"])
+        for item in process_inventory.get("processes", [])
+        if item.get("eligible_for_cleanup") is True
+    )
+    runtime_pids = {
+        int(item["pid"])
+        for item in process_inventory.get("processes", [])
+        if item.get("matched_reason", {}).get("runtime_entrypoints")
+        and not item.get("cleanup_exclusion_reason")
+    }
+    gpu_pids = sorted(
+        int(item["pid"])
+        for item in gpu_inventory.get("compute_processes", [])
+        if item.get("pid") is not None and int(item["pid"]) in runtime_pids
+    )
+    instance_count = inotify_inventory.get("instance_count")
+    watch_count = inotify_inventory.get("watch_count")
+    watch_reliable = inotify_inventory.get("watch_count_reliable") is True
+    group_residual = sorted({int(pid) for pid in process_group_residual})
+    reasons: list[str] = []
+    if group_residual:
+        reasons.append("simulator_process_group_remaining")
+    if eligible:
+        reasons.append("eligible_project_process_remaining")
+    if gpu_pids:
+        reasons.append("project_gpu_process_remaining")
+    if instance_count is None or int(instance_count) >= int(original_instances):
+        reasons.append("instance_count_not_below_original_limit")
+    if not watch_reliable:
+        reasons.append("watch_count_unreliable")
+    elif watch_count is None or int(watch_count) >= int(original_watches):
+        reasons.append("watch_count_not_below_original_limit")
+    return {
+        "schema_version": "openeta.univtac.restore_ready.v1",
+        "original_instances": int(original_instances),
+        "original_watches": int(original_watches),
+        "current_instances_limit": inotify_inventory.get("max_user_instances"),
+        "current_watches_limit": inotify_inventory.get("max_user_watches"),
+        "current_instance_count": instance_count,
+        "current_watch_count": watch_count,
+        "watch_count_reliable": watch_reliable,
+        "project_processes_remaining": eligible,
+        "project_gpu_pids_remaining": gpu_pids,
+        "process_group_members_remaining": group_residual,
+        "safe_for_manual_restore": not reasons,
+        "not_ready_reasons": reasons,
     }
 
 

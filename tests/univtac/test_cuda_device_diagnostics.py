@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from scripts.univtac.probe_uipc_device import _ensure_simulation_playing
 from sim.envs.univtac.cuda_device_diagnostics import (
     classify_uipc_runs,
     compare_cuda_modes,
@@ -17,6 +18,23 @@ def _cuda(uuid: str, pci: str, *, success: bool = True) -> dict:
         "success": success,
         "nvidia_smi_logical_zero": {"uuid": uuid, "pci_bus_id": pci},
     }
+
+
+def test_headless_uipc_harness_starts_stopped_timeline_once() -> None:
+    class FakeSimulation:
+        def __init__(self) -> None:
+            self.playing = False
+            self.play_calls = 0
+
+        def play(self) -> None:
+            self.play_calls += 1
+            self.playing = True
+
+    simulation = FakeSimulation()
+    original = lambda instance: instance.playing
+    assert _ensure_simulation_playing(simulation, original) == (True, True)
+    assert _ensure_simulation_playing(simulation, original) == (True, False)
+    assert simulation.play_calls == 1
 
 
 def test_cuda_modes_must_map_to_same_physical_gpu() -> None:
@@ -87,3 +105,39 @@ def test_persistent_invalid_device_is_not_a_planner_failure() -> None:
     summary = classify_uipc_runs([failed, {**failed, "mode": "d1_unset_visible_devices"}])
     assert summary["classification"] == "persistent_uipc_invalid_device_clean_state"
     assert "planner" not in json.dumps(summary).lower()
+
+
+def test_clean_native_no_step_is_not_external_or_planner_failure() -> None:
+    early_exit = {
+        "mode": "d0_visible_gpu0",
+        "returncode": 0,
+        "completed_step": False,
+        "invalid_device": False,
+        "cleanup_complete": True,
+        "native_result_missing": True,
+        "stage": "official_main_started",
+    }
+    summary = classify_uipc_runs(
+        [early_exit, {**early_exit, "mode": "d1_unset_visible_devices"}]
+    )
+    assert summary["classification"] == "uipc_no_step_clean_state"
+    assert summary["consecutive_two_pass"] is False
+    assert "planner" not in summary["classification"]
+
+
+def test_clean_uipc_timeout_is_classified_separately() -> None:
+    timed_out = {
+        "mode": "d0_visible_gpu0",
+        "returncode": 0,
+        "timed_out": True,
+        "completed_step": False,
+        "invalid_device": False,
+        "cleanup_complete": True,
+        "final_process_group_members": [],
+        "new_gpu_pids_after": [],
+    }
+    summary = classify_uipc_runs(
+        [timed_out, {**timed_out, "mode": "d1_unset_visible_devices"}]
+    )
+    assert summary["classification"] == "uipc_sentinel_timeout_clean_state"
+    assert summary["consecutive_two_pass"] is False

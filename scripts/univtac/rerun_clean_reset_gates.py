@@ -36,6 +36,7 @@ from sim.envs.univtac.cuda_device_diagnostics import (
     should_continue_after_gate,
 )
 from sim.envs.univtac.resource_sanitation import (
+    build_restore_ready,
     collect_gpu_inventory,
     collect_inotify_inventory,
     collect_process_inventory,
@@ -71,6 +72,60 @@ def _git_head(path: Path) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _validate_external_inotify(
+    inventory: Mapping[str, Any], config: Mapping[str, Any]
+) -> dict[str, Any]:
+    minimums = config.get("external_inotify_minimums", {})
+    current_instances = int(inventory.get("max_user_instances") or 0)
+    current_watches = int(inventory.get("max_user_watches") or 0)
+    required_instances = int(minimums.get("max_user_instances", 1024))
+    required_watches = int(minimums.get("max_user_watches", 524288))
+    instance_ratio = inventory.get("instance_usage_ratio")
+    watch_ratio = inventory.get("watch_usage_ratio")
+    failures: list[str] = []
+    if current_instances < required_instances:
+        failures.append("max_user_instances_below_external_minimum")
+    if current_watches < required_watches:
+        failures.append("max_user_watches_below_external_minimum")
+    if instance_ratio is None or float(instance_ratio) >= 0.75:
+        failures.append("inotify_instance_usage_at_or_above_75_percent")
+    if watch_ratio is None or float(watch_ratio) >= 0.75:
+        failures.append("inotify_watch_usage_at_or_above_75_percent")
+    return {
+        "satisfied": not failures,
+        "failures": failures,
+        "required": {
+            "max_user_instances": required_instances,
+            "max_user_watches": required_watches,
+        },
+        "observed": {
+            "max_user_instances": current_instances,
+            "max_user_watches": current_watches,
+            "instance_usage_ratio": instance_ratio,
+            "watch_usage_ratio": watch_ratio,
+        },
+    }
+
+
+def _residual_group_members(*payloads: Mapping[str, Any]) -> list[int]:
+    residual: set[int] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            members = value.get("final_process_group_members")
+            if isinstance(members, list):
+                residual.update(int(pid) for pid in members)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    for payload in payloads:
+        visit(payload)
+    return sorted(residual)
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -140,6 +195,10 @@ def _run_uipc(
 ) -> dict[str, Any]:
     directory = output_root / "uipc_sentinel" / label
     result_path = directory / "result.json"
+    stage_path = directory / "stage.json"
+    for stale_path in (result_path, stage_path):
+        if stale_path.is_file():
+            stale_path.unlink()
     command = [
         str(config["python_executable"]),
         str(REPO_ROOT / "scripts/univtac/probe_uipc_device.py"),
@@ -166,6 +225,7 @@ def _run_uipc(
         else ""
     )
     native = _read_json(result_path) if result_path.is_file() else {}
+    stage = _read_json(stage_path) if stage_path.is_file() else {}
     record = {
         **run,
         "label": label,
@@ -175,6 +235,9 @@ def _run_uipc(
         "invalid_device": "cudaErrorInvalidDevice" in log_text,
         "cuda_malloc_async_failure": "cudaMallocAsync" in log_text,
         "native_result": native,
+        "native_result_missing": not result_path.is_file(),
+        "stage": stage.get("stage"),
+        "stage_evidence": stage,
     }
     write_json(directory / "process_run.json", record)
     return record
@@ -244,6 +307,10 @@ def _run_reset(
     record["process_cleanup_complete"] = run.get("cleanup_complete") is True
     record["new_gpu_pids_after"] = run.get("new_gpu_pids_after", [])
     record["inotify_instance_delta"] = run.get("inotify_instance_delta")
+    record["process_group_id"] = run.get("process_group_id")
+    record["final_process_group_members"] = run.get(
+        "final_process_group_members", []
+    )
     _materialize_seed_evidence(
         raw_output=raw, task_output=task_output, seed=seed, record=record
     )
@@ -263,9 +330,10 @@ def _collect_logs(output_root: Path) -> str:
 def _create_author_bundle(
     *, output_root: Path, classification: str, system_changes: Mapping[str, Any],
     cuda_comparison: Mapping[str, Any], uipc_summary: Mapping[str, Any],
-    gate_summary: Mapping[str, Any], clean_runtime: Mapping[str, Any]
+    gate_summary: Mapping[str, Any], clean_runtime: Mapping[str, Any],
+    bundle_name: str = "author_bundle_v2",
 ) -> None:
-    bundle = output_root / "author_bundle_v2"
+    bundle = output_root / bundle_name
     bundle.mkdir(parents=True, exist_ok=True)
     r03_protocol = REPO_ROOT / "outputs/ftp1-eval-seed-probe/author_bundle/protocol_summary.md"
     if r03_protocol.is_file():
@@ -437,6 +505,7 @@ def run(args: argparse.Namespace) -> int:
     write_json(cleanup_manifest, manifest)
     system_changes: dict[str, Any] = {
         "inotify": {
+            "management": config.get("inotify_management", "automatic"),
             "original": {
                 "max_user_instances": read_sysctl("fs.inotify.max_user_instances"),
                 "max_user_watches": read_sysctl("fs.inotify.max_user_watches"),
@@ -484,22 +553,36 @@ def run(args: argparse.Namespace) -> int:
                 f"GPU free ratio {gpu_free_ratio:.3f} is below required threshold"
             )
 
-        decision = decide_inotify_change(_read_json(post_inotify))
-        system_changes["inotify"]["change_required"] = decision[
-            "instances_change_required"
-        ]
-        system_changes["inotify"]["trigger_reason"] = decision["reason"]
-        if decision["instances_change_required"]:
-            applied = run_noninteractive_sysctl(
-                "fs.inotify.max_user_instances",
-                int(config["inotify_instances_temporary_limit"]),
-            )
-            system_changes["inotify"]["applied"]["max_user_instances"] = applied
-            system_changes["inotify"]["applied_success"] = applied["success"]
-            system_changes["inotify"]["restore_required"] = applied["success"]
-            temporary_instances_applied = applied["success"]
-            if not applied["success"]:
-                raise RuntimeError("sysctl_change_unavailable")
+        inotify_management = config.get("inotify_management", "automatic")
+        cleanup_inotify = _read_json(post_inotify)
+        if inotify_management == "external":
+            external = _validate_external_inotify(cleanup_inotify, config)
+            system_changes["inotify"]["external_precondition"] = external
+            system_changes["inotify"]["change_required"] = False
+            system_changes["inotify"]["trigger_reason"] = "externally_managed"
+            system_changes["inotify"]["restore_success"] = None
+            if not external["satisfied"]:
+                raise RuntimeError(
+                    "manual_inotify_precondition_missing: "
+                    + ", ".join(external["failures"])
+                )
+        else:
+            decision = decide_inotify_change(cleanup_inotify)
+            system_changes["inotify"]["change_required"] = decision[
+                "instances_change_required"
+            ]
+            system_changes["inotify"]["trigger_reason"] = decision["reason"]
+            if decision["instances_change_required"]:
+                applied = run_noninteractive_sysctl(
+                    "fs.inotify.max_user_instances",
+                    int(config["inotify_instances_temporary_limit"]),
+                )
+                system_changes["inotify"]["applied"]["max_user_instances"] = applied
+                system_changes["inotify"]["applied_success"] = applied["success"]
+                system_changes["inotify"]["restore_required"] = applied["success"]
+                temporary_instances_applied = applied["success"]
+                if not applied["success"]:
+                    raise RuntimeError("sysctl_change_unavailable")
         write_json(output_root / "system_changes.json", system_changes)
 
         cuda_results: dict[str, dict[str, Any]] = {}
@@ -552,11 +635,7 @@ def run(args: argparse.Namespace) -> int:
         ]
         if not passing_modes:
             uipc_summary = classify_uipc_runs(uipc_runs)
-            classification = (
-                "persistent_uipc_invalid_device_clean_state"
-                if all(record["invalid_device"] for record in uipc_runs)
-                else "blocked_by_external_resources"
-            )
+            classification = str(uipc_summary["classification"])
             write_json(output_root / "uipc_sentinel/summary.json", uipc_summary)
             raise RuntimeError("no UIPC mode passed the first sentinel")
         selected = d0_name if d0_name in passing_modes else passing_modes[0]
@@ -679,7 +758,7 @@ def run(args: argparse.Namespace) -> int:
             if not system_changes["inotify"]["restore_success"]:
                 cleanup_complete = False
                 classification = "cleanup_incomplete"
-        else:
+        elif config.get("inotify_management", "automatic") != "external":
             system_changes["inotify"]["restore_success"] = True
         system_changes["inotify"]["final"] = {
             "max_user_instances": read_sysctl("fs.inotify.max_user_instances"),
@@ -695,6 +774,21 @@ def run(args: argparse.Namespace) -> int:
         write_json(output_root / "final_resource_state/process_inventory.json", final_process)
         write_json(output_root / "final_resource_state/gpu_inventory.json", final_gpu)
         write_json(output_root / "final_resource_state/inotify_inventory.json", final_inotify)
+        manual_original = config.get("manual_restore_original", {})
+        restore_ready = build_restore_ready(
+            original_instances=int(manual_original.get("max_user_instances", 128)),
+            original_watches=int(manual_original.get("max_user_watches", 65536)),
+            inotify_inventory=final_inotify,
+            process_inventory=final_process,
+            gpu_inventory=final_gpu,
+            process_group_residual=_residual_group_members(
+                cuda_comparison, uipc_summary, gate_summary
+            ),
+        )
+        restore_ready["original_file_warning"] = (
+            "recorded_original_matches_temporary_limits; using R0.4 observed originals"
+        )
+        write_json(output_root / "restore_ready.json", restore_ready)
         clean_runtime = {
             "captured_at": utc_now(),
             "git_head": _git_head(REPO_ROOT),
@@ -715,6 +809,19 @@ def run(args: argparse.Namespace) -> int:
             uipc_summary=uipc_summary,
             gate_summary=gate_summary,
             clean_runtime=clean_runtime,
+            bundle_name=(
+                "author_bundle_uipc"
+                if classification
+                in {
+                    "persistent_uipc_invalid_device_clean_state",
+                    "uipc_initialization_early_exit_clean_state",
+                    "uipc_no_step_clean_state",
+                    "uipc_sentinel_timeout_clean_state",
+                }
+                else "author_bundle_planner"
+                if classification == "planner_reached_after_runtime_cleanup"
+                else "author_bundle_v2"
+            ),
         )
         manifest.update(
             {

@@ -1,6 +1,7 @@
 schema_version: openeta.univtac.isaac51_offline_wheelhouse_r0952.v1
 installation_method_label: isaac51_hash_locked_offline_wheelhouse_v1
 environment: UniVTAC-isaac51-sm120-r09
+openeta_head: 6d9da7c49944ef57ee4319e6d4bcc3dba4db7978
 requirement: isaaclab[isaacsim,all]==2.3.0
 source_report_sha256: 081e2f2a27a0252cdb305abdaf9fb00add6557f42626aa04f91f8a8702f19e4b
 source_artifact_lock_sha256: 816691fad4acfcf3d4e450f40c41858ec9ab75f9dd7de3233cf40547dbf95f7f

@@ -23,6 +23,7 @@ from sim.envs.univtac.offline_wheelhouse_contract import (
     validate_config,
     validate_existing_cache,
     validate_offline_command,
+    validate_system_curl_provenance,
     verify_nvidia_canary_minimum,
 )
 
@@ -53,6 +54,7 @@ def test_r0952_config_locks_transport_and_no_install_accounting() -> None:
     config = _config()
     validate_config(config)
     assert config["max_transport_attempts_per_artifact"] == 20
+    assert config["openeta_head"] == "6d9da7c49944ef57ee4319e6d4bcc3dba4db7978"
     assert config["install_accounting"]["total_invocations"] == 1
     changed = dict(config)
     changed["max_transport_attempts_per_artifact"] = 21
@@ -141,6 +143,23 @@ def test_curl_transport_does_not_inherit_conda_library_path() -> None:
     source = inspect.getsource(downloader.run_curl)
     assert 'environment.pop("LD_LIBRARY_PATH", None)' in source
     assert "env=environment" in source
+
+
+def test_system_curl_provenance_rejects_conda_libraries() -> None:
+    good = validate_system_curl_provenance(
+        executable=Path("/usr/bin/curl"),
+        version_output="curl 7.81.0 libcurl/7.81.0 OpenSSL/3.0.2\nProtocols: http https\nFeatures: SSL",
+        ldd_output="libcurl.so.4 => /lib/x86_64-linux-gnu/libcurl.so.4 (0x1)\nlibssl.so.3 => /lib/x86_64-linux-gnu/libssl.so.3 (0x2)",
+        conda_prefixes=(Path("/opt/conda/envs/r09"),),
+    )
+    assert good["curl_ssl_backend"] == "OpenSSL/3.0.2"
+    with pytest.raises(ValueError, match="Conda"):
+        validate_system_curl_provenance(
+            executable=Path("/usr/bin/curl"),
+            version_output="curl 7.81.0 libcurl/8.16 OpenSSL/3.5",
+            ldd_output="libcurl.so.4 => /opt/conda/envs/r09/lib/libcurl.so.4 (0x1)",
+            conda_prefixes=(Path("/opt/conda/envs/r09"),),
+        )
 
 
 def test_unapproved_redirect_is_rejected() -> None:
@@ -257,6 +276,10 @@ def test_r0952_runner_stops_before_install_or_simulator() -> None:
     assert '"task_started": False' in source and '"agent_started": False' in source
     assert "AppLauncher" not in source and "start_seed" not in source
     assert "I0B_R1" not in source and "pip install" not in source
+    assert source.index('manifest["stages"]["T0"] = "passed"') < source.index('manifest["stages"]["T1"] = "passed"')
+    assert source.index('manifest["stages"]["T1"] = "passed"') < source.index("download_process = managed(")
+    assert 'prior_r0952.get("classification") == "network_transport_preflight_failed"' in source
+    assert 'manifest["stages"]["R0"] = "failed"' in source
 
 
 def test_downloader_revalidates_cache_before_transport() -> None:
@@ -269,6 +292,14 @@ def test_complete_part_is_validated_before_and_after_atomic_rename() -> None:
     assert 'validate_wheel(part, record, total, check_filename=False)' in source
     assert source.index('validate_wheel(part, record, total, check_filename=False)') < source.index("os.replace(part, final)")
     assert source.index("os.replace(part, final)") < source.rindex("validation = validate_wheel(final, record, total)")
+    assert 'historical_attempts = len(sidecar.get("attempts", []))' in source
+    assert 'historical_attempts + len(attempts)' in source
+
+
+def test_cached_large_metadata_is_refreshed_before_download() -> None:
+    source = inspect.getsource(downloader.main)
+    assert source.index("if metadata_cache_reused:") < source.index("refreshed_large = []")
+    assert source.index("refreshed_large.append") < source.index('state["current_stage"] = "D0"')
 
 
 def test_source_input_modes_are_checked(tmp_path: Path) -> None:

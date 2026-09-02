@@ -276,6 +276,8 @@ def download_remote(record: dict, metadata: dict, cache: Path, config: dict, com
     if not sidecar:
         sidecar = {"schema_version": "openeta.univtac.wheel_partial.v1", "url": record["url"], "filename": record["filename"], "sha256": record["sha256"], "expected_size": total, "etag": metadata.get("etag"), "attempts": []}
         write_json(sidecar_path, sidecar, mode=0o600)
+    historical_attempts = len(sidecar.get("attempts", []))
+    recovered_complete_part = part.exists() and part.stat().st_size == total
     attempts = []
     maximum = int(config["max_transport_attempts_per_artifact"])
     first_attempt = (
@@ -361,7 +363,15 @@ def download_remote(record: dict, metadata: dict, cache: Path, config: dict, com
     sidecar_path.unlink()
     for header in partial_root.glob(f"{record['filename']}.attempt-*.headers"):
         header.unlink()
-    return {**validation, "disposition": "resumed" if attempts and attempts[0]["start_offset"] else "fresh"}, attempts
+    disposition = "recovered_complete_part" if recovered_complete_part else "resumed" if attempts and attempts[0]["start_offset"] else "fresh"
+    return {
+        **validation,
+        "disposition": disposition,
+        "historical_transport_attempts": historical_attempts,
+        "new_transport_attempts": len(attempts),
+        "cumulative_transport_attempts": historical_attempts + len(attempts),
+        "recovered_complete_part": recovered_complete_part,
+    }, attempts
 
 
 def main() -> None:
@@ -468,7 +478,24 @@ def main() -> None:
             except (OSError, TypeError, ValueError) as exc:
                 raise WheelhouseError("existing_cache_identity_failed", str(exc)) from exc
             metadata.update(canary_metadata)
+            refreshed_large = []
+            threshold = int(config["large_artifact_threshold_bytes"])
+            for record in sorted(groups["remote"], key=lambda item: int(item["index"])):
+                cached_total = int(metadata[record["filename"]]["expected_total"])
+                if cached_total <= threshold:
+                    continue
+                refreshed = probe_remote(
+                    record,
+                    output / "remote_metadata/system_curl_large_refresh",
+                    config,
+                    classification="blocked_by_external_resources",
+                )
+                if refreshed["expected_total"] != cached_total:
+                    raise WheelhouseError("remote_artifact_identity_changed", f"large artifact total changed: {record['filename']}")
+                metadata[record["filename"]] = refreshed
+                refreshed_large.append({"index": record["index"], "filename": record["filename"], "expected_total": cached_total, "metadata_method": refreshed["metadata_method"]})
         else:
+            refreshed_large = []
             metadata = dict(canary_metadata)
             for record in sorted(groups["remote"], key=lambda item: int(item["index"])):
                 if record["filename"] not in metadata:
@@ -507,7 +534,7 @@ def main() -> None:
             method = item["metadata_method"]
             method_counts[method] = method_counts.get(method, 0) + 1
         write_json(output / "remote_metadata/method_counts.json", method_counts)
-        write_json(output / "remote_metadata/cache_reuse.json", {"reused": metadata_cache_reused})
+        write_json(output / "remote_metadata/cache_reuse.json", {"reused": metadata_cache_reused, "large_artifacts_refreshed_with_system_curl": refreshed_large})
         write_json(output / "transport_canary/nvidia_minimum_check.json", canary_minimum)
         state["stages"]["M0"] = "passed"
         write_json(output / "run_manifest.json", state)

@@ -16,7 +16,7 @@ from packaging.utils import canonicalize_name
 
 
 SCHEMA_VERSION = "openeta.univtac.isaac51_offline_wheelhouse_r0952.v1"
-EXPECTED_HEAD = "88781a2f9a8064fbe2c263bc1c489f7fefc7a66d"
+EXPECTED_HEAD = "6d9da7c49944ef57ee4319e6d4bcc3dba4db7978"
 EXPECTED_SOURCE_REPORT_SHA256 = "081e2f2a27a0252cdb305abdaf9fb00add6557f42626aa04f91f8a8702f19e4b"
 EXPECTED_SOURCE_LOCK_SHA256 = "816691fad4acfcf3d4e450f40c41858ec9ab75f9dd7de3233cf40547dbf95f7f"
 EXPECTED_TRANSFORM_LOCK_SHA256 = "b2e9f58ddd17298c80ab95203a680f8e7553250da80698e3c4458bff0e29f01c"
@@ -41,6 +41,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "schema_version": SCHEMA_VERSION,
         "installation_method_label": "isaac51_hash_locked_offline_wheelhouse_v1",
         "environment": "UniVTAC-isaac51-sm120-r09",
+        "openeta_head": EXPECTED_HEAD,
         "requirement": "isaaclab[isaacsim,all]==2.3.0",
         "source_report_sha256": EXPECTED_SOURCE_REPORT_SHA256,
         "source_artifact_lock_sha256": EXPECTED_SOURCE_LOCK_SHA256,
@@ -177,6 +178,51 @@ def validate_cached_metadata(
         else:
             raise ValueError(f"cached metadata has unsupported URL scheme: {filename}")
     return {"passed": True, "record_count": len(expected), "method_counts": method_counts}
+
+
+def validate_system_curl_provenance(
+    *,
+    executable: Path,
+    version_output: str,
+    ldd_output: str,
+    conda_prefixes: Sequence[Path],
+) -> dict[str, Any]:
+    realpath = executable.resolve()
+    combined = f"{version_output}\n{ldd_output}"
+    if realpath != Path("/usr/bin/curl"):
+        raise ValueError("system curl realpath changed")
+    if "no version information available" in combined or "not found" in ldd_output:
+        raise ValueError("system curl loader provenance is invalid")
+    forbidden = [str(prefix.resolve()) for prefix in conda_prefixes]
+    forbidden.extend(["/anaconda", "/miniconda", "/conda/envs/"])
+    if any(fragment in ldd_output for fragment in forbidden):
+        raise ValueError("system curl loaded a Conda library")
+    library_paths = []
+    for line in ldd_output.splitlines():
+        if "=>" not in line:
+            continue
+        candidate = line.split("=>", 1)[1].strip().split()[0]
+        if candidate.startswith("/"):
+            library_paths.append(candidate)
+    if not library_paths or any(not path.startswith(("/lib/", "/usr/lib/")) for path in library_paths):
+        raise ValueError("system curl loaded a non-system library")
+    first_line = version_output.splitlines()[0] if version_output.splitlines() else ""
+    if not first_line.startswith("curl "):
+        raise ValueError("system curl version output is invalid")
+    ssl_backend = next(
+        (token for token in first_line.split() if token.startswith(("OpenSSL/", "GnuTLS/"))),
+        None,
+    )
+    if ssl_backend is None:
+        raise ValueError("system curl TLS backend is unavailable")
+    return {
+        "passed": True,
+        "curl_executable": str(executable),
+        "curl_realpath": str(realpath),
+        "curl_version_output": version_output,
+        "curl_ssl_backend": ssl_backend,
+        "library_paths": library_paths,
+    }
 
 
 def validate_existing_cache(

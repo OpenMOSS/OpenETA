@@ -1,0 +1,64 @@
+schema_version: openeta.univtac.isaac51_runtime_validation.v1
+
+source:
+  repository: univtac/UniVTAC
+  commit: 371fac67917307026be8f00869fcc1b61c623a9f
+
+environment:
+  conda_name: UniVTAC-isaac51-r07
+  python: "3.11"
+  torch: "2.7.0"
+  torchvision: "0.22.0"
+  torch_index_url: https://download.pytorch.org/whl/cu126
+  torch_cuda: "12.6"
+  cuda_arch: "89"
+  build_jobs: 4
+  vcpkg_commit: dd3097e305afa53f7b4312371f62058d2e665320
+  curobo_commit: ebb71702f3f70e767f40fd8e050674af0288abe8
+
+resource_gates:
+  minimum_disk_free_gib: 80
+  minimum_gpu_free_ratio: 0.70
+  maximum_inotify_usage_ratio: 0.75
+  required_inotify_instances: 1024
+  required_inotify_watches: 524288
+
+timeouts_seconds:
+  t0: 1800
+  install: 7200
+  install_check: 600
+  runtime_import: 600
+  smoke: 1800
+  collection: 3600
+
+runtime:
+  gpu: "0"
+  headless: true
+  tactile_backend: taxim
+
+gates:
+  - id: G0
+    task: grasp_classify
+    seed: 0
+    label: official_isaac51_phase1_collection_smoke
+    output_dir: grasp_classify_seed0
+    conditional: false
+  - id: L0
+    task: lift_can
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: lift_can_seed1000000
+    conditional: false
+  - id: C0
+    task: pull_out_key
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: pull_out_key_seed1000000
+    conditional: false
+  - id: H0
+    task: insert_hole
+    seed: 1000000
+    label: legacy_ftp1_eval_seed_index_aligned
+    output_dir: insert_hole_seed1000000
+    conditional: true
+    requires: C0_runtime_and_tactile_valid

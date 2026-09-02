@@ -1,0 +1,31 @@
+schema_version: openeta.univtac.tinygltf_source_recovery.v1
+runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1
+packaging_adaptation: tinygltf_republished_archive_recovery_v1
+official_recipe_exact: false
+benchmark_reproduction: false
+
+source:
+  univtac_commit: 371fac67917307026be8f00869fcc1b61c623a9f
+  vcpkg_commit: dd3097e305afa53f7b4312371f62058d2e665320
+  tinygltf_version: 2.9.6
+  tinygltf_tag: v2.9.6
+  tinygltf_commit: 26422192e2908a562b641175dde18489824e609e
+  tinygltf_url: https://github.com/syoyo/tinygltf.git
+  expected_archive_sha512: 89397dc2c8884a54ea0c370251449459a200057b5e470210c4468f43c4623947500630b1a67ff6319e0998e648487367398f134711bc7d2c42ebdbd7097770b3
+
+environment:
+  conda_name: UniVTAC-isaac51-sm120-r08
+  python: "3.11"
+  torch: 2.7.0+cu128
+  torch_cuda: "12.8"
+  cuda_arch: "120"
+  torch_cuda_arch_list: "12.0"
+  build_jobs: 4
+
+limits:
+  u0_retry_count: 1
+  maximum_overlay_ports: 1
+  libuipc_build_timeout_seconds: 7200
+  core_run1_timeout_seconds: 600
+  core_run2_timeout_seconds: 300
+  curobo_build_timeout_seconds: 3600

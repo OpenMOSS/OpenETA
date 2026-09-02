@@ -1,0 +1,22 @@
+schema_version: openeta.univtac.curobo_cuda_include_bridge.v1
+runtime_variant: blackwell_compat_adaptation_v1+tinygltf_republished_archive_recovery_v1+conda_cuda_target_include_bridge_v1
+official_recipe_exact: false
+benchmark_reproduction: false
+
+source:
+  univtac_commit: 371fac67917307026be8f00869fcc1b61c623a9f
+  curobo_commit: ebb71702f3f70e767f40fd8e050674af0288abe8
+
+environment:
+  conda_name: UniVTAC-isaac51-sm120-r08
+  cuda_arch: "120"
+  torch_cuda_arch_list: "12.0"
+  build_jobs: 4
+
+timeouts_seconds:
+  minimal_extension: 1200
+  curobo_build: 3600
+  binary_audit: 1200
+  import: 600
+  official_smoke: 600
+  libuipc_regression: 300

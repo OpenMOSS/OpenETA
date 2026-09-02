@@ -1,0 +1,14 @@
+schema_version: openeta.univtac.isaaclab_packaging23_bridge.v1
+compatibility_label: isaaclab_packaging23_compatibility_bridge_v1
+package: packaging
+native_reference_version: "26.3"
+simulator_integration_version: "23.0"
+baseline_source: isaaclab_2_3_metadata_and_pinned_univtac_isaac51_install_recipe
+pypi_json_url: https://pypi.org/pypi/packaging/23.0/json
+allowed_file_host: files.pythonhosted.org
+filename: packaging-23.0-py3-none-any.whl
+packagetype: bdist_wheel
+expected_size: 42678
+expected_sha256: 714ac14496c3e68c99c29b00845f7a2b85f3bb6f1078fd9f72fd20f0570002b2
+expected_tag: py3-none-any
+expected_purelib: true

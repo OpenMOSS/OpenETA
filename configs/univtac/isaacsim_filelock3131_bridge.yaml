@@ -22,6 +22,11 @@ mutation_command:
   - VERIFIED_WHEEL
 security_exception:
   isolated_research_environment: true
-  production: false
-  untrusted_code: false
+  package: filelock
+  version: 3.13.1
+  reason: isaacsim-core 5.1.0.0 exact dependency
+  scope: isolated research simulator environment only
+  production_use_allowed: false
+  untrusted_code_allowed: false
   private_project_directories_required: true
+  benchmark_semantics_changed: false

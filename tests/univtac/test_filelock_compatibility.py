@@ -41,6 +41,8 @@ def test_fixed_bridge_config_and_official_wheel_identity() -> None:
         "sha256": "57dbda9b35157b05fb3e58ee91448612eb674172fab98ee235ccb0b5bee19a1c",
         "pypi_json_url": "https://pypi.org/pypi/filelock/3.13.1/json",
     }
+    assert payload["security_exception"]["reason"] == "isaacsim-core 5.1.0.0 exact dependency"
+    assert payload["security_exception"]["benchmark_semantics_changed"] is False
     changed = copy.deepcopy(payload)
     changed["wheel"]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="identity"):

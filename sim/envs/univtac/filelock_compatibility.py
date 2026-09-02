@@ -48,9 +48,14 @@ def validate_config(config: Mapping[str, Any]) -> None:
         raise ValueError("filelock mutation command changed")
     expected_security = {
         "isolated_research_environment": True,
-        "production": False,
-        "untrusted_code": False,
+        "package": "filelock",
+        "version": AFTER_VERSION,
+        "reason": "isaacsim-core 5.1.0.0 exact dependency",
+        "scope": "isolated research simulator environment only",
+        "production_use_allowed": False,
+        "untrusted_code_allowed": False,
         "private_project_directories_required": True,
+        "benchmark_semantics_changed": False,
     }
     if config.get("security_exception") != expected_security:
         raise ValueError("filelock security exception changed")

@@ -73,7 +73,8 @@ def main() -> None:
     output = args.output_root.resolve()
     if output.exists():
         raise FileExistsError(output)
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, mode=0o750)
+    output.chmod(0o750)
     base = Path(
         subprocess.run(
             [str(args.conda_exe), "info", "--base"], check=True, capture_output=True, text=True
@@ -199,6 +200,13 @@ def main() -> None:
         private_root.mkdir(mode=0o700)
         private_root.chmod(0o700)
         private_record = private_directory_record(private_root)
+        pip_cache = Path(environment.get("PIP_CACHE_DIR", Path.home() / ".cache/pip")).resolve()
+        ownership = {
+            "output_root": private_directory_record(output),
+            "package_cache": private_directory_record(pip_cache),
+            "simulator_workspace": private_directory_record(source),
+            "task_output_root": private_directory_record(output),
+        }
         security = {
             **bridge["security_exception"],
             "environment_prefix": str(prefix),
@@ -206,19 +214,24 @@ def main() -> None:
             "source_owned_by_current_user": source.stat().st_uid == os.getuid(),
             "output_owned_by_current_user": output.stat().st_uid == os.getuid(),
             "private_runtime_directory": private_record,
+            "ownership": ownership,
             "exploit_tested": False,
             "symlink_attack_tested": False,
         }
         security["success"] = all(
             (
                 security["isolated_research_environment"],
-                not security["production"],
-                not security["untrusted_code"],
+                not security["production_use_allowed"],
+                not security["untrusted_code_allowed"],
+                not security["benchmark_semantics_changed"],
                 security["environment_owned_by_current_user"],
                 security["source_owned_by_current_user"],
                 security["output_owned_by_current_user"],
                 private_record["private"],
                 private_record["owned_by_current_user"],
+                all(item["owned_by_current_user"] for item in ownership.values()),
+                ownership["output_root"]["mode"] in {"0700", "0750"},
+                ownership["task_output_root"]["mode"] in {"0700", "0750"},
             )
         )
         write_json(output / "security_exception/manifest.json", security)

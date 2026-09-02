@@ -1,0 +1,22 @@
+sources:
+  legacy:
+    repository: michaelyuancb/ftp1-policy
+    commit: 89fa681d6c014cce28300946b7526db808e0b1c1
+    checkout: /home/ubuntu/wybcode/.worktrees/ftp1-policy/r02-official-89fa681
+    task_root: UniVTAC
+  isaac51:
+    repository: univtac/UniVTAC
+    commit: 371fac67917307026be8f00869fcc1b61c623a9f
+    checkout: /home/ubuntu/wybcode/.cache/univtac-audit/isaac51-371fac679173
+    task_root: .
+tasks:
+  - lift_bottle
+  - lift_can
+  - put_bottle_in_shelf
+  - pull_out_key
+  - insert_hole
+  - insert_tube
+contact_rich_tasks:
+  - pull_out_key
+  - insert_hole
+  - insert_tube

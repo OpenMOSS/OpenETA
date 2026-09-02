@@ -1,0 +1,62 @@
+schema_version: openeta.univtac.isaac51_offline_wheelhouse_r0952.v1
+installation_method_label: isaac51_hash_locked_offline_wheelhouse_v1
+environment: UniVTAC-isaac51-sm120-r09
+requirement: isaaclab[isaacsim,all]==2.3.0
+source_report_sha256: 081e2f2a27a0252cdb305abdaf9fb00add6557f42626aa04f91f8a8702f19e4b
+source_artifact_lock_sha256: 816691fad4acfcf3d4e450f40c41858ec9ab75f9dd7de3233cf40547dbf95f7f
+transformation_lock_sha256: b2e9f58ddd17298c80ab95203a680f8e7553250da80698e3c4458bff0e29f01c
+derived_install_lock_sha256: 2be906ebd28183dee3621df59f12dcdd8266f253e8f45d597fdf1e7a37976fd8
+constraints_sha256: 53cbd6a945209f6b3bcf3be7c1976edef5c94337ad23124e0cbef1a69102fadd
+allowed_remote_hosts:
+  - files.pythonhosted.org
+  - pypi.nvidia.com
+source_inputs:
+  idna-ssl:
+    filename: idna-ssl-1.1.0.tar.gz
+    size: 3377
+    sha256: a933e3bb13da54383f9e8f35dc4f9cb9eb9b3b78c6b36f311254d6d0d92c6c7c
+  pyperclip:
+    filename: pyperclip-1.8.0.tar.gz
+    size: 16529
+    sha256: b75b975160428d84608c26edba2dec146e7799566aea42c1fe1b32e72b6028f2
+  antlr4-python3-runtime:
+    filename: antlr4-python3-runtime-4.9.3.tar.gz
+    size: 117034
+    sha256: f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b
+derived_wheels:
+  idna-ssl: 406596d87d2cd5f81b8bbcb3499e95e529a16bcb85498f446835773b4228d65b
+  pyperclip: cf5618d4a9eea31e6dcea62af9345c49d2f660e540a9c5cbc55fc8afadea4537
+  antlr4-python3-runtime: c39686ecd20f882f46d894b142287e973e06de245d79e7db7cefe38fcec57a75
+flatdict:
+  filename: flatdict-4.0.1-py3-none-any.whl
+  sha256: 94614060d175f1acbff62a4bca3051e5145f4ed9c880a36861e47533f82ba212
+networkx_canary:
+  index: 92
+  filename: networkx-3.3-py3-none-any.whl
+  expected_size: 1702396
+nvidia_canary:
+  index: 75
+  filename: isaacsim_rl-5.1.0.0-cp311-none-manylinux_2_35_x86_64.whl
+  expected_size: 17268
+  selection: minimum_observed_size_then_record_index_from_preserved_metadata_probe
+cache_mode: "0700"
+artifact_mode: "0444"
+large_artifact_threshold_bytes: 268435456
+canary_range_attempts: 3
+metadata_range_attempts: 3
+max_transport_attempts_per_artifact: 20
+retry_wait_seconds: 30
+probe:
+  connect_timeout_seconds: 60
+  max_time_seconds: 300
+download:
+  connect_timeout_seconds: 60
+  max_time_seconds: 3600
+  speed_time_seconds: 180
+  speed_limit_bytes_per_second: 1024
+  retry_wait_seconds: 30
+install_accounting:
+  prior_online_invocations: 1
+  authorized_offline_retry_invocations: 0
+  total_invocations: 1
+  third_install_invocation: false

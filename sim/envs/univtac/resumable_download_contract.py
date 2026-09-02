@@ -134,7 +134,7 @@ def sidecar_matches(sidecar: Mapping[str, Any], record: Mapping[str, Any], metad
 
 def curl_download_command(*, url: str, output: Path, headers: Path, offset: int, config: Mapping[str, Any]) -> list[str]:
     command = [
-        "curl", "--location", "--fail", "--show-error", "--http1.1",
+        "curl", "--location", "--fail", "--show-error", "--silent", "--http1.1",
         "--proto", "=https", "--proto-redir", "=https",
         "--connect-timeout", str(config["connect_timeout_seconds"]),
         "--max-time", str(config["max_time_seconds"]),
@@ -168,8 +168,18 @@ def disk_space_gate(*, total_bytes: int, remaining_bytes: int, largest_bytes: in
     return {"passed": passed, "same_filesystem": same_filesystem, "total_planned_wheel_bytes": total_bytes, "total_remaining_download_bytes": remaining_bytes, "largest_artifact_bytes": largest_bytes, "cache_available_bytes": cache_available, "environment_available_bytes": env_available, **requirements}
 
 
-def validate_wheel(path: Path, record: Mapping[str, Any], expected_size: int) -> dict[str, Any]:
-    if path.name != record["filename"] or path.stat().st_size != expected_size or sha256_file(path) != record["sha256"]:
+def validate_wheel(
+    path: Path,
+    record: Mapping[str, Any],
+    expected_size: int,
+    *,
+    check_filename: bool = True,
+) -> dict[str, Any]:
+    if (
+        (check_filename and path.name != record["filename"])
+        or path.stat().st_size != expected_size
+        or sha256_file(path) != record["sha256"]
+    ):
         raise ValueError("wheel file identity mismatch")
     wheel_name, wheel_version, _, filename_tags = parse_wheel_filename(path.name)
     compatible = set(cpython_tags(python_version=(3, 11))) | set(compatible_tags(python_version=(3, 11), interpreter="cp311"))
@@ -201,10 +211,11 @@ def validate_wheel(path: Path, record: Mapping[str, Any], expected_size: int) ->
         if not metadata_tags or not compatible.intersection(metadata_tags):
             raise ValueError("wheel WHEEL tags are incompatible")
         rows = list(csv.reader(io.StringIO(archive.read(record_names[0]).decode("utf-8"))))
-        if len(rows) != len(names) or len({row[0] for row in rows}) != len(rows):
+        file_names = [name for name in names if not name.endswith("/")]
+        if len(rows) != len(file_names) or len({row[0] for row in rows}) != len(rows):
             raise ValueError("wheel RECORD coverage mismatch")
         row_map = {row[0]: row[1:] for row in rows}
-        for name in names:
+        for name in file_names:
             if name == record_names[0]:
                 if row_map.get(name) != ["", ""]:
                     raise ValueError("wheel RECORD self entry mismatch")

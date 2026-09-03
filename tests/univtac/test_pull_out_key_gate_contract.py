@@ -11,6 +11,7 @@ from scripts.univtac.run_pull_out_key_gate import _finalize_run, _recover_child_
 from sim.envs.univtac.contract import UniVTACContractError, validate_operator_visible
 from sim.envs.univtac.observation import REQUIRED_TACTILE_FIELDS, capture_snapshot
 from sim.envs.univtac.pull_out_key_gate import (
+    ALLOWED_SEEDS,
     EXPECTED_SEED,
     summarize_pull_out_key_observation,
     validate_gate_config,
@@ -70,8 +71,10 @@ def test_gate_config_fixes_one_seed_and_forbids_actions() -> None:
     assert validated["run_play_once"] is False
     assert validated["call_success_checks"] is False
     assert validated["capture_post_action"] is False
+    assert ALLOWED_SEEDS == (1_000_000, 1_000_001, 1_000_002)
+    assert validate_gate_config(dict(payload, seed=1_000_001))["seed"] == 1_000_001
     changed = dict(payload, seed=0)
-    with pytest.raises(UniVTACContractError, match="seed=1000000"):
+    with pytest.raises(UniVTACContractError, match="seed must be one of"):
         validate_gate_config(changed)
 
 

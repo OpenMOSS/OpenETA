@@ -36,6 +36,8 @@ def build_codex_exec_command(
     episode_root: Path,
     snapshot_path: Path,
     final_response_path: Path,
+    condition_manifest: Path | None = None,
+    prompt: str = CODEX_OPERATOR_PROMPT,
 ) -> list[str]:
     """Build one isolated Codex exec command with only the UniVTAC MCP."""
 
@@ -53,6 +55,8 @@ def build_codex_exec_command(
         "--snapshot-pre",
         str(snapshot_path),
     ]
+    if condition_manifest is not None:
+        mcp_args.extend(("--condition-manifest", str(condition_manifest)))
     config = [
         "features.memories=false",
         "features.enable_request_compression=false",
@@ -84,7 +88,7 @@ def build_codex_exec_command(
     ]
     for value in config:
         command.extend(("-c", value))
-    command.append(CODEX_OPERATOR_PROMPT)
+    command.append(prompt)
     return command
 
 
@@ -144,13 +148,17 @@ def summarize_codex_exec(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def load_operator_context(path: Path) -> list[dict[str, Any]]:
+def load_operator_context(
+    path: Path,
+    *,
+    expected_image_count: int = 4,
+) -> list[dict[str, Any]]:
     rows = read_jsonl(path)
     for row in rows:
         if row.get("tool") != "observe" or row.get("arguments") != {}:
             raise ValueError("operator context contains a non-observe tool call")
         if len(row.get("response_text_blocks", [])) != 1:
             raise ValueError("observe must return exactly one text block")
-        if len(row.get("response_image_paths", [])) != 4:
-            raise ValueError("observe must return exactly four image paths")
+        if len(row.get("response_image_paths", [])) != expected_image_count:
+            raise ValueError(f"observe must return exactly {expected_image_count} image paths")
     return rows

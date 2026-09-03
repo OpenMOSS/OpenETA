@@ -72,6 +72,7 @@ def parse_base_args(
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--seed", type=int, required=True)
     base_args, _ = parser.parse_known_args(argv)
     return parser, base_args
 
@@ -119,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     source_root = base_args.source_root.expanduser().resolve()
     repo_root = base_args.repo_root.expanduser().resolve()
     output_root = base_args.output_root.expanduser().resolve()
-    seed_dir = output_root / "pull_out_key_seed1000000"
+    seed = int(base_args.seed)
+    seed_dir = output_root / f"pull_out_key_seed{seed}"
     seed_dir.mkdir(parents=True, exist_ok=False)
     stages = StageRecorder(seed_dir / "stages.jsonl", started)
     task = None
@@ -140,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     result: dict[str, Any] = {
         "schema_version": "openeta.univtac.pull_out_key_gate.v1",
         "classification": "app_launcher_failed",
-        "requested_seed": 1_000_000,
+        "requested_seed": seed,
         "observed_seed": None,
         "unexpected_seeds": [],
         "module_realpaths": {},
@@ -185,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         from sim.envs.univtac.observation import capture_snapshot
         from sim.envs.univtac.planner_diagnostics import PlannerDiagnosticRecorder
         from sim.envs.univtac.pull_out_key_gate import (
+            success_classification,
             summarize_pull_out_key_observation,
             validate_gate_config,
         )
@@ -196,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(config_payload, dict):
             raise TypeError("gate config must be a mapping")
         gate_config = validate_gate_config(config_payload)
+        if gate_config["seed"] != seed:
+            raise RuntimeError(f"CLI seed {seed} does not match gate config seed {gate_config['seed']}")
         stages.record("task_config_load", "enter")
         native_config, native_config_path = load_task_config(
             source_root / "task_config" / f"{gate_config['task_config']}.yml"
@@ -238,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
         task = task_module.Task(env_cfg, mode="collect")
         stages.task = task
         stages.record("task_constructor", "exit")
-        result["classification"] = "pull_out_key_seed1000000_reset_before_pre_move_failed"
+        result["classification"] = f"pull_out_key_seed{seed}_reset_before_pre_move_failed"
         result["task_config"] = {
             "native_config_path": str(native_config_path),
             "mode": "collect",
@@ -284,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
                 record.get("stage") == "pre_move" and record.get("event") == "enter"
                 for record in _read_stage_records(stages.path)
             ):
-                result["classification"] = "pull_out_key_seed1000000_pre_move_exception"
+                result["classification"] = f"pull_out_key_seed{seed}_pre_move_exception"
             raise
         stages.record("reset", "exit")
         stages.record("reset_returned", "enter")
@@ -302,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
             and task.plan_success is True
         )
         if not planner_ok:
-            result["classification"] = "pull_out_key_seed1000000_pre_move_planner_failed"
+            result["classification"] = f"pull_out_key_seed{seed}_pre_move_planner_failed"
             raise RuntimeError(f"pre_move planner gate failed: {planner_failure}")
         if task.in_pre_move is not False:
             raise RuntimeError("task.in_pre_move did not return to false")
@@ -317,13 +322,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             observation_summary, contact_summary = summarize_pull_out_key_observation(observation)
         except Exception:
-            result["classification"] = "pull_out_key_seed1000000_observation_contract_failed"
+            result["classification"] = f"pull_out_key_seed{seed}_observation_contract_failed"
             raise
         write_json(seed_dir / "native_observation_tree.json", observation_summary["key_tree"])
         write_json(seed_dir / "observation_summary.json", observation_summary)
         write_json(seed_dir / "contact_summary.json", contact_summary)
         if not contact_summary["any_contact_candidate"]:
-            result["classification"] = "pull_out_key_seed1000000_tactile_contact_not_observed"
+            result["classification"] = f"pull_out_key_seed{seed}_tactile_contact_not_observed"
             raise RuntimeError("no positive press_depth contact candidate was observed")
 
         stages.record("snapshot_projection", "enter")
@@ -334,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             task_name="pull_out_key",
             seed=gate_config["seed"],
             phase="pre_action",
-            action_id="pull-out-key-seed-1000000-ready",
+            action_id=f"pull-out-key-seed-{seed}-ready",
             simulator_step=int(task.step_count),
             take_action_count=int(task.take_action_cnt),
             task_instruction=gate_config["task_instruction"],
@@ -356,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         stages.record("snapshot_projection", "exit")
         result.update(
             {
-                "classification": "scoped_launcher_and_pull_out_key_seed1000000_gate_passed",
+                "classification": success_classification(seed),
                 "snapshot_pre": str((seed_dir / "snapshot_pre.json").relative_to(output_root)),
                 "planner_move_call_count": len(recorder.move_calls),
                 "planner_call_count": len(recorder.planning_calls),
@@ -388,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                 result["planner_call_count"] = len(recorder.planning_calls)
                 result["planner_failure"] = recorder.planner_failure()
                 if recorder.planner_failure() is not None:
-                    result["classification"] = "pull_out_key_seed1000000_pre_move_planner_failed"
+                    result["classification"] = f"pull_out_key_seed{seed}_pre_move_planner_failed"
             except Exception as diagnostic_exc:  # noqa: BLE001 - preserve primary failure
                 result["planner_diagnostic_error"] = {
                     "error_type": type(diagnostic_exc).__name__,
@@ -428,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         result["transition_created"] = (seed_dir / "transition.json").exists()
         _write_stdlib_json(seed_dir / "child_result.json", result)
     passed = (
-        result["classification"] == "scoped_launcher_and_pull_out_key_seed1000000_gate_passed"
+        result["classification"] == success_classification(seed)
         and cleanup["task_close"]
         and cleanup["simulation_app_close_invoked"]
     )

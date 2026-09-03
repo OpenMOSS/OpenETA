@@ -17,7 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim.envs.univtac.pull_out_key_gate import validate_gate_config
+from sim.envs.univtac.pull_out_key_gate import (
+    seed_dir_name,
+    success_classification,
+    validate_gate_config,
+)
 from sim.envs.univtac.scoped_isaac51_launcher import (
     ScopedIsaac51LaunchError,
     ScopedIsaac51LaunchSpec,
@@ -85,10 +89,11 @@ def _recover_child_result(
     output_root: Path,
     source_root: Path,
     lifecycle: dict[str, Any],
+    seed: int = 1_000_000,
 ) -> dict[str, Any] | None:
     """Recover evidence when SimulationApp.close ends the child interpreter."""
 
-    seed_dir = output_root / "pull_out_key_seed1000000"
+    seed_dir = output_root / seed_dir_name(seed)
     stages = _read_jsonl(seed_dir / "stages.jsonl")
     stage_events = {(record["stage"], record["event"]) for record in stages}
     required_exits = {
@@ -166,9 +171,9 @@ def _recover_child_result(
         return None
     return {
         "schema_version": "openeta.univtac.pull_out_key_gate.v1",
-        "classification": "scoped_launcher_and_pull_out_key_seed1000000_gate_passed",
-        "requested_seed": 1_000_000,
-        "observed_seed": 1_000_000,
+        "classification": success_classification(seed),
+        "requested_seed": seed,
+        "observed_seed": seed,
         "unexpected_seeds": [],
         "module_realpaths": module_realpaths,
         "module_path_evidence": "validated in child control flow; paths recovered after SimulationApp.close ended interpreter",
@@ -186,7 +191,7 @@ def _recover_child_result(
             "simulation_app_close_ended_interpreter": True,
             "process_group_cleanup_complete": True,
         },
-        "snapshot_pre": "pull_out_key_seed1000000/snapshot_pre.json",
+        "snapshot_pre": f"{seed_dir_name(seed)}/snapshot_pre.json",
         "snapshot_post_created": False,
         "transition_created": False,
         "planner_move_call_count": len(move_calls),
@@ -214,10 +219,11 @@ def _finalize_run(
     lifecycle: dict[str, Any] | None,
     launcher_error: dict[str, str] | None,
 ) -> str:
-    seed_dir = output_root / "pull_out_key_seed1000000"
+    seed = int(config["seed"])
+    seed_dir = output_root / seed_dir_name(seed)
     child_result = _read_json(seed_dir / "child_result.json")
     if child_result is None and lifecycle is not None:
-        child_result = _recover_child_result(output_root, source_root, lifecycle)
+        child_result = _recover_child_result(output_root, source_root, lifecycle, seed)
         if child_result is not None:
             write_json(seed_dir / "child_result_recovered.json", child_result)
     physx = _physx_evidence(output_root)
@@ -306,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             launcher_error=None,
         )
         return (
-            0 if classification == "scoped_launcher_and_pull_out_key_seed1000000_gate_passed" else 1
+            0 if classification == success_classification(int(config["seed"])) else 1
         )
     output_root.mkdir(parents=True)
     child_argv = [
@@ -319,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         str(REPO_ROOT),
         "--output-root",
         str(output_root),
+        "--seed",
+        str(config["seed"]),
     ]
     if args.headless:
         child_argv.append("--headless")
@@ -368,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
         lifecycle=lifecycle.to_dict() if lifecycle else None,
         launcher_error=launcher_error,
     )
-    return 0 if classification == "scoped_launcher_and_pull_out_key_seed1000000_gate_passed" else 1
+    return 0 if classification == success_classification(int(config["seed"])) else 1
 
 
 if __name__ == "__main__":

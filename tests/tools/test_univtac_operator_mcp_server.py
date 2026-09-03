@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 from mcp.server.fastmcp.utilities.types import Image
 from mcp.types import TextContent
 from PIL import Image as PilImage
 
 from sim.envs.univtac.contract import UniVTACTaskSnapshot
+from sim.envs.univtac.tactile_causal_pilot import stage_condition
 from tools.univtac_operator_mcp_server import (
     build_observe_blocks,
     build_server,
@@ -141,3 +143,54 @@ def test_server_exposes_only_observe(tmp_path: Path) -> None:
     episode, snapshot = make_episode(tmp_path)
     server = build_server(episode_root=episode, snapshot_path=snapshot)
     assert [tool.name for tool in server._tool_manager.list_tools()] == ["observe"]
+
+
+def test_condition_manifest_returns_two_or_swapped_four_images_without_disclosure(
+    tmp_path: Path,
+) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    simulator = source_episode / "simulator"
+    source_dir = simulator / "pull_out_key_seed1000000/pre"
+    image_map = {
+        "camera/head/rgb": source_dir / "camera/head_rgb.png",
+        "camera/wrist/rgb": source_dir / "camera/wrist_rgb.png",
+        "tactile/left_tactile/rgb_marker": source_dir / "tactile/left_tactile_rgb_marker.png",
+        "tactile/right_tactile/rgb_marker": source_dir / "tactile/right_tactile_rgb_marker.png",
+    }
+    visual = tmp_path / "visual"
+    visual.mkdir()
+    stage_condition(
+        condition="visual_only",
+        context_images=image_map,
+        episode_root=visual,
+        simulator_root=simulator,
+    )
+    visual_blocks = build_observe_blocks(
+        episode_root=visual,
+        snapshot_path=snapshot,
+        condition_manifest=visual / "condition.json",
+    )
+    assert len(visual_blocks) == 3
+    assert len(json.loads(visual_blocks[0].text)["images"]) == 2
+
+    swapped = tmp_path / "swapped"
+    swapped.mkdir()
+    stage_condition(
+        condition="swapped_tactile",
+        context_images=image_map,
+        episode_root=swapped,
+        simulator_root=simulator,
+    )
+    swapped_blocks = build_observe_blocks(
+        episode_root=swapped,
+        snapshot_path=snapshot,
+        condition_manifest=swapped / "condition.json",
+    )
+    text = swapped_blocks[0].text
+    assert "swapped_tactile" not in text and "source_label" not in text
+    left_target = np.asarray(PilImage.open(swapped_blocks[3].path))
+    original_right = np.asarray(PilImage.open(image_map[EXPECTED_LABELS[3]]))
+    right_target = np.asarray(PilImage.open(swapped_blocks[4].path))
+    original_left = np.asarray(PilImage.open(image_map[EXPECTED_LABELS[2]]))
+    assert np.array_equal(left_target, original_right)
+    assert np.array_equal(right_target, original_left)

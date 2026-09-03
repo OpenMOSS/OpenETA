@@ -12,6 +12,7 @@ from sim.envs.univtac.observation import array_summary, observation_key_tree, to
 
 EXPECTED_TASK = "pull_out_key"
 EXPECTED_SEED = 1_000_000
+ALLOWED_SEEDS = (1_000_000, 1_000_001, 1_000_002)
 EXPECTED_SEED_LABEL = "legacy_ftp1_eval_seed_index_aligned"
 EXPECTED_INSTRUCTION = "Pull the key out of the slot."
 EXPECTED_TACTILE_SENSORS = ("left_tactile", "right_tactile")
@@ -43,7 +44,6 @@ def validate_gate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise UniVTACContractError(f"Pull Out Key gate config is missing: {missing}")
     expected = {
         "task": EXPECTED_TASK,
-        "seed": EXPECTED_SEED,
         "seed_label": EXPECTED_SEED_LABEL,
         "task_config": "demo",
         "sensor_type": "gsmini",
@@ -64,7 +64,19 @@ def validate_gate_config(config: Mapping[str, Any]) -> dict[str, Any]:
             raise UniVTACContractError(
                 f"Pull Out Key gate requires {key}={value!r}, got {config[key]!r}"
             )
+    if config["seed"] not in ALLOWED_SEEDS:
+        raise UniVTACContractError(
+            f"Pull Out Key gate seed must be one of {ALLOWED_SEEDS}, got {config['seed']!r}"
+        )
     return dict(config)
+
+
+def seed_dir_name(seed: int) -> str:
+    return f"pull_out_key_seed{seed}"
+
+
+def success_classification(seed: int) -> str:
+    return f"scoped_launcher_and_pull_out_key_seed{seed}_gate_passed"
 
 
 def _require_array(

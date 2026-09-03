@@ -23,6 +23,39 @@ _TACTILE_LABELS = (
     "tactile/left_tactile/rgb_marker",
     "tactile/right_tactile/rgb_marker",
 )
+_STRUCTURED_FIELDS = {
+    "normalized_horizontal_saliency",
+    "active_pixel_ratio",
+    "mean_absolute_change",
+    "p95_absolute_change",
+    "salient_mass",
+}
+
+
+def _validated_structured_summary(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or set(payload) != {
+        "vector_order",
+        "left_tactile",
+        "right_tactile",
+    }:
+        raise ValueError("structured tactile summary fields are invalid")
+    if payload["vector_order"] != ["left", "center", "right"]:
+        raise ValueError("structured tactile vector order is invalid")
+    for sensor in ("left_tactile", "right_tactile"):
+        values = payload[sensor]
+        if not isinstance(values, dict) or set(values) != _STRUCTURED_FIELDS:
+            raise ValueError(f"structured tactile fields are invalid for {sensor}")
+        vector = values["normalized_horizontal_saliency"]
+        if not isinstance(vector, list) or len(vector) != 3:
+            raise ValueError("normalized horizontal saliency must contain three values")
+        if any(not isinstance(value, (int, float)) for value in vector):
+            raise ValueError("normalized horizontal saliency must be numeric")
+        if any(
+            not isinstance(values[field], (int, float))
+            for field in _STRUCTURED_FIELDS - {"normalized_horizontal_saliency"}
+        ):
+            raise ValueError("structured tactile metrics must be numeric")
+    return payload
 
 
 def _relative_to_episode(path: Path, episode_root: Path) -> str:
@@ -117,6 +150,10 @@ def build_observe_blocks(
             for image in images
         ],
     }
+    if manifest is not None and "model_visible_structured_tactile_summary" in manifest:
+        text_payload["tactile_change_summary"] = _validated_structured_summary(
+            manifest["model_visible_structured_tactile_summary"]
+        )
     return [
         TextContent(
             type="text",

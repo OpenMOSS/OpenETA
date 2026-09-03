@@ -238,5 +238,95 @@ def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(
         "Current",
         "Difference",
     ]
+
+
+def test_structured_pilot_dashboard_preserves_actual_text_and_host_references(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs/r0916"
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.16", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "structured_signal": "text_sensitive_without_accuracy_gain",
+                "completed_semantic_trials": 9,
+            }
+        ),
+        encoding="utf-8",
+    )
+    reference = {
+        "seeds": {
+            "1000000": {
+                "seed": 1000000,
+                "sensors": {
+                    "left_tactile": {
+                        "structured_metrics": {
+                            "reference_region": "center",
+                            "normalized_horizontal_saliency": [0.2, 0.6, 0.2],
+                        },
+                        "old_global_centroid_region": "center",
+                        "old_and_new_region_agree": True,
+                    }
+                },
+            }
+        }
+    }
+    (root / "structured_reference.json").write_text(
+        json.dumps(reference), encoding="utf-8"
+    )
+    conditions = (
+        "difference_only",
+        "correct_structured_guidance",
+        "swapped_structured_guidance",
+    )
+    summary = {
+        "vector_order": ["left", "center", "right"],
+        "left_tactile": {"salient_mass": 1.8},
+        "right_tactile": {"salient_mass": 1.9},
+    }
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for condition in conditions:
+            run = root / "runs" / f"seed_{seed}" / condition
+            run.mkdir(parents=True)
+            (run / "episode.json").write_text(
+                json.dumps({"round": "R0.9.16", "seed": seed, "condition": condition}),
+                encoding="utf-8",
+            )
+            text_payload = {"images": []}
+            if condition != "difference_only":
+                text_payload["tactile_change_summary"] = summary
+            (run / "operator_context.jsonl").write_text(
+                json.dumps(
+                    {
+                        "tool": "observe",
+                        "response_text_blocks": [json.dumps(text_payload)],
+                        "response_image_paths": [f"images/{index}.png" for index in range(6)],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run / "agent_final.md").write_text("{}", encoding="utf-8")
+            (run / "condition.json").write_text("{}", encoding="utf-8")
+    pilots = discover_pilots(tmp_path / "outputs")
+    assert pilots == [
+        {
+            "directory": "r0916",
+            "signal": "text_sensitive_without_accuracy_gain",
+            "completed_call_count": 9,
+        }
+    ]
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 9
+    assert [cell["condition"] for cell in detail["cells"][:3]] == list(conditions)
+    assert all(len(cell["image_paths"]) == 6 for cell in detail["cells"])
+    assert detail["cells"][0]["structured_summary"] is None
+    assert detail["cells"][1]["structured_summary"] == summary
+    assert detail["structured_reference"] == reference
+    assert "Actual structured text seen by Codex" in PILOT_HTML
+    assert "old centroid" in PILOT_HTML
     assert "LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED" in PILOT_HTML
     assert 'class="pair-images"' in PILOT_HTML

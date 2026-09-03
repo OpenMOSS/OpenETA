@@ -1,0 +1,13 @@
+task: pull_out_key
+source_round: R0.9.15
+seeds: [1000000, 1000001, 1000002]
+model: gpt-5.6-terra
+reasoning_effort: medium
+active_threshold: 12
+saliency_percentile: 90
+condition_order:
+  "1000000": [difference_only, correct_structured_guidance, swapped_structured_guidance]
+  "1000001": [correct_structured_guidance, swapped_structured_guidance, difference_only]
+  "1000002": [swapped_structured_guidance, difference_only, correct_structured_guidance]
+codex_timeout_seconds: 900
+pre_observe_retry_limit: 1

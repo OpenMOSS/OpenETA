@@ -241,3 +241,70 @@ def test_six_image_difference_manifest_returns_native_images_without_host_metada
     assert "explicit_difference" not in text and "source_path" not in text
     assert "host-only" not in text
     assert [item["label"] for item in json.loads(text)["images"]] == labels
+
+
+def test_structured_tactile_summary_is_visible_without_host_reference(
+    tmp_path: Path,
+) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "structured"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    labels = [
+        "camera/head/rgb",
+        "camera/wrist/rgb",
+        "tactile/left_tactile/current_rgb_marker",
+        "tactile/left_tactile/difference",
+        "tactile/right_tactile/current_rgb_marker",
+        "tactile/right_tactile/difference",
+    ]
+    records = []
+    for index, label in enumerate(labels):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    per_sensor = {
+        "normalized_horizontal_saliency": [0.2, 0.6, 0.2],
+        "active_pixel_ratio": 0.25,
+        "mean_absolute_change": 19.0,
+        "p95_absolute_change": 103.0,
+        "salient_mass": 1.8,
+    }
+    manifest = {
+        "condition": "host-only-condition-name",
+        "simulator_root": str(source_episode / "simulator"),
+        "images": records,
+        "model_visible_structured_tactile_summary": {
+            "vector_order": ["left", "center", "right"],
+            "left_tactile": per_sensor,
+            "right_tactile": per_sensor,
+        },
+        "structured_source_mapping": {"host-only": "DO_NOT_SHOW"},
+        "reference_region": "DO_NOT_SHOW",
+        "press_depth": "DO_NOT_SHOW",
+    }
+    (episode / "condition.json").write_text(json.dumps(manifest), encoding="utf-8")
+    blocks = build_observe_blocks(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=episode / "condition.json",
+    )
+    payload = json.loads(blocks[0].text)
+    assert len(blocks) == 7
+    assert payload["tactile_change_summary"]["vector_order"] == [
+        "left",
+        "center",
+        "right",
+    ]
+    text = blocks[0].text
+    assert "host-only-condition-name" not in text
+    assert "DO_NOT_SHOW" not in text
+    assert "press_depth" not in text and "reference_region" not in text

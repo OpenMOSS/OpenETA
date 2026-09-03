@@ -19,9 +19,9 @@ LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
-<style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell,section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px;margin:10px 0}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.pair-images{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.images img,.pair-images img{width:100%;background:#000}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:8px}.host{border-color:#9a7030}</style>
-<a href="/">← runs</a><h1 id="pilotTitle">Pull Out Key · 3 seeds × 3 conditions</h1><section id="top"></section><div class="grid" id="matrix"></div><section id="pairs" hidden></section><section id="comparison"></section><section class="host"><details><summary><b>HOST-ONLY EVALUATION — NOT SHOWN TO CODEX</b></summary><pre id="host"></pre></details></section>
-<script>const pilot=decodeURIComponent(location.pathname.slice(7));const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);async function tick(){const d=await fetch('/api/pilot?pilot='+encodeURIComponent(pilot)+'&t='+Date.now()).then(r=>r.json());document.querySelector('#pilotTitle').textContent=d.pilot.round==='R0.9.15'?'Pull Out Key · Before/After Tactile Difference Pilot':'Pull Out Key · 3 seeds × 3 conditions';const calls=d.summary.completed_semantic_trials??d.summary.completed_call_count,signal=d.summary.difference_signal??d.summary.pilot_signal;document.querySelector('#top').innerHTML=`<b>model:</b> ${esc(d.pilot.model)} · <b>prompt:</b> prompt.txt · <b>completed calls:</b> ${esc(calls)} · <b>signal:</b> ${esc(signal)}`;document.querySelector('#matrix').innerHTML=d.cells.map(c=>`<div class="cell"><h3>seed ${esc(c.seed)} · ${esc(c.condition)}</h3>${c.condition==='swapped_tactile'?'<p><i>LEFT/RIGHT TACTILE ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}${c.condition==='swapped_difference'?'<p><i>LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}<div class="images">${(c.image_paths||[]).map(p=>`<img src="${art(c.run,p)}">`).join('')}</div><pre>${esc(JSON.stringify(c.prediction,null,2))}</pre><details><summary>raw answer</summary><pre>${esc(c.raw_answer)}</pre></details><p>${esc(c.duration_seconds)} s · tool ${esc(c.tool_call_count)} · usage ${esc(JSON.stringify(c.usage||{}))}</p><a href="/run/${encodeURIComponent(c.run)}">detail</a></div>`).join('');const pairs=document.querySelector('#pairs');pairs.hidden=!d.pairs.length;pairs.innerHTML='<h2>Baseline | Current | Difference</h2>'+d.pairs.map(x=>`<h3>seed ${esc(x.seed)} · ${esc(x.sensor)}</h3><div class="pair-images">${x.images.map(i=>`<figure><img src="${art(i.run,i.path)}"><figcaption>${esc(i.label)}</figcaption></figure>`).join('')}</div>`).join('');document.querySelector('#comparison').innerHTML='<h2>Cross-condition comparisons</h2><pre>'+esc(JSON.stringify(d.summary.metrics??d.summary,null,2))+'</pre>';document.querySelector('#host').textContent=JSON.stringify({reference:d.host_reference,difference_metrics:d.difference_metrics,condition_manifests:d.condition_manifests},null,2)}tick();setInterval(tick,2000)</script>"""
+<style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell,section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px;margin:10px 0}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.pair-images{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.images img,.pair-images img{width:100%;background:#000}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:8px}.host{border-color:#9a7030}.host-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.host-card{background:#20252d;padding:10px;border-radius:6px}.bar{height:12px;background:#343b47;margin:4px 0}.bar span{display:block;height:100%;background:#e3a84f}</style>
+<a href="/">← runs</a><h1 id="pilotTitle">Pull Out Key · 3 seeds × 3 conditions</h1><section id="top"></section><div class="grid" id="matrix"></div><section id="pairs" hidden></section><section id="comparison"></section><section class="host"><details><summary><b>HOST-ONLY EVALUATION — NOT SHOWN TO CODEX</b></summary><div id="hostBars" class="host-grid"></div><pre id="host"></pre></details></section>
+<script>const pilot=decodeURIComponent(location.pathname.slice(7));const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);async function tick(){const d=await fetch('/api/pilot?pilot='+encodeURIComponent(pilot)+'&t='+Date.now()).then(r=>r.json());const round=d.pilot.round;document.querySelector('#pilotTitle').textContent=round==='R0.9.16'?'Pull Out Key · RGB-marker Structured Guidance Pilot':round==='R0.9.15'?'Pull Out Key · Before/After Tactile Difference Pilot':'Pull Out Key · 3 seeds × 3 conditions';const calls=d.summary.completed_semantic_trials??d.summary.completed_call_count,signal=d.summary.structured_signal??d.summary.difference_signal??d.summary.pilot_signal;document.querySelector('#top').innerHTML=`<b>model:</b> ${esc(d.pilot.model)} · <b>prompt:</b> prompt.txt · <b>completed calls:</b> ${esc(calls)} · <b>signal:</b> ${esc(signal)}`;document.querySelector('#matrix').innerHTML=d.cells.map(c=>`<div class="cell"><h3>seed ${esc(c.seed)} · ${esc(c.condition)}</h3>${c.condition==='swapped_tactile'?'<p><i>LEFT/RIGHT TACTILE ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}${c.condition==='swapped_difference'?'<p><i>LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}${c.condition==='swapped_structured_guidance'?'<p><i>LEFT/RIGHT STRUCTURED SUMMARY SWAPPED — host-side label, not sent through MCP.</i></p>':''}<div class="images">${(c.image_paths||[]).map(p=>`<img src="${art(c.run,p)}">`).join('')}</div>${c.structured_summary?`<h4>Actual structured text seen by Codex</h4><pre>${esc(JSON.stringify(c.structured_summary,null,2))}</pre>`:'<p><i>No structured tactile summary was sent.</i></p>'}<pre>${esc(JSON.stringify(c.prediction,null,2))}</pre><details><summary>raw answer</summary><pre>${esc(c.raw_answer)}</pre></details><p>${esc(c.duration_seconds)} s · tool ${esc(c.tool_call_count)} · usage ${esc(JSON.stringify(c.usage||{}))}</p><a href="/run/${encodeURIComponent(c.run)}">detail</a></div>`).join('');const pairs=document.querySelector('#pairs');pairs.hidden=!d.pairs.length;pairs.innerHTML='<h2>Baseline | Current | Difference</h2>'+d.pairs.map(x=>`<h3>seed ${esc(x.seed)} · ${esc(x.sensor)}</h3><div class="pair-images">${x.images.map(i=>`<figure><img src="${art(i.run,i.path)}"><figcaption>${esc(i.label)}</figcaption></figure>`).join('')}</div>`).join('');document.querySelector('#comparison').innerHTML='<h2>Cross-condition comparisons</h2><pre>'+esc(JSON.stringify(d.summary.metrics??d.summary,null,2))+'</pre>';const refs=d.structured_reference?.seeds||{};document.querySelector('#hostBars').innerHTML=Object.values(refs).flatMap(x=>Object.entries(x.sensors||{}).map(([sensor,s])=>{const m=s.structured_metrics||{},v=m.normalized_horizontal_saliency||[];return `<div class="host-card"><b>seed ${esc(x.seed)} · ${esc(sensor)}</b><p>new: ${esc(m.reference_region)} · old centroid: ${esc(s.old_global_centroid_region)} · agree: ${esc(s.old_and_new_region_agree)}</p>${['left','center','right'].map((name,i)=>`<label>${name} ${esc(Number(v[i]||0).toFixed(3))}</label><div class="bar"><span style="width:${Math.max(0,Math.min(100,(v[i]||0)*100))}%"></span></div>`).join('')}</div>`})).join('');document.querySelector('#host').textContent=JSON.stringify({reference:d.host_reference,difference_metrics:d.difference_metrics,structured_reference:d.structured_reference,secondary_diagnostics:d.secondary_diagnostics,condition_manifests:d.condition_manifests},null,2)}tick();setInterval(tick,2000)</script>"""
 
 PROGRESS_HTML = """<!doctype html><meta charset="utf-8"><title>OpenETA-UniVTAC 项目进展</title>
 <style>body{font:15px/1.65 system-ui;background:#101216;color:#e6e9ef;margin:24px auto;max-width:1050px;padding:0 18px}a{color:#8fd3ff}.intro{color:#b8c0cc}.entry{background:#181c22;border:1px solid #303744;border-radius:12px;padding:20px 24px;margin:18px 0}.entry h3{margin:18px 0 5px;color:#d9e7f5}.entry p{white-space:pre-wrap;margin:5px 0}.meta{color:#98a3b3;font-size:13px}.status{display:inline-block;border-radius:14px;padding:3px 9px;background:#245f3b;font-size:12px}.warn{background:#805b20}.question{border-left:4px solid #b07cff;padding-left:14px}.method{border-left:4px solid #55b8ff;padding-left:14px}.observed{border-left:4px solid #65c78d;padding-left:14px}.meaning{border-left:4px solid #f0b55a;padding-left:14px}.conclusion{font-size:17px;background:#222934;border-left:4px solid #e8edf5;margin:20px 0 10px;padding:12px 16px}details{background:#11161c;border-radius:8px;padding:10px 12px;margin-top:14px}pre{white-space:pre-wrap}.experiments{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}.card{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px}</style>
@@ -79,11 +79,14 @@ def discover_pilots(runs_root: Path) -> list[dict[str, Any]]:
         pilot_root = path.parent
         pilot = _load_json(path)
         summary = _load_json(pilot_root / "summary.json")
-        if pilot.get("round") in {"R0.9.14", "R0.9.15"}:
+        if pilot.get("round") in {"R0.9.14", "R0.9.15", "R0.9.16"}:
             pilots.append(
                 {
                     "directory": pilot_root.relative_to(root).as_posix(),
-                    "signal": summary.get("difference_signal", summary.get("pilot_signal")),
+                    "signal": summary.get(
+                        "structured_signal",
+                        summary.get("difference_signal", summary.get("pilot_signal")),
+                    ),
                     "completed_call_count": summary.get(
                         "completed_semantic_trials", summary.get("completed_call_count", 0)
                     ),
@@ -110,6 +113,11 @@ def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
         episode = _load_json(episode_path)
         rows = read_jsonl(run_root / "operator_context.jsonl")
         row = rows[0] if rows else {}
+        text_blocks = row.get("response_text_blocks", [])
+        try:
+            visible_payload = json.loads(text_blocks[0]) if text_blocks else {}
+        except (TypeError, json.JSONDecodeError):
+            visible_payload = {}
         relative_run = run_root.relative_to(pilot_root.parent).as_posix()
         cells.append(
             {
@@ -117,6 +125,8 @@ def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
                 "condition": episode.get("condition"),
                 "run": relative_run,
                 "image_paths": row.get("response_image_paths", []),
+                "mcp_text_blocks": text_blocks,
+                "structured_summary": visible_payload.get("tactile_change_summary"),
                 "prediction": by_pair.get((episode.get("seed"), episode.get("condition")), {}),
                 "raw_answer": (run_root / "agent_final.md").read_text(encoding="utf-8")
                 if (run_root / "agent_final.md").is_file()
@@ -133,6 +143,9 @@ def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
         "raw_pair": 0,
         "explicit_difference": 1,
         "swapped_difference": 2,
+        "difference_only": 0,
+        "correct_structured_guidance": 1,
+        "swapped_structured_guidance": 2,
     }
     cells.sort(key=lambda cell: (int(cell["seed"]), condition_rank[str(cell["condition"])]))
     pairs = []
@@ -171,6 +184,8 @@ def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
         "summary": _load_json(pilot_root / "summary.json"),
         "host_reference": _load_json(pilot_root / "host_reference.json"),
         "difference_metrics": _load_json(pilot_root / "difference_metrics.json"),
+        "structured_reference": _load_json(pilot_root / "structured_reference.json"),
+        "secondary_diagnostics": _load_json(pilot_root / "secondary_diagnostics.json"),
         "condition_manifests": [
             _load_json(path)
             for path in sorted((pilot_root / "runs").glob("seed_*/*/condition.json"))

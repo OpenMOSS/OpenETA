@@ -71,6 +71,11 @@ def test_gate_config_fixes_one_seed_and_forbids_actions() -> None:
     assert validated["run_play_once"] is False
     assert validated["call_success_checks"] is False
     assert validated["capture_post_action"] is False
+    assert validated["capture_tactile_pair"] is False
+    assert (
+        validate_gate_config(dict(payload, capture_tactile_pair=True))["capture_tactile_pair"]
+        is True
+    )
     assert ALLOWED_SEEDS == (1_000_000, 1_000_001, 1_000_002)
     assert validate_gate_config(dict(payload, seed=1_000_001))["seed"] == 1_000_001
     changed = dict(payload, seed=0)
@@ -149,10 +154,10 @@ def test_legacy_capture_without_press_depth_still_succeeds(tmp_path: Path) -> No
     )
 
 
-def test_probe_static_contract_has_one_reset_one_observation_and_no_action() -> None:
+def test_probe_static_contract_has_one_reset_two_bounded_observations_and_no_action() -> None:
     source = PROBE_PATH.read_text(encoding="utf-8")
     assert source.count("task.reset(") == 1
-    assert source.count("task._get_observations()") == 1
+    assert source.count("task._get_observations()") == 2
     assert "task.play_once()" not in source
     assert "task.check_success()" not in source
     assert "task.check_early_stop()" not in source

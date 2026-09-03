@@ -127,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     task = None
     simulation_app = None
     recorder = None
+    baseline_capture = None
     cleanup = {
         "task_close": False,
         "simulation_app_close_invoked": False,
@@ -200,7 +201,9 @@ def main(argv: list[str] | None = None) -> int:
             raise TypeError("gate config must be a mapping")
         gate_config = validate_gate_config(config_payload)
         if gate_config["seed"] != seed:
-            raise RuntimeError(f"CLI seed {seed} does not match gate config seed {gate_config['seed']}")
+            raise RuntimeError(
+                f"CLI seed {seed} does not match gate config seed {gate_config['seed']}"
+            )
         stages.record("task_config_load", "enter")
         native_config, native_config_path = load_task_config(
             source_root / "task_config" / f"{gate_config['task_config']}.yml"
@@ -278,6 +281,49 @@ def main(argv: list[str] | None = None) -> int:
         stages.wrap_method(task.atom, "grasp_actor", "pre_move_grasp_actor")
         _install_forbidden_call_guards(task, counters)
 
+        if gate_config["capture_tactile_pair"]:
+            original_pre_move = task.pre_move
+
+            def capture_baseline_then_pre_move(_self, *move_args, **move_kwargs):
+                nonlocal baseline_capture
+                stages.record("pre_grasp_baseline_capture", "enter")
+                counters["observation_call_count"] += 1
+                baseline_observation = task._get_observations()
+                baseline_summary, baseline_contact = summarize_pull_out_key_observation(
+                    baseline_observation
+                )
+                baseline_capture = capture_snapshot(
+                    baseline_observation,
+                    output_root=output_root,
+                    seed_dir=seed_dir / "pre_grasp_baseline",
+                    task_name="pull_out_key",
+                    seed=gate_config["seed"],
+                    phase="pre_action",
+                    action_id=f"pull-out-key-seed-{seed}-pre-grasp-baseline",
+                    simulator_step=int(task.step_count),
+                    take_action_count=int(task.take_action_cnt),
+                    task_instruction=gate_config["task_instruction"],
+                    task_metadata={
+                        "pair_stage": "pre_grasp_baseline",
+                        "seed_label": gate_config["seed_label"],
+                    },
+                    native_check_success=None,
+                    save_host_only=True,
+                    strict_two_tactile_sensors=True,
+                    fail_on_missing_rgb_marker=True,
+                )
+                validate_operator_visible(baseline_capture.snapshot.operator_visible)
+                write_snapshot(
+                    seed_dir / "snapshot_pre_grasp_baseline.json", baseline_capture.snapshot
+                )
+                write_json(seed_dir / "baseline_observation_summary.json", baseline_summary)
+                write_json(seed_dir / "baseline_contact_summary.json", baseline_contact)
+                verify_artifacts(output_root, baseline_capture.snapshot.to_dict())
+                stages.record("pre_grasp_baseline_capture", "exit")
+                return original_pre_move(*move_args, **move_kwargs)
+
+            task.pre_move = types.MethodType(capture_baseline_then_pre_move, task)
+
         stages.record("reset", "enter")
         counters["reset_call_count"] += 1
         result["observed_seed"] = gate_config["seed"]
@@ -332,10 +378,13 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("no positive press_depth contact candidate was observed")
 
         stages.record("snapshot_projection", "enter")
+        current_seed_dir = (
+            seed_dir / "post_pre_move" if gate_config["capture_tactile_pair"] else seed_dir
+        )
         capture = capture_snapshot(
             observation,
             output_root=output_root,
-            seed_dir=seed_dir,
+            seed_dir=current_seed_dir,
             task_name="pull_out_key",
             seed=gate_config["seed"],
             phase="pre_action",
@@ -357,12 +406,43 @@ def main(argv: list[str] | None = None) -> int:
         )
         validate_operator_visible(capture.snapshot.operator_visible)
         write_snapshot(seed_dir / "snapshot_pre.json", capture.snapshot)
+        if gate_config["capture_tactile_pair"]:
+            if baseline_capture is None:
+                raise RuntimeError("pre_grasp baseline capture did not occur")
+            write_snapshot(seed_dir / "snapshot_post_pre_move.json", capture.snapshot)
+            write_json(
+                seed_dir / "pair_capture_summary.json",
+                {
+                    "seed": seed,
+                    "baseline_stage": "pre_grasp_baseline",
+                    "current_stage": "post_pre_move",
+                    "baseline_snapshot": "snapshot_pre_grasp_baseline.json",
+                    "current_snapshot": "snapshot_post_pre_move.json",
+                    "baseline_simulator_step": baseline_capture.snapshot.simulator_step,
+                    "current_simulator_step": capture.snapshot.simulator_step,
+                    "baseline_take_action_count": baseline_capture.snapshot.take_action_count,
+                    "current_take_action_count": capture.snapshot.take_action_count,
+                    "same_reset_run": True,
+                    "pre_move_parameters_modified": False,
+                },
+            )
         verify_artifacts(output_root, capture.snapshot.to_dict())
         stages.record("snapshot_projection", "exit")
         result.update(
             {
                 "classification": success_classification(seed),
                 "snapshot_pre": str((seed_dir / "snapshot_pre.json").relative_to(output_root)),
+                "capture_tactile_pair": gate_config["capture_tactile_pair"],
+                "baseline_snapshot": (
+                    str((seed_dir / "snapshot_pre_grasp_baseline.json").relative_to(output_root))
+                    if gate_config["capture_tactile_pair"]
+                    else None
+                ),
+                "post_pre_move_snapshot": (
+                    str((seed_dir / "snapshot_post_pre_move.json").relative_to(output_root))
+                    if gate_config["capture_tactile_pair"]
+                    else None
+                ),
                 "planner_move_call_count": len(recorder.move_calls),
                 "planner_call_count": len(recorder.planning_calls),
                 "planner_failure": None,

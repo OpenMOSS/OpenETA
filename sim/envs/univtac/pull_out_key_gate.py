@@ -68,7 +68,12 @@ def validate_gate_config(config: Mapping[str, Any]) -> dict[str, Any]:
         raise UniVTACContractError(
             f"Pull Out Key gate seed must be one of {ALLOWED_SEEDS}, got {config['seed']!r}"
         )
-    return dict(config)
+    validated = dict(config)
+    capture_pair = validated.get("capture_tactile_pair", False)
+    if not isinstance(capture_pair, bool):
+        raise UniVTACContractError("capture_tactile_pair must be boolean")
+    validated["capture_tactile_pair"] = capture_pair
+    return validated
 
 
 def seed_dir_name(seed: int) -> str:

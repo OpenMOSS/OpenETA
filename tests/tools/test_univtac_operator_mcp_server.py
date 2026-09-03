@@ -194,3 +194,50 @@ def test_condition_manifest_returns_two_or_swapped_four_images_without_disclosur
     original_left = np.asarray(PilImage.open(image_map[EXPECTED_LABELS[2]]))
     assert np.array_equal(left_target, original_right)
     assert np.array_equal(right_target, original_left)
+
+
+def test_six_image_difference_manifest_returns_native_images_without_host_metadata(
+    tmp_path: Path,
+) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "difference"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    records = []
+    labels = [
+        "camera/head/rgb",
+        "camera/wrist/rgb",
+        "tactile/left_tactile/current_rgb_marker",
+        "tactile/left_tactile/difference",
+        "tactile/right_tactile/current_rgb_marker",
+        "tactile/right_tactile/difference",
+    ]
+    for index, label in enumerate(labels):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "source_path": f"host-only-{index}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    manifest = {
+        "condition": "explicit_difference",
+        "simulator_root": str(source_episode / "simulator"),
+        "images": records,
+    }
+    (episode / "condition.json").write_text(json.dumps(manifest), encoding="utf-8")
+    blocks = build_observe_blocks(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=episode / "condition.json",
+    )
+    assert len(blocks) == 7
+    text = blocks[0].text
+    assert "explicit_difference" not in text and "source_path" not in text
+    assert "host-only" not in text
+    assert [item["label"] for item in json.loads(text)["images"]] == labels

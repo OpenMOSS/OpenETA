@@ -185,3 +185,50 @@ def test_project_progress_uses_human_summaries_and_links_pilots(tmp_path: Path) 
     payload = load_project_progress(root)
     assert payload["entries"] == [row]
     assert payload["pilots"] == []
+
+
+def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs/r0915"
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.15", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "difference_signal": "mixed_difference_signal",
+                "completed_semantic_trials": 9,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "difference_metrics.json").write_text("{}", encoding="utf-8")
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for condition in ("raw_pair", "explicit_difference", "swapped_difference"):
+            run = root / "runs" / f"seed_{seed}" / condition
+            (run / "images").mkdir(parents=True)
+            (run / "episode.json").write_text(
+                json.dumps({"round": "R0.9.15", "seed": seed, "condition": condition}),
+                encoding="utf-8",
+            )
+            (run / "operator_context.jsonl").write_text(
+                json.dumps({"tool": "observe", "response_image_paths": []}) + "\n",
+                encoding="utf-8",
+            )
+            (run / "condition.json").write_text("{}", encoding="utf-8")
+    detail = load_pilot_detail(root)
+    assert [cell["condition"] for cell in detail["cells"][:3]] == [
+        "raw_pair",
+        "explicit_difference",
+        "swapped_difference",
+    ]
+    assert len(detail["pairs"]) == 6
+    assert [image["label"] for image in detail["pairs"][0]["images"]] == [
+        "Baseline",
+        "Current",
+        "Difference",
+    ]
+    assert "LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED" in PILOT_HTML
+    assert 'class="pair-images"' in PILOT_HTML

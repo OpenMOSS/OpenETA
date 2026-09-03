@@ -19,9 +19,9 @@ LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
-<style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell,section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px;margin:10px 0}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.images img{width:100%;background:#000}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:8px}.host{border-color:#9a7030}</style>
-<a href="/">← runs</a><h1>Pull Out Key · 3 seeds × 3 conditions</h1><section id="top"></section><div class="grid" id="matrix"></div><section id="comparison"></section><section class="host"><details><summary><b>HOST-ONLY EVALUATION — NOT SHOWN TO CODEX</b></summary><pre id="host"></pre></details></section>
-<script>const pilot=decodeURIComponent(location.pathname.slice(7));const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);async function tick(){const d=await fetch('/api/pilot?pilot='+encodeURIComponent(pilot)+'&t='+Date.now()).then(r=>r.json());document.querySelector('#top').innerHTML=`<b>model:</b> ${esc(d.pilot.model)} · <b>prompt:</b> prompt.txt · <b>completed calls:</b> ${esc(d.summary.completed_call_count)} · <b>signal:</b> ${esc(d.summary.pilot_signal)}`;document.querySelector('#matrix').innerHTML=d.cells.map(c=>`<div class="cell"><h3>seed ${esc(c.seed)} · ${esc(c.condition)}</h3>${c.condition==='swapped_tactile'?'<p><i>LEFT/RIGHT TACTILE ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}<div class="images">${(c.image_paths||[]).map(p=>`<img src="${art(c.run,p)}">`).join('')}</div><pre>${esc(JSON.stringify(c.prediction,null,2))}</pre><details><summary>raw answer</summary><pre>${esc(c.raw_answer)}</pre></details><p>${esc(c.duration_seconds)} s · tool ${esc(c.tool_call_count)} · usage ${esc(JSON.stringify(c.usage||{}))}</p><a href="/run/${encodeURIComponent(c.run)}">detail</a></div>`).join('');document.querySelector('#comparison').innerHTML='<h2>Cross-condition comparisons</h2><pre>'+esc(JSON.stringify(d.summary.metrics,null,2))+'</pre>';document.querySelector('#host').textContent=JSON.stringify({reference:d.host_reference,condition_manifests:d.condition_manifests},null,2)}tick();setInterval(tick,2000)</script>"""
+<style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell,section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px;margin:10px 0}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.pair-images{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.images img,.pair-images img{width:100%;background:#000}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:8px}.host{border-color:#9a7030}</style>
+<a href="/">← runs</a><h1 id="pilotTitle">Pull Out Key · 3 seeds × 3 conditions</h1><section id="top"></section><div class="grid" id="matrix"></div><section id="pairs" hidden></section><section id="comparison"></section><section class="host"><details><summary><b>HOST-ONLY EVALUATION — NOT SHOWN TO CODEX</b></summary><pre id="host"></pre></details></section>
+<script>const pilot=decodeURIComponent(location.pathname.slice(7));const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);async function tick(){const d=await fetch('/api/pilot?pilot='+encodeURIComponent(pilot)+'&t='+Date.now()).then(r=>r.json());document.querySelector('#pilotTitle').textContent=d.pilot.round==='R0.9.15'?'Pull Out Key · Before/After Tactile Difference Pilot':'Pull Out Key · 3 seeds × 3 conditions';const calls=d.summary.completed_semantic_trials??d.summary.completed_call_count,signal=d.summary.difference_signal??d.summary.pilot_signal;document.querySelector('#top').innerHTML=`<b>model:</b> ${esc(d.pilot.model)} · <b>prompt:</b> prompt.txt · <b>completed calls:</b> ${esc(calls)} · <b>signal:</b> ${esc(signal)}`;document.querySelector('#matrix').innerHTML=d.cells.map(c=>`<div class="cell"><h3>seed ${esc(c.seed)} · ${esc(c.condition)}</h3>${c.condition==='swapped_tactile'?'<p><i>LEFT/RIGHT TACTILE ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}${c.condition==='swapped_difference'?'<p><i>LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED — host-side label, not sent through MCP.</i></p>':''}<div class="images">${(c.image_paths||[]).map(p=>`<img src="${art(c.run,p)}">`).join('')}</div><pre>${esc(JSON.stringify(c.prediction,null,2))}</pre><details><summary>raw answer</summary><pre>${esc(c.raw_answer)}</pre></details><p>${esc(c.duration_seconds)} s · tool ${esc(c.tool_call_count)} · usage ${esc(JSON.stringify(c.usage||{}))}</p><a href="/run/${encodeURIComponent(c.run)}">detail</a></div>`).join('');const pairs=document.querySelector('#pairs');pairs.hidden=!d.pairs.length;pairs.innerHTML='<h2>Baseline | Current | Difference</h2>'+d.pairs.map(x=>`<h3>seed ${esc(x.seed)} · ${esc(x.sensor)}</h3><div class="pair-images">${x.images.map(i=>`<figure><img src="${art(i.run,i.path)}"><figcaption>${esc(i.label)}</figcaption></figure>`).join('')}</div>`).join('');document.querySelector('#comparison').innerHTML='<h2>Cross-condition comparisons</h2><pre>'+esc(JSON.stringify(d.summary.metrics??d.summary,null,2))+'</pre>';document.querySelector('#host').textContent=JSON.stringify({reference:d.host_reference,difference_metrics:d.difference_metrics,condition_manifests:d.condition_manifests},null,2)}tick();setInterval(tick,2000)</script>"""
 
 PROGRESS_HTML = """<!doctype html><meta charset="utf-8"><title>OpenETA-UniVTAC 项目进展</title>
 <style>body{font:15px system-ui;background:#101216;color:#e6e9ef;margin:20px;max-width:1200px}a{color:#8fd3ff}.entry{background:#181c22;border:1px solid #303744;border-radius:10px;padding:16px;margin:14px 0}.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}.pro{border-left:4px solid #b07cff;padding-left:12px}.codex{border-left:4px solid #55b8ff;padding-left:12px}.status{display:inline-block;border-radius:14px;padding:4px 9px;background:#245f3b}.warn{background:#805b20}pre{white-space:pre-wrap}.experiments{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}.card{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px}</style>
@@ -79,12 +79,14 @@ def discover_pilots(runs_root: Path) -> list[dict[str, Any]]:
         pilot_root = path.parent
         pilot = _load_json(path)
         summary = _load_json(pilot_root / "summary.json")
-        if pilot.get("round") == "R0.9.14":
+        if pilot.get("round") in {"R0.9.14", "R0.9.15"}:
             pilots.append(
                 {
                     "directory": pilot_root.relative_to(root).as_posix(),
-                    "signal": summary.get("pilot_signal"),
-                    "completed_call_count": summary.get("completed_call_count", 0),
+                    "signal": summary.get("difference_signal", summary.get("pilot_signal")),
+                    "completed_call_count": summary.get(
+                        "completed_semantic_trials", summary.get("completed_call_count", 0)
+                    ),
                 }
             )
     return pilots
@@ -124,17 +126,57 @@ def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
                 "tool_call_count": episode.get("tool_call_count"),
             }
         )
-    condition_rank = {"visual_only": 0, "correct_tactile": 1, "swapped_tactile": 2}
+    condition_rank = {
+        "visual_only": 0,
+        "correct_tactile": 1,
+        "swapped_tactile": 2,
+        "raw_pair": 0,
+        "explicit_difference": 1,
+        "swapped_difference": 2,
+    }
     cells.sort(key=lambda cell: (int(cell["seed"]), condition_rank[str(cell["condition"])]))
+    pairs = []
+    if _load_json(pilot_root / "pilot.json").get("round") == "R0.9.15":
+        for seed in (1_000_000, 1_000_001, 1_000_002):
+            raw_run = pilot_root / "runs" / f"seed_{seed}" / "raw_pair"
+            difference_run = pilot_root / "runs" / f"seed_{seed}" / "explicit_difference"
+            if not raw_run.is_dir() or not difference_run.is_dir():
+                continue
+            for sensor in ("left_tactile", "right_tactile"):
+                pairs.append(
+                    {
+                        "seed": seed,
+                        "sensor": sensor,
+                        "images": [
+                            {
+                                "label": "Baseline",
+                                "run": raw_run.relative_to(pilot_root.parent).as_posix(),
+                                "path": f"images/{sensor}_baseline.png",
+                            },
+                            {
+                                "label": "Current",
+                                "run": raw_run.relative_to(pilot_root.parent).as_posix(),
+                                "path": f"images/{sensor}_current.png",
+                            },
+                            {
+                                "label": "Difference",
+                                "run": difference_run.relative_to(pilot_root.parent).as_posix(),
+                                "path": f"images/{sensor}_difference.png",
+                            },
+                        ],
+                    }
+                )
     return {
         "pilot": _load_json(pilot_root / "pilot.json"),
         "summary": _load_json(pilot_root / "summary.json"),
         "host_reference": _load_json(pilot_root / "host_reference.json"),
+        "difference_metrics": _load_json(pilot_root / "difference_metrics.json"),
         "condition_manifests": [
             _load_json(path)
             for path in sorted((pilot_root / "runs").glob("seed_*/*/condition.json"))
         ],
         "cells": cells,
+        "pairs": pairs,
     }
 
 

@@ -64,24 +64,43 @@ def build_observe_blocks(
         expected_labels = list(_CAMERA_LABELS)
         if len(requested) == 4:
             expected_labels.extend(_TACTILE_LABELS)
+        elif len(requested) == 6:
+            labels = [str(item.get("label")) for item in requested]
+            if labels[:2] != list(_CAMERA_LABELS) or any(
+                not label.startswith("tactile/") for label in labels[2:]
+            ):
+                raise ValueError("six-image condition labels are invalid")
+            expected_labels = labels
         elif len(requested) != 2:
-            raise ValueError("condition observe must return two or four images")
+            raise ValueError("condition observe must return two, four, or six images")
         if [item.get("label") for item in requested] != expected_labels:
             raise ValueError("condition manifest image labels are invalid")
         originals = {image.label: image for image in context.images}
         selected = []
         for item in requested:
-            source = originals[str(item["source_label"])]
             staged = root / str(item["path"])
+            if "shape" in item:
+                shape = tuple(int(value) for value in item["shape"])
+                if len(shape) != 3:
+                    raise ValueError("condition image shape must be HxWxC")
+                source = context.images[0]
+                media_type = str(item.get("media_type", "image/png"))
+                dtype = str(item.get("dtype", "uint8"))
+                height, width, channels = shape
+            else:
+                source = originals[str(item["source_label"])]
+                media_type = source.media_type
+                dtype = source.dtype
+                height, width, channels = source.height, source.width, source.channels
             selected.append(
                 type(source)(
                     label=str(item["label"]),
-                    media_type=source.media_type,
+                    media_type=media_type,
                     path=staged,
-                    width=source.width,
-                    height=source.height,
-                    channels=source.channels,
-                    dtype=source.dtype,
+                    width=width,
+                    height=height,
+                    channels=channels,
+                    dtype=dtype,
                 )
             )
         images = selected
@@ -159,7 +178,7 @@ def build_server(
         name="observe",
         description=(
             "Return the task instruction, step identifiers, proprioception, head and wrist RGB, "
-            "and left and right tactile rgb_marker images for this pre-action episode."
+            "and the available left and right tactile image evidence for this pre-action episode."
         ),
         annotations=ToolAnnotations(
             readOnlyHint=True,

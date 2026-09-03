@@ -1,0 +1,14 @@
+task: pull_out_key
+seeds: [1000000, 1000001, 1000002]
+model: gpt-5.6-terra
+reasoning_effort: medium
+difference_gain: 4
+active_threshold: 12
+condition_order:
+  "1000000": [raw_pair, explicit_difference, swapped_difference]
+  "1000001": [explicit_difference, swapped_difference, raw_pair]
+  "1000002": [swapped_difference, raw_pair, explicit_difference]
+gate_config: configs/univtac/pull_out_key_seed1000000_gate.yaml
+headless: true
+codex_timeout_seconds: 900
+pre_observe_retry_limit: 1

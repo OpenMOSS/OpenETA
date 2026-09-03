@@ -164,3 +164,4 @@ def test_balanced_to_balanced_is_not_a_side_flip() -> None:
         "flipped": 0,
         "evaluated": 3,
     }
+    assert summary["pilot_signal"] == "no_detectable_signal"

@@ -265,20 +265,17 @@ def summarize_pilot(
     valid_all = len(by_pair) == 9
     dominant_rate = metrics["correct_tactile_dominant_side_alignment"]["rate"]
     flip_rate = metrics["swapped_tactile_side_flip_rate"]
-    if (
-        valid_all
-        and dominant_rate is not None
-        and flip_rate is not None
-        and dominant_rate >= 2 / 3
-        and flip_rate >= 2 / 3
-    ):
+    dominant_pass = dominant_rate is not None and dominant_rate >= 2 / 3
+    flip_pass = flip_rate is not None and flip_rate >= 2 / 3
+    many_uncertain = contact["uncertain"] >= 3 or dominant_total < 2
+    if valid_all and dominant_pass and flip_pass:
         signal = "positive_causal_signal"
     elif dominant_total == 3 and dominant_opposite == 3 and flips == 0:
         signal = "contradictory_signal"
-    elif tactile_changes == 0 and flips == 0 and region_equivariant == 0:
-        signal = "no_detectable_signal"
-    else:
+    elif dominant_pass != flip_pass or many_uncertain:
         signal = "mixed_signal"
+    else:
+        signal = "no_detectable_signal"
     return {
         "classification": "pull_out_key_tactile_causal_pilot_completed",
         "pilot_signal": signal,

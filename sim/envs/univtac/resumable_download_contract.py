@@ -175,13 +175,14 @@ def validate_wheel(
     *,
     check_filename: bool = True,
 ) -> dict[str, Any]:
+    locked_filename = str(record["filename"])
     if (
-        (check_filename and path.name != record["filename"])
+        (check_filename and path.name != locked_filename)
         or path.stat().st_size != expected_size
         or sha256_file(path) != record["sha256"]
     ):
         raise ValueError("wheel file identity mismatch")
-    wheel_name, wheel_version, _, filename_tags = parse_wheel_filename(path.name)
+    wheel_name, wheel_version, _, filename_tags = parse_wheel_filename(locked_filename)
     compatible = set(cpython_tags(python_version=(3, 11))) | set(compatible_tags(python_version=(3, 11), interpreter="cp311"))
     if canonicalize_name(str(wheel_name)) != record["name"] or str(wheel_version) != record["version"] or not compatible.intersection(filename_tags):
         raise ValueError("wheel filename metadata or tag mismatch")

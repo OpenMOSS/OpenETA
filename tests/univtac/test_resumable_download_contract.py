@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import copy
+import base64
+import csv
+import hashlib
 import io
 import json
+import os
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -14,12 +19,53 @@ from sim.envs.univtac.resumable_download_contract import (
     deterministic_sha256,
     expected_total,
     parse_headers,
+    sha256_file,
     sidecar_matches,
+    validate_wheel,
     validate_lock_pair,
 )
 
 
 CONFIG = {"connect_timeout_seconds": 60, "max_time_seconds": 3600, "speed_time_seconds": 180, "speed_limit_bytes_per_second": 1024}
+
+
+def _record_digest(data: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("=")
+
+
+def _legal_wheel(tmp_path: Path) -> tuple[bytes, dict]:
+    wheel_path = tmp_path / "demo_pkg-1.0-py3-none-any.whl"
+    files = {
+        "demo_pkg/__init__.py": b"",
+        "demo_pkg-1.0.dist-info/METADATA": (
+            b"Metadata-Version: 2.1\nName: demo-pkg\nVersion: 1.0\n\n"
+        ),
+        "demo_pkg-1.0.dist-info/WHEEL": (
+            b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n"
+        ),
+    }
+    record_path = "demo_pkg-1.0.dist-info/RECORD"
+    rows = [
+        [name, f"sha256={_record_digest(data)}", str(len(data))]
+        for name, data in files.items()
+    ]
+    rows.append([record_path, "", ""])
+    output = io.StringIO()
+    csv.writer(output, lineterminator="\n").writerows(rows)
+    files[record_path] = output.getvalue().encode()
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    payload = wheel_path.read_bytes()
+    record = {
+        "index": 0,
+        "name": "demo-pkg",
+        "version": "1.0",
+        "filename": wheel_path.name,
+        "url": "https://files.pythonhosted.org/demo_pkg-1.0-py3-none-any.whl",
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+    return payload, record
 
 
 def test_parse_range_identity_and_total() -> None:
@@ -134,6 +180,86 @@ def test_invalid_existing_cached_wheel_is_classified(tmp_path: Path) -> None:
     with pytest.raises(downloader.WheelhouseError) as caught:
         downloader.download_remote(record, {"content_length": final.stat().st_size}, cache, {}, tmp_path / "completed")
     assert caught.value.classification == "wheel_artifact_hash_mismatch"
+
+
+def test_complete_part_uses_locked_filename_for_identity(tmp_path: Path) -> None:
+    payload, record = _legal_wheel(tmp_path)
+    part = tmp_path / f"{record['filename']}.part"
+    part.write_bytes(payload)
+    result = validate_wheel(part, record, len(payload), check_filename=False)
+    assert result["name"] == "demo-pkg"
+    assert result["record_complete"] is True
+
+    with pytest.raises(ValueError, match="wheel file identity mismatch"):
+        validate_wheel(part, record, len(payload), check_filename=True)
+
+
+def test_complete_part_still_validates_locked_filename_identity(tmp_path: Path) -> None:
+    payload, record = _legal_wheel(tmp_path)
+    part = tmp_path / f"{record['filename']}.part"
+    part.write_bytes(payload)
+
+    wrong_name = {**record, "filename": "other_pkg-1.0-py3-none-any.whl"}
+    with pytest.raises(ValueError, match="filename metadata or tag mismatch"):
+        validate_wheel(part, wrong_name, len(payload), check_filename=False)
+
+    invalid_name = {**record, "filename": "not-a-wheel.part"}
+    with pytest.raises(ValueError):
+        validate_wheel(part, invalid_name, len(payload), check_filename=False)
+
+
+def test_complete_part_promotion_is_offline_and_strictly_revalidated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload, record = _legal_wheel(tmp_path)
+    cache = tmp_path / "cache"
+    for name in ("artifacts", "partial", "quarantined"):
+        (cache / name).mkdir(parents=True, exist_ok=True)
+    part = cache / "partial" / f"{record['filename']}.part"
+    part.write_bytes(payload)
+    sidecar = {
+        "schema_version": "openeta.univtac.wheel_partial.v1",
+        "url": record["url"],
+        "filename": record["filename"],
+        "sha256": record["sha256"],
+        "expected_size": len(payload),
+        "etag": "locked-etag",
+        "attempts": [{"attempt_index": 1}],
+    }
+    sidecar_path = cache / "partial" / f"{record['filename']}.part.json"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    header = cache / "partial" / f"{record['filename']}.attempt-1.headers"
+    header.write_text("preserved historical header", encoding="utf-8")
+    curl_calls = []
+
+    def unexpected_curl(*_args, **_kwargs):
+        curl_calls.append(True)
+        raise AssertionError("complete part must not access the network")
+
+    monkeypatch.setattr(downloader, "run_curl", unexpected_curl)
+    result, attempts = downloader.download_remote(
+        record,
+        {"content_length": len(payload), "etag": "locked-etag"},
+        cache,
+        {"max_transport_attempts_per_artifact": 20},
+        tmp_path / "completed.jsonl",
+    )
+    final = cache / "artifacts" / record["filename"]
+    assert curl_calls == [] and attempts == []
+    assert final.is_file() and not part.exists()
+    assert not sidecar_path.exists() and not header.exists()
+    assert result["disposition"] == "recovered_complete_part"
+    assert result["historical_transport_attempts"] == 1
+    assert result["new_transport_attempts"] == 0
+    assert result["cumulative_transport_attempts"] == 1
+    assert sha256_file(final) == record["sha256"]
+    assert validate_wheel(final, record, len(payload))["zip_valid"] is True
+    assert (final.stat().st_mode & 0o777) == 0o444
+
+    renamed = tmp_path / "renamed-1.0-py3-none-any.whl"
+    os.link(final, renamed)
+    with pytest.raises(ValueError, match="wheel file identity mismatch"):
+        validate_wheel(renamed, record, len(payload), check_filename=True)
 
 
 class _RedirectedJsonResponse(io.BytesIO):

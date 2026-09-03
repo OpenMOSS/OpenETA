@@ -1,0 +1,11 @@
+simulator_gate_config: configs/univtac/pull_out_key_seed1000000_gate.yaml
+task: pull_out_key
+seed: 1000000
+agent_mode: read_only
+backend_mode: localhost_capture
+expected_image_count: 4
+simulator_invocation_limit: 1
+agent_request_limit: 1
+allow_agent_action: false
+allow_tools: false
+allow_external_network: false

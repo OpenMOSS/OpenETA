@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import yaml
 
-from scripts.univtac.run_pull_out_key_gate import _recover_child_result
+from scripts.univtac.run_pull_out_key_gate import _finalize_run, _recover_child_result
 from sim.envs.univtac.contract import UniVTACContractError, validate_operator_visible
 from sim.envs.univtac.observation import REQUIRED_TACTILE_FIELDS, capture_snapshot
 from sim.envs.univtac.pull_out_key_gate import (
@@ -280,3 +280,26 @@ def test_clean_close_process_exit_can_recover_persisted_gate_evidence(
     )
     assert recovered["cleanup"]["simulation_app_close_ended_interpreter"] is True
     assert recovered["counters"]["play_once_call_count"] == 0
+
+
+def test_nonzero_child_exit_cannot_be_finalized_as_gate_success(tmp_path: Path) -> None:
+    (tmp_path / "launcher").mkdir(parents=True)
+    (tmp_path / "run_manifest.json").write_text("{}", encoding="utf-8")
+    classification = _finalize_run(
+        output_root=tmp_path,
+        source_root=tmp_path,
+        config={"seed": 1_000_000},
+        run_manifest={"simulator_invocation_count": 1},
+        lifecycle={
+            "returncode": 1,
+            "timed_out": False,
+            "sigterm_sent": False,
+            "sigkill_sent": False,
+            "cleanup_complete": True,
+            "stub_mapped": False,
+            "mapped_libcuda_paths": [],
+            "alias_target": "/usr/lib/libcuda.so.1",
+        },
+        launcher_error=None,
+    )
+    assert classification == "native_runtime_abort"

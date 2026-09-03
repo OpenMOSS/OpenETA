@@ -227,7 +227,12 @@ def _finalize_run(
             if (output_root / "runtime" / "libcuda_alias").exists()
             else "scoped_launcher_driver_resolution_failed"
         )
-    elif lifecycle is None:
+    elif lifecycle is None or (
+        lifecycle["returncode"] != 0
+        or lifecycle["timed_out"]
+        or lifecycle["sigterm_sent"]
+        or lifecycle["sigkill_sent"]
+    ):
         classification = "native_runtime_abort"
     elif not lifecycle["cleanup_complete"]:
         classification = "cleanup_incomplete"

@@ -5,8 +5,12 @@ from pathlib import Path
 
 from scripts.univtac.serve_experiment_dashboard import (
     DETAIL_HTML,
+    PILOT_HTML,
     build_timeline,
+    discover_pilots,
     discover_runs,
+    load_pilot_detail,
+    load_project_progress,
     load_run_detail,
 )
 
@@ -113,3 +117,65 @@ def test_dashboard_has_no_control_post_route() -> None:
     source = (root / "scripts/univtac/serve_experiment_dashboard.py").read_text()
     assert "def do_POST" not in source
     assert "move_to" not in source and "set_gripper" not in source
+
+
+def test_causal_pilot_dashboard_loads_three_by_three_actual_context(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/r0914"
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.14", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    (root / "summary.json").write_text(
+        json.dumps({"pilot_signal": "mixed", "completed_call_count": 9, "metrics": {}}),
+        encoding="utf-8",
+    )
+    (root / "host_reference.json").write_text("{}", encoding="utf-8")
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for condition in ("visual_only", "correct_tactile", "swapped_tactile"):
+            run = root / "runs" / f"seed_{seed}" / condition
+            run.mkdir(parents=True)
+            (run / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "round": "R0.9.14",
+                        "seed": seed,
+                        "condition": condition,
+                        "tool_call_count": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            paths = ["images/head.png", "images/wrist.png"]
+            if condition != "visual_only":
+                paths += ["images/left.png", "images/right.png"]
+            (run / "operator_context.jsonl").write_text(
+                json.dumps({"tool": "observe", "response_image_paths": paths}) + "\n",
+                encoding="utf-8",
+            )
+            (run / "agent_final.md").write_text("{}", encoding="utf-8")
+            (run / "condition.json").write_text(
+                json.dumps({"condition": condition}), encoding="utf-8"
+            )
+    pilots = discover_pilots(tmp_path / "outputs")
+    assert pilots == [{"directory": "r0914", "signal": "mixed", "completed_call_count": 9}]
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 9
+    assert sum(len(cell["image_paths"]) for cell in detail["cells"]) == 30
+    assert "HOST-ONLY EVALUATION" in PILOT_HTML
+
+
+def test_project_progress_uses_human_summaries_and_links_pilots(tmp_path: Path) -> None:
+    root = tmp_path / "outputs"
+    progress = root / "univtac-project-dashboard/progress.jsonl"
+    progress.parent.mkdir(parents=True)
+    row = {
+        "round": "R0.9.13",
+        "status": "completed",
+        "pro_instruction_summary": "接通只读触觉观察。",
+        "codex_work_summary": "调用一次 observe 并展示四张图。",
+        "result_summary": "真实 Codex 完成观察。",
+    }
+    progress.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload = load_project_progress(root)
+    assert payload["entries"] == [row]
+    assert payload["pilots"] == []

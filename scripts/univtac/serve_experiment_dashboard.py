@@ -15,8 +15,18 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
-<script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const xs=await fetch('/api/runs?t='+Date.now()).then(r=>r.json());document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
+
+PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
+<style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.cell,section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px;margin:10px 0}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.images img{width:100%;background:#000}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:8px}.host{border-color:#9a7030}</style>
+<a href="/">← runs</a><h1>Pull Out Key · Causal Pilot</h1><section id="top"></section><div class="grid" id="matrix"></div><section id="comparison"></section><section class="host"><details><summary><b>HOST-ONLY EVALUATION — NOT SHOWN TO AGENT</b></summary><pre id="host"></pre></details></section>
+<script>const pilot=decodeURIComponent(location.pathname.slice(7));const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);async function tick(){const d=await fetch('/api/pilot?pilot='+encodeURIComponent(pilot)+'&t='+Date.now()).then(r=>r.json());document.querySelector('#top').innerHTML=`<b>model:</b> ${esc(d.pilot.model)} · <b>prompt:</b> prompt.txt · <b>completed calls:</b> ${esc(d.summary.completed_call_count)} · <b>signal:</b> ${esc(d.summary.pilot_signal)}`;document.querySelector('#matrix').innerHTML=d.cells.map(c=>`<div class="cell"><h3>seed ${esc(c.seed)} · ${esc(c.condition)}</h3>${c.condition==='swapped_tactile'?'<p><i>Host-side assignment swapped; this label was not sent through MCP.</i></p>':''}<div class="images">${(c.image_paths||[]).map(p=>`<img src="${art(c.run,p)}">`).join('')}</div><pre>${esc(JSON.stringify(c.prediction,null,2))}</pre><details><summary>raw answer</summary><pre>${esc(c.raw_answer)}</pre></details><p>${esc(c.duration_seconds)} s · tool ${esc(c.tool_call_count)} · usage ${esc(JSON.stringify(c.usage||{}))}</p><a href="/run/${encodeURIComponent(c.run)}">detail</a></div>`).join('');document.querySelector('#comparison').innerHTML='<h2>Cross-condition comparisons</h2><pre>'+esc(JSON.stringify(d.summary.metrics,null,2))+'</pre>';document.querySelector('#host').textContent=JSON.stringify({reference:d.host_reference,condition_manifests:d.condition_manifests},null,2)}tick();setInterval(tick,2000)</script>"""
+
+PROGRESS_HTML = """<!doctype html><meta charset="utf-8"><title>OpenETA-UniVTAC 项目进展</title>
+<style>body{font:15px system-ui;background:#101216;color:#e6e9ef;margin:20px;max-width:1200px}a{color:#8fd3ff}.entry{background:#181c22;border:1px solid #303744;border-radius:10px;padding:16px;margin:14px 0}.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}.pro{border-left:4px solid #b07cff;padding-left:12px}.codex{border-left:4px solid #55b8ff;padding-left:12px}.status{display:inline-block;border-radius:14px;padding:4px 9px;background:#245f3b}.warn{background:#805b20}pre{white-space:pre-wrap}.experiments{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}.card{background:#181c22;border:1px solid #303744;border-radius:8px;padding:12px}</style>
+<a href="/">← 实验列表</a><h1>OpenETA-UniVTAC 项目进展</h1><p>这里用讲人话的方式记录：GPT-Pro 每轮让我做什么、我实际做了什么，以及对应实验在哪里看。不会展示隐藏思维、认证信息或 host-only 数据。</p><div id="entries"></div><h2>实验可视化</h2><div class="experiments" id="experiments"></div>
+<script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const d=await fetch('/api/progress?t='+Date.now()).then(r=>r.json());document.querySelector('#entries').innerHTML=[...d.entries].reverse().map(x=>`<div class="entry"><h2>${esc(x.round)} <span class="status ${x.status==='completed'?'':'warn'}">${esc(x.status)}</span></h2><p>${esc(x.timestamp)}</p><div class="cols"><div class="pro"><h3>GPT-Pro 的指示</h3><p>${esc(x.pro_instruction_summary)}</p></div><div class="codex"><h3>我实际做了什么</h3><p>${esc(x.codex_work_summary)}</p></div></div><h3>结果</h3><p>${esc(x.result_summary||'尚未结束')}</p>${x.experiment_root?`<p><a href="/pilot/${encodeURIComponent(x.experiment_root)}">打开本轮实验可视化</a></p>`:''}${x.commit?`<p>commit: ${esc(x.commit)} · push: ${esc(x.push||'')}</p>`:''}</div>`).join('');document.querySelector('#experiments').innerHTML=d.pilots.map(x=>`<div class="card"><h3>${esc(x.directory)}</h3><p>信号：${esc(x.signal||'运行中')} · 已完成 ${esc(x.completed_call_count)} 次</p><a href="/pilot/${encodeURIComponent(x.directory)}">打开 3×3 实验</a></div>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 DETAIL_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC replay</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}section{background:#181c22;border:1px solid #303744;border-radius:8px;padding:14px;margin:12px 0}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:10px}.images{display:grid;grid-template-columns:1fr 1fr;gap:10px}.images img{width:100%;max-height:420px;object-fit:contain;background:#000}.badge{display:inline-block;background:#245f3b;padding:4px 8px;border-radius:12px}.event{border-left:3px solid #5b8bad;padding:7px 10px;margin:8px 0;background:#11161c}.host{border-color:#9a7030}</style>
@@ -60,6 +70,70 @@ def discover_runs(runs_root: Path) -> list[dict[str, Any]]:
             }
         )
     return runs
+
+
+def discover_pilots(runs_root: Path) -> list[dict[str, Any]]:
+    root = runs_root.expanduser().resolve()
+    pilots = []
+    for path in sorted(root.rglob("pilot.json")):
+        pilot_root = path.parent
+        pilot = _load_json(path)
+        summary = _load_json(pilot_root / "summary.json")
+        if pilot.get("round") == "R0.9.14":
+            pilots.append(
+                {
+                    "directory": pilot_root.relative_to(root).as_posix(),
+                    "signal": summary.get("pilot_signal"),
+                    "completed_call_count": summary.get("completed_call_count", 0),
+                }
+            )
+    return pilots
+
+
+def load_project_progress(runs_root: Path) -> dict[str, Any]:
+    return {
+        "entries": read_jsonl(
+            runs_root.expanduser().resolve() / "univtac-project-dashboard/progress.jsonl"
+        ),
+        "pilots": discover_pilots(runs_root),
+    }
+
+
+def load_pilot_detail(pilot_root: Path) -> dict[str, Any]:
+    predictions = read_jsonl(pilot_root / "predictions.jsonl")
+    by_pair = {(row.get("seed"), row.get("condition")): row for row in predictions}
+    cells = []
+    for episode_path in sorted((pilot_root / "runs").glob("seed_*/*/episode.json")):
+        run_root = episode_path.parent
+        episode = _load_json(episode_path)
+        rows = read_jsonl(run_root / "operator_context.jsonl")
+        row = rows[0] if rows else {}
+        relative_run = run_root.relative_to(pilot_root.parent).as_posix()
+        cells.append(
+            {
+                "seed": episode.get("seed"),
+                "condition": episode.get("condition"),
+                "run": relative_run,
+                "image_paths": row.get("response_image_paths", []),
+                "prediction": by_pair.get((episode.get("seed"), episode.get("condition")), {}),
+                "raw_answer": (run_root / "agent_final.md").read_text(encoding="utf-8")
+                if (run_root / "agent_final.md").is_file()
+                else "",
+                "duration_seconds": episode.get("duration_seconds"),
+                "usage": episode.get("usage"),
+                "tool_call_count": episode.get("tool_call_count"),
+            }
+        )
+    return {
+        "pilot": _load_json(pilot_root / "pilot.json"),
+        "summary": _load_json(pilot_root / "summary.json"),
+        "host_reference": _load_json(pilot_root / "host_reference.json"),
+        "condition_manifests": [
+            _load_json(path)
+            for path in sorted((pilot_root / "runs").glob("seed_*/*/condition.json"))
+        ],
+        "cells": cells,
+    }
 
 
 def _event_item(event: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +233,17 @@ def _safe_run_root(runs_root: Path, raw: str) -> Path:
     return candidate
 
 
+def _safe_pilot_root(runs_root: Path, raw: str) -> Path:
+    relative = PurePosixPath(unquote(raw))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("invalid pilot path")
+    root = runs_root.resolve()
+    candidate = root.joinpath(*relative.parts).resolve(strict=True)
+    if not candidate.is_relative_to(root) or not (candidate / "pilot.json").is_file():
+        raise ValueError("pilot is outside runs root")
+    return candidate
+
+
 def _safe_artifact(episode_root: Path, raw: str) -> Path:
     relative = PurePosixPath(unquote(raw))
     if relative.is_absolute() or ".." in relative.parts:
@@ -196,11 +281,24 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
             try:
                 if parsed.path == "/":
                     return self._send(LIST_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/progress":
+                    return self._send(PROGRESS_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path.startswith("/run/"):
                     _safe_run_root(root, parsed.path[5:])
                     return self._send(DETAIL_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path.startswith("/pilot/"):
+                    _safe_pilot_root(root, parsed.path[7:])
+                    return self._send(PILOT_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/api/runs":
                     return self._json(discover_runs(root))
+                if parsed.path == "/api/pilots":
+                    return self._json(discover_pilots(root))
+                if parsed.path == "/api/progress":
+                    return self._json(load_project_progress(root))
+                if parsed.path == "/api/pilot":
+                    return self._json(
+                        load_pilot_detail(_safe_pilot_root(root, query.get("pilot", [""])[0]))
+                    )
                 run = _safe_run_root(root, query.get("run", [""])[0])
                 if parsed.path == "/api/detail":
                     return self._json(load_run_detail(run))

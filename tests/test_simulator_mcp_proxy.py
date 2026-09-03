@@ -2722,6 +2722,44 @@ def test_gripper_empty_close_feedback_does_not_recommend_lift_probe() -> None:
     assert "reopen the gripper" in result.content
 
 
+def test_gripper_envelope_mismatch_recommends_validated_articulated_probe() -> None:
+    transport = FakeSimulatorMcpTransport(
+        {
+            "cameras": [],
+            "robot": {"gripper_state": {"openness": 0.5147}},
+            "attachment_proxy_receipt": {
+                "schema_version": "openeta.attachment_proxy_receipt.v1",
+                "status": "not_armed",
+                "reason": "authorized_target_outside_contact_envelope",
+                "measured_open_fraction": 0.5147,
+                "attachment_proven": False,
+            },
+        }
+    )
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(),
+        transport=transport,
+        config=SimulatorMcpToolProxyConfig(
+            session_id="session-articulated",
+            handle="env-articulated",
+        ),
+        tool_names=("gripper_control",),
+    )
+
+    result = tools.call("gripper_control", {"position": 0})
+
+    receipt = result.details["outputs"]["attachment_proxy_receipt"]
+    assert receipt["reason"] == "close_not_supported_by_host_contact_envelope"
+    assert result.details["semantic_outcome"] == "no_attachment_evidence"
+    assert {item["action"] for item in result.details["recovery_options"]} == {
+        "inspect_fresh_dual_view",
+        "prepare_articulated_attachment_probe",
+        "reopen_and_repair_contact",
+    }
+    assert "call prepare_attachment_probe" in result.content
+    assert "do not transport a portable object" in result.content
+
+
 def test_gripper_control_rejects_fractional_command(tmp_path: Path) -> None:
     transport = FakeSimulatorMcpTransport({"cameras": [], "robot": {}})
     tools = bind_simulator_mcp_tool_handlers(

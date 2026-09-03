@@ -300,6 +300,93 @@ def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
         )
 
 
+def test_libero_drawer_probe_accepts_reached_contact_when_carried_proxy_is_inapplicable() -> None:
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"]["attachment_proxy_receipt"] = {
+        "schema_version": "openeta.attachment_proxy_receipt.v1",
+        "status": "not_armed",
+        "reason": "close_not_supported_by_host_contact_envelope",
+        "measured_open_fraction": 0.5147,
+        "attachment_proven": False,
+    }
+    memory["memory"]["latest_compiled_contact_execution"] = {
+        "schema_version": "openeta.compiled_contact_execution.v1",
+        "compiled_grasp_id": "compiled-1",
+        "reached_target": True,
+        "position_error_m": 0.0049,
+        "max_axis_position_error_m": 0.0047,
+        "stop_reason": "target_reached",
+    }
+
+    observation = _observation()
+    observation.task = "open the middle drawer of the cabinet"
+    observation.robot.gripper_state = {
+        "open": True,
+        "openness": 0.5146711342859446,
+    }
+    result = prepare_attachment_probe(
+        {
+            "compiled_grasp_id": "compiled-1",
+            "motion_type": "linear",
+            "direction_world_xyz": [0, 1, 0],
+        },
+        observation=observation,
+        supervision_context=memory,
+    )
+
+    assert result["status"] == "prepared"
+    assert result["gripper_evidence"] == {
+        "commanded_position": 0,
+        "attachment_proxy_status": "not_armed",
+        "attachment_proxy_reason": "close_not_supported_by_host_contact_envelope",
+        "probe_evidence_basis": "matching_reached_compiled_contact",
+        "compiled_grasp_id": "compiled-1",
+        "compiled_contact_reached": True,
+        "measured_open": True,
+        "measured_openness": pytest.approx(0.5146711342859446),
+        "checked_by": "host_gripper_evidence",
+    }
+
+
+@pytest.mark.parametrize(
+    "contact_receipt",
+    [
+        None,
+        {
+            "schema_version": "openeta.compiled_contact_execution.v1",
+            "compiled_grasp_id": "other-compiled-grasp",
+            "reached_target": True,
+        },
+        {
+            "schema_version": "openeta.compiled_contact_execution.v1",
+            "compiled_grasp_id": "compiled-1",
+            "reached_target": False,
+        },
+    ],
+)
+def test_prepare_probe_rejects_proxy_fallback_without_matching_reached_contact(
+    contact_receipt,
+) -> None:
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"]["attachment_proxy_receipt"] = {
+        "status": "not_armed",
+        "reason": "close_not_supported_by_host_contact_envelope",
+    }
+    if contact_receipt is not None:
+        memory["memory"]["latest_compiled_contact_execution"] = contact_receipt
+
+    with pytest.raises(AttachmentProbeError, match="matching reached compiled-contact"):
+        prepare_attachment_probe(
+            {
+                "compiled_grasp_id": "compiled-1",
+                "motion_type": "linear",
+                "direction_world_xyz": [0, 1, 0],
+            },
+            observation=_observation(),
+            supervision_context=memory,
+        )
+
+
 def test_prepare_probe_prefers_continuous_aperture_over_coarse_open_flag() -> None:
     observation = _observation()
     observation.robot.gripper_state = {"open": True, "openness": 0.5258}

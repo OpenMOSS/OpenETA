@@ -23,6 +23,19 @@ ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA = (
     "openeta.articulated_attachment_assessment.v1"
 )
 
+# A carried-object proxy is intentionally conservative and is not meaningful
+# for an articulated mechanism such as a drawer.  Some simulator backends bind
+# the compiled contact to the correct mechanism surface, but cannot arm a
+# carried-object proxy because the EEF is far from the mechanism body's centre.
+# In that one case, a matching reached compiled-contact receipt is the stronger
+# evidence for allowing a short articulated probe.
+_ARTICULATED_PROXY_NOT_APPLICABLE_REASONS = frozenset(
+    {
+        "authorized_target_outside_contact_envelope",
+        "close_not_supported_by_host_contact_envelope",
+    }
+)
+
 ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT = """You are an independent attachment reviewer.
 The robot closed on an articulated handle and executed one host-frozen 5 cm probe.
 Compare the ordered before/after agentview and wrist images. Return PASS only when
@@ -143,6 +156,7 @@ def assess_attachment_probe(
         memory,
         context.observation,
         operation="attachment assessment",
+        compiled_grasp_id=str(probe.get("compiled_grasp_id") or ""),
     )
     before = [
         path
@@ -273,6 +287,7 @@ def prepare_attachment_probe(
         memory,
         observation,
         operation="attachment probe preparation",
+        compiled_grasp_id=compiled_grasp_id,
     )
     pose = getattr(getattr(observation, "robot", None), "end_effector_pose", None)
     pose = _mapping(pose, "observation.robot.end_effector_pose")
@@ -431,8 +446,17 @@ def _require_probe_gripper_evidence(
     observation: Any,
     *,
     operation: str,
+    compiled_grasp_id: str,
 ) -> JsonDict:
-    """Reject probes that contradict host command or measured aperture evidence."""
+    """Reject probes that contradict host command or measured aperture evidence.
+
+    A tentative carried-object proxy is sufficient, but it is not required for
+    an articulated mechanism.  When the simulator reports that the host-bound
+    target falls outside the *carried-object* envelope, accept a matching host
+    compiled-contact execution receipt instead.  This does not claim physical
+    attachment; the short probe and independent visual assessment still own
+    that verdict.
+    """
 
     commanded_value = memory.get("gripper_command_state")
     commanded = dict(commanded_value) if isinstance(commanded_value, Mapping) else {}
@@ -444,13 +468,25 @@ def _require_probe_gripper_evidence(
 
     proxy_value = commanded.get("attachment_proxy_receipt")
     proxy = dict(proxy_value) if isinstance(proxy_value, Mapping) else {}
-    if proxy.get("status") != "tentative":
-        status = str(proxy.get("status") or "missing")
-        reason = str(proxy.get("reason") or "no tentative close receipt")
+    status = str(proxy.get("status") or "missing")
+    reason = str(proxy.get("reason") or "no tentative close receipt")
+    contact_receipt = _matching_compiled_contact_receipt(
+        memory,
+        compiled_grasp_id=compiled_grasp_id,
+    )
+    proxy_is_tentative = status == "tentative"
+    articulated_contact_fallback = (
+        status == "not_armed"
+        and reason in _ARTICULATED_PROXY_NOT_APPLICABLE_REASONS
+        and contact_receipt is not None
+    )
+    if not proxy_is_tentative and not articulated_contact_fallback:
         raise AttachmentProbeError(
-            f"{operation} requires a tentative non-empty close receipt; latest "
-            f"attachment_proxy_status={status!r}, reason={reason!r}. Inspect current "
-            "dual-view evidence, repair contact, close again, then prepare a new probe"
+            f"{operation} requires a tentative non-empty close receipt or a matching "
+            "reached compiled-contact receipt for an articulated target whose carried-"
+            f"object proxy is inapplicable; latest attachment_proxy_status={status!r}, "
+            f"reason={reason!r}. Inspect current dual-view evidence, repair contact, "
+            "close again, then prepare a new probe"
         )
 
     robot = getattr(observation, "robot", None)
@@ -478,12 +514,44 @@ def _require_probe_gripper_evidence(
         )
     return {
         "commanded_position": 0,
-        "attachment_proxy_status": "tentative",
-        "attachment_proxy_reason": proxy.get("reason"),
+        "attachment_proxy_status": status,
+        "attachment_proxy_reason": reason,
+        "probe_evidence_basis": (
+            "tentative_carried_object_proxy"
+            if proxy_is_tentative
+            else "matching_reached_compiled_contact"
+        ),
+        "compiled_grasp_id": compiled_grasp_id,
+        "compiled_contact_reached": (
+            bool(contact_receipt.get("reached_target"))
+            if contact_receipt is not None
+            else None
+        ),
         "measured_open": is_open,
         "measured_openness": openness,
         "checked_by": "host_gripper_evidence",
     }
+
+
+def _matching_compiled_contact_receipt(
+    memory: Mapping[str, Any],
+    *,
+    compiled_grasp_id: str,
+) -> JsonDict | None:
+    """Return reached host contact evidence for this exact compiled grasp."""
+
+    value = memory.get("latest_compiled_contact_execution")
+    receipt = dict(value) if isinstance(value, Mapping) else {}
+    if not compiled_grasp_id:
+        return None
+    if str(receipt.get("compiled_grasp_id") or "") != compiled_grasp_id:
+        return None
+    if receipt.get("reached_target") is not True:
+        return None
+    schema = str(receipt.get("schema_version") or "")
+    if schema and schema != "openeta.compiled_contact_execution.v1":
+        return None
+    return receipt
 
 
 def _memory_context(value: object) -> JsonDict:

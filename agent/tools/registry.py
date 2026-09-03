@@ -794,6 +794,42 @@ def _semantic_result_projection(
                         ),
                     }
                 )
+        elif (
+            spec.name == "gripper_control"
+            and status == "not_armed"
+            and str(receipt.get("reason") or "")
+            == "close_not_supported_by_host_contact_envelope"
+        ):
+            outcome = "no_attachment_evidence"
+            recovery.extend(
+                [
+                    {
+                        "action": "inspect_fresh_dual_view",
+                        "reason": (
+                            "the close receipt did not arm a carried-object proxy; "
+                            "do not infer attachment"
+                        ),
+                    },
+                    {
+                        "action": "prepare_articulated_attachment_probe",
+                        "tool": "prepare_attachment_probe",
+                        "reason": (
+                            "for a drawer, door, or other articulated handle, ask the "
+                            "host to validate the exact compiled contact and freeze a "
+                            "short probe; the carried-object proxy is not the required "
+                            "evidence for an articulated mechanism"
+                        ),
+                    },
+                    {
+                        "action": "reopen_and_repair_contact",
+                        "reason": (
+                            "for a portable object, or if articulated probe validation "
+                            "rejects the compiled contact, reopen and reacquire contact "
+                            "instead of transporting without a collision proxy"
+                        ),
+                    },
+                ]
+            )
         else:
             outcome = "no_attachment_evidence"
             recovery.extend(

@@ -2826,6 +2826,18 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
                 "lift to verify co-motion. Upgrade or restart the simulator service "
                 "before relying on attachment-aware collision coverage."
             )
+        elif (
+            status == "not_armed"
+            and reason == "close_not_supported_by_host_contact_envelope"
+        ):
+            guidance = (
+                ". No carried-object proxy is active, so do not transport a portable "
+                "object from this receipt. If the selected target is an articulated "
+                "drawer or door handle, call prepare_attachment_probe with the exact "
+                "compiled_grasp_id: the host can validate a matching reached contact "
+                "and freeze a short probe without treating the mechanism as a carried "
+                "object. If that validation fails, reopen and repair contact."
+            )
         else:
             guidance = (
                 ". No carried-object proxy is active. Do NOT treat a lift as an "

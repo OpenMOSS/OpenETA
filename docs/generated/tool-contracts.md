@@ -1429,7 +1429,7 @@ Exclusive request branches: `[{"required": ["direction_world_xyz"], "properties"
 
 ### Gate and repair
 
-- Checks: `compiled grasp exists and target evidence is current`, `linear direction is non-zero or arc has 2-5 bounded segments`, `total probe length is 0.05 m within tolerance`, `current EEF pose and exactly two required RGB views exist`, `every frozen endpoint still requires exact IK preview`
+- Checks: `compiled grasp exists and target evidence is current`, `gripper close is latched and measured aperture is not fully open`, `a tentative carried-object proxy exists, or an articulated target has a matching reached compiled-contact receipt when that proxy is not applicable`, `linear direction is non-zero or arc has 2-5 bounded segments`, `total probe length is 0.05 m within tolerance`, `current EEF pose and exactly two required RGB views exist`, `every frozen endpoint still requires exact IK preview`
 - Fail closed: `true`
 - Repair schema: `openeta.gate_repair.v1`
 - Preserves Agent choice: `true`

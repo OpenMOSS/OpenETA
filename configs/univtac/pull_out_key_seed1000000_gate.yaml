@@ -1,0 +1,16 @@
+task: pull_out_key
+seed: 1000000
+seed_label: legacy_ftp1_eval_seed_index_aligned
+task_config: demo
+sensor_type: gsmini
+optical_backend: taxim
+device: cuda:0
+task_instruction: Pull the key out of the slot.
+save_host_only: true
+strict_two_tactile_sensors: true
+require_press_depth: true
+require_any_positive_press_depth: true
+run_play_once: false
+call_success_checks: false
+capture_post_action: false
+timeout_seconds: 1200

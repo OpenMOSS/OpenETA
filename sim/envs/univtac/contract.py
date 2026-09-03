@@ -25,6 +25,7 @@ FORBIDDEN_OPERATOR_KEYS = frozenset(
         "native_check_success",
         "eval_success",
         "plan_success",
+        "press_depth",
     }
 )
 OPERATOR_TOP_LEVEL_KEYS = frozenset(

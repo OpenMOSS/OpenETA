@@ -277,6 +277,10 @@ def capture_snapshot(
             "available_fields": sorted(str(key) for key in packet),
             "rgb_marker": array_summary(marker_array),
         }
+        if save_host_only and "press_depth" in packet:
+            tactile_metadata[sensor_name]["press_depth"] = array_summary(
+                packet["press_depth"]
+            )
         rgb_markers[sensor_name] = marker_array
         operator_artifacts.append(marker_artifact.path)
 
@@ -308,6 +312,18 @@ def capture_snapshot(
                     output_root,
                 )
                 sensor_host[contract_key] = reference.to_dict()
+                host_artifacts.append(reference.path)
+            if "press_depth" in packet:
+                reference = save_npy_artifact(
+                    packet["press_depth"],
+                    seed_dir
+                    / "host_only"
+                    / phase
+                    / "tactile"
+                    / f"{safe_name}_press_depth.npy",
+                    output_root,
+                )
+                sensor_host["press_depth"] = reference.to_dict()
                 host_artifacts.append(reference.path)
             host_tactile[sensor_name] = sensor_host
 

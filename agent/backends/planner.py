@@ -1010,6 +1010,7 @@ def _planner_visible_main_agent_context(dynamic_context: JsonDict) -> JsonDict:
     visible.pop("vision_image_paths", None)
     for key in (
         "vision_evidence",
+        "review_vision_evidence",
         "visual_history",
         "current_observation",
         "decision_state",
@@ -1090,23 +1091,56 @@ def _planner_user_content(
     if not config.enable_vision:
         return text, []
     explicit_paths = request.tool_context.get("vision_image_paths")
-    paths = (
+    explicit_paths = (
         [value for value in explicit_paths if isinstance(value, str) and value]
         if isinstance(explicit_paths, list)
         else []
     )
+    evidence_by_path: dict[str, JsonDict] = {}
+    raw_evidence = request.tool_context.get("vision_evidence")
+    if isinstance(raw_evidence, list):
+        for item in raw_evidence:
+            if not isinstance(item, dict):
+                continue
+            evidence_path = item.get("path")
+            if isinstance(evidence_path, str) and evidence_path:
+                evidence_by_path[evidence_path] = item
+    review_evidence = request.tool_context.get("review_vision_evidence")
+    review_evidence = review_evidence if isinstance(review_evidence, list) else []
+    priority_paths: list[str] = []
+
+    def add_priority_path(path: object, evidence: JsonDict | None = None) -> None:
+        if not isinstance(path, str) or not path or path in priority_paths:
+            return
+        priority_paths.append(path)
+        if isinstance(evidence, dict):
+            evidence_by_path[path] = evidence
+
     localization = request.tool_context.get("pending_reference_localization")
     if isinstance(localization, dict):
         if localization.get("required_parameter") != "positive_points":
             scene_image = localization.get("scene_image")
-            if isinstance(scene_image, str) and scene_image and scene_image not in paths:
-                paths.append(scene_image)
+            add_priority_path(
+                scene_image,
+                {
+                    "role": "reference_localization_scene",
+                    "freshness": "review_required",
+                    "derived": False,
+                },
+            )
             references = localization.get("reference_images")
             if isinstance(references, list):
                 for value in references:
-                    if isinstance(value, str) and value and value not in paths:
-                        paths.append(value)
-                    if len(paths) >= config.max_vision_images:
+                    add_priority_path(
+                        value,
+                        {
+                            "role": "reference_localization_reference",
+                            "freshness": "review_required",
+                            "derived": True,
+                            "not_world_observation": True,
+                        },
+                    )
+                    if len(priority_paths) >= config.max_vision_images:
                         break
     else:
         obligation = request.tool_context.get("pending_target_selection")
@@ -1114,11 +1148,21 @@ def _planner_user_content(
             bundle = obligation.get("selection_bundle")
             if not isinstance(bundle, dict):
                 bundle = {}
-            for field in ("original_image_ref", "contact_sheet_ref"):
+            for field, role in (
+                ("original_image_ref", "target_selection_source"),
+                ("contact_sheet_ref", "target_selection_review"),
+            ):
                 value = bundle.get(field)
-                if isinstance(value, str) and value and value not in paths:
-                    paths.append(value)
-            if len(paths) < config.max_vision_images:
+                add_priority_path(
+                    value,
+                    {
+                        "role": role,
+                        "freshness": "review_required",
+                        "derived": field != "original_image_ref",
+                        "not_world_observation": field != "original_image_ref",
+                    },
+                )
+            if len(priority_paths) < config.max_vision_images:
                 candidates = bundle.get("candidates")
                 if not isinstance(candidates, list):
                     candidates = []
@@ -1127,12 +1171,37 @@ def _planner_user_content(
                         continue
                     for field in ("overlay_ref", "crop_ref"):
                         value = candidate.get(field)
-                        if isinstance(value, str) and value and value not in paths:
-                            paths.append(value)
-                        if len(paths) >= config.max_vision_images:
+                        add_priority_path(
+                            value,
+                            {
+                                "role": "target_selection_candidate_review",
+                                "freshness": "review_required",
+                                "derived": True,
+                                "not_world_observation": True,
+                            },
+                        )
+                        if len(priority_paths) >= config.max_vision_images:
                             break
-                    if len(paths) >= config.max_vision_images:
+                    if len(priority_paths) >= config.max_vision_images:
                         break
+    for item in review_evidence:
+        if isinstance(item, dict):
+            add_priority_path(item.get("path"), item)
+
+    if priority_paths:
+        explicit_paths = sorted(
+            explicit_paths,
+            key=lambda path: (
+                0
+                if evidence_by_path.get(path, {}).get("role") == "current_scene"
+                else 1
+            ),
+        )
+    paths = list(
+        dict.fromkeys(
+            [*priority_paths, *explicit_paths]
+        )
+    )
     if not paths:
         return text, []
 
@@ -1146,15 +1215,6 @@ def _planner_user_content(
         }
     ]
     attachments: list[JsonDict] = []
-    evidence_by_path: dict[str, JsonDict] = {}
-    raw_evidence = request.tool_context.get("vision_evidence")
-    if isinstance(raw_evidence, list):
-        for item in raw_evidence:
-            if not isinstance(item, dict):
-                continue
-            evidence_path = item.get("path")
-            if isinstance(evidence_path, str):
-                evidence_by_path[evidence_path] = item
     for image_index, path_value in enumerate(paths[: config.max_vision_images], start=1):
         path = Path(path_value)
         try:
@@ -1214,6 +1274,11 @@ def _planner_user_content(
                 "freshness",
                 "observation_step",
                 "timestamp_s",
+                "source_tool",
+                "source_packet_id",
+                "source_packet_ids",
+                "artifact_type",
+                "not_world_observation",
             ):
                 value = evidence.get(field)
                 if value is not None and value != "":

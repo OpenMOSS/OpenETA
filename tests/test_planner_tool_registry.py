@@ -4907,8 +4907,12 @@ def test_openai_compatible_backend_asks_human_after_timeout_retries_exhausted() 
 def test_openai_compatible_backend_attaches_pending_selection_images(tmp_path: Path) -> None:
     from PIL import Image
 
+    current_agentview = tmp_path / "current-agentview.png"
+    current_wrist = tmp_path / "current-wrist.png"
     original = tmp_path / "original.png"
     contact_sheet = tmp_path / "selection.png"
+    Image.new("RGB", (8, 8), "red").save(current_agentview)
+    Image.new("RGB", (8, 8), "green").save(current_wrist)
     Image.new("RGB", (8, 8), "white").save(original)
     Image.new("RGB", (16, 8), "blue").save(contact_sheet)
     captured = {}
@@ -4944,7 +4948,12 @@ def test_openai_compatible_backend_attaches_pending_selection_images(tmp_path: P
         PlannerBackendRequest(
             tool_context={
                 "task": "pick alphabet soup",
-                    "pending_target_selection": {
+                "vision_image_paths": [str(current_agentview), str(current_wrist)],
+                "vision_evidence": [
+                    {"path": str(current_agentview), "role": "current_scene"},
+                    {"path": str(current_wrist), "role": "current_scene"},
+                ],
+                "pending_target_selection": {
                     "result_id": "sam3-run-selection",
                     "selection_bundle": {
                         "original_image_ref": str(original),
@@ -4960,19 +4969,101 @@ def test_openai_compatible_backend_attaches_pending_selection_images(tmp_path: P
     assert isinstance(user_content, list)
     assert [part["type"] for part in user_content] == [
         "text",
+        "text",
         "image_url",
+        "text",
         "image_url",
         "text",
     ]
+    image_parts = [part for part in user_content if part["type"] == "image_url"]
     assert all(
         part["image_url"]["url"].startswith("data:image/png;base64,")
-        for part in user_content[1:3]
+        for part in image_parts
     )
     assert [item["path"] for item in result.details["vision_attachments"]] == [
         str(original),
         str(contact_sheet),
     ]
     assert "base64" not in json.dumps(result.details)
+
+
+def test_openai_compatible_backend_prioritizes_latest_tool_review_image(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image
+
+    historical = tmp_path / "historical.png"
+    current = tmp_path / "current.png"
+    review = tmp_path / "molmopoint-review.png"
+    Image.new("RGB", (8, 8), "red").save(historical)
+    Image.new("RGB", (8, 8), "green").save(current)
+    Image.new("RGB", (8, 8), "blue").save(review)
+    captured = {}
+
+    def fake_transport(url, body, headers, timeout_s):
+        del url, headers, timeout_s
+        captured["body"] = body
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": (
+                            '{"kind":"response","name":"talk",'
+                            '"parameters":{"message":"reviewed"}}'
+                        )
+                    },
+                }
+            ],
+            "usage": {"total_tokens": 10},
+        }
+
+    backend = OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            model="vision-model",
+            api_base="https://api.example.test",
+            api_key="secret-key",
+            max_vision_images=2,
+        ),
+        transport=fake_transport,
+    )
+    result = backend.decide(
+        PlannerBackendRequest(
+            tool_context={
+                "task": "open the middle drawer",
+                "vision_image_paths": [str(historical), str(current)],
+                "vision_evidence": [
+                    {"path": str(historical), "role": "historical_scene"},
+                    {"path": str(current), "role": "current_scene"},
+                ],
+                "review_vision_evidence": [
+                    {
+                        "path": str(review),
+                        "role": "tool_result_review",
+                        "source_tool": "molmopoint",
+                        "source_packet_id": "obs-0001",
+                        "artifact_type": "molmopoint_contact_sheet",
+                        "freshness": "derived_from_source_packet",
+                        "not_world_observation": True,
+                    }
+                ],
+            },
+            system_prompt="return json",
+        )
+    )
+
+    assert [item["path"] for item in result.details["vision_attachments"]] == [
+        str(review),
+        str(current),
+    ]
+    user_content = captured["body"]["messages"][1]["content"]
+    role_notes = [
+        part["text"]
+        for part in user_content
+        if part.get("type") == "text" and "role:" in part.get("text", "")
+    ]
+    assert "role: tool_result_review" in role_notes[0]
+    assert "not_world_observation=True" in role_notes[0]
 
 
 def test_openai_compatible_backend_labels_reviewer_vision_evidence(tmp_path: Path) -> None:
@@ -5192,7 +5283,9 @@ def test_openai_compatible_backend_attaches_scene_and_asset_reference(tmp_path: 
     user_content = captured["body"]["messages"][1]["content"]
     assert [part["type"] for part in user_content] == [
         "text",
+        "text",
         "image_url",
+        "text",
         "image_url",
         "text",
     ]

@@ -90,6 +90,65 @@ def test_agent_context_prioritizes_current_evidence_and_agent_memory() -> None:
     assert len(json.dumps(agent_context)) < len(json.dumps(compatibility_payload))
 
 
+def test_agent_context_projects_latest_molmopoint_review_image() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="open the middle drawer")
+    memory.add_action(
+        EnvAction(
+            action_type="tool_call",
+            command={
+                "status": "executed",
+                "tool_calls": [
+                    {
+                        "name": "molmopoint",
+                        "status": "executed",
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "operational_success": True,
+                                "outputs": {"source_packet_ids": ["obs-0001"]},
+                                "artifacts": [
+                                    {
+                                        "type": "molmopoint_point_overlay",
+                                        "kind": "image",
+                                        "path": "/session/point-overlay.png",
+                                    },
+                                    {
+                                        "type": "molmopoint_contact_sheet",
+                                        "kind": "image",
+                                        "path": "/session/point-contact-sheet.png",
+                                    },
+                                ],
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+    )
+
+    context = build_tool_context(
+        observation=_observation(),
+        memory=memory,
+        tools=build_default_tool_registry(),
+        skills=build_default_skill_registry(),
+    )
+
+    assert context["agent_context"]["review_vision_evidence"] == [
+        {
+            "evidence_id": "tool_review:molmopoint:0",
+            "role": "tool_result_review",
+            "source_tool": "molmopoint",
+            "artifact_type": "molmopoint_contact_sheet",
+            "path": "/session/point-contact-sheet.png",
+            "freshness": "derived_from_source_packet",
+            "derived": True,
+            "not_world_observation": True,
+            "source_packet_id": "obs-0001",
+        }
+    ]
+
+
 def test_latest_probe_projection_keeps_short_ik_handoff_and_omits_pose_payload() -> None:
     short_request = {
         "tool": "ik_preview_check",

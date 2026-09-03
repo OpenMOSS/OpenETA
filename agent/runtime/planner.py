@@ -83,6 +83,11 @@ _CAMERA_ROLE_PREFERENCE = {
     "wrist_secondary": 3,
 }
 
+_TOOL_REVIEW_ARTIFACT_TYPES = {
+    "molmopoint_contact_sheet",
+    "molmopoint_point_overlay",
+}
+
 DEFAULT_MAX_SKILL_CONTENT_CHARS = 8000
 DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS = 4
 DEFAULT_RECENT_TRANSITION_OBSERVATIONS = 3
@@ -2831,6 +2836,7 @@ def _build_tool_context_payload(
         task=effective_task,
     )
     camera_artifacts = _current_camera_artifacts(observation, memory=memory)
+    review_vision_evidence = _latest_tool_review_vision_evidence(memory)
     visual_history: JsonDict | None = None
     if config.visual_history.enabled:
         visual_projection = build_visual_history_projection(
@@ -2865,6 +2871,7 @@ def _build_tool_context_payload(
         ),
         "vision_image_paths": vision_image_paths,
         "vision_evidence": vision_evidence,
+        "review_vision_evidence": review_vision_evidence,
         "visual_history": visual_history,
         "current_camera_artifacts": camera_artifacts,
         "current_camera_calibrations": _current_camera_calibrations(observation),
@@ -3151,6 +3158,9 @@ def _build_agent_decision_context(
         },
         "vision_image_paths": runtime_context.get("vision_image_paths", []),
         "vision_evidence": visual_evidence,
+        "review_vision_evidence": runtime_context.get(
+            "review_vision_evidence", []
+        ),
     }
 
 
@@ -3862,6 +3872,75 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
             "repair_bundle": metadata.get("repair_bundle"),
         }
     return None
+
+
+def _latest_tool_review_vision_evidence(memory: AgentMemory) -> list[JsonDict]:
+    """Return bounded derived visuals from the immediately preceding tool call.
+
+    These are review aids, not new world observations.  They remain durable as
+    artifacts, while this high-priority projection lasts for one planner turn so
+    the Agent can verify a visual tool result before consuming it downstream.
+    """
+
+    for event in reversed(memory.events):
+        if event.event_type != "action":
+            continue
+        command = event.payload.get("command")
+        command = command if isinstance(command, dict) else {}
+        calls = command.get("tool_calls")
+        calls = calls if isinstance(calls, list) else []
+        call = next((item for item in reversed(calls) if isinstance(item, dict)), None)
+        if call is None or str(call.get("name") or "") != "molmopoint":
+            return []
+        result = call.get("result")
+        result = result if isinstance(result, dict) else {}
+        details = result.get("details")
+        details = details if isinstance(details, dict) else {}
+        if details.get("operational_success", result.get("success")) is not True:
+            return []
+        artifacts = details.get("artifacts")
+        artifacts = artifacts if isinstance(artifacts, list) else []
+        candidates = [
+            artifact
+            for artifact in artifacts
+            if isinstance(artifact, dict)
+            and artifact.get("kind") == "image"
+            and artifact.get("type") in _TOOL_REVIEW_ARTIFACT_TYPES
+            and isinstance(artifact.get("path"), str)
+            and artifact.get("path")
+        ]
+        contact_sheets = [
+            artifact
+            for artifact in candidates
+            if artifact.get("type") == "molmopoint_contact_sheet"
+        ]
+        selected = contact_sheets[:1] or candidates[:2]
+        outputs = details.get("outputs")
+        outputs = outputs if isinstance(outputs, dict) else {}
+        packet_ids = [
+            str(value)
+            for value in outputs.get("source_packet_ids", [])
+            if isinstance(value, str) and value
+        ]
+        evidence: list[JsonDict] = []
+        for index, artifact in enumerate(selected):
+            item: JsonDict = {
+                "evidence_id": f"tool_review:molmopoint:{index}",
+                "role": "tool_result_review",
+                "source_tool": "molmopoint",
+                "artifact_type": artifact.get("type"),
+                "path": artifact["path"],
+                "freshness": "derived_from_source_packet",
+                "derived": True,
+                "not_world_observation": True,
+            }
+            if len(packet_ids) == 1:
+                item["source_packet_id"] = packet_ids[0]
+            elif packet_ids:
+                item["source_packet_ids"] = packet_ids
+            evidence.append(item)
+        return evidence
+    return []
 
 
 def _recent_high_fidelity_transitions(

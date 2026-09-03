@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,6 @@ from sim.envs.univtac.isaac51_blackwell_runtime import (
 )
 from sim.envs.univtac.offline_wheelhouse_contract import (
     EXPECTED_DERIVED_LOCK_SHA256,
-    EXPECTED_HEAD,
     EXPECTED_SOURCE_LOCK_SHA256,
     EXPECTED_SOURCE_REPORT_SHA256,
     EXPECTED_TRANSFORM_LOCK_SHA256,
@@ -43,6 +43,12 @@ from sim.envs.univtac.offline_wheelhouse_contract import (
     validate_existing_cache,
     validate_offline_command,
     validate_system_curl_provenance,
+)
+from sim.envs.univtac.execution_revision_contract import (
+    create_and_verify_bundle,
+    classify_delivery,
+    inspect_execution_revision,
+    validate_r0952r1_evidence,
 )
 from sim.envs.univtac.resumable_download_contract import validate_lock_pair, validate_wheel
 from sim.envs.univtac.resource_sanitation import (
@@ -85,6 +91,60 @@ def remote_head() -> str:
     return result.stdout.split()[0]
 
 
+def push_execution_revision(*, wait_seconds: int = 30) -> dict[str, Any]:
+    """Push once normally and retry once with HTTP/1.1 only for the allowed errors."""
+
+    commands = [
+        ["git", "push", "private", "HEAD:refs/heads/tactile-agent-for-univtac"],
+    ]
+    attempts = []
+    first = subprocess.run(
+        commands[0], cwd=ROOT, check=False, capture_output=True, text=True, timeout=300
+    )
+    attempts.append(
+        {
+            "transport": "default",
+            "returncode": first.returncode,
+            "stdout": first.stdout.strip(),
+            "stderr": first.stderr.strip(),
+        }
+    )
+    final = first
+    combined = f"{first.stdout}\n{first.stderr}".lower()
+    retry_allowed = first.returncode != 0 and (
+        "gnutls" in combined or "http/2" in combined or "http2" in combined
+    )
+    if retry_allowed:
+        time.sleep(wait_seconds)
+        command = [
+            "git",
+            "-c",
+            "http.version=HTTP/1.1",
+            "push",
+            "private",
+            "HEAD:refs/heads/tactile-agent-for-univtac",
+        ]
+        commands.append(command)
+        final = subprocess.run(
+            command, cwd=ROOT, check=False, capture_output=True, text=True, timeout=300
+        )
+        attempts.append(
+            {
+                "transport": "http1.1",
+                "returncode": final.returncode,
+                "stdout": final.stdout.strip(),
+                "stderr": final.stderr.strip(),
+            }
+        )
+    return {
+        "attempts": attempts,
+        "attempt_count": len(attempts),
+        "retry_allowed": retry_allowed,
+        "returncode": final.returncode,
+        "commands": commands,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-config", type=Path, required=True)
@@ -94,6 +154,7 @@ def main() -> None:
     parser.add_argument("--r095-output", type=Path, required=True)
     parser.add_argument("--r0951-output", type=Path, required=True)
     parser.add_argument("--r0952-output", type=Path, required=True)
+    parser.add_argument("--r0952r1-output", type=Path, required=True)
     parser.add_argument("--wheel-cache-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--conda-exe", type=Path, required=True)
@@ -108,6 +169,7 @@ def main() -> None:
     r095 = args.r095_output.resolve()
     r0951 = args.r0951_output.resolve()
     r0952 = args.r0952_output.resolve()
+    r0952r1 = args.r0952r1_output.resolve()
     cache = args.wheel_cache_root.resolve()
     output = args.output_root.resolve()
     if output.exists():
@@ -127,7 +189,7 @@ def main() -> None:
     python = prefix / "bin/python"
     environment, _ = clean_runtime_environment(prefix, source, runtime["runtime"]["gpu"])
     manifest: dict[str, Any] = {
-        "schema_version": "openeta.univtac.r0952r1_offline_wheelhouse.v1",
+        "schema_version": "openeta.univtac.r0952r3_offline_wheelhouse.v1",
         "runtime_variant": runtime["runtime_variant"],
         "installation_method_label": wheelhouse_config["installation_method_label"],
         **runtime["claims"],
@@ -146,14 +208,31 @@ def main() -> None:
         "transport_remediation": "system_curl_with_child_ld_library_path_unset",
         "runtime_environment_changed": False,
         "artifact_selection_changed": False,
+        "execution_head": None,
     }
     write_json(output / "run_manifest.json", manifest)
     r08_before: dict[str, Any] = {}
     r09_before: dict[str, Any] = {}
     try:
-        resources = preflight(runtime, (ROOT, source, curobo, r095, r0951, r0952, cache, output), output)
+        resources = preflight(
+            runtime, (ROOT, source, curobo, r095, r0951, r0952, r0952r1, cache, output), output
+        )
         write_json(output / "resume_preflight/resources.json", resources)
-        local_head = git(ROOT, "rev-parse", "HEAD")
+        revision = inspect_execution_revision(ROOT)
+        manifest["execution_head"] = revision["execution_head"]
+        write_json(output / "execution_revision/summary.json", revision)
+        bundle = create_and_verify_bundle(
+            ROOT,
+            output / "source_snapshot/r0952r3.bundle",
+            revision["execution_head"],
+        )
+        write_json(output / "source_snapshot/summary.json", bundle)
+        if not revision["passed"] or not bundle["passed"]:
+            manifest["classification"] = "r0952r3_execution_revision_failed"
+            raise RuntimeError("execution revision or source bundle validation failed")
+
+        push = push_execution_revision()
+        local_head_after_push = git(ROOT, "rev-parse", "HEAD")
         tracking_head = git(ROOT, "rev-parse", "private/tactile-agent-for-univtac")
         remote_error = None
         try:
@@ -162,20 +241,38 @@ def main() -> None:
             observed_remote = None
             remote_error = str(exc)
         delivery = {
-            "local_head": local_head,
+            "local_head": revision["execution_head"],
+            "local_head_after_push": local_head_after_push,
             "tracking_head": tracking_head,
             "remote_head": observed_remote,
             "remote_error": remote_error,
-            "expected_head": EXPECTED_HEAD,
-            "fast_forward_delivery_confirmed": local_head == tracking_head == observed_remote == EXPECTED_HEAD,
+            "push": push,
             "force_push_used": False,
         }
+        delivery.update(
+            classify_delivery(
+                execution_head=revision["execution_head"],
+                push_returncode=push["returncode"],
+                remote_head=observed_remote,
+                remote_error=remote_error,
+                bundle_verified=bundle["passed"],
+            )
+        )
+        delivery["head_stable"] = local_head_after_push == revision["execution_head"]
+        delivery["tracking_matches_execution"] = tracking_head == revision["execution_head"]
+        delivery["fast_forward_delivery_confirmed"] = (
+            delivery["passed"]
+            and delivery["head_stable"]
+            and delivery["tracking_matches_execution"]
+        )
         write_json(output / "git_delivery/summary.json", delivery)
 
         prior = load_json(r095 / "run_manifest.json")
         prior_bridge = load_json(r0951 / "legacy_sdist_bridge/summary.json")
         prior_r0951 = load_json(r0951 / "run_manifest.json")
         prior_r0952 = load_json(r0952 / "run_manifest.json")
+        prior_r0952r1 = validate_r0952r1_evidence(r0952r1)
+        write_json(output / "r0952r1_evidence/summary.json", prior_r0952r1)
         source_lock_path = r095 / "artifact_lock/artifact_lock.private.json"
         source_lock = load_json(source_lock_path)
         derived_lock_path = r0951 / "legacy_sdist_bridge/derived_install_artifact_lock/derived_install_artifact_lock.private.json"
@@ -203,7 +300,10 @@ def main() -> None:
         r09_before = fingerprint_environment(args.conda_exe, runtime["environment"]["conda_name"])
         downloader_source = (ROOT / "scripts/univtac/download_isaac_wheelhouse.py").read_text(encoding="utf-8")
         conditions = {
+            "execution_revision": revision["passed"],
+            "source_bundle": bundle["passed"],
             "git_delivery": delivery["fast_forward_delivery_confirmed"],
+            "r0952r1_evidence": prior_r0952r1["passed"],
             "r095_classification": prior.get("classification") == "artifact_lock_contains_nonwheel",
             "r0951_bridge_classification": prior_bridge.get("classification") == "legacy_sdist_reproducible_wheel_bridge_validated",
             "r0952_classification": prior_r0952.get("classification") == "network_transport_preflight_failed",
@@ -255,7 +355,7 @@ def main() -> None:
         write_json(output / "resume_preflight/summary.json", {"passed": all(conditions.values()), "conditions": conditions, "packages": current, "protected_binaries": binaries})
         if not all(conditions.values()):
             manifest["stages"]["R0"] = "failed"
-            manifest["classification"] = "r0952r1_resume_precondition_failed"
+            manifest["classification"] = "r0952r3_resume_precondition_failed"
             raise RuntimeError("R0 failed")
         manifest["stages"]["R0"] = "passed"
 
@@ -409,7 +509,7 @@ def main() -> None:
             raise RuntimeError("offline resolution parity failed")
         manifest["stages"]["O0"] = "passed"
         manifest["status"] = "completed"
-        manifest["classification"] = "isaac51_offline_wheelhouse_ready"
+        manifest["classification"] = "r0952r3_isaac51_offline_wheelhouse_ready"
         manifest["wheelhouse_manifest_sha256"] = wheelhouse_manifest["wheelhouse_manifest_sha256"]
     except BaseException as exc:
         manifest["status"] = "failed"

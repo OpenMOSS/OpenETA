@@ -54,7 +54,10 @@ def test_r0952_config_locks_transport_and_no_install_accounting() -> None:
     config = _config()
     validate_config(config)
     assert config["max_transport_attempts_per_artifact"] == 20
-    assert config["openeta_head"] == "6d9da7c49944ef57ee4319e6d4bcc3dba4db7978"
+    assert "openeta_head" not in config
+    assert config["revision_contract"]["implementation_base_head"] == (
+        "2319e6587cb1c8330905313bae75e765b9b716d2"
+    )
     assert config["install_accounting"]["total_invocations"] == 1
     changed = dict(config)
     changed["max_transport_attempts_per_artifact"] = 21

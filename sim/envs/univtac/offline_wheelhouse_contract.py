@@ -16,7 +16,6 @@ from packaging.utils import canonicalize_name
 
 
 SCHEMA_VERSION = "openeta.univtac.isaac51_offline_wheelhouse_r0952.v1"
-EXPECTED_HEAD = "6d9da7c49944ef57ee4319e6d4bcc3dba4db7978"
 EXPECTED_SOURCE_REPORT_SHA256 = "081e2f2a27a0252cdb305abdaf9fb00add6557f42626aa04f91f8a8702f19e4b"
 EXPECTED_SOURCE_LOCK_SHA256 = "816691fad4acfcf3d4e450f40c41858ec9ab75f9dd7de3233cf40547dbf95f7f"
 EXPECTED_TRANSFORM_LOCK_SHA256 = "b2e9f58ddd17298c80ab95203a680f8e7553250da80698e3c4458bff0e29f01c"
@@ -41,7 +40,6 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "schema_version": SCHEMA_VERSION,
         "installation_method_label": "isaac51_hash_locked_offline_wheelhouse_v1",
         "environment": "UniVTAC-isaac51-sm120-r09",
-        "openeta_head": EXPECTED_HEAD,
         "requirement": "isaaclab[isaacsim,all]==2.3.0",
         "source_report_sha256": EXPECTED_SOURCE_REPORT_SHA256,
         "source_artifact_lock_sha256": EXPECTED_SOURCE_LOCK_SHA256,
@@ -57,6 +55,11 @@ def validate_config(config: Mapping[str, Any]) -> None:
     }
     if any(config.get(key) != value for key, value in expected.items()):
         raise ValueError("R0.9.5.2 configuration identity changed")
+    from sim.envs.univtac.execution_revision_contract import validate_revision_config
+
+    validate_revision_config(config.get("revision_contract", {}))
+    if "openeta_head" in config:
+        raise ValueError("execution HEAD must be resolved dynamically")
     if tuple(config.get("allowed_remote_hosts", ())) != (
         "files.pythonhosted.org", "pypi.nvidia.com"
     ):

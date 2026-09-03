@@ -6,6 +6,7 @@ from pathlib import Path
 from scripts.univtac.serve_experiment_dashboard import (
     DETAIL_HTML,
     PILOT_HTML,
+    PROGRESS_HTML,
     build_timeline,
     discover_pilots,
     discover_runs,
@@ -185,6 +186,13 @@ def test_project_progress_uses_human_summaries_and_links_pilots(tmp_path: Path) 
     payload = load_project_progress(root)
     assert payload["entries"] == [row]
     assert payload["pilots"] == []
+    assert "Pro 想弄清楚什么" in PROGRESS_HTML
+    assert "我们怎么验证的" in PROGRESS_HTML
+    assert "实际看到了什么" in PROGRESS_HTML
+    assert "这说明什么" in PROGRESS_HTML
+    assert "一句话结论" in PROGRESS_HTML
+    assert "技术证据（commit、测试、产物）" in PROGRESS_HTML
+    assert "x.pro_question||x.pro_instruction_summary" in PROGRESS_HTML
 
 
 def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(

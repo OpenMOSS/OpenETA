@@ -160,8 +160,14 @@ def test_causal_pilot_dashboard_loads_three_by_three_actual_context(tmp_path: Pa
     assert pilots == [{"directory": "r0914", "signal": "mixed", "completed_call_count": 9}]
     detail = load_pilot_detail(root)
     assert len(detail["cells"]) == 9
+    assert [cell["condition"] for cell in detail["cells"][:3]] == [
+        "visual_only",
+        "correct_tactile",
+        "swapped_tactile",
+    ]
     assert sum(len(cell["image_paths"]) for cell in detail["cells"]) == 30
-    assert "HOST-ONLY EVALUATION" in PILOT_HTML
+    assert "HOST-ONLY EVALUATION — NOT SHOWN TO CODEX" in PILOT_HTML
+    assert "LEFT/RIGHT TACTILE ASSIGNMENT SWAPPED" in PILOT_HTML
 
 
 def test_project_progress_uses_human_summaries_and_links_pilots(tmp_path: Path) -> None:

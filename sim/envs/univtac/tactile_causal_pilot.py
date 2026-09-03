@@ -272,13 +272,13 @@ def summarize_pilot(
         and dominant_rate >= 2 / 3
         and flip_rate >= 2 / 3
     ):
-        signal = "positive"
+        signal = "positive_causal_signal"
     elif dominant_total == 3 and dominant_opposite == 3 and flips == 0:
-        signal = "contradictory"
+        signal = "contradictory_signal"
     elif tactile_changes == 0 and flips == 0 and region_equivariant == 0:
-        signal = "no_detectable"
+        signal = "no_detectable_signal"
     else:
-        signal = "mixed"
+        signal = "mixed_signal"
     return {
         "classification": "pull_out_key_tactile_causal_pilot_completed",
         "pilot_signal": signal,

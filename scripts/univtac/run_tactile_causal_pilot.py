@@ -308,14 +308,42 @@ def _write_predictions(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _write_results_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    scalar_rows = [
-        {
-            key: json.dumps(value, sort_keys=True) if isinstance(value, dict) else value
-            for key, value in row.items()
-        }
-        for row in rows
+    prediction_fields = [
+        "seed",
+        "condition",
+        "model",
+        "left_contact",
+        "right_contact",
+        "bilateral_contact",
+        "left_marker_region",
+        "right_marker_region",
+        "stronger_contact_side",
+        "evidence_source",
+        "scene_summary",
+        "evidence_summary",
+        "uncertainty",
+        "parse_status",
+        "duration_seconds",
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "tool_call_count",
+        "raw_response_path",
     ]
-    fieldnames = list(scalar_rows[0]) if scalar_rows else ["seed", "condition", "parse_status"]
+    scalar_rows = []
+    for row in rows:
+        usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+        scalar = {field: row.get(field) for field in prediction_fields}
+        for field in (
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ):
+            scalar[field] = usage.get(field)
+        scalar_rows.append(scalar)
+    fieldnames = prediction_fields
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()
@@ -352,6 +380,14 @@ def _finish_outputs(
     _write_predictions(output_root / "predictions.jsonl", predictions)
     _write_results_csv(output_root / "results.csv", predictions)
     _write_raw_answers(output_root, predictions)
+    dashboard_dir = output_root / "dashboard"
+    dashboard_dir.mkdir(exist_ok=True)
+    (dashboard_dir / "index.html").write_text(
+        '<!doctype html><meta charset="utf-8">'
+        f'<a href="http://127.0.0.1:9399/pilot/{output_root.name}">'
+        "Open the live R0.9.14 causal pilot dashboard</a>\n",
+        encoding="utf-8",
+    )
     summary = summarize_pilot(predictions, references)
     complete = len(predictions) == 9 and not condition_errors
     summary.update(
@@ -363,14 +399,21 @@ def _finish_outputs(
             ),
             "pilot_signal": summary["pilot_signal"] if complete else "unavailable_incomplete",
             "valid_seeds": [row["seed"] for row in sources if row["valid"]],
+            "valid_seed_count": sum(bool(row["valid"]) for row in sources),
             "invalid_seeds": [row["seed"] for row in sources if not row["valid"]],
             "completed_call_count": len(predictions),
+            "completed_codex_call_count": len(predictions),
             "condition_errors": condition_errors,
             "new_simulator_invocation_count": pilot["new_simulator_invocation_count"],
             "codex_process_count": pilot["codex_process_count"],
             "observe_tool_call_count": sum(row["tool_call_count"] for row in predictions),
             "action_tool_call_count": 0,
             "raw_answers_path": "raw_answers.md",
+            "contact_alignment_counts": summary["metrics"]["correct_tactile_contact_alignment"],
+            "dominant_side_alignment": summary["metrics"][
+                "correct_tactile_dominant_side_alignment"
+            ],
+            "swap_flip_rate": summary["metrics"]["swapped_tactile_side_flip_rate"],
         }
     )
     write_json(output_root / "summary.json", summary)

@@ -95,6 +95,17 @@ def test_incomplete_results_are_not_classified_as_completed(tmp_path: Path) -> N
     )
     assert summary["classification"] == "pull_out_key_tactile_causal_pilot_incomplete"
     assert summary["pilot_signal"] == "unavailable_incomplete"
+    assert summary["valid_seed_count"] == 0
+    assert summary["completed_codex_call_count"] == 0
+    header = (tmp_path / "results.csv").read_text(encoding="utf-8").splitlines()[0]
+    for field in (
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ):
+        assert field in header
+    assert (tmp_path / "dashboard/index.html").is_file()
     assert pilot["status"] == "incomplete"
 
 
@@ -129,7 +140,7 @@ def test_press_depth_reference_and_pilot_metrics() -> None:
         ):
             rows.append({"seed": seed, "condition": condition, **payload})
     summary = summarize_pilot(rows, {str(seed): reference for seed in SEEDS})
-    assert summary["pilot_signal"] == "positive"
+    assert summary["pilot_signal"] == "positive_causal_signal"
     assert summary["metrics"]["swapped_tactile_side_flip_rate"] == 1.0
     assert summary["metrics"]["correct_tactile_contact_alignment"]["aligned"] == 6
 

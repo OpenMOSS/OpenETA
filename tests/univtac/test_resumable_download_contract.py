@@ -68,6 +68,71 @@ def _legal_wheel(tmp_path: Path) -> tuple[bytes, dict]:
     return payload, record
 
 
+def _official_like_wheel(
+    tmp_path: Path,
+    *,
+    omit_from_primary_record: set[str] | None = None,
+    empty_hash_entries: set[str] | None = None,
+    primary_record_self: tuple[str, str] = ("", ""),
+) -> tuple[Path, dict]:
+    filename = "isaacsim_kernel-5.1.0.0-cp311-none-manylinux_2_35_x86_64.whl"
+    primary_dir = "isaacsim_kernel-5.1.0.0.dist-info"
+    nested_root = "isaacsim/kit/extscore/registry/pip_requests"
+    files = {
+        "isaacsim_kernel/__init__.py": b"",
+        f"{primary_dir}/METADATA": (
+            b"Metadata-Version: 2.1\nName: isaacsim-kernel\nVersion: 5.1.0.0\n\n"
+        ),
+        f"{primary_dir}/WHEEL": (
+            b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\n"
+            b"Tag: cp311-none-manylinux_2_35_x86_64\n\n"
+        ),
+        f"{nested_root}/requests-2.0.dist-info/METADATA": b"Name: requests\nVersion: 2.0\n",
+        f"{nested_root}/requests-2.0.dist-info/WHEEL": b"vendored requests wheel metadata\n",
+        f"{nested_root}/requests-2.0.dist-info/RECORD": b"vendored requests record\n",
+        f"{nested_root}/certifi-1.0.dist-info/METADATA": b"Name: certifi\nVersion: 1.0\n",
+        f"{nested_root}/certifi-1.0.dist-info/WHEEL": b"vendored certifi wheel metadata\n",
+        f"{nested_root}/certifi-1.0.dist-info/RECORD": b"vendored certifi record\n",
+    }
+    primary_record_path = f"{primary_dir}/RECORD"
+    omitted = omit_from_primary_record or set()
+    empty = empty_hash_entries or set()
+    rows = []
+    for name, data in files.items():
+        if name in omitted:
+            continue
+        if name in empty:
+            rows.append([name, "", ""])
+        else:
+            rows.append([name, f"sha256={_record_digest(data)}", str(len(data))])
+    rows.append([primary_record_path, *primary_record_self])
+    output = io.StringIO()
+    csv.writer(output, lineterminator="\n").writerows(rows)
+    files[primary_record_path] = output.getvalue().encode()
+    wheel_path = tmp_path / filename
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    record = {
+        "index": 9,
+        "name": "isaacsim-kernel",
+        "version": "5.1.0.0",
+        "filename": filename,
+        "url": f"https://pypi.nvidia.com/{filename}",
+        "sha256": sha256_file(wheel_path),
+    }
+    return wheel_path, record
+
+
+def _rewrite_wheel(path: Path, transform) -> None:
+    with zipfile.ZipFile(path) as archive:
+        members = [(name, archive.read(name)) for name in archive.namelist()]
+    rewritten = transform(members)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in rewritten:
+            archive.writestr(name, data)
+
+
 def test_parse_range_identity_and_total() -> None:
     text = "HTTP/1.1 200 Connection established\r\n\r\nHTTP/1.1 206 Partial Content\r\nETag: abc\r\nContent-Range: bytes 0-0/3021300000\r\nContent-Length: 1\r\n\r\n"
     result = parse_headers(text)
@@ -260,6 +325,146 @@ def test_complete_part_promotion_is_offline_and_strictly_revalidated(
     os.link(final, renamed)
     with pytest.raises(ValueError, match="wheel file identity mismatch"):
         validate_wheel(renamed, record, len(payload), check_filename=True)
+
+
+def test_nested_vendored_dist_info_uses_only_root_primary_metadata(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    result = validate_wheel(wheel, record, wheel.stat().st_size)
+    assert result["name"] == "isaacsim-kernel"
+    assert result["record_complete"] is True
+
+
+def test_nested_dist_info_does_not_contribute_to_primary_count(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as archive:
+        dist_info_dirs = {
+            name.split(".dist-info/", 1)[0] + ".dist-info"
+            for name in archive.namelist()
+            if ".dist-info/" in name
+        }
+    assert len(dist_info_dirs) == 3
+    assert validate_wheel(wheel, record, wheel.stat().st_size)["zip_valid"] is True
+
+
+def test_official_like_complete_part_accepts_nested_dist_info(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    part = tmp_path / f"{record['filename']}.part"
+    part.write_bytes(wheel.read_bytes())
+    assert validate_wheel(part, record, part.stat().st_size, check_filename=False)[
+        "zip_valid"
+    ] is True
+
+
+def test_second_top_level_dist_info_is_rejected(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    _rewrite_wheel(
+        wheel,
+        lambda members: members + [("other_pkg-1.0.dist-info/METADATA", b"Name: other-pkg\n")],
+    )
+    record["sha256"] = sha256_file(wheel)
+    with pytest.raises(ValueError, match="primary dist-info directory mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_nested_dist_info_cannot_replace_missing_root_primary(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    primary = "isaacsim_kernel-5.1.0.0.dist-info/"
+    _rewrite_wheel(wheel, lambda members: [item for item in members if not item[0].startswith(primary)])
+    record["sha256"] = sha256_file(wheel)
+    with pytest.raises(ValueError, match="primary dist-info directory mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_wrong_root_primary_dir_fails_even_when_metadata_matches(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    primary = "isaacsim_kernel-5.1.0.0.dist-info/"
+    _rewrite_wheel(
+        wheel,
+        lambda members: [
+            (name.replace(primary, "wrong_name-5.1.0.0.dist-info/", 1), data)
+            if name.startswith(primary)
+            else (name, data)
+            for name, data in members
+        ],
+    )
+    record["sha256"] = sha256_file(wheel)
+    with pytest.raises(ValueError, match="primary dist-info directory mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_primary_record_must_cover_nested_member(tmp_path: Path) -> None:
+    missing = {
+        "isaacsim/kit/extscore/registry/pip_requests/requests-2.0.dist-info/METADATA"
+    }
+    wheel, record = _official_like_wheel(tmp_path, omit_from_primary_record=missing)
+    with pytest.raises(ValueError, match="RECORD coverage mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_nested_record_is_hashed_as_regular_payload(tmp_path: Path) -> None:
+    nested_record = {
+        "isaacsim/kit/extscore/registry/pip_requests/requests-2.0.dist-info/RECORD"
+    }
+    wheel, record = _official_like_wheel(tmp_path, empty_hash_entries=nested_record)
+    with pytest.raises(ValueError, match="RECORD mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_only_primary_record_self_entry_can_have_empty_hash(tmp_path: Path) -> None:
+    wheel, record = _official_like_wheel(
+        tmp_path, primary_record_self=("sha256=not-the-record", "1")
+    )
+    with pytest.raises(ValueError, match="RECORD self entry mismatch"):
+        validate_wheel(wheel, record, wheel.stat().st_size)
+
+
+def test_official_like_complete_part_promotion_uses_no_network(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    wheel, record = _official_like_wheel(tmp_path)
+    payload = wheel.read_bytes()
+    cache = tmp_path / "cache"
+    for name in ("artifacts", "partial", "quarantined"):
+        (cache / name).mkdir(parents=True, exist_ok=True)
+    part = cache / "partial" / f"{record['filename']}.part"
+    part.write_bytes(payload)
+    sidecar = {
+        "schema_version": "openeta.univtac.wheel_partial.v1",
+        "url": record["url"],
+        "filename": record["filename"],
+        "sha256": record["sha256"],
+        "expected_size": len(payload),
+        "etag": "locked-etag",
+        "attempts": [{"attempt_index": 1}],
+    }
+    sidecar_path = cache / "partial" / f"{record['filename']}.part.json"
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    header = cache / "partial" / f"{record['filename']}.attempt-1.headers"
+    header.write_text("historical header", encoding="utf-8")
+    curl_calls = []
+
+    def unexpected_curl(*_args, **_kwargs):
+        curl_calls.append(True)
+        raise AssertionError("complete part must not access the network")
+
+    monkeypatch.setattr(downloader, "run_curl", unexpected_curl)
+    result, attempts = downloader.download_remote(
+        record,
+        {"content_length": len(payload), "etag": "locked-etag"},
+        cache,
+        {"max_transport_attempts_per_artifact": 20},
+        tmp_path / "completed.jsonl",
+    )
+    final = cache / "artifacts" / record["filename"]
+    assert curl_calls == [] and attempts == []
+    assert final.is_file() and not part.exists()
+    assert not sidecar_path.exists() and not header.exists()
+    assert result["disposition"] == "recovered_complete_part"
+    assert result["historical_transport_attempts"] == 1
+    assert result["new_transport_attempts"] == 0
+    assert result["cumulative_transport_attempts"] == 1
+    assert validate_wheel(final, record, len(payload))["zip_valid"] is True
+    assert (final.stat().st_mode & 0o777) == 0o444
 
 
 class _RedirectedJsonResponse(io.BytesIO):

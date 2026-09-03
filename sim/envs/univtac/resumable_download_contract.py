@@ -183,6 +183,10 @@ def validate_wheel(
     ):
         raise ValueError("wheel file identity mismatch")
     wheel_name, wheel_version, _, filename_tags = parse_wheel_filename(locked_filename)
+    wheel_components = locked_filename.removesuffix(".whl").split("-")
+    if len(wheel_components) not in (5, 6):
+        raise ValueError("wheel filename component layout is invalid")
+    expected_dist_info_dir = f"{wheel_components[0]}-{wheel_components[1]}.dist-info"
     compatible = set(cpython_tags(python_version=(3, 11))) | set(compatible_tags(python_version=(3, 11), interpreter="cp311"))
     if canonicalize_name(str(wheel_name)) != record["name"] or str(wheel_version) != record["version"] or not compatible.intersection(filename_tags):
         raise ValueError("wheel filename metadata or tag mismatch")
@@ -196,28 +200,38 @@ def validate_wheel(
             pure = PurePosixPath(name)
             if pure.is_absolute() or ".." in pure.parts or "\\" in name:
                 raise ValueError("wheel contains unsafe path")
-        metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
-        wheel_names = [name for name in names if name.endswith(".dist-info/WHEEL")]
-        record_names = [name for name in names if name.endswith(".dist-info/RECORD")]
-        if not (len(metadata_names) == len(wheel_names) == len(record_names) == 1):
-            raise ValueError("wheel dist-info files are not unique")
-        metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
+        top_level_dist_info_dirs = {
+            parts[0]
+            for name in names
+            if (parts := PurePosixPath(name).parts) and parts[0].endswith(".dist-info")
+        }
+        if top_level_dist_info_dirs != {expected_dist_info_dir}:
+            raise ValueError("wheel primary dist-info directory mismatch")
+        primary_metadata_path = f"{expected_dist_info_dir}/METADATA"
+        primary_wheel_path = f"{expected_dist_info_dir}/WHEEL"
+        primary_record_path = f"{expected_dist_info_dir}/RECORD"
+        if any(names.count(name) != 1 for name in (primary_metadata_path, primary_wheel_path, primary_record_path)):
+            raise ValueError("wheel primary dist-info files are incomplete")
+        metadata = BytesParser().parsebytes(archive.read(primary_metadata_path))
         if canonicalize_name(str(metadata.get("Name", ""))) != record["name"] or str(metadata.get("Version", "")) != record["version"]:
             raise ValueError("wheel METADATA identity mismatch")
-        wheel_message = BytesParser().parsebytes(archive.read(wheel_names[0]))
+        wheel_message = BytesParser().parsebytes(archive.read(primary_wheel_path))
         metadata_tags = set()
         for raw in wheel_message.get_all("Tag") or []:
             from packaging.tags import parse_tag
             metadata_tags.update(parse_tag(raw))
         if not metadata_tags or not compatible.intersection(metadata_tags):
             raise ValueError("wheel WHEEL tags are incompatible")
-        rows = list(csv.reader(io.StringIO(archive.read(record_names[0]).decode("utf-8"))))
-        file_names = [name for name in names if not name.endswith("/")]
-        if len(rows) != len(file_names) or len({row[0] for row in rows}) != len(rows):
+        rows = list(csv.reader(io.StringIO(archive.read(primary_record_path).decode("utf-8"))))
+        file_names = {name for name in names if not name.endswith("/")}
+        record_paths = [row[0] for row in rows]
+        if len(record_paths) != len(set(record_paths)):
+            raise ValueError("wheel RECORD paths are not unique")
+        if set(record_paths) != file_names:
             raise ValueError("wheel RECORD coverage mismatch")
         row_map = {row[0]: row[1:] for row in rows}
         for name in file_names:
-            if name == record_names[0]:
+            if name == primary_record_path:
                 if row_map.get(name) != ["", ""]:
                     raise ValueError("wheel RECORD self entry mismatch")
                 continue

@@ -507,6 +507,47 @@ def test_operator_summary_projects_main_turn_without_dropping_wire_audit() -> No
     assert audit["messages"][2]["parts"][2]["chars"] == len(json.dumps(dynamic))
 
 
+def test_operator_summary_uses_benchmark_instruction_as_display_title() -> None:
+    task = (
+        "Complete LIBERO Goal task 0 with seed 0. Use the exact environment ID "
+        "openeta/libero_libero_goal_task0-v0. The benchmark instruction is: "
+        "open the middle drawer of the cabinet. Create that simulator environment "
+        "through the registered environment tool, use only provider-visible evidence, "
+        "and stop only after trusted environment evidence reports success."
+    )
+    dynamic = {
+        "instruction": "Choose exactly one next OpenETA action.",
+        "tool_context": {
+            "objective": {"task": task, "active_environment_task": None},
+        },
+    }
+    body = {
+        "model": "human-vlm",
+        "messages": [
+            {
+                "role": "system",
+                "content": json.dumps(
+                    {
+                        "schema_version": "openeta.planner_static_context.v1",
+                        "agent_context_schema_version": "openeta.agent_context.v2",
+                    }
+                ),
+            },
+            {"role": "user", "content": task},
+            {"role": "user", "content": json.dumps(dynamic)},
+        ],
+    }
+
+    classification = classify_request(body)
+    operator = build_operator_summary(body, request_id="request-1")
+    presentation = OpenETAProtocolAdapter().presentation(body, request_id="request-1")
+
+    assert classification["task"] == "open the middle drawer of the cabinet"
+    assert operator["task"] == task
+    assert operator["task_title"] == "open the middle drawer of the cabinet"
+    assert presentation["view"]["title"] == "open the middle drawer of the cabinet"
+
+
 def test_visual_differencing_request_is_distinct_from_main_planner() -> None:
     body = {
         "messages": [

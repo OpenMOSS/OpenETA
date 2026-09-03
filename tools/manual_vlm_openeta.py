@@ -17,6 +17,14 @@ from tools.manual_vlm_protocol import EncodedResponse, JsonObject
 
 
 _DEFAULT_VALUE_PATTERN = re.compile(r"\bdefaults?\s+to\s+([^.;]+)", re.IGNORECASE)
+_BENCHMARK_INSTRUCTION_MARKER = re.compile(
+    r"\b(?:the\s+)?benchmark instruction is:\s*",
+    re.IGNORECASE,
+)
+_BENCHMARK_INSTRUCTION_SUFFIX = re.compile(
+    r"\.\s+(?:create that simulator environment|use only|stop only)\b",
+    re.IGNORECASE,
+)
 
 
 def _message_texts(body: JsonObject) -> list[str]:
@@ -319,6 +327,20 @@ def _request_label_from_schema(schema: str, *, response_mode: str) -> tuple[str,
     return "planner", "Planner"
 
 
+def _task_display_title(task: object) -> str:
+    """Project a concise console title without altering the planner objective."""
+
+    value = " ".join(str(task or "").split())
+    marker = _BENCHMARK_INSTRUCTION_MARKER.search(value)
+    if marker is None:
+        return value
+    instruction = value[marker.end() :]
+    suffix = _BENCHMARK_INSTRUCTION_SUFFIX.search(instruction)
+    if suffix is not None:
+        instruction = instruction[: suffix.start()]
+    return instruction.strip().rstrip(".") or value
+
+
 def classify_request(body: JsonObject) -> JsonObject:
     payload = _planner_wire_payload(body)
     context = payload.get("tool_context")
@@ -334,6 +356,7 @@ def classify_request(body: JsonObject) -> JsonObject:
     attempt = payload.get("attempt")
     if not isinstance(attempt, int) or isinstance(attempt, bool):
         attempt = 1
+    task = objective.get("task") or context.get("task") or ""
     return {
         "type": request_type,
         "label": label,
@@ -341,7 +364,7 @@ def classify_request(body: JsonObject) -> JsonObject:
         "response_mode": response_mode,
         "attempt": attempt,
         "validation_error_count": len(errors),
-        "task": str(objective.get("task") or context.get("task") or ""),
+        "task": _task_display_title(task),
     }
 
 
@@ -533,6 +556,7 @@ def build_operator_summary(body: JsonObject, *, request_id: str) -> JsonObject:
         "classification": classification,
         "instruction": str(payload.get("instruction") or ""),
         "task": str(objective.get("task") or active_task.get("task") or context.get("task") or ""),
+        "task_title": classification["task"],
         "environment": {"env_id": active_task.get("env_id"), "handle": active_task.get("handle")},
         "attempt": classification["attempt"],
         "validation_errors": errors,
@@ -719,7 +743,7 @@ class OpenETAProtocolAdapter:
         return {
             "view": {
                 "eyebrow": classification["label"],
-                "title": operator["task"] or classification["label"],
+                "title": operator["task_title"] or classification["label"],
                 "badges": [
                     f"attempt {operator['attempt']}",
                     str(operator["environment"].get("env_id") or ""),

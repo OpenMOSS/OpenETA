@@ -7,7 +7,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.types import Image
@@ -77,6 +77,7 @@ def build_observe_blocks(
     episode_root: Path,
     snapshot_path: Path,
     condition_manifest: Path | None = None,
+    include_structured_summary: bool = True,
 ) -> list[Any]:
     """Return the exact text and native image blocks visible to Codex."""
 
@@ -156,7 +157,11 @@ def build_observe_blocks(
             for image in images
         ],
     }
-    if manifest is not None and "model_visible_structured_tactile_summary" in manifest:
+    if (
+        include_structured_summary
+        and manifest is not None
+        and "model_visible_structured_tactile_summary" in manifest
+    ):
         text_payload["tactile_change_summary"] = _validated_structured_summary(
             manifest["model_visible_structured_tactile_summary"]
         )
@@ -186,21 +191,167 @@ def record_operator_context(
     )
     if existing_rows:
         raise RuntimeError("observe may be called exactly once in this episode")
-    text_blocks = [block.text for block in blocks if isinstance(block, TextContent)]
-    image_paths = [
-        _relative_to_episode(Path(block.path), root) for block in blocks if isinstance(block, Image)
-    ]
+    return _append_operator_context(
+        episode_root=root,
+        tool="observe",
+        arguments={},
+        blocks=blocks,
+        timestamp_s=timestamp_s,
+    )
+
+
+def _append_operator_context(
+    *,
+    episode_root: Path,
+    tool: str,
+    arguments: dict[str, Any],
+    blocks: list[Any],
+    timestamp_s: float | None = None,
+) -> dict[str, Any]:
+    root = episode_root.expanduser().resolve(strict=True)
+    trace_path = root / "operator_context.jsonl"
+    existing_rows = (
+        [line for line in trace_path.read_text(encoding="utf-8").splitlines() if line]
+        if trace_path.is_file()
+        else []
+    )
     row = {
-        "seq": 1,
+        "seq": len(existing_rows) + 1,
         "timestamp_s": time.time() if timestamp_s is None else timestamp_s,
-        "tool": "observe",
-        "arguments": {},
-        "response_text_blocks": text_blocks,
-        "response_image_paths": image_paths,
+        "tool": tool,
+        "arguments": arguments,
+        "response_text_blocks": [
+            block.text for block in blocks if isinstance(block, TextContent)
+        ],
+        "response_image_paths": [
+            _relative_to_episode(Path(block.path), root)
+            for block in blocks
+            if isinstance(block, Image)
+        ],
     }
     with trace_path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
     return row
+
+
+class StagedGroundingSession:
+    """Enforce image-first commitment before revealing structured guidance."""
+
+    def __init__(self, *, episode_root: Path, snapshot_path: Path, condition_manifest: Path) -> None:
+        self.episode_root = episode_root.expanduser().resolve(strict=True)
+        self.snapshot_path = snapshot_path.expanduser().resolve(strict=True)
+        self.condition_manifest = condition_manifest.expanduser().resolve(strict=True)
+        if not self.condition_manifest.is_relative_to(self.episode_root):
+            raise ValueError("condition manifest must be inside the episode root")
+        manifest = json.loads(self.condition_manifest.read_text(encoding="utf-8"))
+        if "model_visible_structured_tactile_summary" not in manifest:
+            raise ValueError("staged grounding requires structured tactile guidance")
+        self.guidance = _validated_structured_summary(
+            manifest["model_visible_structured_tactile_summary"]
+        )
+        self.state = "START"
+
+    def observe_images(self) -> list[Any]:
+        if self.state != "START":
+            raise RuntimeError("observe_images is available exactly once at START")
+        blocks = build_observe_blocks(
+            episode_root=self.episode_root,
+            snapshot_path=self.snapshot_path,
+            condition_manifest=self.condition_manifest,
+            include_structured_summary=False,
+        )
+        _append_operator_context(
+            episode_root=self.episode_root,
+            tool="observe_images",
+            arguments={},
+            blocks=blocks,
+        )
+        self.state = "IMAGES_OBSERVED"
+        return blocks
+
+    def record_image_judgment(
+        self,
+        *,
+        tactile_image_access: Literal["available", "unavailable", "uncertain"],
+        left_tactile_state: Literal[
+            "clear_change", "little_or_no_change", "uncertain"
+        ],
+        right_tactile_state: Literal[
+            "clear_change", "little_or_no_change", "uncertain"
+        ],
+        tactile_changed_side: Literal["left", "right", "both", "neither", "uncertain"],
+        left_visual_cue: Literal[
+            "localized_colored_disturbance",
+            "regular_grid",
+            "diffuse_or_ambiguous",
+            "unavailable",
+        ],
+        right_visual_cue: Literal[
+            "localized_colored_disturbance",
+            "regular_grid",
+            "diffuse_or_ambiguous",
+            "unavailable",
+        ],
+        evidence_summary: str,
+    ) -> list[Any]:
+        if self.state != "IMAGES_OBSERVED":
+            raise RuntimeError("record_image_judgment requires one completed observe_images call")
+        if not evidence_summary.strip():
+            raise ValueError("image judgment evidence_summary must be non-empty")
+        judgment = {
+            "tactile_image_access": tactile_image_access,
+            "left_tactile_state": left_tactile_state,
+            "right_tactile_state": right_tactile_state,
+            "tactile_changed_side": tactile_changed_side,
+            "left_visual_cue": left_visual_cue,
+            "right_visual_cue": right_visual_cue,
+            "evidence_summary": evidence_summary,
+        }
+        (self.episode_root / "image_judgment.json").write_text(
+            json.dumps(judgment, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        blocks = [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {"status": "image_judgment_committed"},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        ]
+        _append_operator_context(
+            episode_root=self.episode_root,
+            tool="record_image_judgment",
+            arguments=judgment,
+            blocks=blocks,
+        )
+        self.state = "IMAGE_JUDGMENT_COMMITTED"
+        return blocks
+
+    def observe_structured_guidance(self) -> list[Any]:
+        if self.state != "IMAGE_JUDGMENT_COMMITTED":
+            raise RuntimeError(
+                "observe_structured_guidance requires a committed image judgment"
+            )
+        blocks = [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {"tactile_change_summary": self.guidance},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        ]
+        _append_operator_context(
+            episode_root=self.episode_root,
+            tool="observe_structured_guidance",
+            arguments={},
+            blocks=blocks,
+        )
+        self.state = "GUIDANCE_OBSERVED"
+        return blocks
 
 
 def build_server(
@@ -208,14 +359,94 @@ def build_server(
     episode_root: Path,
     snapshot_path: Path,
     condition_manifest: Path | None = None,
+    mode: Literal["observe", "staged"] = "observe",
 ) -> FastMCP:
     root = episode_root.expanduser().resolve(strict=True)
     snapshot = snapshot_path.expanduser().resolve(strict=True)
-    server = FastMCP(
-        "univtac-readonly",
-        instructions="One validated UniVTAC pre-action observation is available through observe.",
-        log_level="WARNING",
+    if mode not in {"observe", "staged"}:
+        raise ValueError(f"unsupported UniVTAC MCP mode: {mode}")
+    instructions = (
+        "Use observe_images, record_image_judgment, then observe_structured_guidance."
+        if mode == "staged"
+        else "One validated UniVTAC pre-action observation is available through observe."
     )
+    server = FastMCP("univtac-readonly", instructions=instructions, log_level="WARNING")
+
+    if mode == "staged":
+        if condition_manifest is None:
+            raise ValueError("staged mode requires a condition manifest")
+        session = StagedGroundingSession(
+            episode_root=root,
+            snapshot_path=snapshot,
+            condition_manifest=condition_manifest,
+        )
+
+        @server.tool(
+            name="observe_images",
+            description="Return task context and four native images without structured guidance.",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=False, destructiveHint=False
+            ),
+            structured_output=False,
+        )
+        def observe_images() -> list[Any]:
+            return session.observe_images()
+
+        @server.tool(
+            name="record_image_judgment",
+            description="Commit the image-only tactile judgment before guidance is available.",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=False, destructiveHint=False
+            ),
+            structured_output=False,
+        )
+        def record_image_judgment(
+            tactile_image_access: Literal["available", "unavailable", "uncertain"],
+            left_tactile_state: Literal[
+                "clear_change", "little_or_no_change", "uncertain"
+            ],
+            right_tactile_state: Literal[
+                "clear_change", "little_or_no_change", "uncertain"
+            ],
+            tactile_changed_side: Literal[
+                "left", "right", "both", "neither", "uncertain"
+            ],
+            left_visual_cue: Literal[
+                "localized_colored_disturbance",
+                "regular_grid",
+                "diffuse_or_ambiguous",
+                "unavailable",
+            ],
+            right_visual_cue: Literal[
+                "localized_colored_disturbance",
+                "regular_grid",
+                "diffuse_or_ambiguous",
+                "unavailable",
+            ],
+            evidence_summary: str,
+        ) -> list[Any]:
+            return session.record_image_judgment(
+                tactile_image_access=tactile_image_access,
+                left_tactile_state=left_tactile_state,
+                right_tactile_state=right_tactile_state,
+                tactile_changed_side=tactile_changed_side,
+                left_visual_cue=left_visual_cue,
+                right_visual_cue=right_visual_cue,
+                evidence_summary=evidence_summary,
+            )
+
+        @server.tool(
+            name="observe_structured_guidance",
+            description="Reveal structured tactile guidance after the image judgment is committed.",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=False, destructiveHint=False
+            ),
+            structured_output=False,
+        )
+        def observe_structured_guidance() -> list[Any]:
+            return session.observe_structured_guidance()
+
+        return server
 
     @server.tool(
         name="observe",
@@ -247,11 +478,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--episode-root", type=Path, required=True)
     parser.add_argument("--snapshot-pre", type=Path, required=True)
     parser.add_argument("--condition-manifest", type=Path)
+    parser.add_argument("--mode", choices=("observe", "staged"), default="observe")
     args = parser.parse_args(argv)
     server = build_server(
         episode_root=args.episode_root,
         snapshot_path=args.snapshot_pre,
         condition_manifest=args.condition_manifest,
+        mode=args.mode,
     )
     server.run(transport="stdio")
     return 0

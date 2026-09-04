@@ -1,0 +1,10 @@
+task: pull_out_key
+seeds: [1000000, 1000001, 1000002]
+model: gpt-5.6-terra
+reasoning_effort: medium
+condition_order:
+  "1000000": [correct_guidance, swapped_guidance]
+  "1000001": [swapped_guidance, correct_guidance]
+  "1000002": [correct_guidance, swapped_guidance]
+codex_timeout_seconds: 900
+pre_image_tool_retry_limit: 1

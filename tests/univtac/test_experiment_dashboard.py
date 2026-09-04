@@ -426,3 +426,119 @@ def test_unilateral_pilot_dashboard_renders_four_image_conflict_comparison(
     assert "Unilateral Tactile Guidance Conflict Pilot" in PILOT_HTML
     assert "HOST-ONLY COUNTERFACTUAL MAPPING" in PILOT_HTML
     assert "每个 seed 用人话对比" in PILOT_HTML
+
+
+def test_staged_grounding_dashboard_renders_four_ordered_phases(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/r0918"
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.18", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "grounding_signal": "grounding_improves_conflict_resistance",
+                "completed_semantic_trials": 6,
+                "r0917_comparison": {"swapped_follow_text_change": -2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    finals = []
+    image_judgment = {
+        "tactile_image_access": "available",
+        "left_tactile_state": "clear_change",
+        "right_tactile_state": "little_or_no_change",
+        "tactile_changed_side": "left",
+        "left_visual_cue": "localized_colored_disturbance",
+        "right_visual_cue": "regular_grid",
+        "evidence_summary": "Left differs more.",
+    }
+    guidance = {
+        "left_tactile": {"mean_absolute_change": 18.0},
+        "right_tactile": {"mean_absolute_change": 0.0},
+    }
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for condition in ("correct_guidance", "swapped_guidance"):
+            run = root / "runs" / f"seed_{seed}" / condition
+            run.mkdir(parents=True)
+            final = {
+                "seed": seed,
+                "condition": condition,
+                "guidance_consistency": "conflicting"
+                if condition == "swapped_guidance"
+                else "consistent",
+                "final_changed_side": "left",
+            }
+            finals.append(final)
+            (run / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "round": "R0.9.18",
+                        "seed": seed,
+                        "condition": condition,
+                        "ended_at": "2026-09-04T00:00:04Z",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                        "tool_call_count": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "image_judgment.json").write_text(
+                json.dumps(image_judgment), encoding="utf-8"
+            )
+            image_payload = {
+                "images": [{"label": f"image-{index}"} for index in range(4)]
+            }
+            rows = [
+                {
+                    "seq": 1,
+                    "timestamp_s": 1.0,
+                    "tool": "observe_images",
+                    "response_text_blocks": [json.dumps(image_payload)],
+                    "response_image_paths": [f"images/{index}.png" for index in range(4)],
+                },
+                {
+                    "seq": 2,
+                    "timestamp_s": 2.0,
+                    "tool": "record_image_judgment",
+                    "arguments": image_judgment,
+                    "response_text_blocks": ["{}"],
+                    "response_image_paths": [],
+                },
+                {
+                    "seq": 3,
+                    "timestamp_s": 3.0,
+                    "tool": "observe_structured_guidance",
+                    "response_text_blocks": [
+                        json.dumps({"tactile_change_summary": guidance})
+                    ],
+                    "response_image_paths": [],
+                },
+            ]
+            (run / "operator_context.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+            )
+            (run / "agent_final.md").write_text(json.dumps(final), encoding="utf-8")
+            (run / "condition.json").write_text("{}", encoding="utf-8")
+    with (root / "final_predictions.jsonl").open("w", encoding="utf-8") as stream:
+        for final in finals:
+            stream.write(json.dumps(final) + "\n")
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 6
+    assert [cell["condition"] for cell in detail["cells"][:2]] == [
+        "correct_guidance",
+        "swapped_guidance",
+    ]
+    assert all(len(cell["image_paths"]) == 4 for cell in detail["cells"])
+    assert [phase["name"] for phase in detail["cells"][0]["phases"]] == [
+        "Agent Saw Images",
+        "Image-Only Judgment Committed",
+        "Structured Guidance Revealed",
+        "Final Reaction",
+    ]
+    assert detail["cells"][0]["image_judgment"] == image_judgment
+    assert detail["cells"][0]["structured_summary"] == guidance
+    assert "Image-First Staged Grounding Pilot" in PILOT_HTML
+    assert "provisional → final changed" in PILOT_HTML
+    assert "R0.9.17 single-stage swapped" in PILOT_HTML

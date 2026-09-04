@@ -11,6 +11,7 @@ from PIL import Image as PilImage
 from sim.envs.univtac.contract import UniVTACTaskSnapshot
 from sim.envs.univtac.tactile_causal_pilot import stage_condition
 from tools.univtac_operator_mcp_server import (
+    StagedGroundingSession,
     build_observe_blocks,
     build_server,
     record_operator_context,
@@ -371,3 +372,136 @@ def test_scalar_unilateral_summary_returns_exactly_four_images_without_mapping_l
             "counterfactual_multimodal_input",
         )
     )
+
+
+def test_staged_grounding_state_machine_commits_before_guidance(tmp_path: Path) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "staged"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    records = []
+    for index, label in enumerate(EXPECTED_LABELS):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    scalar = {
+        "active_pixel_ratio": 0.2,
+        "mean_absolute_change": 18.0,
+        "p95_absolute_change": 103.0,
+        "salient_mass": 1.8,
+    }
+    manifest = {
+        "simulator_root": str(source_episode / "simulator"),
+        "images": records,
+        "model_visible_structured_tactile_summary": {
+            "left_tactile": scalar,
+            "right_tactile": {key: 0.0 for key in scalar},
+        },
+    }
+    manifest_path = episode / "condition.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    session = StagedGroundingSession(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest_path,
+    )
+    with __import__("pytest").raises(RuntimeError, match="committed"):
+        session.observe_structured_guidance()
+    with __import__("pytest").raises(RuntimeError, match="observe_images"):
+        session.record_image_judgment(
+            tactile_image_access="available",
+            left_tactile_state="clear_change",
+            right_tactile_state="little_or_no_change",
+            tactile_changed_side="left",
+            left_visual_cue="localized_colored_disturbance",
+            right_visual_cue="regular_grid",
+            evidence_summary="The left image has a localized disturbance.",
+        )
+    image_blocks = session.observe_images()
+    assert len(image_blocks) == 5
+    assert "tactile_change_summary" not in image_blocks[0].text
+    with __import__("pytest").raises(RuntimeError, match="exactly once"):
+        session.observe_images()
+    judgment = {
+        "tactile_image_access": "available",
+        "left_tactile_state": "clear_change",
+        "right_tactile_state": "little_or_no_change",
+        "tactile_changed_side": "left",
+        "left_visual_cue": "localized_colored_disturbance",
+        "right_visual_cue": "regular_grid",
+        "evidence_summary": "The left image has a localized disturbance.",
+    }
+    session.record_image_judgment(**judgment)
+    assert json.loads((episode / "image_judgment.json").read_text()) == judgment
+    with __import__("pytest").raises(RuntimeError, match="observe_images"):
+        session.record_image_judgment(**judgment)
+    guidance = session.observe_structured_guidance()
+    assert json.loads(guidance[0].text)["tactile_change_summary"]["left_tactile"] == scalar
+    with __import__("pytest").raises(RuntimeError, match="committed"):
+        session.observe_structured_guidance()
+    rows = [json.loads(line) for line in (episode / "operator_context.jsonl").read_text().splitlines()]
+    assert [row["seq"] for row in rows] == [1, 2, 3]
+    assert [row["tool"] for row in rows] == [
+        "observe_images",
+        "record_image_judgment",
+        "observe_structured_guidance",
+    ]
+
+
+def test_staged_server_exposes_only_three_grounding_tools(tmp_path: Path) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "staged-server"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    records = []
+    for index, label in enumerate(EXPECTED_LABELS):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    scalar = {
+        "active_pixel_ratio": 0.2,
+        "mean_absolute_change": 18.0,
+        "p95_absolute_change": 103.0,
+        "salient_mass": 1.8,
+    }
+    manifest = episode / "condition.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "simulator_root": str(source_episode / "simulator"),
+                "images": records,
+                "model_visible_structured_tactile_summary": {
+                    "left_tactile": scalar,
+                    "right_tactile": scalar,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = build_server(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest,
+        mode="staged",
+    )
+    assert [tool.name for tool in server._tool_manager.list_tools()] == [
+        "observe_images",
+        "record_image_judgment",
+        "observe_structured_guidance",
+    ]

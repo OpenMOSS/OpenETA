@@ -37,6 +37,7 @@ def build_codex_exec_command(
     snapshot_path: Path,
     final_response_path: Path,
     condition_manifest: Path | None = None,
+    mcp_mode: str = "observe",
     prompt: str = CODEX_OPERATOR_PROMPT,
 ) -> list[str]:
     """Build one isolated Codex exec command with only the UniVTAC MCP."""
@@ -57,6 +58,8 @@ def build_codex_exec_command(
     ]
     if condition_manifest is not None:
         mcp_args.extend(("--condition-manifest", str(condition_manifest)))
+    if mcp_mode != "observe":
+        mcp_args.extend(("--mode", mcp_mode))
     config = [
         "features.memories=false",
         "features.enable_request_compression=false",

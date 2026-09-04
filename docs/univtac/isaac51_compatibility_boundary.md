@@ -1,6 +1,8 @@
 # UniVTAC Isaac 5.1 compatibility boundary
 
-This document records the static boundary between the FTP-1-era UniVTAC stack and the pinned Isaac 5.1 migration. It does not report a simulator run.
+This document records the source, runtime, and benchmark boundary between the
+FTP-1-era UniVTAC stack and the pinned Isaac 5.1 implementation used by the
+current research branch.
 
 ## Pinned sources
 
@@ -21,6 +23,14 @@ The tactile interface still exposes GelSight Mini `rgb_marker` as HWC `uint8` in
 
 The README claims RTX 40- and 50-series support. The installer defaults to `UNIVTAC_CUDA_ARCH=89`, and the installation guide documents `89` or `8.9` for the RTX 40-series phase-one machine. The pinned public source does not name RTX 5090, `sm_120`, `compute_120`, Blackwell, or an explicit PTX-forward-compatibility policy. We therefore classify the RTX 5090 recipe as `claimed_but_not_fully_documented`, not unsupported.
 
+The project-scoped compatibility path has since launched and shut down the
+pinned Isaac 5.1 runtime on the current RTX 5090 machine. In that runtime, the
+official Taxim smoke, the `grasp_classify` phase-one collection gate, and Pull
+Out Key reset/`pre_move` plus observation capture have completed. This is
+evidence that the current isolated development runtime is operational for the
+tested paths. It is not an upstream-supported RTX 5090 recipe, a full six-task
+validation, or FTP-1 benchmark parity.
+
 ## Benchmark interpretation
 
 Within one pinned and validated Isaac 5.1 environment, comparing OpenETA E0/E1/E2/E3 remains a valid experimental design because every variant shares the same physics, sensor, action, and evaluator implementation. Those results must be labeled `UniVTAC-Isaac51`.
@@ -31,4 +41,14 @@ We therefore keep two tracks. Track A uses a separately installed, pinned Isaac 
 
 ## Next gate
 
-The next step is `clarify_rtx5090_build_recipe_then_isolated_smoke`. Before installing anything, confirm the RTX 5090 CUDA architecture recipe and the six-task validation scope with the UniVTAC authors. Any Isaac 5.1 environment must be new and isolated; it must not overwrite the legacy environment.
+The next gate is R1.0 on Pull Out Key. Run the complete native expert operation
+for seeds `1000000`, `1000001`, and `1000002` through `reset -> pre_move ->
+play_once / task body -> check_success`, retain the tactile/action/outcome
+transitions, and report the three native outcomes. Only after that baseline is
+established should the project expose a reviewed UniVTAC manipulation skill to
+Codex for one closed-loop episode.
+
+The existing R0.9 read-only studies do not satisfy this gate. In particular,
+R0.9.19–R0.9.20 are evidence-ordering diagnostics, while R0.9.21 has completed
+three held-out capture gates but no Agent transfer trials. See the
+[research plan](research-plan.md) for the full claim boundary.

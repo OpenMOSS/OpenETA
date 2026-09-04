@@ -1,4 +1,35 @@
-# OpenETA-Light
+# OpenETA-UniVTAC
+
+This is the development branch for
+[`No-518/OpenETA-UniVTAC`](https://github.com/No-518/OpenETA-UniVTAC). It builds
+on OpenETA-Light and vendors the official UniVTAC benchmark under
+`third_party/ftp1-policy/UniVTAC`.
+
+The active research question is whether a frozen embodied Agent can use
+tactile–action–outcome demonstrations to select executable manipulation skills
+and improve UniVTAC native task success. The inherited OpenETA-Light/LIBERO
+Operator remains available, while UniVTAC development uses a separate,
+project-scoped Isaac 5.1 research harness.
+
+Current status:
+
+- the Isaac 5.1 runtime, Taxim smoke, Pull Out Key reset/`pre_move`, bilateral
+  tactile capture, read-only Codex MCP handoff, traces, and dashboard work on
+  the current development machine;
+- R0.9.13–R0.9.20 are read-only perception and evidence-ordering diagnostics,
+  not manipulation-skill or task-success results;
+- R0.9.21 has captured three fresh tactile pairs but has not run its planned
+  semantic transfer trials;
+- the next stage is a three-seed native expert Pull Out Key baseline followed
+  by the first reviewed Codex closed-loop manipulation episode.
+
+Read the [UniVTAC research plan](docs/univtac/research-plan.md) first. See
+[Architecture](docs/architecture.md) for the system boundary,
+[Isaac 5.1 compatibility](docs/univtac/isaac51_compatibility_boundary.md) for
+benchmark interpretation, and [Vendor Notes](docs/vendor-notes.md) for source
+provenance.
+
+## OpenETA-Light interface
 
 **Run Codex as a visual robot operator in LIBERO.**
 
@@ -42,7 +73,7 @@ surfaces are versioned together under
 [`configs/embodied/operator-context/openeta-light`](configs/embodied/operator-context/openeta-light)
 and fail closed if a pinned component changes.
 
-## Try it live in the Codex TUI
+## Try the inherited interface live in the Codex TUI
 
 ### 1. Install OpenETA-Light and LIBERO
 
@@ -50,8 +81,8 @@ Requirements: Python 3.10+, [uv](https://docs.astral.sh/uv/), the Codex CLI,
 and a Codex login.
 
 ~~~bash
-git clone --branch openeta-light https://github.com/OpenMOSS/OpenETA.git
-cd OpenETA
+git clone --branch tactile-agent-for-univtac https://github.com/No-518/OpenETA-UniVTAC.git
+cd OpenETA-UniVTAC
 
 uv sync --extra dev
 export LIBERO_DIR="$PWD/third_party/LIBERO"
@@ -146,6 +177,7 @@ scripts/   Interactive launchers and evaluation entry points
 sim/       Simulator registry and backend wrappers
 tools/     Operator MCP gateway and perception/control adapters
 tests/     Contract and behavior regression tests
+third_party/  Pinned upstream source snapshots, including UniVTAC
 ~~~
 
 Simulator and optional perception service configuration is documented in

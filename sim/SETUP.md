@@ -1,6 +1,9 @@
 # Simulation Environment Setup Guide
 
-本指南覆盖 `sim/envs/` 中 14 个仿真环境的依赖和安装方法。
+本指南汇总 OpenETA 已注册、已配置或计划支持的仿真后端。自动安装脚本
+`scripts/setup_envs.sh` 当前只支持 `metaworld`、`maniskill`、`libero`、
+`robocasa`、`behavior`、`genesis` 和 `d4rl`；其余条目是手动安装参考，不能
+直接作为 `setup_envs.sh` 参数。
 
 ---
 
@@ -43,7 +46,7 @@ print('OK:', obs['task'])
 | `genesis` | ★★ | 是 | Genesis | `uv pip install genesis-world` |
 | `maniskill` | ★★★ | 是 | SAPIEN | `uv pip install mani-skill` |
 | `frankasim` | ★★★ | 是 | MuJoCo | `uv pip install frankasim` |
-| `libero` | ★★★★ | 是 | PyBullet + LIBERO assets | 需要 clone + asset 下载 |
+| `libero` | ★★★★ | 是 | MuJoCo/robosuite + LIBERO assets | 需要 clone + asset 下载 |
 | `calvin` | ★★★★ | 是 | PyBullet + CALVIN assets | 需要 clone + dataset |
 | `habitat` | ★★★★ | 是 | Habitat-Sim | 需要 conda 安装 |
 | `robocasa` | ★★★★★ | 是 | robosuite + assets | 需要 clone + asset 下载 |
@@ -53,6 +56,21 @@ print('OK:', obs['task'])
 | `isaaclab` | ★★★★★ | 是 | Isaac Sim | 需要 Isaac Sim 安装 |
 | `polaris` | ★★★★★ | 是 | Isaac Sim + PolaRiS | 同 IsaacLab |
 | `embodichain` | ★★★ | 否 | 无（纯数值） | `uv pip install embodichain` |
+
+---
+
+## UniVTAC（当前研究分支）
+
+UniVTAC 的 Isaac 5.1 环境是项目专用的隔离 runtime，不是
+`scripts/setup_envs.sh` 的通用 backend 参数。不要把 `isaaclab` 的手动安装参考
+当作 UniVTAC 安装命令，也不要让它覆盖 FTP-1-era legacy 环境。
+
+当前机器已经完成项目专用 runtime、Taxim、Pull Out Key reset/`pre_move` 和
+触觉采集验证；尚未完成 Pull Out Key native expert success baseline 或 Codex
+动作闭环。研究状态与下一条可执行 gate 见
+[`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，版本和
+benchmark 解释见
+[`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。
 
 ---
 
@@ -368,7 +386,7 @@ bash requirements/install.sh embodied --env behavior       # BEHAVIOR (OmniGibso
 | 环境 | Python |
 |------|--------|
 | 大部分 env | >= 3.10 |
-| BEHAVIOR | 3.10 only |
+| BEHAVIOR | 3.11 |
 | D4RL | 3.10 only |
 | RLinf 默认 | 3.11.14 |
 | OpenETA 推荐 | 3.10（最大兼容性） |

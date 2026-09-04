@@ -38,6 +38,39 @@ Task success comes only from the simulator-native checker. The Gateway latches
 terminal success so a later action cannot invalidate a completed task before
 `finish_episode` records it.
 
+### UniVTAC development boundary
+
+The `tactile-agent-for-univtac` branch vendors the official UniVTAC source at
+`third_party/ftp1-policy/UniVTAC` for legacy provenance. Current experiments use
+a separately installed, pinned Isaac 5.1 source and a project-scoped direct
+harness under `sim/envs/univtac/` and `scripts/univtac/`; they do not import the
+vendored tree as a generic OpenETA backend.
+
+The direct harness currently supports:
+
+```text
+native reset / pre_move
+        -> snapshot and tactile-pair capture
+        -> operator_visible projection
+        -> read-only UniVTAC MCP
+        -> Codex observation
+        -> trace and dashboard replay
+```
+
+The public projection carries task text, step identifiers, proprioception,
+head/wrist RGB, and bilateral tactile `rgb_marker` artifacts. Privileged actor
+state, tactile pose/depth, planner state, and native success remain host-only.
+The UniVTAC MCP path exposes observation but no manipulation tool.
+
+UniVTAC is still not registered in the generic OpenETA simulator registry, and
+there is no Agent-controlled action translation or native-evaluation loop. The
+next integration boundary is therefore executable manipulation: first validate
+the complete native expert task path, then expose a small reviewed skill/action
+surface and close the loop through a fresh observation and the native checker.
+
+The research objective and evidence ladder are maintained in the
+[UniVTAC research plan](univtac/research-plan.md).
+
 ## Geometry and visual feedback
 
 `tools/pointcloud_pose_marking.py` back-projects calibrated RGB-D observations,

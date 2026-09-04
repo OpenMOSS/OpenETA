@@ -2,6 +2,17 @@
 
 每个仿真环境独立隔离在 `sim/venvs/<name>/` 下，彻底消除依赖冲突。对外提供统一观测结构、gymnasium 注册入口、MCP 远程控制服务和 Web Dashboard。
 
+## UniVTAC 研究路径
+
+UniVTAC 当前使用 `sim/envs/univtac/` 与 `scripts/univtac/` 下的隔离直连
+harness，不在下面的通用 `gymnasium` 注册表中。该路径已经支持原生
+reset/`pre_move`、head/wrist 与双侧触觉采集、只读 Codex MCP、trace 和实验
+dashboard；尚未向 Codex 暴露 UniVTAC 操作工具，也没有完成 Agent 闭环成功率。
+
+研究问题、证据边界和下一步 R1.0 native expert/closed-loop gate 见
+[`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)。运行版本边界见
+[`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。
+
 ## 快速开始
 
 ```bash
@@ -316,16 +327,18 @@ uv run openeta-replay artifacts/episodes/EPISODE_ID \
 
 ---
 
-## 环境状态
+## 环境注册与安装状态
 
-> 数量为对应 venv 中实际 `gym.registry` 注册数（随 ManiSkill/MetaWorld 版本浮动）。
+> 数量是文档记录时对应 venv 的 `gym.registry` 快照，会随依赖版本变化。
+> “setup script supported”只表示 `scripts/setup_envs.sh` 有对应安装分支，
+> 不是当前机器上的端到端验证或正式实验结果。
 
 | 环境 | 数量 | 机器人 | 安装命令 | 状态 |
 |------|:----:|--------|----------|:----:|
 | `dummy` | 2 | — | built-in | ✅ |
-| `metaworld` | 96 | Sawyer | `setup_envs.sh metaworld` | ✅ 深度已验证 |
-| `maniskill` | 52 | 13 种² | `setup_envs.sh maniskill` | ✅ 深度已验证 |
-| `libero` | 130 | Franka Panda | `setup_envs.sh libero` | ✅ 深度已验证 |
+| `metaworld` | 96 | Sawyer | `setup_envs.sh metaworld` | setup script supported |
+| `maniskill` | 52 | 13 种² | `setup_envs.sh maniskill` | setup script supported |
+| `libero` | 130 | Franka Panda | `setup_envs.sh libero` | setup script supported |
 | `robocasa` | 634¹ | PandaOmron | `setup_envs.sh robocasa` | ✅ RoboCasa365 benchmark |
 | `genesis` | 1 | Franka | `setup_envs.sh genesis` | ⚠️ ³ |
 | `behavior` | 1,016 BDDL definitions (50-task RLinf eval subset) | R1Pro | OmniGibson 3.9 / Isaac Sim 5.1 | integrated; GPU worker required |

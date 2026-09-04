@@ -66,6 +66,11 @@ Current runtime pieces:
   but the runtime never auto-expands it into hidden tool calls. Built-in skill
   markdown files live under `agent/skills/*.md` and are loaded into the registry
   at runtime.
+- `tactile_grounding_image_first` is a read-only UniVTAC evidence-ordering
+  candidate produced by the R0.9 diagnostics. It asks the observer to inspect
+  raw tactile images before a derived summary. It is not a manipulation skill,
+  a learned policy, a tactile-ICL demonstration, or task-success evidence; its
+  planned held-out semantic validation has not run.
 - `agent.runtime.planner.ToolCallingPlanner`: default planner bridge for the
   closed-loop pattern `observe -> tool(parameter) -> result -> observe`. It can
   call a `PlannerBackend`, validate the returned JSON command request, and

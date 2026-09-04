@@ -8,6 +8,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     PILOT_HTML,
     PROGRESS_HTML,
     R10_OPERATION_HTML,
+    R11_ICL_HTML,
     build_timeline,
     build_unilateral_human_comparisons,
     discover_pilots,
@@ -15,6 +16,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     load_pilot_detail,
     load_project_progress,
     load_r10_operation_detail,
+    load_r11_icl_detail,
     load_run_detail,
 )
 
@@ -270,6 +272,58 @@ def test_r10_operation_dashboard_preserves_expert_and_agent_evidence(
     assert "ACTUAL MCP CONTEXT SEEN BY CODEX" in R10_OPERATION_HTML
     assert "HOST-ONLY Outcome — NOT SHOWN TO AGENT" in R10_OPERATION_HTML
     assert "do_POST" not in R10_OPERATION_HTML
+
+
+def test_r11_dashboard_builds_three_by_four_operation_grid(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/univtac-isaac51-r11"
+    root.mkdir(parents=True)
+    (root / "summary.json").write_text(
+        json.dumps({"icl_interpretation": "no_detectable_icl_signal"}), encoding="utf-8"
+    )
+    (root / "run_manifest.json").write_text('{"round":"R1.1"}', encoding="utf-8")
+    conditions = (
+        "no_demo_multimodal",
+        "correct_icl_multimodal",
+        "action_swapped_icl_multimodal",
+        "correct_icl_visual_only",
+    )
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for condition_name in conditions:
+            run = root / "episodes" / f"seed_{seed}" / condition_name / "attempt_01"
+            run.mkdir(parents=True)
+            (run / "episode.json").write_text(
+                json.dumps({"round": "R1.1", "seed": seed}), encoding="utf-8"
+            )
+            (run / "condition.json").write_text(
+                json.dumps(
+                    {
+                        "agent_visible": {},
+                        "host_only": {
+                            "native_prefix": [],
+                            "expected_remaining_sequence": ["skill_mica"],
+                            "opaque_to_native": {"skill_mica": "settle_alignment"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "result.json").write_text(
+                json.dumps({"condition": condition_name}), encoding="utf-8"
+            )
+            (run / "operator_context.jsonl").write_text(
+                json.dumps({"tool": "observe", "response_image_paths": ["head.png"]})
+                + "\n",
+                encoding="utf-8",
+            )
+    detail = load_r11_icl_detail(tmp_path / "outputs")
+    assert len(detail["cells"]) == 12
+    assert [cell["result"]["condition"] for cell in detail["cells"][:4]] == list(
+        conditions
+    )
+    assert detail["cells"][0]["operator_context"][0]["tool"] == "observe"
+    assert "3 个 query 状态 × 4 个条件" in R11_ICL_HTML
+    assert "HOST-ONLY — NOT SHOWN TO AGENT" in R11_ICL_HTML
+    assert "do_POST" not in R11_ICL_HTML
 
 
 def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(

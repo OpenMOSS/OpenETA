@@ -1,0 +1,17 @@
+task: pull_out_key
+query_seeds: [1000000, 1000001, 1000002]
+conditions:
+  - no_demo_multimodal
+  - correct_icl_multimodal
+  - action_swapped_icl_multimodal
+  - correct_icl_visual_only
+opaque_skills: [skill_mica, skill_onyx, skill_quartz]
+model: gpt-5.6-terra
+reasoning_effort: medium
+task_config: demo
+mode: collect
+device: cuda:0
+task_instruction: Pull the key out of the slot.
+max_world_changing_skills: 3
+worker_timeout_seconds: 1200
+codex_timeout_seconds: 900

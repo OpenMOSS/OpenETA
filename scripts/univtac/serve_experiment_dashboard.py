@@ -15,7 +15,7 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
@@ -88,6 +88,23 @@ tick();setInterval(tick,2000)
 
 # Keep the JavaScript string escape intact inside the Python triple-quoted HTML.
 R10_OPERATION_HTML = R10_OPERATION_HTML.replace("join('\n')", r"join('\n')")
+
+R11_ICL_HTML = """<!doctype html><meta charset="utf-8"><title>R1.1 Tactile-Action ICL</title>
+<style>body{font:14px/1.5 system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.summary,.cell{background:#181c22;border:1px solid #303744;border-radius:9px;padding:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(280px,1fr));gap:10px}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.images img{width:100%;background:#000}.ok{color:#76db8b}.failed{color:#ff8585}.host{border:1px solid #9a7030;padding:8px;margin-top:8px}.host b{color:#f0b55a}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:7px}.metric{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.metric div{background:#222934;padding:10px}</style>
+<a href="/">← 实验列表</a><h1>R1.1：第一次真实 Tactile-Action ICL</h1><section class="summary"><p id="plain"></p><div class="metric" id="metrics"></div><pre id="gains"></pre></section><h2>3 个 query 状态 × 4 个条件</h2><div class="grid" id="grid"></div>
+<script>
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);
+const imgs=(run,paths)=>`<div class="images">${(paths||[]).map(p=>`<figure><img src="${art(run,p)}"><figcaption>${esc(p.split('/').slice(-2).join('/'))}</figcaption></figure>`).join('')}</div>`;
+const labels={no_demo_multimodal:'No Demo',correct_icl_multimodal:'Correct Multimodal ICL',action_swapped_icl_multimodal:'Action-Swapped ICL',correct_icl_visual_only:'Correct Vision-Only ICL'};
+async function tick(){const d=await fetch('/api/r11-icl?t='+Date.now()).then(r=>r.json()),s=d.summary,m=s.condition_metrics;
+ document.querySelector('#plain').innerHTML=`<b>一句话：</b> 正确 ICL 的首步是 ${m.correct_icl_multimodal.first_skill_correct_count}/3，与无 demo 的 ${m.no_demo_multimodal.first_skill_correct_count}/3 相同；本轮结论为 <b>${esc(s.icl_interpretation)}</b>。`;
+ document.querySelector('#metrics').innerHTML=Object.entries(labels).map(([k,v])=>`<div><b>${v}</b><br>first skill ${m[k].first_skill_correct_count}/3<br>exact ${m[k].exact_sequence_count}/3<br>native success ${m[k].native_continuation_success_count}/3</div>`).join('');document.querySelector('#gains').textContent=JSON.stringify(s.gains,null,2);
+ document.querySelector('#grid').innerHTML=d.cells.map(c=>{const review=c.operator_context.find(x=>x.tool==='review_demonstrations')||{},obs=c.operator_context.find(x=>x.tool==='observe')||{},exec=c.operator_context.filter(x=>x.tool==='execute_skill'),r=c.result,h=c.condition.host_only;return `<article class="cell"><h3>seed ${c.episode.seed} · ${labels[r.condition]}</h3><p>query: ${esc(r.query_start_state)} · support: ${esc(r.support_seed)}</p><details><summary>Support demonstrations (${review.response_image_paths?.length||0})</summary><pre>${esc((review.response_text_blocks||[]).join('\n'))}</pre>${imgs(c.run,review.response_image_paths)}</details><h4>Agent Saw</h4>${imgs(c.run,obs.response_image_paths)}<h4>Agent chose</h4><p>${esc(r.agent_skill_sequence.join(' → ')||'no action')}</p>${exec.map((x,i)=>`<details><summary>Action ${i+1} after-observation</summary>${imgs(c.run,x.response_image_paths)}</details>`).join('')}<p class="${r.first_skill_correct?'ok':'failed'}">first skill correct: ${r.first_skill_correct}</p><p>exact sequence: ${r.exact_sequence} · native success: ${r.native_continuation_success} · Codex completed: ${r.codex_completed}</p><div class="host"><b>HOST-ONLY — NOT SHOWN TO AGENT</b><p>prefix: ${esc(h.native_prefix.join(' → ')||'none')}<br>expected: ${esc(h.expected_remaining_sequence.join(' → '))}<br>actual native: ${esc((c.final_result.host_only?.selected_native_sequence||[]).join(' → '))}<br>mapping: ${esc(JSON.stringify(h.opaque_to_native))}<br>native evaluator available: ${r.native_evaluation_available}</p></div><details><summary>Raw Codex answer</summary><pre>${esc(c.agent_final)}</pre></details></article>`}).join('');}
+tick();setInterval(tick,2000)
+</script>"""
+
+R11_ICL_HTML = R11_ICL_HTML.replace("join('\n')", r"join('\n')")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -212,6 +229,55 @@ def load_r10_operation_detail(runs_root: Path) -> dict[str, Any]:
         "expert_summary": _load_json(operation_root / "expert_summary.json"),
         "expert_episodes": expert_episodes,
         "agent_attempts": agent_attempts,
+    }
+
+
+def load_r11_icl_detail(runs_root: Path) -> dict[str, Any]:
+    root = runs_root.expanduser().resolve()
+    pilot_root = root / "univtac-isaac51-r11"
+    if not (pilot_root / "summary.json").is_file():
+        raise FileNotFoundError("R1.1 ICL evidence is unavailable")
+    condition_order = {
+        "no_demo_multimodal": 0,
+        "correct_icl_multimodal": 1,
+        "action_swapped_icl_multimodal": 2,
+        "correct_icl_visual_only": 3,
+    }
+    cells = []
+    for result_path in pilot_root.glob("episodes/seed_*/*/attempt_*/result.json"):
+        episode_root = result_path.parent
+        condition = _load_json(episode_root / "condition.json")
+        cells.append(
+            {
+                "run": episode_root.relative_to(root).as_posix(),
+                "episode": _load_json(episode_root / "episode.json"),
+                "condition": condition,
+                "result": _load_json(result_path),
+                "operator_context": read_jsonl(episode_root / "operator_context.jsonl"),
+                "action_trace": read_jsonl(episode_root / "action_trace.jsonl"),
+                "host_setup": read_jsonl(
+                    episode_root / "host_setup/action_trace.jsonl"
+                ),
+                "final_result": _load_json(episode_root / "final_result.json"),
+                "agent_final": (
+                    (episode_root / "agent_final.md").read_text(encoding="utf-8")
+                    if (episode_root / "agent_final.md").is_file()
+                    else "unavailable"
+                ),
+            }
+        )
+    cells.sort(
+        key=lambda cell: (
+            int(cell["episode"]["seed"]),
+            condition_order[cell["result"]["condition"]],
+        )
+    )
+    if len(cells) != 12:
+        raise ValueError(f"R1.1 dashboard requires 12 cells, found {len(cells)}")
+    return {
+        "summary": _load_json(pilot_root / "summary.json"),
+        "run_manifest": _load_json(pilot_root / "run_manifest.json"),
+        "cells": cells,
     }
 
 
@@ -698,6 +764,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(
                         R10_OPERATION_HTML.encode(), "text/html; charset=utf-8"
                     )
+                if parsed.path == "/r11-icl":
+                    return self._send(R11_ICL_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path.startswith("/run/"):
                     _safe_run_root(root, parsed.path[5:])
                     return self._send(DETAIL_HTML.encode(), "text/html; charset=utf-8")
@@ -712,6 +780,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._json(load_project_progress(root))
                 if parsed.path == "/api/r10-operation":
                     return self._json(load_r10_operation_detail(root))
+                if parsed.path == "/api/r11-icl":
+                    return self._json(load_r11_icl_detail(root))
                 if parsed.path == "/api/pilot":
                     return self._json(
                         load_pilot_detail(_safe_pilot_root(root, query.get("pilot", [""])[0]))

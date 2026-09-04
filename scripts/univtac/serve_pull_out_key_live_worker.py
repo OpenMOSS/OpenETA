@@ -23,6 +23,7 @@ def _parse_base_args(
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--icl-condition", type=Path)
     parser.add_argument("--port", type=int, default=0)
     base, _ = parser.parse_known_args(argv)
     return parser, base
@@ -154,7 +155,45 @@ def main(argv: list[str] | None = None) -> int:
         config_payload = yaml.safe_load(args.config.read_text(encoding="utf-8"))
         if not isinstance(config_payload, dict):
             raise TypeError("live operation config must be a mapping")
-        config = validate_live_operation_config(config_payload)
+        r11_mode = args.icl_condition is not None
+        condition_manifest: dict[str, Any] | None = None
+        if r11_mode:
+            from sim.envs.univtac.tactile_action_icl import (
+                OPAQUE_TO_NATIVE,
+                R11_MCP_TOOLS,
+                OpaqueSkillBudget,
+                validate_r11_config,
+                validate_r11_projection,
+            )
+
+            config = validate_r11_config(config_payload)
+            condition_manifest = json.loads(
+                args.icl_condition.read_text(encoding="utf-8")
+            )
+            host_condition = condition_manifest["host_only"]
+            episode_seed = int(host_condition["seed"])
+            native_prefix = list(host_condition["native_prefix"])
+            image_mode = str(condition_manifest["agent_visible"]["image_mode"])
+            condition_name = str(condition_manifest["agent_visible"]["condition"])
+        else:
+            config = validate_live_operation_config(config_payload)
+            episode_seed = LIVE_SEED
+            native_prefix = []
+            image_mode = "multimodal"
+            condition_name = None
+            OPAQUE_TO_NATIVE = {}
+            R11_MCP_TOOLS = ()
+        result.update(
+            {
+                "schema_version": (
+                    "openeta.univtac.r11.live_worker_episode.v1"
+                    if r11_mode
+                    else result["schema_version"]
+                ),
+                "seed": episode_seed,
+                "condition": condition_name,
+            }
+        )
 
         native_config, native_config_path = load_task_config(
             source_root / "task_config" / f"{config['task_config']}.yml"
@@ -184,14 +223,18 @@ def main(argv: list[str] | None = None) -> int:
         task = task_module.Task(env_cfg, mode=config["mode"])
         planner = PlannerDiagnosticRecorder(task)
         planner.install()
-        planner.start_seed(LIVE_SEED)
+        planner.start_seed(episode_seed)
         counters["reset_call_count"] += 1
         result["classification"] = "live_reset_failed"
-        task.reset(seed=LIVE_SEED)
+        task.reset(seed=episode_seed)
         if not task.plan_success:
             raise RuntimeError("live reset/pre_move returned with plan_success=False")
 
-        budget = PullOutKeySkillBudget(max_calls=config["max_world_changing_skills"])
+        budget = (
+            OpaqueSkillBudget(max_calls=config["max_world_changing_skills"])
+            if r11_mode
+            else PullOutKeySkillBudget(max_calls=config["max_world_changing_skills"])
+        )
         counters["over_rotate_sample_count"] += 1
         over_rotate = float(task.rng.uniform(0.09, 0.16))
         task.metadata["over_rotate"] = over_rotate
@@ -201,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
             "initial_observe_completed": False,
             "observation_index": 0,
             "selected_skill_sequence": [],
+            "selected_native_sequence": [],
+            "host_prefix_trace": [],
             "transitions": [],
             "fatal_error": None,
         }
@@ -228,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_root=output_root,
                 seed_dir=snapshot_root,
                 task_name="pull_out_key",
-                seed=LIVE_SEED,
+                seed=episode_seed,
                 phase=phase,
                 action_id=action_id,
                 simulator_step=int(task.step_count),
@@ -270,17 +315,22 @@ def main(argv: list[str] | None = None) -> int:
                         "dtype": descriptor["dtype"],
                     }
                 )
-            projection = validate_worker_projection(
-                {
-                    "task_instruction": visible["task_instruction"],
-                    "visible_phase": visible_phase,
-                    "step_identifiers": visible["step_identifiers"],
-                    "proprio": visible["proprio"],
-                    "images": images,
-                    "skill_execution": skill_execution,
-                    "remaining_skills": budget.remaining,
-                }
-            )
+            projection_payload = {
+                "task_instruction": visible["task_instruction"],
+                "step_identifiers": visible["step_identifiers"],
+                "proprio": visible["proprio"],
+                "images": images[:2] if image_mode == "visual_only" else images,
+                "skill_execution": skill_execution,
+            }
+            if r11_mode:
+                projection_payload["available_skills"] = list(budget.remaining)
+                projection = validate_r11_projection(
+                    projection_payload, image_mode=image_mode
+                )
+            else:
+                projection_payload["visible_phase"] = visible_phase
+                projection_payload["remaining_skills"] = budget.remaining
+                projection = validate_worker_projection(projection_payload)
             write_json(snapshot_root / "operator_projection.json", projection)
             return captured, projection
 
@@ -314,11 +364,13 @@ def main(argv: list[str] | None = None) -> int:
 
         def execute_skill(skill: str) -> dict[str, Any]:
             call_index = budget.reserve(skill)
+            native_skill = OPAQUE_TO_NATIVE[skill] if r11_mode else skill
             counters["execute_skill_call_count"] += 1
             counters["world_changing_skill_count"] += 1
             state["selected_skill_sequence"].append(skill)
+            state["selected_native_sequence"].append(native_skill)
             transition_root = output_root / "transitions" / f"{call_index:02d}_{skill}"
-            action_id = f"live-{LIVE_SEED}-{call_index}-{skill}"
+            action_id = f"live-{episode_seed}-{call_index}-{skill}"
             before, _ = capture_projection(
                 phase="pre_action",
                 action_id=action_id,
@@ -327,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                 root=transition_root,
             )
             write_snapshot(transition_root / "snapshot_before.json", before.snapshot)
-            actions, kwargs, post_delay = native_skill_call(skill)
+            actions, kwargs, post_delay = native_skill_call(native_skill)
             actions_before = [serialize_native_action(action) for action in actions]
             plan_before = bool(task.plan_success)
             planner_start = len(planner.planning_calls)
@@ -347,9 +399,9 @@ def main(argv: list[str] | None = None) -> int:
             transition = build_native_move_transition(
                 output_root=output_root,
                 transition_dir=transition_root,
-                seed=LIVE_SEED,
+                seed=episode_seed,
                 move_index=call_index,
-                semantic_segment=skill,
+                semantic_segment=native_skill,
                 before=before,
                 after=after,
                 native_actions_before=actions_before,
@@ -368,6 +420,26 @@ def main(argv: list[str] | None = None) -> int:
             _append_jsonl(output_root / "action_trace.jsonl", transition)
             return projection
 
+        for prefix_index, native_skill in enumerate(native_prefix, start=1):
+            actions, kwargs, post_delay = native_skill_call(native_skill)
+            serialized = [serialize_native_action(action) for action in actions]
+            step_before = int(task.step_count)
+            move_returned = task.move(actions, **kwargs)
+            if post_delay:
+                task.delay(post_delay)
+            prefix_row = {
+                "index": prefix_index,
+                "native_skill": native_skill,
+                "native_actions": serialized,
+                "simulator_step_range": [step_before, int(task.step_count)],
+                "move_returned": bool(move_returned),
+                "plan_success": bool(task.plan_success),
+            }
+            state["host_prefix_trace"].append(prefix_row)
+            _append_jsonl(output_root / "host_setup" / "action_trace.jsonl", prefix_row)
+            if not move_returned or not task.plan_success:
+                raise RuntimeError(f"host prefix failed at step {prefix_index}")
+
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, _format: str, *log_args: Any) -> None:
                 return
@@ -385,8 +457,8 @@ def main(argv: list[str] | None = None) -> int:
                         counters["observe_call_count"] += 1
                         _, projection = capture_projection(
                             phase="pre_action",
-                            action_id=f"live-{LIVE_SEED}-initial-observe",
-                            visible_phase="pre_action",
+                            action_id=f"live-{episode_seed}-initial-observe",
+                            visible_phase="current",
                             skill_execution={"skill": None, "status": "not_started"},
                         )
                         response = {"ok": True, "observation": projection}
@@ -453,8 +525,12 @@ def main(argv: list[str] | None = None) -> int:
                 "status": "ready",
                 "worker_url": worker_url,
                 "task": "pull_out_key",
-                "seed": LIVE_SEED,
-                "mcp_tools": ["observe", "execute_skill", "finish_episode"],
+                "seed": episode_seed,
+                "mcp_tools": (
+                    list(R11_MCP_TOOLS)
+                    if r11_mode
+                    else ["observe", "execute_skill", "finish_episode"]
+                ),
             },
         )
         _write_json(output_root / "child_result.json", result)
@@ -503,8 +579,15 @@ def main(argv: list[str] | None = None) -> int:
         final_result = {
             "schema_version": "openeta.univtac.live_operation_result.v1",
             "task": "pull_out_key",
-            "seed": LIVE_SEED,
+            "seed": episode_seed,
             "selected_skill_sequence": list(state["selected_skill_sequence"]),
+            "host_only": {
+                "condition": condition_name,
+                "native_prefix": native_prefix,
+                "host_prefix_trace": state["host_prefix_trace"],
+                "selected_native_sequence": state["selected_native_sequence"],
+                "opaque_to_native": dict(OPAQUE_TO_NATIVE),
+            },
             "world_changing_skill_count": counters["world_changing_skill_count"],
             "action_budget": config["max_world_changing_skills"],
             "finish_reason": state["finish_reason"],

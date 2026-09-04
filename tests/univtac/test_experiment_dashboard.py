@@ -710,3 +710,114 @@ def test_mechanism_ablation_dashboard_renders_three_by_three_funnel(tmp_path: Pa
     assert "Tactile Grounding Mechanism Ablation" in PILOT_HTML
     assert "follow image" in PILOT_HTML and "follow text" in PILOT_HTML
     assert "HOST-ONLY EXPECTED IMAGE / SWAPPED TEXT SIDES" in PILOT_HTML
+
+
+def test_conflict_instruction_dashboard_renders_three_by_two_comparison(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/r0920"
+    protocols = (
+        "simultaneous_conflict_aware",
+        "image_first_no_commit_conflict_aware",
+    )
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.20", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    metric = {"final_follow_image_rate": {"followed": 3, "evaluated": 3}}
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "minimal_skill_candidate": "conflict_aware_instruction_without_staged_ordering",
+                "completed_semantic_trials": 6,
+                "protocol_metrics": {protocol: metric for protocol in protocols},
+                "r0919_reference": {
+                    "simultaneous_neutral": {
+                        "final_follow_image_rate": {"followed": 0}
+                    },
+                    "image_first_no_commit_neutral": {
+                        "final_follow_image_rate": {"followed": 2}
+                    },
+                },
+                "r0918_reference": {
+                    "swapped_final_follow_image_rate": {"followed": 3}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    predictions = []
+    labels = [
+        "camera/head/rgb",
+        "camera/wrist/rgb",
+        "tactile/left_tactile/rgb_marker",
+        "tactile/right_tactile/rgb_marker",
+    ]
+    guidance = {"left_tactile": {}, "right_tactile": {}}
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for protocol in protocols:
+            run = root / "runs" / f"seed_{seed}" / protocol
+            run.mkdir(parents=True)
+            prediction = {
+                "seed": seed,
+                "protocol": protocol,
+                "guidance_consistency": "conflicting",
+                "final_changed_side": "left",
+                "final_evidence_basis": "image",
+            }
+            predictions.append(prediction)
+            (run / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "round": "R0.9.20",
+                        "seed": seed,
+                        "protocol": protocol,
+                        "tool_call_count": 1 if protocol.startswith("simultaneous") else 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "condition.json").write_text(
+                json.dumps({"expected_image_side": "left", "text_indicated_side": "right"}),
+                encoding="utf-8",
+            )
+            visible = {"images": [{"label": label} for label in labels]}
+            if protocol.startswith("simultaneous"):
+                visible["tactile_change_summary"] = guidance
+            rows = [
+                {
+                    "seq": 1,
+                    "tool": "observe" if protocol.startswith("simultaneous") else "observe_images",
+                    "response_text_blocks": [json.dumps(visible)],
+                    "response_image_paths": [f"images/{index}.png" for index in range(4)],
+                }
+            ]
+            if not protocol.startswith("simultaneous"):
+                rows.append(
+                    {
+                        "seq": 2,
+                        "tool": "observe_structured_guidance",
+                        "response_text_blocks": [
+                            json.dumps({"tactile_change_summary": guidance})
+                        ],
+                        "response_image_paths": [],
+                    }
+                )
+            (run / "operator_context.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+            )
+            (run / "agent_final.md").write_text(json.dumps(prediction), encoding="utf-8")
+    with (root / "predictions.jsonl").open("w", encoding="utf-8") as stream:
+        for prediction in predictions:
+            stream.write(json.dumps(prediction) + "\n")
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 6
+    assert [cell["condition"] for cell in detail["cells"][:2]] == list(protocols)
+    assert all(len(cell["image_paths"]) == 4 for cell in detail["cells"])
+    assert [item["name"] for item in detail["interaction_funnel"]] == [
+        "Neutral Simultaneous",
+        "Conflict-Aware Simultaneous",
+        "Neutral Image-First",
+        "Conflict-Aware Image-First",
+        "Committed + Conflict-Aware",
+    ]
+    assert "Conflict-Aware Instruction Interaction Ablation" in PILOT_HTML
+    assert "pilot ≥2/3" in PILOT_HTML and "robust 3/3" in PILOT_HTML

@@ -9,6 +9,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     PROGRESS_HTML,
     R10_OPERATION_HTML,
     R11_ICL_HTML,
+    R12_BRANCHING_HTML,
     build_timeline,
     build_unilateral_human_comparisons,
     discover_pilots,
@@ -17,6 +18,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     load_project_progress,
     load_r10_operation_detail,
     load_r11_icl_detail,
+    load_r12_branching_detail,
     load_run_detail,
 )
 
@@ -324,6 +326,92 @@ def test_r11_dashboard_builds_three_by_four_operation_grid(tmp_path: Path) -> No
     assert "3 个 query 状态 × 4 个条件" in R11_ICL_HTML
     assert "HOST-ONLY — NOT SHOWN TO AGENT" in R11_ICL_HTML
     assert "do_POST" not in R11_ICL_HTML
+
+
+def test_r12_dashboard_separates_visible_images_from_host_decision(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/univtac-isaac51-r12"
+    root.mkdir(parents=True)
+    summaries = {
+        task: {
+            "task": task,
+            "native_expert_success_count": 3,
+            "decision_class_count": 2,
+            "decision_class_distribution": {"a": 1, "b": 2},
+            "branching_candidate": True,
+        }
+        for task in ("lift_bottle", "insert_hole")
+    }
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "task_summaries": summaries,
+                "selected_tactile_icl_task": "insert_hole",
+                "selection_reason": "correct_succeeds_wrong_fails",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "run_manifest.json").write_text('{"round":"R1.2"}', encoding="utf-8")
+    for task in ("lift_bottle", "insert_hole"):
+        for seed in (1_000_000, 1_000_001, 1_000_002):
+            run = root / task / f"seed_{seed}" / "expert"
+            run.mkdir(parents=True)
+            visible = {
+                "cameras": {
+                    "head": {"rgb": {"path": "decision/pre/camera/head_rgb.png"}},
+                    "wrist": {"rgb": {"path": "decision/pre/camera/wrist_rgb.png"}},
+                },
+                "tactile": {
+                    "left_tactile": {
+                        "rgb_marker": {"path": "decision/pre/tactile/left.png"}
+                    },
+                    "right_tactile": {
+                        "rgb_marker": {"path": "decision/pre/tactile/right.png"}
+                    },
+                },
+                "proprio": {},
+            }
+            (run / "episode.json").write_text('{"status":"completed"}', encoding="utf-8")
+            (run / "decision_state.json").write_text(
+                json.dumps(
+                    {
+                        "operator_visible": visible,
+                        "host_only": {
+                            "decision_class": "DO_NOT_LEAK_HOST_CLASS",
+                            "native_x_move": 0.002,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "final_result.json").write_text(
+                json.dumps(
+                    {
+                        "task": task,
+                        "seed": seed,
+                        "condition": "expert",
+                        "semantic_segments": ["native"],
+                        "expert_episode_success": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+    detail = load_r12_branching_detail(tmp_path / "outputs")
+    assert len(detail["experts"]) == 6
+    assert detail["counterfactual"] == []
+    cell = detail["experts"][0]
+    assert cell["image_labels"] == [
+        "camera/head/rgb",
+        "camera/wrist/rgb",
+        "tactile/left_tactile/rgb_marker",
+        "tactile/right_tactile/rgb_marker",
+    ]
+    assert "DO_NOT_LEAK_HOST_CLASS" not in json.dumps(cell["operator_visible"])
+    assert cell["host_only"]["decision_class"] == "DO_NOT_LEAK_HOST_CLASS"
+    assert "HOST-ONLY DECISION CLASS — NOT SHOWN TO AGENT" in R12_BRANCHING_HTML
+    assert "错误组只把 x 方向反过来" in R12_BRANCHING_HTML
+    assert "本轮没有 Codex，也没有 ICL" in R12_BRANCHING_HTML
+    assert "do_POST" not in R12_BRANCHING_HTML
 
 
 def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(

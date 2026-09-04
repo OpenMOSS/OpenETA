@@ -152,6 +152,7 @@ def build_native_move_transition(
     planner_call_indices: Sequence[int],
     post_settle_delay_steps: int,
     enforce_native_order: bool = True,
+    task_name: str = TASK_NAME,
 ) -> dict[str, Any]:
     """Build one move-level transition from the unmodified native call."""
 
@@ -166,7 +167,7 @@ def build_native_move_transition(
     )
     return {
         "schema_version": "openeta.univtac.native_move_transition.v1",
-        "task": TASK_NAME,
+        "task": str(task_name),
         "seed": int(seed),
         "action_id": before.snapshot.action_id,
         "semantic_segment": semantic_segment,

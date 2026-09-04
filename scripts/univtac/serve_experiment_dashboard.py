@@ -15,7 +15,7 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><p><a href="/r12-branching">R1.2：筛选真正需要触觉分支的任务 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
@@ -105,6 +105,21 @@ tick();setInterval(tick,2000)
 </script>"""
 
 R11_ICL_HTML = R11_ICL_HTML.replace("join('\n')", r"join('\n')")
+
+R12_BRANCHING_HTML = """<!doctype html><meta charset="utf-8"><title>R1.2 Branching Qualification</title>
+<style>body{font:14px/1.5 system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.summary,.cell{background:#181c22;border:1px solid #303744;border-radius:9px;padding:12px}.grid{display:grid;grid-template-columns:repeat(3,minmax(280px,1fr));gap:10px}.images{display:grid;grid-template-columns:1fr 1fr;gap:5px}.images img{width:100%;background:#000}.ok{color:#76db8b}.failed{color:#ff8585}.host{border:1px solid #9a7030;padding:8px;margin-top:8px}.host b{color:#f0b55a}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:7px}.tasks{display:grid;grid-template-columns:1fr 1fr;gap:10px}</style>
+<a href="/">← 实验列表</a><h1>R1.2：筛选真正需要触觉分支的任务</h1><section class="summary"><p><b>说人话：</b>我们先让原生专家做 Lift Bottle 和 Insert Hole，检查不同初始状态是否真的需要不同动作，以及选错动作是否会让任务失败。本轮没有 Codex，也没有 ICL。</p><div class="tasks" id="tasks"></div><p id="selection"></p></section><h2>六个固定原生 expert episode</h2><div class="grid" id="experts"></div><h2>同一状态：正确动作 vs 错误动作</h2><div class="grid" id="counterfactual"></div>
+<script>
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);
+const imgs=c=>`<div class="images">${(c.image_paths||[]).map((p,i)=>`<figure><img src="${art(c.run,p)}"><figcaption>${esc((c.image_labels||[])[i]||p)}</figcaption></figure>`).join('')}</div>`;
+const card=c=>`<article class="cell"><h3>${esc(c.task)} · seed ${esc(c.seed)} · ${esc(c.condition)}</h3><p><b>决策时实际可见的四张图</b></p>${imgs(c)}<p>实际执行：${esc((c.semantic_segments||[]).join(' → '))}</p><p class="${c.expert_episode_success?'ok':'failed'}">native success: ${esc(c.expert_episode_success)}</p><div class="host"><b>HOST-ONLY DECISION CLASS — NOT SHOWN TO AGENT</b><p>${esc(c.host_only?.decision_class)}</p>${c.condition!=='expert'?`<p><b>这次干预：</b>原生建议 x=${esc(c.intervention.native_x_move)}，实际施加 x=${esc(c.intervention.applied_x_move)}；z=${esc(c.intervention.applied_z_move)}。${c.condition==='wrong'?'错误组只把 x 方向反过来。':'正确组照原生建议执行。'}</p>`:''}<pre>${esc(JSON.stringify(c.host_only,null,2))}</pre></div></article>`;
+async function tick(){const d=await fetch('/api/r12-branching?t='+Date.now()).then(r=>r.json()),s=d.summary,t=s.task_summaries;
+ document.querySelector('#tasks').innerHTML=Object.values(t).map(x=>`<div class="cell"><b>${esc(x.task)}</b><p>expert success ${esc(x.native_expert_success_count)}/3<br>分支种类 ${esc(x.decision_class_count)}：${esc(JSON.stringify(x.decision_class_distribution))}<br>候选任务：${esc(x.branching_candidate)}</p></div>`).join('');
+ document.querySelector('#selection').innerHTML=`<b>最终选择：</b> ${esc(s.selected_tactile_icl_task)} · ${esc(s.selection_reason)}`;
+ document.querySelector('#experts').innerHTML=d.experts.map(card).join('');document.querySelector('#counterfactual').innerHTML=d.counterfactual.length?d.counterfactual.map(card).join(''):'<p>没有任务通过候选门槛，因此没有运行反事实。</p>';
+}tick();setInterval(tick,2000)
+</script>"""
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -278,6 +293,81 @@ def load_r11_icl_detail(runs_root: Path) -> dict[str, Any]:
         "summary": _load_json(pilot_root / "summary.json"),
         "run_manifest": _load_json(pilot_root / "run_manifest.json"),
         "cells": cells,
+    }
+
+
+def _decision_images(operator_visible: dict[str, Any]) -> tuple[list[str], list[str]]:
+    paths: list[str] = []
+    labels: list[str] = []
+    cameras = operator_visible.get("cameras", {})
+    for camera in ("head", "wrist"):
+        item = cameras.get(camera, {}).get("rgb", {})
+        if item.get("path"):
+            paths.append(str(item["path"]))
+            labels.append(f"camera/{camera}/rgb")
+    tactile = operator_visible.get("tactile", {})
+    for sensor in sorted(tactile):
+        item = tactile[sensor].get("rgb_marker", {})
+        if item.get("path"):
+            paths.append(str(item["path"]))
+            labels.append(f"tactile/{sensor}/rgb_marker")
+    return paths, labels
+
+
+def load_r12_branching_detail(runs_root: Path) -> dict[str, Any]:
+    root = runs_root.expanduser().resolve()
+    run_root = root / "univtac-isaac51-r12"
+    summary = _load_json(run_root / "summary.json")
+    if not summary:
+        raise FileNotFoundError("R1.2 branching evidence is unavailable")
+
+    def load_cell(episode_root: Path) -> dict[str, Any]:
+        decision = _load_json(episode_root / "decision_state.json")
+        final = _load_json(episode_root / "final_result.json")
+        operator_visible = decision.get("operator_visible", {})
+        image_paths, image_labels = _decision_images(operator_visible)
+        if len(image_paths) != 4:
+            raise ValueError(
+                f"R1.2 decision cell requires four images: {episode_root}"
+            )
+        return {
+            "run": episode_root.relative_to(root).as_posix(),
+            "task": final.get("task"),
+            "seed": final.get("seed"),
+            "condition": final.get("condition"),
+            "operator_visible": operator_visible,
+            "host_only": decision.get("host_only", {}),
+            "image_paths": image_paths,
+            "image_labels": image_labels,
+            "semantic_segments": final.get("semantic_segments", []),
+            "expert_episode_success": final.get("expert_episode_success"),
+            "intervention": {
+                "native_x_move": final.get("native_x_move"),
+                "native_z_move": final.get("native_z_move"),
+                "applied_x_move": final.get("applied_x_move"),
+                "applied_z_move": final.get("applied_z_move"),
+                "corrective_moves_executed": final.get("corrective_moves_executed"),
+            },
+            "final_result": final,
+        }
+
+    experts = [
+        load_cell(path.parent)
+        for path in sorted(run_root.glob("*/seed_*/expert/episode.json"))
+    ]
+    if len(experts) != 6:
+        raise ValueError(f"R1.2 dashboard requires six expert cells, found {len(experts)}")
+    counterfactual = [
+        load_cell(path.parent)
+        for path in sorted(run_root.glob("counterfactual/*/seed_*/*/episode.json"))
+    ]
+    if len(counterfactual) not in {0, 2}:
+        raise ValueError("R1.2 dashboard requires zero or two counterfactual cells")
+    return {
+        "summary": summary,
+        "run_manifest": _load_json(run_root / "run_manifest.json"),
+        "experts": experts,
+        "counterfactual": counterfactual,
     }
 
 
@@ -766,6 +856,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     )
                 if parsed.path == "/r11-icl":
                     return self._send(R11_ICL_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/r12-branching":
+                    return self._send(R12_BRANCHING_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path.startswith("/run/"):
                     _safe_run_root(root, parsed.path[5:])
                     return self._send(DETAIL_HTML.encode(), "text/html; charset=utf-8")
@@ -782,6 +874,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._json(load_r10_operation_detail(root))
                 if parsed.path == "/api/r11-icl":
                     return self._json(load_r11_icl_detail(root))
+                if parsed.path == "/api/r12-branching":
+                    return self._json(load_r12_branching_detail(root))
                 if parsed.path == "/api/pilot":
                     return self._json(
                         load_pilot_detail(_safe_pilot_root(root, query.get("pilot", [""])[0]))

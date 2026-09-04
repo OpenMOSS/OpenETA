@@ -1,0 +1,13 @@
+tasks: [lift_bottle, insert_hole]
+seeds: [1000000, 1000001, 1000002]
+task_config: demo
+mode: collect
+device: cuda:0
+task_instructions:
+  lift_bottle: Grasp the bottle and lift it vertically, keeping its final base near the wall.
+  insert_hole: Insert the peg into the hole.
+save_host_only: true
+strict_two_tactile_sensors: true
+timeout_seconds: 1800
+max_simulator_episodes: 8
+source_commit: 371fac67917307026be8f00869fcc1b61c623a9f

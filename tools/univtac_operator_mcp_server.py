@@ -23,36 +23,42 @@ _TACTILE_LABELS = (
     "tactile/left_tactile/rgb_marker",
     "tactile/right_tactile/rgb_marker",
 )
-_STRUCTURED_FIELDS = {
-    "normalized_horizontal_saliency",
+_STRUCTURED_SCALAR_FIELDS = {
     "active_pixel_ratio",
     "mean_absolute_change",
     "p95_absolute_change",
     "salient_mass",
 }
+_STRUCTURED_REGION_FIELDS = _STRUCTURED_SCALAR_FIELDS | {
+    "normalized_horizontal_saliency"
+}
 
 
 def _validated_structured_summary(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) != {
-        "vector_order",
-        "left_tactile",
-        "right_tactile",
-    }:
+    if not isinstance(payload, dict):
+        raise TypeError("structured tactile summary must be a mapping")
+    keys = set(payload)
+    if keys == {"vector_order", "left_tactile", "right_tactile"}:
+        expected_fields = _STRUCTURED_REGION_FIELDS
+        if payload["vector_order"] != ["left", "center", "right"]:
+            raise ValueError("structured tactile vector order is invalid")
+    elif keys == {"left_tactile", "right_tactile"}:
+        expected_fields = _STRUCTURED_SCALAR_FIELDS
+    else:
         raise ValueError("structured tactile summary fields are invalid")
-    if payload["vector_order"] != ["left", "center", "right"]:
-        raise ValueError("structured tactile vector order is invalid")
     for sensor in ("left_tactile", "right_tactile"):
         values = payload[sensor]
-        if not isinstance(values, dict) or set(values) != _STRUCTURED_FIELDS:
+        if not isinstance(values, dict) or set(values) != expected_fields:
             raise ValueError(f"structured tactile fields are invalid for {sensor}")
-        vector = values["normalized_horizontal_saliency"]
-        if not isinstance(vector, list) or len(vector) != 3:
-            raise ValueError("normalized horizontal saliency must contain three values")
-        if any(not isinstance(value, (int, float)) for value in vector):
-            raise ValueError("normalized horizontal saliency must be numeric")
+        if "normalized_horizontal_saliency" in values:
+            vector = values["normalized_horizontal_saliency"]
+            if not isinstance(vector, list) or len(vector) != 3:
+                raise ValueError("normalized horizontal saliency must contain three values")
+            if any(not isinstance(value, (int, float)) for value in vector):
+                raise ValueError("normalized horizontal saliency must be numeric")
         if any(
             not isinstance(values[field], (int, float))
-            for field in _STRUCTURED_FIELDS - {"normalized_horizontal_saliency"}
+            for field in expected_fields - {"normalized_horizontal_saliency"}
         ):
             raise ValueError("structured tactile metrics must be numeric")
     return payload

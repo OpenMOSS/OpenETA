@@ -8,6 +8,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     PILOT_HTML,
     PROGRESS_HTML,
     build_timeline,
+    build_unilateral_human_comparisons,
     discover_pilots,
     discover_runs,
     load_pilot_detail,
@@ -330,3 +331,98 @@ def test_structured_pilot_dashboard_preserves_actual_text_and_host_references(
     assert "old centroid" in PILOT_HTML
     assert "LEFT/RIGHT DIFFERENCE MAP ASSIGNMENT SWAPPED" in PILOT_HTML
     assert 'class="pair-images"' in PILOT_HTML
+
+
+def test_unilateral_pilot_dashboard_renders_four_image_conflict_comparison(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs/r0917"
+    (root / "runs").mkdir(parents=True)
+    (root / "pilot.json").write_text(
+        json.dumps({"round": "R0.9.17", "model": "gpt-5.6-terra"}), encoding="utf-8"
+    )
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "unilateral_signal": "helpful_and_image_grounded",
+                "completed_semantic_trials": 9,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_mapping = {
+        "counterfactual_multimodal_input": True,
+        "seeds": {
+            str(seed): {
+                "expected_image_change_side": "right" if seed == 1_000_001 else "left",
+                "image_source_mapping": {
+                    "left_tactile": "baseline" if seed == 1_000_001 else "current",
+                    "right_tactile": "current" if seed == 1_000_001 else "baseline",
+                },
+            }
+            for seed in (1_000_000, 1_000_001, 1_000_002)
+        },
+    }
+    (root / "source_mapping.json").write_text(
+        json.dumps(source_mapping), encoding="utf-8"
+    )
+    conditions = (
+        "image_only",
+        "correct_structured_guidance",
+        "swapped_structured_guidance",
+    )
+    scalar = {
+        "left_tactile": {"mean_absolute_change": 18.0},
+        "right_tactile": {"mean_absolute_change": 0.0},
+    }
+    predictions = []
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        expected = source_mapping["seeds"][str(seed)]["expected_image_change_side"]
+        for condition in conditions:
+            run = root / "runs" / f"seed_{seed}" / condition
+            run.mkdir(parents=True)
+            prediction = {
+                "seed": seed,
+                "condition": condition,
+                "tactile_changed_side": expected,
+            }
+            predictions.append(prediction)
+            (run / "episode.json").write_text(
+                json.dumps({"round": "R0.9.17", "seed": seed, "condition": condition}),
+                encoding="utf-8",
+            )
+            visible = {
+                "images": [{"label": f"image-{index}"} for index in range(4)]
+            }
+            if condition != "image_only":
+                visible["tactile_change_summary"] = scalar
+            (run / "operator_context.jsonl").write_text(
+                json.dumps(
+                    {
+                        "tool": "observe",
+                        "response_text_blocks": [json.dumps(visible)],
+                        "response_image_paths": [f"images/{index}.png" for index in range(4)],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run / "agent_final.md").write_text("{}", encoding="utf-8")
+            (run / "condition.json").write_text("{}", encoding="utf-8")
+    with (root / "predictions.jsonl").open("w", encoding="utf-8") as stream:
+        for prediction in predictions:
+            stream.write(json.dumps(prediction) + "\n")
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 9
+    assert [cell["condition"] for cell in detail["cells"][:3]] == list(conditions)
+    assert all(len(cell["image_paths"]) == 4 for cell in detail["cells"])
+    assert all(len(cell["image_labels"]) == 4 for cell in detail["cells"])
+    assert detail["cells"][0]["structured_summary"] is None
+    assert len(detail["human_comparisons"]) == 3
+    assert detail["human_comparisons"][0]["conflict_reaction"] == "跟随图片"
+    assert build_unilateral_human_comparisons(predictions, source_mapping) == detail[
+        "human_comparisons"
+    ]
+    assert "Unilateral Tactile Guidance Conflict Pilot" in PILOT_HTML
+    assert "HOST-ONLY COUNTERFACTUAL MAPPING" in PILOT_HTML
+    assert "每个 seed 用人话对比" in PILOT_HTML

@@ -308,3 +308,66 @@ def test_structured_tactile_summary_is_visible_without_host_reference(
     assert "host-only-condition-name" not in text
     assert "DO_NOT_SHOW" not in text
     assert "press_depth" not in text and "reference_region" not in text
+
+
+def test_scalar_unilateral_summary_returns_exactly_four_images_without_mapping_leak(
+    tmp_path: Path,
+) -> None:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "unilateral"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    records = []
+    for index, label in enumerate(EXPECTED_LABELS):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    scalar = {
+        "active_pixel_ratio": 0.2,
+        "mean_absolute_change": 18.0,
+        "p95_absolute_change": 103.0,
+        "salient_mass": 1.8,
+    }
+    manifest = {
+        "condition": "swapped_structured_guidance",
+        "simulator_root": str(source_episode / "simulator"),
+        "images": records,
+        "model_visible_structured_tactile_summary": {
+            "left_tactile": scalar,
+            "right_tactile": scalar,
+        },
+        "image_source_mapping": {"left_tactile": "current", "right_tactile": "baseline"},
+        "expected_image_change_side": "left",
+        "counterfactual_multimodal_input": True,
+    }
+    (episode / "condition.json").write_text(json.dumps(manifest), encoding="utf-8")
+    blocks = build_observe_blocks(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=episode / "condition.json",
+    )
+    assert len(blocks) == 5
+    payload = json.loads(blocks[0].text)
+    assert payload["tactile_change_summary"] == {
+        "left_tactile": scalar,
+        "right_tactile": scalar,
+    }
+    text = blocks[0].text
+    assert not any(
+        term in text
+        for term in (
+            "swapped_structured_guidance",
+            "baseline",
+            "current",
+            "expected_image_change_side",
+            "counterfactual_multimodal_input",
+        )
+    )

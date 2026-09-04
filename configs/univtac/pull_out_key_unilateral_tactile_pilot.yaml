@@ -1,0 +1,14 @@
+task: pull_out_key
+seeds: [1000000, 1000001, 1000002]
+model: gpt-5.6-terra
+reasoning_effort: medium
+image_source_mapping:
+  "1000000": {left_tactile: current, right_tactile: baseline}
+  "1000001": {left_tactile: baseline, right_tactile: current}
+  "1000002": {left_tactile: current, right_tactile: baseline}
+condition_order:
+  "1000000": [image_only, correct_structured_guidance, swapped_structured_guidance]
+  "1000001": [correct_structured_guidance, swapped_structured_guidance, image_only]
+  "1000002": [swapped_structured_guidance, image_only, correct_structured_guidance]
+codex_timeout_seconds: 900
+pre_observe_retry_limit: 1

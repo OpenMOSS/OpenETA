@@ -1,0 +1,24 @@
+round: R1.3
+task: insert_hole
+support_seeds: [1000000, 1000001]
+query_seeds: [1000003, 1000004, 1000005]
+conditions:
+  - no_demo_multimodal
+  - correct_icl_multimodal
+  - action_swapped_icl_multimodal
+  - correct_icl_vision_only
+opaque_skills: [skill_slate, skill_ember]
+task_config: demo
+mode: collect
+device: cuda:0
+task_instructions:
+  insert_hole: Insert the peg into the hole.
+model: gpt-5.6-terra
+reasoning_effort: medium
+max_world_changing_choices: 1
+max_simulator_episodes: 15
+save_host_only: true
+strict_two_tactile_sensors: true
+simulator_timeout_seconds: 1800
+codex_timeout_seconds: 1200
+source_commit: 371fac67917307026be8f00869fcc1b61c623a9f

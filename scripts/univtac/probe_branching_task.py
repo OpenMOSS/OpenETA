@@ -50,7 +50,13 @@ def _parse_base_args(
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--task", required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--condition", choices=("expert", "correct", "wrong"), required=True)
+    parser.add_argument(
+        "--condition",
+        choices=("expert", "correct", "wrong", "selected"),
+        required=True,
+    )
+    parser.add_argument("--skill", choices=("skill_slate", "skill_ember"))
+    parser.add_argument("--canonical-class")
     base_args, _ = parser.parse_known_args(argv)
     return parser, base_args
 
@@ -89,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     task_name = str(base.task)
     seed = int(base.seed)
     condition = str(base.condition)
+    selected_skill = str(base.skill) if base.skill else None
+    canonical_class = str(base.canonical_class) if base.canonical_class else None
     episode_root.mkdir(parents=True, exist_ok=True)
     if (episode_root / "child_result.json").exists():
         raise FileExistsError(f"episode root is not fresh: {episode_root}")
@@ -167,6 +175,13 @@ def main(argv: list[str] | None = None) -> int:
             validate_branching_config,
         )
         from sim.envs.univtac.contract import validate_operator_visible
+        from sim.envs.univtac.insert_hole_tactile_icl import (
+            OPAQUE_TO_CLASS,
+            validate_r13_config,
+        )
+        from sim.envs.univtac.insert_hole_tactile_icl import (
+            QUERY_SEEDS as R13_QUERY_SEEDS,
+        )
         from sim.envs.univtac.native_operation import (
             attach_native_outcome,
             build_native_move_transition,
@@ -185,8 +200,26 @@ def main(argv: list[str] | None = None) -> int:
         config_payload = yaml.safe_load(args.config.read_text(encoding="utf-8"))
         if not isinstance(config_payload, dict):
             raise TypeError("branching config must be a mapping")
-        config = validate_branching_config(config_payload)
-        if task_name not in TASKS or seed not in SEEDS:
+        is_r13 = config_payload.get("round") == "R1.3"
+        if is_r13:
+            config = validate_r13_config(config_payload)
+            allowed_tasks = ("insert_hole",)
+            allowed_seeds = R13_QUERY_SEEDS
+            if condition not in {"expert", "selected"}:
+                raise RuntimeError("R1.3 child supports only expert or selected condition")
+            if condition == "selected" and (
+                selected_skill not in OPAQUE_TO_CLASS or canonical_class is None
+            ):
+                raise RuntimeError(
+                    "R1.3 selected continuation requires skill and canonical class"
+                )
+        else:
+            config = validate_branching_config(config_payload)
+            allowed_tasks = TASKS
+            allowed_seeds = SEEDS
+            if condition == "selected":
+                raise RuntimeError("selected condition is reserved for R1.3")
+        if task_name not in allowed_tasks or seed not in allowed_seeds:
             raise RuntimeError(f"unexpected task/seed: {task_name}/{seed}")
 
         native_config, native_config_path = load_task_config(
@@ -453,6 +486,11 @@ def main(argv: list[str] | None = None) -> int:
             x_move = float(insert_native["native_x_move"])
             if condition == "wrong":
                 x_move = -x_move
+            elif condition == "selected":
+                desired_class = OPAQUE_TO_CLASS[selected_skill]
+                x_move = abs(x_move) * (
+                    1.0 if desired_class == "positive_x_correction" else -1.0
+                )
             z_move = float(insert_native["native_z_move"])
             task.move(
                 task.atom.move_by_displacement(x=x_move, z=z_move),
@@ -469,6 +507,16 @@ def main(argv: list[str] | None = None) -> int:
                 "final_insert_z": -0.04,
                 "corrective_time_dilation": 0.5,
                 "final_time_dilation": 0.5,
+                "selected_skill": selected_skill,
+                "canonical_decision_class": canonical_class,
+                "execution_decision_class": insert_native["decision_class"],
+                "execution_state_mismatch": (
+                    condition == "selected"
+                    and insert_native["decision_class"] != canonical_class
+                ),
+                "agent_world_changing_choice_count": (
+                    1 if condition == "selected" else 0
+                ),
             }
         else:
             task.move(task.atom.close_gripper())
@@ -569,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
             episode_root / "episode.json",
             {
                 "schema_version": "openeta.univtac.branching_episode.v1",
-                "round": "R1.2",
+                "round": "R1.3" if is_r13 else "R1.2",
                 "task": task_name,
                 "seed": seed,
                 "condition": condition,

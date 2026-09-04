@@ -15,7 +15,7 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><p><a href="/r12-branching">R1.2：筛选真正需要触觉分支的任务 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><p><a href="/r12-branching">R1.2：筛选真正需要触觉分支的任务 →</a></p><p><a href="/r13-icl">R1.3：Insert Hole 接触前后 Tactile ICL →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
@@ -120,6 +120,23 @@ async function tick(){const d=await fetch('/api/r12-branching?t='+Date.now()).th
  document.querySelector('#experts').innerHTML=d.experts.map(card).join('');document.querySelector('#counterfactual').innerHTML=d.counterfactual.length?d.counterfactual.map(card).join(''):'<p>没有任务通过候选门槛，因此没有运行反事实。</p>';
 }tick();setInterval(tick,2000)
 </script>"""
+
+R13_ICL_HTML = """<!doctype html><meta charset="utf-8"><title>R1.3 Insert Hole Tactile ICL</title>
+<style>body{font:14px/1.5 system-ui;background:#101216;color:#e6e9ef;margin:20px}a{color:#8fd3ff}.summary,.cell{background:#181c22;border:1px solid #303744;border-radius:9px;padding:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(300px,1fr));gap:10px}.images{display:grid;grid-template-columns:1fr 1fr;gap:4px}.images img{width:100%;background:#000}.ok{color:#76db8b}.failed{color:#ff8585}.host{border:1px solid #9a7030;padding:8px;margin-top:8px}.host b{color:#f0b55a}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:7px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.metrics div{background:#222934;padding:9px}</style>
+<a href="/">← 实验列表</a><h1>R1.3：Insert Hole 接触前后 Tactile-Action ICL</h1><section class="summary"><p><b>说人话：</b>Codex 只能在两个互斥程序里选一个。我们比较不看示范、看正确触觉示范、看动作标签被交换的示范、以及只看视觉示范；选完立即在 fresh simulator 中执行，选错不补救。</p><div class="metrics" id="metrics"></div><p id="conclusion"></p></section><h2>3 个 query seed × 4 个条件</h2><div class="grid" id="grid"></div>
+<script>
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);
+const imgs=(run,paths)=>`<div class="images">${(paths||[]).map(p=>`<figure><img src="${art(run,p)}"><figcaption>${esc(p.split('/').slice(-3).join('/'))}</figcaption></figure>`).join('')}</div>`;
+const names={no_demo_multimodal:'No Demo',correct_icl_multimodal:'Correct Multimodal ICL',action_swapped_icl_multimodal:'Action-Swapped ICL',correct_icl_vision_only:'Correct Vision-Only ICL'};
+async function tick(){const d=await fetch('/api/r13-icl?t='+Date.now()).then(r=>r.json()),s=d.summary,m=s.condition_metrics;
+ document.querySelector('#metrics').innerHTML=Object.entries(names).map(([k,v])=>`<div><b>${v}</b><br>选向 ${m[k].correction_selection_correct_count}/3<br>native success ${m[k].native_continuation_success_count}/3</div>`).join('');
+ document.querySelector('#conclusion').innerHTML=`<b>结论：</b>${esc(s.action_icl_signal)}；触觉特异性：${esc(s.tactile_icl_signal)}。正确 ICL 相比 no-demo=${esc(s.gains.correct_icl_gain_over_no_demo)}，相比 swapped=${esc(s.gains.correct_icl_gain_over_swapped)}，相比 vision-only=${esc(s.gains.tactile_gain_over_vision_only)}。`;
+ document.querySelector('#grid').innerHTML=d.cells.map(c=>`<article class="cell"><h3>seed ${c.seed} · ${names[c.condition]}</h3><details><summary>Agent 真实看到的 support (${c.support_images.length} 张)</summary>${imgs(c.decision_run,c.support_images)}<pre>${esc(c.support_text.join('\n'))}</pre></details><h4>Canonical T0/T1 query (${c.query_images.length} 张)</h4>${imgs(c.decision_run,c.query_images)}<pre>${esc(c.query_text.join('\n'))}</pre><h4>Codex 只选一次</h4><p>${esc(c.selected_skill)} · confidence=${esc(c.confidence)}</p><p>${esc(c.reason)}</p><h4>Fresh physical after</h4>${imgs(c.execution_run,c.after_images)}<p class="${c.selection_correct?'ok':'failed'}">选向正确：${esc(c.selection_correct)}</p><p class="${c.native_success?'ok':'failed'}">native success：${esc(c.native_success)}</p><div class="host"><b>HOST-ONLY — NOT SHOWN TO CODEX</b><p>真实 class=${esc(c.host_only.canonical_decision_class)}；expected=${esc(c.host_only.expected_skill)}；execution mismatch=${esc(c.execution_state_mismatch)}</p><pre>${esc(JSON.stringify(c.intervention,null,2))}</pre></div></article>`).join('');
+}tick();setInterval(tick,2000)
+</script>"""
+
+R13_ICL_HTML = R13_ICL_HTML.replace("join('\n')", r"join('\n')")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -368,6 +385,71 @@ def load_r12_branching_detail(runs_root: Path) -> dict[str, Any]:
         "run_manifest": _load_json(run_root / "run_manifest.json"),
         "experts": experts,
         "counterfactual": counterfactual,
+    }
+
+
+def load_r13_icl_detail(runs_root: Path) -> dict[str, Any]:
+    root = runs_root.expanduser().resolve()
+    run_root = root / "univtac-isaac51-r13"
+    summary = _load_json(run_root / "summary.json")
+    if not summary:
+        raise FileNotFoundError("R1.3 ICL evidence is unavailable")
+    cells = []
+    order = {
+        "no_demo_multimodal": 0,
+        "correct_icl_multimodal": 1,
+        "action_swapped_icl_multimodal": 2,
+        "correct_icl_vision_only": 3,
+    }
+    for result_path in run_root.glob("decisions/seed_*/*/decision_result.json"):
+        decision_root = result_path.parent
+        decision = _load_json(result_path)
+        seed = int(decision["seed"])
+        condition = str(decision["condition"])
+        execution_root = run_root / "executions" / f"seed_{seed}" / condition
+        physical = _load_json(execution_root / "r13_result_row.json")
+        final_snapshot = _load_json(execution_root / "snapshot_final.json")
+        after_images, _ = _decision_images(
+            final_snapshot.get("operator_visible", {})
+        )
+        context = read_jsonl(decision_root / "operator_context.jsonl")
+        review = next((row for row in context if row.get("tool") == "review_demonstrations"), {})
+        query = next((row for row in context if row.get("tool") == "observe_query"), {})
+        choose = next((row for row in context if row.get("tool") == "choose_skill"), {})
+        host = _load_json(decision_root / "condition.json").get("host_only", {})
+        cells.append(
+            {
+                "seed": seed,
+                "condition": condition,
+                "decision_run": decision_root.relative_to(root).as_posix(),
+                "execution_run": execution_root.relative_to(root).as_posix(),
+                "support_images": review.get("response_image_paths", []),
+                "support_text": review.get("response_text_blocks", []),
+                "query_images": query.get("response_image_paths", []),
+                "query_text": query.get("response_text_blocks", []),
+                "selected_skill": choose.get("arguments", {}).get("skill"),
+                "confidence": choose.get("arguments", {}).get("confidence"),
+                "reason": choose.get("arguments", {}).get("reason"),
+                "selection_correct": decision.get("selection_correct"),
+                "native_success": physical.get("native_episode_success"),
+                "execution_state_mismatch": physical.get("execution_state_mismatch"),
+                "host_only": host,
+                "intervention": {
+                    "native_x_move": physical.get("native_x_move"),
+                    "native_z_move": physical.get("native_z_move"),
+                    "applied_x_move": physical.get("applied_x_move"),
+                    "applied_z_move": physical.get("applied_z_move"),
+                },
+                "after_images": after_images,
+            }
+        )
+    cells.sort(key=lambda row: (int(row["seed"]), order[str(row["condition"])]))
+    if len(cells) != 12:
+        raise ValueError(f"R1.3 dashboard requires twelve cells, found {len(cells)}")
+    return {
+        "summary": summary,
+        "run_manifest": _load_json(run_root / "run_manifest.json"),
+        "cells": cells,
     }
 
 
@@ -858,6 +940,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(R11_ICL_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/r12-branching":
                     return self._send(R12_BRANCHING_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/r13-icl":
+                    return self._send(R13_ICL_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path.startswith("/run/"):
                     _safe_run_root(root, parsed.path[5:])
                     return self._send(DETAIL_HTML.encode(), "text/html; charset=utf-8")
@@ -876,6 +960,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._json(load_r11_icl_detail(root))
                 if parsed.path == "/api/r12-branching":
                     return self._json(load_r12_branching_detail(root))
+                if parsed.path == "/api/r13-icl":
+                    return self._json(load_r13_icl_detail(root))
                 if parsed.path == "/api/pilot":
                     return self._json(
                         load_pilot_detail(_safe_pilot_root(root, query.get("pilot", [""])[0]))

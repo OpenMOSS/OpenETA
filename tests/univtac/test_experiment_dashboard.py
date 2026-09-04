@@ -10,6 +10,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     R10_OPERATION_HTML,
     R11_ICL_HTML,
     R12_BRANCHING_HTML,
+    R13_ICL_HTML,
     build_timeline,
     build_unilateral_human_comparisons,
     discover_pilots,
@@ -19,6 +20,7 @@ from scripts.univtac.serve_experiment_dashboard import (
     load_r10_operation_detail,
     load_r11_icl_detail,
     load_r12_branching_detail,
+    load_r13_icl_detail,
     load_run_detail,
 )
 
@@ -412,6 +414,143 @@ def test_r12_dashboard_separates_visible_images_from_host_decision(tmp_path: Pat
     assert "错误组只把 x 方向反过来" in R12_BRANCHING_HTML
     assert "本轮没有 Codex，也没有 ICL" in R12_BRANCHING_HTML
     assert "do_POST" not in R12_BRANCHING_HTML
+
+
+def test_r13_dashboard_uses_actual_mcp_context_and_separates_host_truth(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs/univtac-isaac51-r13"
+    root.mkdir(parents=True)
+    conditions = (
+        "no_demo_multimodal",
+        "correct_icl_multimodal",
+        "action_swapped_icl_multimodal",
+        "correct_icl_vision_only",
+    )
+    metrics = {
+        condition: {
+            "correction_selection_correct_count": 2,
+            "native_continuation_success_count": 2,
+        }
+        for condition in conditions
+    }
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "condition_metrics": metrics,
+                "action_icl_signal": "no_detectable_action_icl_signal",
+                "tactile_icl_signal": "generic_visual_or_multimodal_icl_without_tactile_gain",
+                "gains": {
+                    "correct_icl_gain_over_no_demo": 0,
+                    "correct_icl_gain_over_swapped": 1,
+                    "tactile_gain_over_vision_only": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "run_manifest.json").write_text('{"round":"R1.3"}', encoding="utf-8")
+    for seed in (1_000_003, 1_000_004, 1_000_005):
+        for condition in conditions:
+            decision = root / "decisions" / f"seed_{seed}" / condition
+            execution = root / "executions" / f"seed_{seed}" / condition
+            decision.mkdir(parents=True)
+            execution.mkdir(parents=True)
+            (decision / "decision_result.json").write_text(
+                json.dumps(
+                    {
+                        "seed": seed,
+                        "condition": condition,
+                        "selection_correct": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (decision / "condition.json").write_text(
+                json.dumps(
+                    {
+                        "agent_visible": {"query": {}},
+                        "host_only": {
+                            "canonical_decision_class": "DO_NOT_LEAK_CLASS",
+                            "expected_skill": "skill_slate",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            context = [
+                {
+                    "tool": "review_demonstrations",
+                    "response_text_blocks": ["actual support"],
+                    "response_image_paths": ["support.png"],
+                },
+                {
+                    "tool": "observe_query",
+                    "response_text_blocks": ["actual query"],
+                    "response_image_paths": ["t0.png", "t1.png"],
+                },
+                {
+                    "tool": "choose_skill",
+                    "arguments": {
+                        "skill": "skill_slate",
+                        "confidence": "medium",
+                        "reason": "actual reason",
+                    },
+                    "response_image_paths": [],
+                },
+            ]
+            (decision / "operator_context.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in context), encoding="utf-8"
+            )
+            (execution / "r13_result_row.json").write_text(
+                json.dumps(
+                    {
+                        "native_episode_success": True,
+                        "execution_state_mismatch": False,
+                        "native_x_move": -0.04,
+                        "native_z_move": -0.01,
+                        "applied_x_move": -0.04,
+                        "applied_z_move": -0.01,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (execution / "snapshot_final.json").write_text(
+                json.dumps(
+                    {
+                        "operator_visible": {
+                            "cameras": {
+                                "head": {"rgb": {"path": "final/head.png"}},
+                                "wrist": {"rgb": {"path": "final/wrist.png"}},
+                            },
+                            "tactile": {
+                                "left_tactile": {
+                                    "rgb_marker": {"path": "final/left.png"}
+                                },
+                                "right_tactile": {
+                                    "rgb_marker": {"path": "final/right.png"}
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+    detail = load_r13_icl_detail(tmp_path / "outputs")
+    assert len(detail["cells"]) == 12
+    assert detail["cells"][0]["support_text"] == ["actual support"]
+    assert detail["cells"][0]["query_images"] == ["t0.png", "t1.png"]
+    assert detail["cells"][0]["selected_skill"] == "skill_slate"
+    assert "DO_NOT_LEAK_CLASS" not in json.dumps(
+        {
+            "support": detail["cells"][0]["support_text"],
+            "query": detail["cells"][0]["query_text"],
+        }
+    )
+    assert detail["cells"][0]["host_only"]["canonical_decision_class"] == "DO_NOT_LEAK_CLASS"
+    assert "3 个 query seed × 4 个条件" in R13_ICL_HTML
+    assert "HOST-ONLY — NOT SHOWN TO CODEX" in R13_ICL_HTML
+    assert "do_POST" not in R13_ICL_HTML
 
 
 def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(

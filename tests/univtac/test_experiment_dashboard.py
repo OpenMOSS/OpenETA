@@ -7,12 +7,14 @@ from scripts.univtac.serve_experiment_dashboard import (
     DETAIL_HTML,
     PILOT_HTML,
     PROGRESS_HTML,
+    R10_OPERATION_HTML,
     build_timeline,
     build_unilateral_human_comparisons,
     discover_pilots,
     discover_runs,
     load_pilot_detail,
     load_project_progress,
+    load_r10_operation_detail,
     load_run_detail,
 )
 
@@ -194,6 +196,80 @@ def test_project_progress_uses_human_summaries_and_links_pilots(tmp_path: Path) 
     assert "一句话结论" in PROGRESS_HTML
     assert "技术证据（commit、测试、产物）" in PROGRESS_HTML
     assert "x.pro_question||x.pro_instruction_summary" in PROGRESS_HTML
+
+
+def test_r10_operation_dashboard_preserves_expert_and_agent_evidence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "outputs/univtac-isaac51-r10"
+    expert = root / "expert/seed_1000000"
+    failed = root / "agent/seed_1000000"
+    completed = root / "agent/attempt_02/seed_1000000"
+    for path in (expert, failed, completed):
+        path.mkdir(parents=True)
+    (root / "expert_summary.json").write_text(
+        json.dumps(
+            {
+                "native_expert_success_count": 3,
+                "results": [{"seed": 1_000_000, "expert_episode_success": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "run_manifest.json").write_text('{"round":"R1.0"}', encoding="utf-8")
+    (expert / "episode.json").write_text(
+        '{"round":"R1.0","seed":1000000}', encoding="utf-8"
+    )
+    (expert / "action_trace.jsonl").write_text(
+        '{"semantic_segment":"align_key"}\n', encoding="utf-8"
+    )
+    for attempt_root, attempt, status, action_count in (
+        (failed, 1, "failed", 0),
+        (completed, 2, "completed", 3),
+    ):
+        (attempt_root / "episode.json").write_text(
+            json.dumps(
+                {
+                    "round": "R1.0",
+                    "seed": 1_000_000,
+                    "attempt": attempt,
+                    "status": status,
+                    "agent_action_count": action_count,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (attempt_root / "operator_context.jsonl").write_text(
+            json.dumps(
+                {
+                    "tool": "observe",
+                    "response_image_paths": ["a.png", "b.png", "c.png", "d.png"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (attempt_root / "action_trace.jsonl").write_text(
+            '{"semantic_segment":"align_key"}\n' if action_count else "",
+            encoding="utf-8",
+        )
+        (attempt_root / "final_result.json").write_text(
+            json.dumps({"agent_operation_smoke_success": status == "completed"}),
+            encoding="utf-8",
+        )
+        (attempt_root / "agent_final.md").write_text(status, encoding="utf-8")
+
+    detail = load_r10_operation_detail(tmp_path / "outputs")
+    assert detail["expert_summary"]["native_expert_success_count"] == 3
+    assert detail["expert_episodes"][0]["action_trace"][0]["semantic_segment"] == "align_key"
+    assert [row["episode"]["attempt"] for row in detail["agent_attempts"]] == [1, 2]
+    assert detail["agent_attempts"][1]["operator_context"][0][
+        "response_image_paths"
+    ] == ["a.png", "b.png", "c.png", "d.png"]
+    assert "第一次 Codex 真实操作" in R10_OPERATION_HTML
+    assert "ACTUAL MCP CONTEXT SEEN BY CODEX" in R10_OPERATION_HTML
+    assert "HOST-ONLY Outcome — NOT SHOWN TO AGENT" in R10_OPERATION_HTML
+    assert "do_POST" not in R10_OPERATION_HTML
 
 
 def test_difference_pilot_dashboard_orders_conditions_and_builds_pair_viewer(

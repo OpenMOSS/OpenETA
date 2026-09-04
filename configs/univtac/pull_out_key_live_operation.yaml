@@ -1,0 +1,12 @@
+task: pull_out_key
+seed: 1000000
+task_config: demo
+mode: collect
+device: cuda:0
+task_instruction: Pull the key out of the slot.
+model: gpt-5.6-terra
+reasoning_effort: medium
+skills: [align_key, settle_alignment, pull_key_out]
+max_world_changing_skills: 3
+worker_timeout_seconds: 1800
+codex_timeout_seconds: 900

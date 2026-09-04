@@ -15,7 +15,7 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
@@ -63,6 +63,31 @@ DETAIL_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC replay</tit
 
 # Keep the JavaScript string escape intact inside the Python triple-quoted HTML.
 DETAIL_HTML = DETAIL_HTML.replace("join('\n')", r"join('\n')")
+
+R10_OPERATION_HTML = """<!doctype html><meta charset="utf-8"><title>R1.0 UniVTAC Operation</title>
+<style>body{font:15px/1.55 system-ui;background:#101216;color:#e6e9ef;margin:24px auto;max-width:1300px;padding:0 18px}a{color:#8fd3ff}section,.card{background:#181c22;border:1px solid #303744;border-radius:10px;padding:15px;margin:12px 0}table{border-collapse:collapse;width:100%}th,td{border:1px solid #303744;padding:8px;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}.images{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.images img{width:100%;max-height:390px;object-fit:contain;background:#000}.timeline{border-left:4px solid #5b8bad}.choice{border-left-color:#b07cff}.execution{border-left-color:#55b8ff}.host{border-color:#9a7030}.host-only{color:#f0b55a}pre{white-space:pre-wrap;overflow:auto;background:#0c0e12;padding:9px}.plain{font-size:17px;background:#222934;border-left:4px solid #76db8b;padding:12px}.attempt{color:#98a3b3}</style>
+<a href="/">← 实验列表</a><h1>R1.0：第一次 Codex 真实操作</h1><p class="plain" id="plain">加载中……</p>
+<section><h2>Native Expert Development Baseline</h2><p>这不是论文成功率，而是三个固定 seed 的开发基线。</p><h3 id="score"></h3><table><thead><tr><th>seed</th><th>plan</th><th>check_success</th><th>early_stop</th><th>final outcome</th><th>native segments</th></tr></thead><tbody id="experts"></tbody></table></section>
+<section><h2>Codex Operation</h2><div id="attempts"></div></section>
+<script>
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const art=(run,p)=>'/artifact?run='+encodeURIComponent(run)+'&path='+encodeURIComponent(p);
+const imageLabels=['Head RGB','Wrist RGB','Left tactile rgb_marker','Right tactile rgb_marker'];
+const images=(run,paths)=>`<div class="images">${(paths||[]).map((p,i)=>`<figure><img src="${art(run,p)}"><figcaption>${esc(imageLabels[i]||p)}</figcaption></figure>`).join('')}</div>`;
+const changed=(run,row)=>{const paths=row.response_image_paths||[];return `<div class="images">${paths.flatMap((p,i)=>{const before=p.replace('/post/','/pre/');return [`<figure><img src="${art(run,before)}"><figcaption>Before · ${esc(imageLabels[i])}</figcaption></figure>`,`<figure><img src="${art(run,p)}"><figcaption>After · ${esc(imageLabels[i])}</figcaption></figure>`]}).join('')}</div>`};
+async function tick(){
+ const d=await fetch('/api/r10-operation?t='+Date.now()).then(r=>r.json()),s=d.expert_summary;
+ document.querySelector('#score').textContent=`${s.native_expert_success_count} / 3 native expert episodes succeeded`;
+ document.querySelector('#experts').innerHTML=(s.results||[]).map(x=>`<tr><td>${esc(x.seed)}</td><td>${esc(x.plan_success)}</td><td>${esc(x.native_check_success)}</td><td>${esc(x.native_check_early_stop)}</td><td class="${x.expert_episode_success?'ok':'failed'}">${esc(x.expert_episode_success)}</td><td>${esc((x.semantic_segments||[]).join(' → '))}</td></tr>`).join('');
+ const completed=(d.agent_attempts||[]).find(x=>x.episode.status==='completed');
+ document.querySelector('#plain').textContent=completed?'Codex 先看了相机和双侧触觉，再自己选择三个受限技能；每做一步都重新观察，最后原生任务判定成功。':'尚无完成的 Codex 操作。';
+ document.querySelector('#attempts').innerHTML=(d.agent_attempts||[]).map(a=>{const e=a.episode,ctx=a.operator_context||[],exec=ctx.filter(x=>x.tool==='execute_skill'),initial=ctx.find(x=>x.tool==='observe'),final=a.final_result||{};return `<article class="card"><h3>Attempt ${esc(e.attempt)} · seed ${esc(e.seed)} · <span class="${e.status==='completed'?'ok':'failed'}">${esc(e.status)}</span></h3><p class="attempt">model ${esc(e.model)} · tools ${(e.mcp_tools||[]).map(esc).join(', ')}</p>${e.status!=='completed'?`<p>这次在真实动作前失败，world-changing actions=${esc(e.agent_action_count)}；证据保留，但它不是任务结果。</p>`:''}${initial?`<div class="timeline"><h3>1. Agent Saw</h3><p><b>ACTUAL MCP CONTEXT SEEN BY CODEX</b></p><pre>${esc((initial.response_text_blocks||[]).join('\n'))}</pre>${images(a.run,initial.response_image_paths)}</div>`:''}<div class="card choice"><h3>2. Agent Chose</h3><p>${exec.length?exec.map(x=>esc(x.arguments.skill)).join(' → '):'没有执行动作'}</p></div>${exec.map((x,i)=>{const t=(a.action_trace||[])[i]||{};return `<div class="card execution"><h3>Step ${i+1}: ${esc(x.arguments.skill)}</h3><p><b>Environment Executed</b> · simulator steps ${esc((t.simulator_step_range||[]).join(' → '))} · plan ${esc(t.plan_success_after)} · move ${esc(t.move_returned)}</p><details><summary>native action evidence</summary><pre>${esc(JSON.stringify(t.native_actions_after||[],null,2))}</pre></details><h4>What Changed</h4>${changed(a.run,x)}</div>`}).join('')}<div class="card"><h3>3. Agent Reaction</h3><pre>${esc(a.agent_final)}</pre></div><div class="card host"><h3 class="host-only">HOST-ONLY Outcome — NOT SHOWN TO AGENT</h3><p>plan=${esc(final.plan_success)} · native success=${esc(final.native_check_success)} · early stop=${esc(final.native_check_early_stop)} · final=${esc(final.agent_operation_smoke_success)}</p></div></article>`}).join('');
+}
+tick();setInterval(tick,2000)
+</script>"""
+
+# Keep the JavaScript string escape intact inside the Python triple-quoted HTML.
+R10_OPERATION_HTML = R10_OPERATION_HTML.replace("join('\n')", r"join('\n')")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -144,6 +169,49 @@ def load_project_progress(runs_root: Path) -> dict[str, Any]:
             runs_root.expanduser().resolve() / "univtac-project-dashboard/progress.jsonl"
         ),
         "pilots": discover_pilots(runs_root),
+    }
+
+
+def load_r10_operation_detail(runs_root: Path) -> dict[str, Any]:
+    operation_root = runs_root.expanduser().resolve() / "univtac-isaac51-r10"
+    if not (operation_root / "expert_summary.json").is_file():
+        raise FileNotFoundError("R1.0 operation evidence is unavailable")
+    expert_episodes = []
+    for episode_path in sorted((operation_root / "expert").glob("seed_*/episode.json")):
+        episode_root = episode_path.parent
+        expert_episodes.append(
+            {
+                "run": episode_root.relative_to(runs_root.resolve()).as_posix(),
+                "episode": _load_json(episode_path),
+                "action_trace": read_jsonl(episode_root / "action_trace.jsonl"),
+                "final_result": _load_json(episode_root / "final_result.json"),
+            }
+        )
+    agent_attempts = []
+    for episode_path in (operation_root / "agent").rglob("episode.json"):
+        episode_root = episode_path.parent
+        episode = _load_json(episode_path)
+        episode.setdefault("attempt", 1)
+        agent_attempts.append(
+            {
+                "run": episode_root.relative_to(runs_root.resolve()).as_posix(),
+                "episode": episode,
+                "operator_context": read_jsonl(episode_root / "operator_context.jsonl"),
+                "action_trace": read_jsonl(episode_root / "action_trace.jsonl"),
+                "final_result": _load_json(episode_root / "final_result.json"),
+                "agent_final": (
+                    (episode_root / "agent_final.md").read_text(encoding="utf-8")
+                    if (episode_root / "agent_final.md").is_file()
+                    else ""
+                ),
+            }
+        )
+    agent_attempts.sort(key=lambda row: int(row["episode"].get("attempt", 0)))
+    return {
+        "run_manifest": _load_json(operation_root / "run_manifest.json"),
+        "expert_summary": _load_json(operation_root / "expert_summary.json"),
+        "expert_episodes": expert_episodes,
+        "agent_attempts": agent_attempts,
     }
 
 
@@ -626,6 +694,10 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(LIST_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/progress":
                     return self._send(PROGRESS_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/r10-operation":
+                    return self._send(
+                        R10_OPERATION_HTML.encode(), "text/html; charset=utf-8"
+                    )
                 if parsed.path.startswith("/run/"):
                     _safe_run_root(root, parsed.path[5:])
                     return self._send(DETAIL_HTML.encode(), "text/html; charset=utf-8")
@@ -638,6 +710,8 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._json(discover_pilots(root))
                 if parsed.path == "/api/progress":
                     return self._json(load_project_progress(root))
+                if parsed.path == "/api/r10-operation":
+                    return self._json(load_r10_operation_detail(root))
                 if parsed.path == "/api/pilot":
                     return self._json(
                         load_pilot_detail(_safe_pilot_root(root, query.get("pilot", [""])[0]))

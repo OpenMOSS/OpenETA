@@ -1,0 +1,9 @@
+task: pull_out_key
+seeds: [1000000, 1000001, 1000002]
+task_config: demo
+mode: collect
+device: cuda:0
+task_instruction: Pull the key out of the slot.
+save_host_only: true
+strict_two_tactile_sensors: true
+timeout_seconds: 1800

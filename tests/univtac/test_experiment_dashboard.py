@@ -542,3 +542,171 @@ def test_staged_grounding_dashboard_renders_four_ordered_phases(tmp_path: Path) 
     assert "Image-First Staged Grounding Pilot" in PILOT_HTML
     assert "provisional → final changed" in PILOT_HTML
     assert "R0.9.17 single-stage swapped" in PILOT_HTML
+
+
+def test_mechanism_ablation_dashboard_renders_three_by_three_funnel(tmp_path: Path) -> None:
+    root = tmp_path / "outputs/r0919"
+    (root / "runs").mkdir(parents=True)
+    protocols = (
+        "simultaneous_fusion",
+        "image_first_no_commit",
+        "image_first_with_commit",
+    )
+    (root / "pilot.json").write_text(
+        json.dumps(
+            {
+                "round": "R0.9.19",
+                "model": "gpt-5.6-terra",
+                "protocols": list(protocols),
+            }
+        ),
+        encoding="utf-8",
+    )
+    metrics = {
+        protocol: {"final_follow_image_rate": {"followed": index + 1, "evaluated": 3}}
+        for index, protocol in enumerate(protocols)
+    }
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "mechanism_result": "image_first_ordering_sufficient",
+                "completed_semantic_trials": 9,
+                "protocol_metrics": metrics,
+                "r0918_reference": {
+                    "conflict_aware_committed_protocol": {
+                        "follow_image": {"followed": 3, "evaluated": 3}
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    predictions = []
+    image_payload = {
+        "images": [
+            {"label": label}
+            for label in (
+                "camera/head/rgb",
+                "camera/wrist/rgb",
+                "tactile/left_tactile/rgb_marker",
+                "tactile/right_tactile/rgb_marker",
+            )
+        ]
+    }
+    summary = {
+        "left_tactile": {"mean_absolute_change": 0.0},
+        "right_tactile": {"mean_absolute_change": 18.0},
+    }
+    judgment = {
+        "tactile_image_access": "available",
+        "left_tactile_state": "clear_change",
+        "right_tactile_state": "little_or_no_change",
+        "tactile_changed_side": "left",
+    }
+    for seed in (1_000_000, 1_000_001, 1_000_002):
+        for protocol in protocols:
+            run = root / "runs" / f"seed_{seed}" / protocol
+            run.mkdir(parents=True)
+            final = {
+                "seed": seed,
+                "protocol": protocol,
+                "guidance_consistency": "conflicting",
+                "final_changed_side": "left",
+                "final_evidence_basis": "image",
+            }
+            predictions.append(final)
+            (run / "episode.json").write_text(
+                json.dumps(
+                    {
+                        "round": "R0.9.19",
+                        "seed": seed,
+                        "protocol": protocol,
+                        "ended_at": "2026-09-04T00:00:04Z",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                        "tool_call_count": 1
+                        if protocol == "simultaneous_fusion"
+                        else 3
+                        if protocol.endswith("with_commit")
+                        else 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run / "condition.json").write_text(
+                json.dumps(
+                    {
+                        "expected_image_side": "left",
+                        "text_indicated_side": "right",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            first_payload = dict(image_payload)
+            if protocol == "simultaneous_fusion":
+                first_payload["tactile_change_summary"] = summary
+            rows = [
+                {
+                    "seq": 1,
+                    "timestamp_s": 1.0,
+                    "tool": "observe" if protocol == "simultaneous_fusion" else "observe_images",
+                    "response_text_blocks": [json.dumps(first_payload)],
+                    "response_image_paths": [f"images/{index}.png" for index in range(4)],
+                }
+            ]
+            if protocol == "image_first_with_commit":
+                (run / "image_judgment.json").write_text(
+                    json.dumps(judgment), encoding="utf-8"
+                )
+                rows.append(
+                    {
+                        "seq": 2,
+                        "timestamp_s": 2.0,
+                        "tool": "record_image_judgment",
+                        "arguments": judgment,
+                        "response_text_blocks": ["{}"],
+                        "response_image_paths": [],
+                    }
+                )
+            if protocol != "simultaneous_fusion":
+                rows.append(
+                    {
+                        "seq": len(rows) + 1,
+                        "timestamp_s": 3.0,
+                        "tool": "observe_structured_guidance",
+                        "response_text_blocks": [
+                            json.dumps({"tactile_change_summary": summary})
+                        ],
+                        "response_image_paths": [],
+                    }
+                )
+            (run / "operator_context.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+            )
+            (run / "agent_final.md").write_text(json.dumps(final), encoding="utf-8")
+    with (root / "predictions.jsonl").open("w", encoding="utf-8") as stream:
+        for prediction in predictions:
+            stream.write(json.dumps(prediction) + "\n")
+    assert discover_pilots(tmp_path / "outputs") == [
+        {
+            "directory": "r0919",
+            "signal": "image_first_ordering_sufficient",
+            "completed_call_count": 9,
+        }
+    ]
+    detail = load_pilot_detail(root)
+    assert len(detail["cells"]) == 9
+    assert [cell["condition"] for cell in detail["cells"][:3]] == list(protocols)
+    assert all(len(cell["image_paths"]) == 4 for cell in detail["cells"])
+    assert detail["cells"][0]["structured_summary"] == summary
+    assert detail["cells"][1]["structured_summary"] == summary
+    assert detail["cells"][2]["image_judgment"] == judgment
+    assert [item["name"] for item in detail["mechanism_funnel"]] == [
+        "All together",
+        "Images first",
+        "Explicit commitment",
+        "R0.9.18 conflict-aware instruction",
+    ]
+    assert len(detail["host_expectations"]) == 9
+    assert "Tactile Grounding Mechanism Ablation" in PILOT_HTML
+    assert "follow image" in PILOT_HTML and "follow text" in PILOT_HTML
+    assert "HOST-ONLY EXPECTED IMAGE / SWAPPED TEXT SIDES" in PILOT_HTML

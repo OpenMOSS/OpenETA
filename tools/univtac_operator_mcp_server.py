@@ -32,6 +32,13 @@ _STRUCTURED_SCALAR_FIELDS = {
 _STRUCTURED_REGION_FIELDS = _STRUCTURED_SCALAR_FIELDS | {
     "normalized_horizontal_saliency"
 }
+_MCP_MODES = (
+    "observe",
+    "staged",
+    "simultaneous_fusion",
+    "image_first_no_commit",
+    "image_first_with_commit",
+)
 
 
 def _validated_structured_summary(payload: Any) -> dict[str, Any]:
@@ -354,25 +361,115 @@ class StagedGroundingSession:
         return blocks
 
 
+class ImageFirstNoCommitSession:
+    """Reveal guidance only after images, without exposing a commitment tool."""
+
+    def __init__(
+        self, *, episode_root: Path, snapshot_path: Path, condition_manifest: Path
+    ) -> None:
+        self.episode_root = episode_root.expanduser().resolve(strict=True)
+        self.snapshot_path = snapshot_path.expanduser().resolve(strict=True)
+        self.condition_manifest = condition_manifest.expanduser().resolve(strict=True)
+        if not self.condition_manifest.is_relative_to(self.episode_root):
+            raise ValueError("condition manifest must be inside the episode root")
+        manifest = json.loads(self.condition_manifest.read_text(encoding="utf-8"))
+        if "model_visible_structured_tactile_summary" not in manifest:
+            raise ValueError("image-first mode requires structured tactile guidance")
+        self.guidance = _validated_structured_summary(
+            manifest["model_visible_structured_tactile_summary"]
+        )
+        self.state = "START"
+
+    def observe_images(self) -> list[Any]:
+        if self.state != "START":
+            raise RuntimeError("observe_images is available exactly once at START")
+        blocks = build_observe_blocks(
+            episode_root=self.episode_root,
+            snapshot_path=self.snapshot_path,
+            condition_manifest=self.condition_manifest,
+            include_structured_summary=False,
+        )
+        _append_operator_context(
+            episode_root=self.episode_root,
+            tool="observe_images",
+            arguments={},
+            blocks=blocks,
+        )
+        self.state = "IMAGES_OBSERVED"
+        return blocks
+
+    def observe_structured_guidance(self) -> list[Any]:
+        if self.state != "IMAGES_OBSERVED":
+            raise RuntimeError(
+                "observe_structured_guidance requires one completed observe_images call"
+            )
+        blocks = [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {"tactile_change_summary": self.guidance},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        ]
+        _append_operator_context(
+            episode_root=self.episode_root,
+            tool="observe_structured_guidance",
+            arguments={},
+            blocks=blocks,
+        )
+        self.state = "GUIDANCE_OBSERVED"
+        return blocks
+
+
+def _validate_simultaneous_manifest(path: Path, episode_root: Path) -> None:
+    resolved = path.expanduser().resolve(strict=True)
+    if not resolved.is_relative_to(episode_root):
+        raise ValueError("condition manifest must be inside the episode root")
+    manifest = json.loads(resolved.read_text(encoding="utf-8"))
+    images = manifest.get("images")
+    if not isinstance(images, list) or [item.get("label") for item in images] != [
+        *_CAMERA_LABELS,
+        *_TACTILE_LABELS,
+    ]:
+        raise ValueError("simultaneous fusion requires exactly four canonical images")
+    if "model_visible_structured_tactile_summary" not in manifest:
+        raise ValueError("simultaneous fusion requires structured tactile guidance")
+    _validated_structured_summary(manifest["model_visible_structured_tactile_summary"])
+
+
 def build_server(
     *,
     episode_root: Path,
     snapshot_path: Path,
     condition_manifest: Path | None = None,
-    mode: Literal["observe", "staged"] = "observe",
+    mode: Literal[
+        "observe",
+        "staged",
+        "simultaneous_fusion",
+        "image_first_no_commit",
+        "image_first_with_commit",
+    ] = "observe",
 ) -> FastMCP:
     root = episode_root.expanduser().resolve(strict=True)
     snapshot = snapshot_path.expanduser().resolve(strict=True)
-    if mode not in {"observe", "staged"}:
+    if mode not in _MCP_MODES:
         raise ValueError(f"unsupported UniVTAC MCP mode: {mode}")
-    instructions = (
-        "Use observe_images, record_image_judgment, then observe_structured_guidance."
-        if mode == "staged"
-        else "One validated UniVTAC pre-action observation is available through observe."
-    )
+    commit_mode = mode in {"staged", "image_first_with_commit"}
+    no_commit_mode = mode == "image_first_no_commit"
+    simultaneous_mode = mode == "simultaneous_fusion"
+    if commit_mode:
+        instructions = (
+            "Use observe_images, record_image_judgment, then observe_structured_guidance."
+        )
+    elif no_commit_mode:
+        instructions = "Use observe_images, then observe_structured_guidance."
+    else:
+        instructions = "One validated UniVTAC pre-action observation is available through observe."
     server = FastMCP("univtac-readonly", instructions=instructions, log_level="WARNING")
 
-    if mode == "staged":
+    if commit_mode:
         if condition_manifest is None:
             raise ValueError("staged mode requires a condition manifest")
         session = StagedGroundingSession(
@@ -448,6 +545,44 @@ def build_server(
 
         return server
 
+    if no_commit_mode:
+        if condition_manifest is None:
+            raise ValueError("image-first no-commit mode requires a condition manifest")
+        no_commit_session = ImageFirstNoCommitSession(
+            episode_root=root,
+            snapshot_path=snapshot,
+            condition_manifest=condition_manifest,
+        )
+
+        @server.tool(
+            name="observe_images",
+            description="Return task context and four native images without structured guidance.",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=False, destructiveHint=False
+            ),
+            structured_output=False,
+        )
+        def observe_images() -> list[Any]:
+            return no_commit_session.observe_images()
+
+        @server.tool(
+            name="observe_structured_guidance",
+            description="Reveal structured tactile guidance after images were observed.",
+            annotations=ToolAnnotations(
+                readOnlyHint=True, idempotentHint=False, destructiveHint=False
+            ),
+            structured_output=False,
+        )
+        def observe_structured_guidance() -> list[Any]:
+            return no_commit_session.observe_structured_guidance()
+
+        return server
+
+    if simultaneous_mode:
+        if condition_manifest is None:
+            raise ValueError("simultaneous fusion mode requires a condition manifest")
+        _validate_simultaneous_manifest(condition_manifest, root)
+
     @server.tool(
         name="observe",
         description=(
@@ -478,7 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--episode-root", type=Path, required=True)
     parser.add_argument("--snapshot-pre", type=Path, required=True)
     parser.add_argument("--condition-manifest", type=Path)
-    parser.add_argument("--mode", choices=("observe", "staged"), default="observe")
+    parser.add_argument("--mode", choices=_MCP_MODES, default="observe")
     args = parser.parse_args(argv)
     server = build_server(
         episode_root=args.episode_root,

@@ -1,0 +1,9 @@
+seeds: [1000000, 1000001, 1000002]
+protocol_order:
+  "1000000": [simultaneous_fusion, image_first_no_commit, image_first_with_commit]
+  "1000001": [image_first_no_commit, image_first_with_commit, simultaneous_fusion]
+  "1000002": [image_first_with_commit, simultaneous_fusion, image_first_no_commit]
+model: gpt-5.6-terra
+reasoning_effort: medium
+codex_timeout_seconds: 180
+pre_image_tool_retry_limit: 1

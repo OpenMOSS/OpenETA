@@ -11,6 +11,7 @@ from PIL import Image as PilImage
 from sim.envs.univtac.contract import UniVTACTaskSnapshot
 from sim.envs.univtac.tactile_causal_pilot import stage_condition
 from tools.univtac_operator_mcp_server import (
+    ImageFirstNoCommitSession,
     StagedGroundingSession,
     build_observe_blocks,
     build_server,
@@ -503,5 +504,103 @@ def test_staged_server_exposes_only_three_grounding_tools(tmp_path: Path) -> Non
     assert [tool.name for tool in server._tool_manager.list_tools()] == [
         "observe_images",
         "record_image_judgment",
+        "observe_structured_guidance",
+    ]
+
+
+def _mechanism_episode(tmp_path: Path) -> tuple[Path, Path, Path]:
+    source_episode, snapshot = make_episode(tmp_path)
+    episode = tmp_path / "mechanism"
+    images = episode / "images"
+    images.mkdir(parents=True)
+    records = []
+    for index, label in enumerate(EXPECTED_LABELS):
+        path = images / f"image_{index}.png"
+        PilImage.new("RGB", (8, 6), (index, 20, 30)).save(path)
+        records.append(
+            {
+                "label": label,
+                "path": f"images/{path.name}",
+                "shape": [6, 8, 3],
+                "dtype": "uint8",
+                "media_type": "image/png",
+            }
+        )
+    scalar = {
+        "active_pixel_ratio": 0.2,
+        "mean_absolute_change": 18.0,
+        "p95_absolute_change": 103.0,
+        "salient_mass": 1.8,
+    }
+    manifest = episode / "condition.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "simulator_root": str(source_episode / "simulator"),
+                "images": records,
+                "model_visible_structured_tactile_summary": {
+                    "left_tactile": scalar,
+                    "right_tactile": {key: 0.0 for key in scalar},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return episode, snapshot, manifest
+
+
+def test_mechanism_server_exposes_exact_tools_per_mode(tmp_path: Path) -> None:
+    episode, snapshot, manifest = _mechanism_episode(tmp_path)
+    simultaneous = build_server(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest,
+        mode="simultaneous_fusion",
+    )
+    assert [tool.name for tool in simultaneous._tool_manager.list_tools()] == ["observe"]
+    no_commit = build_server(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest,
+        mode="image_first_no_commit",
+    )
+    assert [tool.name for tool in no_commit._tool_manager.list_tools()] == [
+        "observe_images",
+        "observe_structured_guidance",
+    ]
+    with_commit = build_server(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest,
+        mode="image_first_with_commit",
+    )
+    assert [tool.name for tool in with_commit._tool_manager.list_tools()] == [
+        "observe_images",
+        "record_image_judgment",
+        "observe_structured_guidance",
+    ]
+
+
+def test_image_first_no_commit_reveals_guidance_only_after_images(tmp_path: Path) -> None:
+    episode, snapshot, manifest = _mechanism_episode(tmp_path)
+    session = ImageFirstNoCommitSession(
+        episode_root=episode,
+        snapshot_path=snapshot,
+        condition_manifest=manifest,
+    )
+    with __import__("pytest").raises(RuntimeError, match="observe_images"):
+        session.observe_structured_guidance()
+    blocks = session.observe_images()
+    assert len(blocks) == 5
+    assert "tactile_change_summary" not in blocks[0].text
+    with __import__("pytest").raises(RuntimeError, match="exactly once"):
+        session.observe_images()
+    guidance = session.observe_structured_guidance()
+    assert set(json.loads(guidance[0].text)) == {"tactile_change_summary"}
+    with __import__("pytest").raises(RuntimeError, match="observe_images"):
+        session.observe_structured_guidance()
+    rows = [json.loads(line) for line in (episode / "operator_context.jsonl").read_text().splitlines()]
+    assert [row["tool"] for row in rows] == [
+        "observe_images",
         "observe_structured_guidance",
     ]

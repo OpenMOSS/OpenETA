@@ -1,0 +1,42 @@
+name: tactile_grounding_image_first
+version: "0.1"
+status: candidate
+mode: read_only
+tool_sequence:
+  - observe_images
+  - observe_structured_guidance
+requires_record_image_judgment: false
+evidence_policy:
+  image_first: true
+  structured_guidance_is_derived: true
+  structured_guidance_may_be_misassigned: true
+  report_conflict_explicitly: true
+  preserve_clear_image_supported_judgment: true
+  abstain_when_images_are_ambiguous: true
+forbidden_claims:
+  - exact_force
+  - exact_pressure
+  - friction
+  - grip_stability
+  - object_pose
+  - task_success
+instruction: |
+  The structured tactile summary is derived evidence and may be incorrect or assigned to the wrong
+  tactile side.
+
+  Inspect the tactile images themselves before requesting the structured guidance.
+
+  When image evidence and structured guidance conflict, explicitly report the conflict.
+
+  Do not replace a clear image-supported judgment merely because the structured summary disagrees.
+
+  When the tactile images are genuinely ambiguous or unavailable, report uncertainty rather than
+  blindly choosing either source.
+output_schema:
+  guidance_consistency: consistent|conflicting|uncertain
+  final_left_tactile_state: clear_change|little_or_no_change|uncertain
+  final_right_tactile_state: clear_change|little_or_no_change|uncertain
+  final_changed_side: left|right|both|neither|uncertain
+  final_evidence_basis: image|structured_guidance|both|uncertain
+  evidence_summary: non_empty_text
+  uncertainty: non_empty_text

@@ -38,7 +38,7 @@ include = ["adapter*", "agent*", "configs*", "logger*", "scripts*", "sim*", "too
 exclude = ["sim.venvs*"]
 
 [tool.setuptools.package-data]
-"agent.skills" = ["*.md"]
+"agent.skills" = ["*.md", "*.yaml"]
 configs = [
   "embodied/operator-context/**/*.json",
   "embodied/operator-context/**/*.md",

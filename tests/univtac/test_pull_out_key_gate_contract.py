@@ -76,7 +76,14 @@ def test_gate_config_fixes_one_seed_and_forbids_actions() -> None:
         validate_gate_config(dict(payload, capture_tactile_pair=True))["capture_tactile_pair"]
         is True
     )
-    assert ALLOWED_SEEDS == (1_000_000, 1_000_001, 1_000_002)
+    assert ALLOWED_SEEDS == (
+        1_000_000,
+        1_000_001,
+        1_000_002,
+        1_000_003,
+        1_000_004,
+        1_000_005,
+    )
     assert validate_gate_config(dict(payload, seed=1_000_001))["seed"] == 1_000_001
     changed = dict(payload, seed=0)
     with pytest.raises(UniVTACContractError, match="seed must be one of"):

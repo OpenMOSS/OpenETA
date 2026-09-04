@@ -1,0 +1,19 @@
+task: pull_out_key
+seeds: [1000003, 1000004, 1000005]
+expected_image_side:
+  "1000003": right
+  "1000004": left
+  "1000005": right
+condition_order:
+  "1000003": [simultaneous_conflict_aware_swapped, skill_correct_guidance, skill_swapped_guidance]
+  "1000004": [skill_correct_guidance, skill_swapped_guidance, simultaneous_conflict_aware_swapped]
+  "1000005": [skill_swapped_guidance, simultaneous_conflict_aware_swapped, skill_correct_guidance]
+model: gpt-5.6-terra
+reasoning_effort: medium
+skill_name: tactile_grounding_image_first
+skill_version: "0.1"
+gate_config: configs/univtac/pull_out_key_seed1000000_gate.yaml
+headless: true
+capture_timeout_seconds: 1260
+codex_timeout_seconds: 180
+pre_image_tool_retry_limit: 1

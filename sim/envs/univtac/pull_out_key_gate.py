@@ -12,7 +12,7 @@ from sim.envs.univtac.observation import array_summary, observation_key_tree, to
 
 EXPECTED_TASK = "pull_out_key"
 EXPECTED_SEED = 1_000_000
-ALLOWED_SEEDS = (1_000_000, 1_000_001, 1_000_002)
+ALLOWED_SEEDS = (1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004, 1_000_005)
 EXPECTED_SEED_LABEL = "legacy_ftp1_eval_seed_index_aligned"
 EXPECTED_INSTRUCTION = "Pull the key out of the slot."
 EXPECTED_TACTILE_SENSORS = ("left_tactile", "right_tactile")

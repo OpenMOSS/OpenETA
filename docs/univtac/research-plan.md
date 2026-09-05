@@ -147,8 +147,9 @@ control-step, or wall-time budget; the native early-stop condition ended them.
 These counts start after official initialization. The Agent repeatedly chose
 translations along world -Z (1000003/5) or its current TCP +Z (1000004), without
 an orientation or gripper change in the formal episodes. The host-only native
-checker recorded about 4.6 cm of object motion relative to the gripper and
-triggered early stop. Motion-target arrival did not imply insertion success.
+checker recorded `inhand_bias` values of 45.77/46.10/46.93 mm, exceeding the
+40 mm early-stop threshold. This native indicator is not a measured cumulative
+slip path or proof that the object fully fell; failure attribution remains open. Motion-target arrival did not imply insertion success.
 See the retained [summary](../../outputs/univtac-isaac51-r14/summary.json) and
 [delivery metrics](../../outputs/univtac-isaac51-r14/delivery_metrics.json).
 
@@ -159,6 +160,22 @@ the host finalized its native outcome. The post-batch launcher extends final
 reporting grace to 300 seconds within the unchanged 3600-second Codex deadline.
 This fix is not a rerun or recovered cost measurement; natural Agent finalization
 and complete cost reporting still need verification in a later authorized run.
+
+GPT-6 Pro accepted R1.4 delivery and the unchanged 0/3 result, with limits on
+failure attribution. When `gripper` is omitted, the controller currently uses
+the measured finger opening as its next target, rather than retaining the
+previous commanded closing target. This is confirmed implementation behavior;
+its effect on loaded grasp retention and these failures is unverified. Likewise,
+pose arrival does not establish velocity settling or contact stability. The
+formal trajectories contain no Agent-requested gripper changes, but that does
+not exclude a gripper-control contribution to failure.
+
+Touch is observed between tool calls. Control-step logs contain robot targets
+and state, not a complete within-action tactile sequence. No real-time tactile
+controller or fully reliable contact-control capability is claimed. These
+limits are recorded for the next decision; no controller fix or rerun followed
+the review. If the controller or sensing interface changes, future B/C must be
+compared with A under that same version, not directly with this historical A.
 
 The reusable command uses the existing r09 runtime and pinned Isaac51 source:
 

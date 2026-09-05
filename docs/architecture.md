@@ -100,7 +100,11 @@ closed normally. In this frozen batch, Codex was stopped after a 15-second
 terminal grace period, so complete token usage is unavailable. The post-batch
 launcher allows 300 seconds for final reporting within the original 3600-second
 Codex deadline; that reporting fix has not been model-tested and did not rerun
-the batch.
+the batch. Contact reliability remains limited: omitted gripper commands currently
+reset the target to measured opening, not the prior commanded closing target.
+Its effect on grasp retention is unverified. Pose arrival also does not prove
+velocity settling. Touch observations are between tool calls; the inner IK
+controller uses robot state, not tactile feedback.
 
 Preserve official reset/`pre_move` initialization. At the official policy handoff,
 the Agent chooses targets, direction, magnitude, orientation, and gripper actions,

@@ -46,30 +46,55 @@ a separately installed, pinned Isaac 5.1 source and a project-scoped direct
 harness under `sim/envs/univtac/` and `scripts/univtac/`; they do not import the
 vendored tree as a generic OpenETA backend.
 
-The direct harness currently supports:
+### Implemented UniVTAC paths
+
+The direct harness retains visual/tactile observations, exact Codex MCP inputs,
+real action traces, native outcomes, and dashboard replay. It includes read-only
+capture as well as executed R1.0–R1.3 experiments:
+
+- [`tools/univtac_operation_mcp_server.py`](../tools/univtac_operation_mcp_server.py)
+  exposes `observe / execute_skill / finish_episode` to a live Pull Out Key
+  worker. Its skills wrap task-specific native operations; they do not let
+  Codex choose arbitrary motion parameters.
+- [`tools/univtac_insert_hole_icl_mcp_server.py`](../tools/univtac_insert_hole_icl_mcp_server.py)
+  exposes demonstration review, query observation, and one opaque skill choice.
+  [`probe_branching_task.py`](../scripts/univtac/probe_branching_task.py)
+  executes the expert-assisted correction and final insertion afterward.
+
+These are real action paths, not general-tool autonomous operation. In these
+historical pilots the query's privileged state and native evaluation stay
+host-side; demonstration outcome labels may be part of the example context.
+
+### Target direct-operation integration — pending
+
+The design reference is OpenMOSS/OpenETA's `openeta-for-codex` branch. Reuse the
+existing [`EmbodiedGateway`](../tools/embodied_gateway.py),
+[Operator MCP](../tools/embodied_mcp_server.py), worker isolation, and replay:
 
 ```text
-native reset / pre_move
-        -> snapshot and tactile-pair capture
-        -> operator_visible projection
-        -> read-only UniVTAC MCP
-        -> Codex observation
-        -> trace and dashboard replay
+vision + bilateral tactile history + proprioception + operation history
+    -> Codex -> observe / mark_point / move_to
+    -> executor -> fresh observations and execution feedback -> Codex
+    -> minimal check_task native success boolean
 ```
 
-The public projection carries task text, step identifiers, proprioception,
-head/wrist RGB, and bilateral tactile `rgb_marker` artifacts. Privileged actor
-state, tactile pose/depth, planner state, and native success remain host-only.
-The UniVTAC MCP path exposes observation but no manipulation tool.
+The [`simulator registry`](../sim/env_registry.py) does not yet register UniVTAC,
+and the existing task-specific workers are not connected to this general
+Gateway loop. UniVTAC action translation, calibrated marking, gripper control,
+and the complete native-checking loop remain to be implemented and validated.
+The inherited LIBERO implementation alone is not proof of UniVTAC integration.
 
-UniVTAC is still not registered in the generic OpenETA simulator registry, and
-there is no Agent-controlled action translation or native-evaluation loop. The
-next integration boundary is therefore executable manipulation: first validate
-the complete native expert task path, then expose a small reviewed skill/action
-surface and close the loop through a fresh observation and the native checker.
+Preserve official reset/`pre_move` initialization. At the official policy handoff,
+the Agent chooses targets, direction, magnitude, orientation, and gripper actions,
+including observation, retreat, and recovery within the episode budget. The
+executor may solve IK and interpolate the requested trajectory; it must not use
+the task expert, hidden target poses, expert prefixes, correction formulas, or
+automatic final insertion to decide the task body. `check_task` returns only
+minimal native success feedback, with no hidden target error or action advice.
 
-The research objective and evidence ladder are maintained in the
-[UniVTAC research plan](univtac/research-plan.md).
+The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
+A/B/C controls, historical result boundaries, and next work. This architecture
+section describes an integration target, not a completed autonomous backend.
 
 ## Geometry and visual feedback
 

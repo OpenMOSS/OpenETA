@@ -65,9 +65,10 @@ UniVTAC 的 Isaac 5.1 环境是项目专用的隔离 runtime，不是
 `scripts/setup_envs.sh` 的通用 backend 参数。不要把 `isaaclab` 的手动安装参考
 当作 UniVTAC 安装命令，也不要让它覆盖 FTP-1-era legacy 环境。
 
-当前机器已经完成项目专用 runtime、Taxim、Pull Out Key reset/`pre_move` 和
-触觉采集验证；尚未完成 Pull Out Key native expert success baseline 或 Codex
-动作闭环。研究状态与下一条可执行 gate 见
+项目专用 runtime 和触觉采集已有运行证据，R1.0–R1.3 也已有 native expert、
+Codex 受限技能与专家辅助 continuation 的真实动作结果。通用 OpenETA 工具下
+的 UniVTAC 自主操作后端仍待完成和验证；安装成功不代表该后端已接通。
+研究状态、同接口示例和 A/B/C 设计统一见
 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，版本和
 benchmark 解释见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。

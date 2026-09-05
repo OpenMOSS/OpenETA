@@ -1,169 +1,206 @@
 # UniVTAC tactile-agent research plan
 
-This page is the canonical research-status entry point for the
-`tactile-agent-for-univtac` branch. It separates working infrastructure from
-exploratory observations and from evidence that still has to be produced.
+This is the canonical research-plan and status entry point for
+`tactile-agent-for-univtac`, updated on 2026-09-05 against the current checkout
+and retained run evidence. The design below is the next research direction;
+it is not a claim that the full autonomous backend already works.
 
 ## Research question
 
-The project is not trying to show only that a general multimodal model can
-describe color changes in a tactile image. The target question is:
+Can a frozen embodied Agent, without fine-tuning, use a few successful
+tactile–action–outcome examples in context to make better use of current touch,
+operate autonomously, improve UniVTAC native task success, and reduce trial and
+error?
 
-> Can a frozen embodied Agent use tactile–action–outcome demonstrations from
-> its context to select an appropriate manipulation skill for the current
-> tactile state, and thereby improve UniVTAC native task success?
+Vision and proprioception remain normal operating inputs. Tactile ICL does not
+require touch-only control. Visual–action ICL is a control for whether any gain
+comes from historical touch rather than simply seeing successful operations.
+Prompt ordering, left/right image-patch questions, and opaque button mappings
+are not the paper's main problem.
 
-Every core method must therefore end in executable manipulation and evaluation
-with the task's native success checker. Read-only perception studies are useful
-diagnostics, but they are not the final result.
+## Target operating loop
 
-## Terms and roles
+Use OpenMOSS/OpenETA's `openeta-for-codex` branch as the design reference and
+reuse the existing OpenETA tools, MCP/Gateway/worker separation, and replay
+facilities. The target is direct operation:
 
-| Term | Role in this project | Current status |
+```text
+current vision + bilateral touch + proprioception + operation history
+    -> Codex decides the next operation
+    -> observe / mark_point / move_to and ordinary gripper commands
+    -> executor performs the specified command
+    -> new observations and execution feedback
+    -> Codex continues, adjusts, retreats, or recovers
+    -> UniVTAC native checker evaluates the episode
+```
+
+The Agent chooses motion targets, direction, magnitude, orientation, and gripper
+operation. IK, trajectory interpolation, and ordinary low-level control may
+remain in the executor. They implement the requested motion, not a task solution.
+Retain the initialization already included in official evaluation reset/`pre_move`;
+from the official policy handoff point, the Agent decides the task body.
+
+The online executor must not call the task expert, use hidden object/hole poses
+to compute a correct correction, or automatically perform an expert prefix,
+correction formula, or final insertion. Historical `ember`/`slate` expert buttons
+are not the main experiment interface. A reusable skill may teach the Agent how
+to operate, but must not conceal an online expert solution or take over control.
+
+Allow observation, probing, and recovery within the same episode and shared
+budget. These are distinct from restarting failed episodes or selecting the
+best attempt. Use OpenETA's minimal `check_task` success boolean; expose no
+hidden target error, ground-truth target pose, or correct-action suggestion.
+Ordinary feedback about the commanded motion and measured robot state remains
+available. This UniVTAC integration is **pending implementation and validation**.
+
+## What a demonstration contains
+
+A demonstration is a real successful episode completed through the same
+OpenETA operation interface:
+
+```text
+task goal + pre-action vision / bilateral tactile short history / proprioception
+    -> actual tool call and parameters
+    -> actual execution feedback
+    -> post-action vision / touch / proprioception
+    -> subsequent operations and final native outcome
+```
+
+In question–answer terms, Q is the current task, state, recent action, and tactile
+change; A is the operation actually performed. The following observations and
+outcome show its consequences. Failed attempts and recovery inside a successful
+trajectory may remain; do not present every step as optimal.
+
+Deliver actual images or short sequences to the Agent, not just file paths,
+array shapes, or a caption. Align bilateral tactile history with each action.
+State action units and coordinate frames explicitly, preserving the actual call
+and its scene context. New targets must be grounded in the current observation;
+examples must not encourage copying world coordinates from a different scene.
+
+Start with a few examples, preferably successful Agent or human operations
+through the same interface. Label historical expert and expert-assisted data
+separately; do not rename them as autonomous demonstrations. Select examples
+from development data, separate from formal test episodes. The current query
+must never contain its future correct action, future images, or future outcome.
+Historical demonstration outcomes are part of the example, not query answers.
+
+## Core comparison: change only historical examples
+
+All three conditions receive the same current vision, touch, proprioception,
+and current operation history. They share the frozen Agent, normal tool
+instructions, tools, executor, task starting point, and action/time/context
+budget policy. A must understand tool functions without guessing button meanings.
+
+| Condition | Historical context | Current input |
 | --- | --- | --- |
-| Raw tactile input | `rgb`, `rgb_marker`, tactile keyframes, or a short tactile history | Bilateral `rgb_marker` capture works in the current direct harness. |
-| Tactile interpreter | Describes contact state and how it changes | Current image/difference summaries are exploratory. Octopi-1.5 is a future candidate, not an integrated dependency or validated result. |
-| Temporal tactile representation | Represents strengthening, weakening, slip, sticking, or contact loss | Baseline/current pairs can be saved. A VT-MUSE-inspired representation remains future work and is not itself ICL. |
-| Manipulation skill | An executable robot procedure such as align, pull, tighten grasp, pause-and-reobserve, or lower-and-regrasp | Not yet exposed to Codex for UniVTAC. The current `tactile_grounding_image_first` candidate is a read-only evidence-ordering procedure, not a manipulation skill. |
-| Tactile ICL | Context examples of `tactile before -> selected skill/action -> tactile after -> outcome`, followed by a new state requiring a skill choice | No demonstration bank or tactile-ICL experiment exists yet. |
+| A — no examples | No historical operation demonstrations | Vision + touch + proprioception + operation history |
+| B — visual–action control | Historical vision, proprioception, actual actions, execution feedback, and outcomes; no historical touch or touch-derived descriptions/features | Same as A |
+| C — tactile–action ICL (main method) | Exactly B's trajectories and non-tactile content, plus action-aligned bilateral tactile history and post-action touch | Same as A |
 
-## System boundary
+B/C use identical example sources, counts, actions, outcomes, and non-tactile
+content. C versus A tests whether complete successful examples help operation.
+C versus B tests whether historical touch adds value. Do not remove B's current
+touch: that would conflate the value of current sensing with historical tactile
+examples. Actual context and inference costs are recorded, including C's extra
+images, under the common budget policy.
 
-The current UniVTAC path is a project-scoped research harness rather than a
-registered backend in the generic OpenETA simulator registry:
+A system with no current touch may be a later supplementary baseline; it does
+not replace A/B/C. Removing tactile input does not disable contact physics or
+change the controller. The older vision-only pilot arms are not automatically
+this new B condition.
 
-```text
-pinned UniVTAC Isaac 5.1 runtime
-        -> native task reset / pre_move
-        -> snapshot and tactile-pair capture
-        -> operator_visible projection
-        -> read-only UniVTAC MCP images and text
-        -> Codex observation
-        -> trace and dashboard replay
-```
+## Evidence and implementation status
 
-The model-visible projection includes the task instruction, step identifiers,
-proprioception, head/wrist RGB, and bilateral tactile `rgb_marker` artifacts.
-Privileged actor state, tactile pose/depth, planner state, and native success
-remain host-only. The current MCP path intentionally exposes no UniVTAC action
-tool.
+The existing Isaac 5.1 harness provides reusable simulation startup, native
+reset/`pre_move`, head/wrist and bilateral tactile capture, proprioception,
+Codex MCP communication, actual action traces, and dashboard replay. Exact
+Agent inputs are retained in `operator_context.jsonl`; host-only diagnostics
+must not be substituted for what the Agent saw.
 
-This direct harness does not yet provide the generic OpenETA backend lifecycle,
-UniVTAC action translation, or an Agent-controlled native evaluation loop.
+Current code still uses a dedicated UniVTAC harness. The generic registry has
+no UniVTAC entry. The Pull Out Key MCP exposes
+`observe / execute_skill / finish_episode`, with task-specific native skills.
+The Insert Hole pilot records an opaque choice and then executes an
+expert-assisted continuation. Neither is a completed UniVTAC
+`observe / mark_point / move_to / check_task` backend. See
+[Architecture](../architecture.md) for implementation pointers.
 
-## Evidence status
+### Historical evidence, with its original scope
 
-### Demonstrated on the current development machine
+These are development results, not one autonomous-success leaderboard. Raw
+results and unsuccessful episodes remain unchanged in their original output
+roots; the links below refer to local retained artifacts, not a portable dataset.
 
-- The isolated Isaac 5.1 stack can launch and shut down on the RTX 5090 using
-  the project-scoped runtime compatibility path.
-- The official Taxim smoke and the `grasp_classify` phase-one collection gate
-  have completed in that runtime.
-- Pull Out Key reset, native `pre_move`, head/wrist capture, bilateral tactile
-  capture, proprioception, and trace serialization work for the tested seeds.
-- Codex can receive the four native MCP images from a fresh pre-action snapshot
-  and produce a retained read-only answer.
-- The experiment dashboard can replay the exact MCP context, runtime events,
-  model-visible answer, and separately labelled host-only diagnostics.
-- Baseline/current tactile pairs can be retained around `pre_move` for later
-  demonstration construction.
+- **R1.0, native expert:** Pull Out Key succeeded on 3/3 development seeds,
+  with nine recorded action transitions
+  ([expert summary](../../outputs/univtac-isaac51-r10/expert_summary.json)).
+  **Separately, a restricted-skill Codex smoke** selected three native skills
+  in one live episode and reached native success
+  ([episode](../../outputs/univtac-isaac51-r10/agent/attempt_02/seed_1000000/episode.json)).
+  This demonstrates real model-selected actions and feedback, not autonomous
+  choice of motion parameters.
+- **R1.1, restricted-skill ICL:** Pull Out Key continuation success counts were
+  3/3 without examples, 3/3 with correct multimodal examples, 2/3 in the old
+  visual-only condition, and 1/3 with swapped action labels. The recorded
+  interpretation is `no_detectable_icl_signal`
+  ([summary](../../outputs/univtac-isaac51-r11/summary.json)). Native outcomes
+  and the report's selection-based gains are different metrics; neither
+  establishes a positive tactile ICL result under the new A/B/C design.
+- **R1.2, expert-assisted task qualification:** native experts succeeded 3/3
+  on both Lift Bottle and Insert Hole. Insert Hole showed two correction
+  classes; a one-seed correct/wrong continuation comparison succeeded/failed
+  respectively ([summary](../../outputs/univtac-isaac51-r12/summary.json)).
+  This motivates a development task, not an autonomous policy claim.
+- **R1.3, expert-assisted Insert Hole continuation:** three query experts
+  succeeded; 12 Codex choices and 12 continuations brought the total to 15
+  simulator episodes. No-demo, correct multimodal, and old vision-only arms
+  each succeeded 2/3; swapped labels succeeded 1/3
+  ([summary](../../outputs/univtac-isaac51-r13/summary.json),
+  [manifest](../../outputs/univtac-isaac51-r13/run_manifest.json)). The Agent
+  chose between two opaque procedures; the harness supplied the initial
+  downward move, native correction magnitude/z, and final insertion. The
+  result does not establish action-ICL or tactile-specific benefit, and is not
+  a general-tool autonomous Agent success rate.
 
-These facts establish an observation and evidence pipeline. They do not
-establish Pull Out Key task success or an autonomous Agent baseline.
+R0.9.13–R0.9.18 remain observation/representation diagnostics. By project decision,
+R0.9.19–R0.9.21 are historical exploration only: preserve their records, do not
+use them to choose the next method, and do not expand that branch. R0.9.21's
+capture-only record must not be relabelled as a completed transfer experiment.
 
-### Exploratory read-only studies
+## Next work and evaluation
 
-- R0.9.13–R0.9.18 established native image handoff and explored whether Codex
-  could describe raw, difference, structured, and staged tactile evidence.
-- R0.9.19–R0.9.20 tested prompt wording, evidence ordering, and conflict
-  handling. Their useful engineering observation is that showing raw tactile
-  images before derived summaries reduced blind reliance on a deliberately
-  swapped summary in three constructed examples.
-- R0.9.21 froze that reading procedure and captured fresh pairs for seeds
-  `1000003`, `1000004`, and `1000005`. The planned semantic transfer trials
-  were not run; the round is capture-only and has no transfer result.
+1. Connect direct OpenETA operation to UniVTAC and validate the full loop from
+   the official policy handoff through Agent-chosen motions to native checking.
+   Start with Insert Hole and three fixed development seeds per round; the
+   existing `1000003`, `1000004`, `1000005` are development data, not a formal
+   held-out test batch. Keep the selected triplet fixed across conditions.
+2. Collect a small set of successful same-interface operations, retaining real
+   images, calls, feedback, recovery, and outcomes. No-demo performance need
+   not be high before examples may be introduced.
+3. Run the A/B/C comparison. Autonomous backend validation, the same-interface
+   example bank, and this comparison are still unfinished.
+4. Use actual failures to improve tactile representation and experience
+   organization, then extend task coverage.
 
-These studies may remain as engineering diagnostics or appendix material.
-They are not manipulation skills, tactile ICL, task-success evidence, or paper
-main results, and they do not determine the research method.
+The first representation is real tactile images and short action-aligned
+history. Later candidates include baseline/current or difference images,
+image-derived structured measurements, Octopi-1.5, VT-MUSE-inspired temporal
+representations, and reusable operation skills. These enhance the same tactile
+ICL question; none is a prerequisite for direct operation or the first ICL test.
+Octopi has not been validated on our simulated touch, and VT-MUSE is not an
+integrated, effective component. Image change alone is not verified force,
+slip, or stable grasp.
 
-### Not yet demonstrated
+The final target is main results on at least three UniVTAC-Isaac51 manipulation
+tasks; candidates are Insert Hole, Pull Out Key, and Lift Bottle. Use a fixed
+formal test batch independent of development and example selection. The primary
+metric is native task success rate. Record action count, recovery behavior,
+completion time, context usage, and inference cost as secondary metrics. Report
+expert success, expert-assisted continuation success, and autonomous Agent
+success separately, not in one main-result table.
 
-- Pull Out Key native expert success on the fixed evaluation seeds.
-- A Codex-selected or Codex-executed UniVTAC manipulation action.
-- An action followed by a fresh tactile observation in one closed loop.
-- A demonstration bank containing tactile-before, executed action or skill,
-  tactile-after, and native outcome.
-- Tactile ICL, Octopi effectiveness on UniVTAC, or a VT-MUSE-inspired temporal
-  representation.
-- A multi-task UniVTAC benchmark comparing native success rates.
-
-## R1.0: return to executable manipulation
-
-The next stage starts with Pull Out Key and fixed seeds `1000000`, `1000001`,
-and `1000002`.
-
-### Native expert baseline
-
-Run the complete native path for each seed:
-
-```text
-reset -> pre_move -> expert play_once / task body -> native check_success
-```
-
-Report the three individual outcomes and the aggregate expert success count.
-Retain, at minimum:
-
-- tactile state before the relevant expert action;
-- the actual native action or action segment;
-- tactile state after the action;
-- the native outcome and lifecycle evidence.
-
-This baseline comes before Agent action development. It confirms that the
-task, action path, and evaluator work end to end in the same Isaac 5.1
-implementation used by later comparisons.
-
-### First Codex closed-loop episode
-
-After the expert baseline is established, derive a small, explicit manipulation
-skill library from the native expert action path. Then run one genuine loop:
-
-```text
-observe
--> select a permitted manipulation skill
--> execute that skill through the reviewed UniVTAC action boundary
--> observe the new tactile state
--> select the next skill
--> native check_success
-```
-
-The first episode is a vertical-slice validation, not a success-rate claim. It
-must retain the exact observation, selected skill, executed action, resulting
-tactile state, and native checker result.
-
-## Evaluation ladder
-
-1. Use the three fixed seeds for development and the first causal comparison.
-2. Expand to ten fixed seeds after the direction is technically and
-   scientifically credible.
-3. Use a fixed, complete seed batch per task and condition for paper results.
-4. Compare at least three UniVTAC tasks with native success rate as the primary
-   outcome.
-
-Tactile ICL begins only after real action transitions exist. Its first controls
-should compare no demonstration, correct demonstration, irrelevant
-demonstration, and action-swapped demonstration while keeping the frozen Agent,
-task implementation, action boundary, and evaluator fixed.
-
-## Version and benchmark interpretation
-
-Current experiments belong to the `UniVTAC-Isaac51` implementation track.
-Isaac 5.1 changes runtime, physics, initialization, control, rendering, and
-tactile semantics relative to the FTP-1-era Isaac 4.5 stack. Within-version
-comparisons are valid when all conditions share the same implementation, but
-their success rates are not direct reproductions of FTP-1 Isaac 4.5 numbers.
-
-See [Isaac 5.1 compatibility boundary](isaac51_compatibility_boundary.md) for
-the source and interpretation boundary, [Architecture](../architecture.md) for
-the system decomposition, and [Vendor Notes](../vendor-notes.md) for the
-vendored legacy source provenance.
+All conditions use the same Isaac51 task implementation. These results cannot
+be presented as direct reproductions of FTP-1/Isaac 4.5 numbers. See
+[Isaac 5.1 compatibility boundary](isaac51_compatibility_boundary.md) and
+[Vendor Notes](../vendor-notes.md). This documentation update does not launch or
+authorize execution of the next experiments.

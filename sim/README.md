@@ -5,12 +5,16 @@
 ## UniVTAC 研究路径
 
 UniVTAC 当前使用 `sim/envs/univtac/` 与 `scripts/univtac/` 下的隔离直连
-harness，不在下面的通用 `gymnasium` 注册表中。该路径已经支持原生
-reset/`pre_move`、head/wrist 与双侧触觉采集、只读 Codex MCP、trace 和实验
-dashboard；尚未向 Codex 暴露 UniVTAC 操作工具，也没有完成 Agent 闭环成功率。
+harness，不在下面的通用 `gymnasium` 注册表中。该路径已有原生初始化、
+head/wrist 与双侧触觉采集、Codex MCP、真实动作 trace 和实验 dashboard。
+R1.0–R1.3 已执行 native expert、Codex 受限技能和专家辅助 continuation；
+这些结果不等于通用工具下的自主 Agent 成功率，也未建立触觉 ICL 正向收益。
 
-研究问题、证据边界和下一步 R1.0 native expert/closed-loop gate 见
-[`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)。运行版本边界见
+下一步接通 OpenETA 通用 `observe / mark_point / move_to / check_task`，
+让 Agent 从官方 policy 接管点决定操作，再收集同接口示例并开展 A/B/C 对照。
+该 UniVTAC 后端仍待完成和验证；下文通用接口不代表它已经接入。
+研究计划见 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，
+运行版本边界见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。
 
 ## 快速开始

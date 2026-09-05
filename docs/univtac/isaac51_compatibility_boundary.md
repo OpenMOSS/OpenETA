@@ -17,7 +17,7 @@ Isaac 5.1 is a new benchmark implementation boundary, not a transparent runtime 
 
 The six FTP-1 task modules remain present and preserve their high-level goals. Their executed semantics nevertheless change. Static scene actors move from high density to explicit kinematic motion, several initial heights change, Pull Out Key composes reset rotations differently, and adaptive grasp moves from camera-distance thresholds to positive indentation depth. Isaac 5.1 also changes reset stabilization, camera resolution, render synchronization, and evaluation decimation. Insert Hole and Insert Tube retain both `place_actor` calls, their `constraint_pose`, target construction, and task-level success thresholds.
 
-The tactile interface still exposes GelSight Mini `rgb_marker` as HWC `uint8` in the 0–255 range. Isaac 5.1 adds `press_depth` as a separate positive-indentation field while retaining legacy raw camera distance under `depth`. That distinction supports new E1/E2/E3 experiments after runtime validation, but it prevents blind reuse of depth-based preprocessing.
+The tactile interface still exposes GelSight Mini `rgb_marker` as HWC `uint8` in the 0–255 range. Isaac 5.1 adds `press_depth` as a separate positive-indentation field while retaining legacy raw camera distance under `depth`. Do not blindly reuse depth-based preprocessing across these interfaces or treat image changes as validated force or slip measurements.
 
 ## RTX 5090 boundary
 
@@ -33,22 +33,23 @@ validation, or FTP-1 benchmark parity.
 
 ## Benchmark interpretation
 
-Within one pinned and validated Isaac 5.1 environment, comparing OpenETA E0/E1/E2/E3 remains a valid experimental design because every variant shares the same physics, sensor, action, and evaluator implementation. Those results must be labeled `UniVTAC-Isaac51`.
+The current A/B/C design compares historical demonstration content within one Isaac 5.1 implementation, keeping current sensing, tools, control, physics, task starts, and evaluation fixed. Label the results `UniVTAC-Isaac51`; the comparison does not establish a gain until it has been run.
 
 Cross-version numeric comparability is not preserved. The official README declares Isaac 4.5 and 5.1 data non-cross-compatible, and the source changes control, physics, sensor timing, and parts of the success or early-stop path. An Isaac 5.1 success rate cannot serve as a direct reproduction of the FTP-1 paper's Isaac 4.5 number.
 
-We therefore keep two tracks. Track A uses a separately installed, pinned Isaac 5.1 environment for the current OpenETA research after an isolated smoke test. Track B retains the frozen FTP-1 stack on an author-confirmed compatible GPU/runtime for legacy checkpoint and paper-number parity. Track B does not block the within-version causal comparisons in Track A.
+Current research uses the isolated Isaac 5.1 track. The frozen FTP-1 stack is
+retained for historical provenance; legacy checkpoint or paper-number parity
+would require a separately authorized study. It is not a prerequisite for the
+current within-version comparison.
 
-## Next gate
+## Research status and navigation
 
-The next gate is R1.0 on Pull Out Key. Run the complete native expert operation
-for seeds `1000000`, `1000001`, and `1000002` through `reset -> pre_move ->
-play_once / task body -> check_success`, retain the tactile/action/outcome
-transitions, and report the three native outcomes. Only after that baseline is
-established should the project expose a reviewed UniVTAC manipulation skill to
-Codex for one closed-loop episode.
+R1.0–R1.3 have progressed beyond reset and observation: retained results include
+native expert successes, restricted-skill Codex execution, and expert-assisted
+continuations. These do not establish a general-tool autonomous Agent baseline
+or positive tactile ICL benefit. The next work is direct OpenETA operation of
+Insert Hole, same-interface successful examples, and the A/B/C comparison.
 
-The existing R0.9 read-only studies do not satisfy this gate. In particular,
-R0.9.19–R0.9.20 are evidence-ordering diagnostics, while R0.9.21 has completed
-three held-out capture gates but no Agent transfer trials. See the
-[research plan](research-plan.md) for the full claim boundary.
+The [research plan](research-plan.md) maintains current evidence and next steps.
+R0.9.19–R0.9.21 remain historical exploration and do not guide method selection.
+This page owns the version boundary, not a separate experiment queue.

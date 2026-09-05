@@ -5,23 +5,27 @@ This is the development branch for
 on OpenETA-Light and vendors the official UniVTAC benchmark under
 `third_party/ftp1-policy/UniVTAC`.
 
-The active research question is whether a frozen embodied Agent can use
-tactile–action–outcome demonstrations to select executable manipulation skills
-and improve UniVTAC native task success. The inherited OpenETA-Light/LIBERO
-Operator remains available, while UniVTAC development uses a separate,
-project-scoped Isaac 5.1 research harness.
+The research question is whether a frozen embodied Agent can use a few
+successful tactile–action–outcome examples in context to operate autonomously,
+improve UniVTAC native task success, and reduce trial and error. Vision and
+proprioception remain normal inputs; visual–action examples are a control for
+the added value of historical touch.
 
 Current status:
 
-- the Isaac 5.1 runtime, Taxim smoke, Pull Out Key reset/`pre_move`, bilateral
-  tactile capture, read-only Codex MCP handoff, traces, and dashboard work on
-  the current development machine;
-- R0.9.13–R0.9.20 are read-only perception and evidence-ordering diagnostics,
-  not manipulation-skill or task-success results;
-- R0.9.21 has captured three fresh tactile pairs but has not run its planned
-  semantic transfer trials;
-- the next stage is a three-seed native expert Pull Out Key baseline followed
-  by the first reviewed Codex closed-loop manipulation episode.
+- the isolated Isaac 5.1 harness supports tactile capture, Codex MCP
+  communication, real action traces, and dashboard replay;
+- R1.0–R1.3 include native expert successes, model-selected restricted skills,
+  and expert-assisted continuations. They establish real execution, but not
+  general-tool autonomous success rates or positive tactile ICL benefit;
+- UniVTAC integration with OpenETA's general operation tools is still pending.
+  The next work is direct Insert Hole operation, successful examples collected
+  through the same interface, then an A/B/C comparison;
+- A has no examples; B has visual–action examples; C adds historical bilateral
+  touch to exactly B's trajectories. All three retain current vision, touch,
+  proprioception, and operation history;
+- R0.9.19–R0.9.21 remain historical exploration, with no further expansion or
+  role in selecting the next method.
 
 Read the [UniVTAC research plan](docs/univtac/research-plan.md) first. See
 [Architecture](docs/architecture.md) for the system boundary,

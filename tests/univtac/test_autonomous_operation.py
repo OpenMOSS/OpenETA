@@ -89,3 +89,88 @@ def test_control_path_uses_native_steps_without_expert():
     assert len(calls)==1
     values={k.arg:ast.literal_eval(k.value) for k in calls[0].keywords}
     assert values['force'] is False and values['action_type']=='qpos'
+
+
+def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
+    import sys
+
+    class Array(np.ndarray):
+        def detach(self):
+            return self
+        def cpu(self):
+            return self
+        def numpy(self):
+            return np.asarray(self)
+    def array(x):
+        return np.asarray(x).view(Array)
+    monkeypatch.setitem(sys.modules,'torch',SimpleNamespace(tensor=lambda x,**_:array(x),float32='float32'))
+    data=SimpleNamespace(joint_pos=array(np.zeros((1,7))),
+        soft_joint_pos_limits=array(np.tile([-3,3],(1,7,1))),body_link_pos_w=array(np.zeros((1,1,3))))
+    physx=SimpleNamespace(get_jacobians=lambda:array(np.c_[np.eye(6),np.zeros(6)][None,None]))
+    robot=SimpleNamespace(robot=SimpleNamespace(data=data,root_physx_view=physx),_arm_ids=np.arange(7),
+        _jacobi_body_idx=0,_body_idx=0,get_gripper_qpos=lambda:0)
+    task=SimpleNamespace(_robot_manager=robot,step_count=20,_physics_step_count=20,take_action_cnt=0,
+        cfg=SimpleNamespace(step_lim=2,sim=SimpleNamespace(dt=1/120)),eval_success=False,device='cpu',
+        check_success=lambda:False,check_early_stop=lambda:False)
+    calls=[]
+    def take_action(action,**kwargs):
+        calls.append(kwargs)
+        data.joint_pos[0]=action[:7]
+        data.body_link_pos_w[0,0]=action[:3]
+        task.take_action_cnt+=1
+        task.step_count+=1
+        task._physics_step_count+=2
+    task.take_action=take_action
+    c=NativeController(task,{'max_control_steps_per_move':80,'position_tolerance_m':.003,
+        'orientation_tolerance_rad':.052,'max_joint_delta_rad':.025},tmp_path)
+    def tcp():
+        m=np.eye(4);m[:3,3]=data.joint_pos[0,:3];return m
+    c.tcp=tcp
+    c.state=lambda:{'xyz_m':tcp()[:3,3].tolist()}
+    target=np.eye(4);target[0,3]=.5
+    result=c.execute(target,None)
+    assert len(calls)==2 and all(k['force'] is False for k in calls)
+    assert c.control_steps==task.take_action_cnt==2
+    assert c.counts()['physics_steps']==4
+    assert result['error']=='native_step_limit' and not result['reached']
+
+
+def test_camera_pose_refreshed_without_physics(tmp_path, monkeypatch):
+    import sim.envs.univtac.autonomous_session as module
+    task=SimpleNamespace(_robot_manager=None,step_count=1,_physics_step_count=1,take_action_cnt=0,
+        cfg=SimpleNamespace(step_lim=300,sim=SimpleNamespace(dt=1/120)),eval_success=False)
+    cameras={}
+    refresh=[]
+    for name in ['head','wrist']:
+        data=SimpleNamespace(output={'depth':np.ones((1,2,2))},intrinsic_matrices=np.array([[[2,0,1],[0,2,1],[0,0,1]]]),
+            quat_w_ros=np.array([[1,0,0,0]]),pos_w=np.zeros((1,3)))
+        cam=SimpleNamespace(data=data,_ALL_INDICES=[0])
+        def update(ids,cam=cam,name=name):
+            refresh.append(name);cam.data.pos_w[0,0]+=1
+        cam._update_poses=update
+        cameras[name]=cam
+    task._camera_manager=SimpleNamespace(cameras=cameras)
+    task._get_observations=lambda:{'observation':{n:{'rgb':np.zeros((2,2,3))} for n in cameras}}
+    visible={'cameras':{n:{'rgb':{'path':n+'.png'}} for n in cameras},
+             'tactile':{n:{'rgb_marker':{'path':n+'.png'}} for n in ['left_tactile','right_tactile']}}
+    monkeypatch.setattr(module,'capture_snapshot',lambda *a,**k:SimpleNamespace(snapshot=SimpleNamespace(operator_visible=visible,to_dict=dict)))
+    s=AutonomousSession(task,{'max_move_requests':30,'max_tool_calls':100},tmp_path,1000003)
+    s.controller.state=dict
+    s.capture();s.capture()
+    assert refresh==['head','head']
+    assert s.frames[0]['metadata']['extrinsics']['pos']==[2,0,0]
+    assert not s.latest['mark_point']['wrist']['available']
+    assert task._physics_step_count==1
+
+
+def test_r14_dashboard_keeps_debug_separate(tmp_path):
+    import json
+
+    from scripts.univtac.autonomous_dashboard import load_autonomous_runs
+    p=tmp_path/'univtac-isaac51-r14-debug';p.mkdir()
+    (p/'run_manifest.json').write_text(json.dumps({'round':'R1.4','mode':'debug'}))
+    e=p/'seed_1000003';e.mkdir()
+    (e/'episode.json').write_text(json.dumps({'scored':False,'seed':1000003}))
+    d=load_autonomous_runs(tmp_path)
+    assert d['batches'][0]['manifest']['mode']=='debug'
+    assert d['batches'][0]['episodes'][0]['context']==[]

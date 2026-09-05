@@ -65,7 +65,7 @@ These are real action paths, not general-tool autonomous operation. In these
 historical pilots the query's privileged state and native evaluation stay
 host-side; demonstration outcome labels may be part of the example context.
 
-### Direct-operation integration — implemented, live validation pending
+### Direct-operation integration — control debug completed, autonomous evaluation pending
 
 The design reference is OpenMOSS/OpenETA's `openeta-for-codex` branch. R1.4 adds
 `LiveBackendGateway` in the existing [Gateway module](../tools/embodied_gateway.py)
@@ -85,9 +85,16 @@ This direct worker route does not require generic simulator registry registratio
 The [controller](../sim/envs/univtac/autonomous_operation.py) uses robot-state
 Jacobian IK and native qpos control with `force=False`; target resolution supports
 world/TCP translation, orientation, gripper commands and numeric previews.
-`mark_point` reuses observed RGB-D back-projection when calibration is available.
-Live TCP, motion, image alignment and native counting validation is still pending;
-implementation and focused tests alone do not establish an autonomous baseline.
+Two separate unscored debug runs exercised translation, orientation, gripper
+commands, measured feedback, fresh images, and native control/physics counters.
+Small translations, rotations and gripper close reached their targets. Gripper
+open moved the fingers but correctly reported `control_segment_not_reached`
+after its 80-control-step segment. This does not prove every command reaches.
+
+`mark_point` supports head-camera RGB-D; back-projection was checked against
+retained sensor data. Wrist geometry is unavailable because its pose cache does
+not track the articulation. Head/wrist RGB and both tactile images remain
+available. The three fresh Codex episodes and autonomous success rate are pending.
 
 Preserve official reset/`pre_move` initialization. At the official policy handoff,
 the Agent chooses targets, direction, magnitude, orientation, and gripper actions,

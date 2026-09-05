@@ -58,6 +58,7 @@ def debug_controls(gateway, root):
             raise RuntimeError(f'debug {tool}: {result.text}')
         return result.text
     first = call('observe',{})['observation']
+    call('mark_point',{'view':'head','u':220,'v':170})
     state = first['robot']
     initial_rotation = quaternion_matrix(state['quat_xyzw'])
     call('move_to',{'delta_mm':[5,0,0],'preview':True})
@@ -180,7 +181,9 @@ def main(argv=None):
         write_json(args.output_root/'summary.json',{'mode':args.mode,'episodes':episodes,
                   'evaluable_count':sum(e['evaluable'] for e in episodes),
                   'native_success_count':sum(e['evaluable'] and e['task_success'] for e in episodes)})
-    manifest['status']='completed'
+        if episodes[-1].get('infrastructure_error'):
+            break
+    manifest['status']='completed' if len(episodes)==len(manifest['seeds']) else 'infrastructure_issue'
     write_json(args.output_root/'run_manifest.json',manifest)
     return 0 if all(e['evaluable'] for e in episodes) else 1
 

@@ -17,6 +17,7 @@ from sim.envs.univtac.autonomous_operation import (
     resolve_target,
 )
 from sim.envs.univtac.observation import capture_snapshot, to_numpy
+from sim.envs.univtac.planner_diagnostics import safe_diagnostic_value
 from sim.envs.univtac.trace import write_json
 from tools.pointcloud_pose_marking import camera_ray_from_image_click
 
@@ -56,7 +57,12 @@ class AutonomousSession:
         frames, availability = [], {}
         for name in ('head','wrist'):
             try:
+                if name == 'wrist':
+                    raise ValueError('live wrist extrinsics unavailable: sensor pose cache does not track articulation')
                 cam = self.task._camera_manager.cameras[name]
+                # TiledCamera defaults to a cached initialization pose. Refresh
+                # sensor extrinsics without rendering or advancing simulation.
+                cam._update_poses(cam._ALL_INDICES)
                 depth = to_numpy(cam.data.output['depth'][0]).squeeze()
                 k = to_numpy(cam.data.intrinsic_matrices[0])
                 q = to_numpy(cam.data.quat_w_ros[0])
@@ -175,5 +181,5 @@ class AutonomousSession:
                   'infrastructure_error':self.infrastructure_error, 'tool_call_count':self.tool_count,
                   'move_request_count':self.move_requests,'elapsed_seconds':time.monotonic()-self.started, **self.controller.counts()}
         write_json(self.root/'final_result.json',result)
-        write_json(self.root/'host_evaluator.json',{'metadata':self.task.metadata,'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)})
+        write_json(self.root/'host_evaluator.json',{'metadata':safe_diagnostic_value(self.task.metadata),'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)})
         return result

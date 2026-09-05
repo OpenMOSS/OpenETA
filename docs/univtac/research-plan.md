@@ -51,8 +51,8 @@ budget. These are distinct from restarting failed episodes or selecting the
 best attempt. Use OpenETA's minimal `check_task` success boolean; expose no
 hidden target error, ground-truth target pose, or correct-action suggestion.
 Ordinary feedback about the commanded motion and measured robot state remains
-available. The R1.4 general-tool backend is implemented; live control validation and
-autonomous episode evaluation are still pending.
+available. The R1.4 general-tool backend has undergone unscored live control debugging;
+autonomous episode evaluation remains pending.
 
 ## What a demonstration contains
 
@@ -121,9 +121,12 @@ must not be substituted for what the Agent saw.
 R1.4 adds a general-tool MCP/Gateway path with a synchronous UniVTAC worker,
 robot-target control, four-image observation projection, native checking, and
 control/physics counters. The original task-specific and expert-assisted paths
-remain historical implementations. Focused tests passed, but control debugging
-and the three fresh Codex episodes have not run; no R1.4 autonomous success rate
-is available. See [Architecture](../architecture.md) for implementation pointers.
+remain historical implementations. Two separate unscored control debug runs
+completed: small translation/rotation and close reached; opening remained partial
+and was reported as not reached. The focused suite passed 22 tests. Head-camera
+marking is supported; wrist geometry is unavailable due to stale camera poses,
+while all four RGB/tactile images remain available. The three fresh Codex
+episodes have not started; no autonomous success rate is available. See [Architecture](../architecture.md) for implementation pointers.
 
 ### Historical evidence, with its original scope
 

@@ -65,7 +65,7 @@ These are real action paths, not general-tool autonomous operation. In these
 historical pilots the query's privileged state and native evaluation stay
 host-side; demonstration outcome labels may be part of the example context.
 
-### Direct-operation integration — control debug completed, autonomous evaluation pending
+### Direct-operation integration — autonomous development batch completed
 
 The design reference is OpenMOSS/OpenETA's `openeta-for-codex` branch. R1.4 adds
 `LiveBackendGateway` in the existing [Gateway module](../tools/embodied_gateway.py)
@@ -94,7 +94,13 @@ after its 80-control-step segment. This does not prove every command reaches.
 `mark_point` supports head-camera RGB-D; back-projection was checked against
 retained sensor data. Wrist geometry is unavailable because its pose cache does
 not track the articulation. Head/wrist RGB and both tactile images remain
-available. The three fresh Codex episodes and autonomous success rate are pending.
+available. Three fresh no-demo Terra medium episodes completed with native
+success 0/3; all were evaluable and ended through native early stop. Workers
+closed normally. In this frozen batch, Codex was stopped after a 15-second
+terminal grace period, so complete token usage is unavailable. The post-batch
+launcher allows 300 seconds for final reporting within the original 3600-second
+Codex deadline; that reporting fix has not been model-tested and did not rerun
+the batch.
 
 Preserve official reset/`pre_move` initialization. At the official policy handoff,
 the Agent chooses targets, direction, magnitude, orientation, and gripper actions,
@@ -106,7 +112,7 @@ minimal native success feedback, with no hidden target error or action advice.
 
 The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
 A/B/C controls, historical result boundaries, and next work. This architecture
-section distinguishes implemented interfaces from pending live validation.
+section distinguishes validated R1.4 capabilities from remaining limitations.
 
 ## Geometry and visual feedback
 

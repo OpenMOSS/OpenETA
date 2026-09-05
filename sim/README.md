@@ -10,9 +10,10 @@ head/wrist 与双侧触觉采集、Codex MCP、真实动作 trace 和实验 dash
 R1.0–R1.3 已执行 native expert、Codex 受限技能和专家辅助 continuation；
 这些结果不等于通用工具下的自主 Agent 成功率，也未建立触觉 ICL 正向收益。
 
-下一步接通 OpenETA 通用 `observe / mark_point / move_to / check_task`，
-让 Agent 从官方 policy 接管点决定操作，再收集同接口示例并开展 A/B/C 对照。
-该 UniVTAC 后端仍待完成和验证；下文通用接口不代表它已经接入。
+R1.4 已接通 OpenETA 六个通用工具与同步 UniVTAC worker，完成三个 fresh
+Insert Hole 无示例自主 episode：原生可评价 3/3，成功 0/3，均由原生提前终止
+结束；两个独立联调 episode 不计分。head 支持 mark_point，wrist 几何暂不可用，
+四路视觉/触觉图片仍保留。同接口成功示例与 A/B/C 尚未开展。
 研究计划见 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，
 运行版本边界见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。

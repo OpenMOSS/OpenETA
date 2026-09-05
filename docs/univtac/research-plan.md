@@ -51,8 +51,9 @@ budget. These are distinct from restarting failed episodes or selecting the
 best attempt. Use OpenETA's minimal `check_task` success boolean; expose no
 hidden target error, ground-truth target pose, or correct-action suggestion.
 Ordinary feedback about the commanded motion and measured robot state remains
-available. The R1.4 general-tool backend has undergone unscored live control debugging;
-autonomous episode evaluation remains pending.
+available. The R1.4 general-tool backend completed two unscored control-debug episodes
+and three fresh no-demo Codex episodes: all three were natively evaluable,
+with autonomous development success 0/3.
 
 ## What a demonstration contains
 
@@ -125,8 +126,52 @@ remain historical implementations. Two separate unscored control debug runs
 completed: small translation/rotation and close reached; opening remained partial
 and was reported as not reached. The focused suite passed 22 tests. Head-camera
 marking is supported; wrist geometry is unavailable due to stale camera poses,
-while all four RGB/tactile images remain available. The three fresh Codex
-episodes have not started; no autonomous success rate is available. See [Architecture](../architecture.md) for implementation pointers.
+while all four RGB/tactile images remain available. The three fresh Terra medium
+episodes all ended through native early stop, with native success 0/3. This is
+a no-demo autonomous development result, not evidence of tactile ICL benefit. See [Architecture](../architecture.md) for implementation pointers.
+
+### R1.4 autonomous no-demo development result
+
+The two independent control-debug episodes are excluded from this table.
+All three formal development episodes had valid reset, available native
+checking, and no worker infrastructure error. Each made five non-preview
+requests, all of which physically moved the robot. None reached the tool,
+control-step, or wall-time budget; the native early-stop condition ended them.
+
+| Seed | Native success | Tools | Control steps | Physics steps | Simulation seconds | Codex wall seconds |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1000003 | false | 22 | 16 | 32 | 0.267 | 143.034 |
+| 1000004 | false | 20 | 7 | 14 | 0.117 | 146.050 |
+| 1000005 | false | 16 | 6 | 12 | 0.100 | 111.029 |
+
+These counts start after official initialization. The Agent repeatedly chose
+translations along world -Z (1000003/5) or its current TCP +Z (1000004), without
+an orientation or gripper change in the formal episodes. The host-only native
+checker recorded about 4.6 cm of object motion relative to the gripper and
+triggered early stop. Motion-target arrival did not imply insertion success.
+See the retained [summary](../../outputs/univtac-isaac51-r14/summary.json) and
+[delivery metrics](../../outputs/univtac-isaac51-r14/delivery_metrics.json).
+
+Workers saved and closed normally. All three Codex processes were stopped
+after the frozen launcher's 15-second native-terminal grace period; complete
+token usage is unavailable, not zero. Seed 1000004 did not call `finish_episode`;
+the host finalized its native outcome. The post-batch launcher extends final
+reporting grace to 300 seconds within the unchanged 3600-second Codex deadline.
+This fix is not a rerun or recovered cost measurement; natural Agent finalization
+and complete cost reporting still need verification in a later authorized run.
+
+The reusable command uses the existing r09 runtime and pinned Isaac51 source:
+
+```bash
+uv run --frozen --extra dev python scripts/univtac/run_autonomous_insert_hole.py \
+  --config configs/univtac/autonomous_insert_hole.yaml \
+  --mode batch --output-root outputs/univtac-isaac51-r14-new
+```
+
+Use a fresh output root. `--mode debug` runs separate unscored controls. These
+commands are usage documentation, not authorization to repeat the completed
+batch. Replay is at `http://127.0.0.1:9400/r14-autonomous`, served by the local
+`univtac-r14-dashboard.service`; raw outputs remain local and are not in Git.
 
 ### Historical evidence, with its original scope
 
@@ -172,22 +217,18 @@ capture-only record must not be relabelled as a completed transfer experiment.
 
 ## Next work and evaluation
 
-1. Connect direct OpenETA operation to UniVTAC and validate the full loop from
-   the official policy handoff through Agent-chosen motions to native checking.
-   Start with Insert Hole and three fixed development seeds per round; the
-   existing `1000003`, `1000004`, `1000005` are development data, not a formal
-   held-out test batch. Keep the selected triplet fixed across conditions.
-   R1.4 uses only A with Terra medium. The
-   [configuration](../../configs/univtac/autonomous_insert_hole.yaml) sets
-   30 non-preview move requests, 100 tool calls, and 3600 Codex seconds per
-   episode alongside the native control budget. The
-   [runner](../../scripts/univtac/run_autonomous_insert_hole.py) separates
-   `--mode debug` from `--mode batch`; each requires a fresh output root.
+1. R1.4 completed the direct-operation development baseline on fixed seeds
+   `1000003`, `1000004`, `1000005`. Review the actual failures before the next
+   authorized step. These remain development data, not formal held-out tests.
+   The [configuration](../../configs/univtac/autonomous_insert_hole.yaml) keeps
+   Terra medium, 30 non-preview move requests, 100 tool calls, and 3600 Codex
+   seconds per episode alongside the native control budget.
 2. Collect a small set of successful same-interface operations, retaining real
    images, calls, feedback, recovery, and outcomes. No-demo performance need
    not be high before examples may be introduced.
-3. Run the A/B/C comparison. Autonomous backend validation, the same-interface
-   example bank, and this comparison are still unfinished.
+3. Run the A/B/C comparison. The same-interface successful example bank and
+   this comparison remain unfinished. R1.4 produced no successful example and
+   did not run B/C.
 4. Use actual failures to improve tactile representation and experience
    organization, then extend task coverage.
 

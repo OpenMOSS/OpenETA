@@ -25,8 +25,10 @@ def load_autonomous_runs(runs_root: Path) -> dict:
                              'debug':read('debug_controls.json'),
                              'host_evaluator':read('host_evaluator.json'),
                              'usage':read('codex_trace_summary.json'),
-                             'worker_error':read('worker_error.json')})
-        batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes})
+                             'worker_error':read('worker_error.json'), 'codex_lifecycle':read('codex_lifecycle.json')})
+        note_path=manifest_path.parent/'validation_note.json'
+        note=json.loads(note_path.read_text()) if note_path.exists() else None
+        batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
     return {'batches':batches}
 
 
@@ -37,17 +39,18 @@ HTML = r'''<!doctype html><html><head><meta charset="utf-8"><title>R1.4 Autonomo
 <p>调试用于验证接口，不计入成功率。正式 episode 的失败和恢复全部保留；unavailable 不计作原生失败。</p><main id="content"></main>
 <script>
 const esc=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+const reason=x=>({native_early_stop:'原生提前终止',native_step_limit:'原生步数用尽',agent_finish:'交互结束',native_success:'原生成功'}[x]??x??'进行中');
 const pretty=x=>'<pre>'+esc(JSON.stringify(x,null,2))+'</pre>';
 const art=(r,p)=>'/artifact?run='+encodeURIComponent(r)+'&path='+encodeURIComponent(p);
 function images(run,paths,labels=[]){return '<div class="images">'+paths.map((p,i)=>'<figure><img loading="lazy" src="'+art(run,p)+'"><figcaption>'+esc(labels[i]??p)+'</figcaption></figure>').join('')+'</div>'}
 function observation(run,o){if(!o)return '';return '<p>'+esc(o.observation_id)+' · step '+esc(o.counts?.simulator_step)+'</p>'+images(run,(o.images||[]).map(x=>x.path),(o.images||[]).map(x=>x.label));}
 async function render(){const d=await (await fetch('/api/r14-autonomous')).json();document.querySelector('#content').innerHTML=d.batches.map(b=>{
 const scored=b.manifest.mode==='batch',valid=b.episodes.filter(e=>e.episode.evaluable),wins=valid.filter(e=>e.episode.task_success);
-return '<section><h2>'+esc(b.name)+'</h2><p class="'+(scored?'metric':'debug')+'">'+(scored?(valid.length===3?'自主操作开发成功率 '+wins.length+'/3':'正式开发批次：可评价 '+valid.length+'/3；成功 '+wins.length+'；其余状态见下方'):'独立控制联调 · 不计分')+'</p>'+b.episodes.map(e=>{
-const state=e.episode;return '<article><h3>seed '+esc(state.seed)+' · '+esc(state.status)+'</h3><p>Native outcome: '+esc(state.native_success_available?state.task_success:'unavailable / pending')+' · 结束原因 '+esc(state.termination)+'</p>'+pretty({tools:state.tool_call_count,move_requests:state.move_request_count,physical_motion_requests:state.actual_motion_requests,control_steps:state.control_steps,physics_steps:state.physics_steps,sim_seconds:state.simulation_time_seconds,wall_seconds:state.elapsed_seconds})+
+return '<section><h2>'+esc(b.name)+'</h2><p class="'+(scored?'metric':'debug')+'">'+(scored?(valid.length===3?'自主操作开发成功率 '+wins.length+'/3':'正式开发批次：可评价 '+valid.length+'/3；成功 '+wins.length+'；其余状态见下方'):'独立控制联调 · 不计分')+'</p>'+(b.validation_note?'<p class="debug">几何复验说明：'+esc(b.validation_note.geometry_validation)+'。腕部几何未通过；正式接口仅开放 head 标点。</p>':'')+b.episodes.map(e=>{
+const state=e.episode;return '<article><h3>seed '+esc(state.seed)+' · '+esc(state.status)+'</h3><p>Native outcome: '+esc(state.native_success_available?state.task_success:'unavailable / pending')+' · 结束原因 '+esc(reason(state.termination))+'</p>'+pretty({'工具调用':state.tool_call_count,'非预览请求':state.move_request_count,'实际运动请求':state.actual_motion_requests,'控制步':state.control_steps,'物理步':state.physics_steps,'仿真秒':state.simulation_time_seconds,'Codex耗时秒':e.codex_lifecycle?.elapsed_seconds,'token用量':e.usage?.usage??'未返回，不能记为0'})+
 '<h3>Agent Saw → Agent Requested → Environment Executed</h3>'+(e.context.length?e.context.map(row=>{
-const execution=e.execution[row.seq-1];return '<details><summary>'+row.seq+' · '+esc(row.tool)+'</summary><h4>Agent Requested</h4>'+pretty(row.arguments)+'<h4>Agent Saw — 实际 MCP 返回</h4>'+row.response_text_blocks.map(x=>'<pre>'+esc(x)+'</pre>').join('')+images(e.run,row.response_image_paths||[])+'<h4>Environment Executed</h4>'+pretty(execution?.result?.text?.execution??execution?.result?.text)+'<h4>Before / After Vision and Touch</h4>'+observation(e.run,execution?.before)+observation(e.run,execution?.result?.text?.observation)+'</details>'}).join(''):'<p>无模型上下文：尚未启动 Codex，或此为纯控制联调。</p>')+
-(e.debug?'<details><summary>不计分的调试请求与实际反馈</summary>'+pretty(e.debug)+'</details>':'')+
-'<details class="host"><summary>Host-only：原生评价、内部错误与成本</summary>'+pretty({episode:state,evaluator:e.host_evaluator,worker_error:e.worker_error,usage:e.usage?.usage})+'</details></article>'}).join('')+'</section>'}).join('')||'<p>尚无 R1.4 运行记录。</p>'}
+const execution=e.execution[row.seq-1];return '<details><summary>'+row.seq+' · '+esc(row.tool)+'</summary><h4>Agent Requested</h4>'+pretty(row.arguments)+'<h4>Agent Saw — 实际 MCP 返回图片</h4>'+images(e.run,row.response_image_paths||[])+ '<details><summary>完整 MCP 文本</summary>'+row.response_text_blocks.map(x=>'<pre>'+esc(x)+'</pre>').join('')+'</details>'+'<h4>Environment Executed</h4><p>'+esc(execution?.result?.text?.execution?.reached===true?'机器人到达请求目标（不代表任务成功）':execution?.result?.text?.execution?.error??'见工具反馈')+'</p><details><summary>实际目标、机器人状态与执行反馈</summary>'+pretty(execution?.result?.text?.execution??execution?.result?.text)+'</details>'+'<h4>Before / After Vision and Touch</h4>'+observation(e.run,execution?.before)+observation(e.run,execution?.result?.text?.observation)+'</details>'}).join(''):'<p>无模型上下文：尚未启动 Codex，或此为纯控制联调。</p>')+
+(e.debug?'<details><summary>不计分的调试请求、反馈与前后图片</summary>'+pretty(e.debug)+e.execution.filter(x=>x.tool==='move_to'&&!x.arguments.preview).map(x=>observation(e.run,x.before)+observation(e.run,x.result?.text?.observation)).join('')+'</details>':'')+
+'<details class="host"><summary>Host-only：原生评价、内部错误与成本</summary>'+pretty({episode:state,evaluator:e.host_evaluator,worker_error:e.worker_error,usage:e.usage?.usage??'unavailable',codex_lifecycle:e.codex_lifecycle})+'</details></article>'}).join('')+'</section>'}).join('')||'<p>尚无 R1.4 运行记录。</p>'}
 render();
 </script></body></html>'''

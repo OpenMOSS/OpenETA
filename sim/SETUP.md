@@ -65,9 +65,9 @@ UniVTAC 的 Isaac 5.1 环境是项目专用的隔离 runtime，不是
 `scripts/setup_envs.sh` 的通用 backend 参数。不要把 `isaaclab` 的手动安装参考
 当作 UniVTAC 安装命令，也不要让它覆盖 FTP-1-era legacy 环境。
 
-项目专用 runtime 和触觉采集已有运行证据，R1.0–R1.3 也已有 native expert、
-Codex 受限技能与专家辅助 continuation 的真实动作结果。通用 OpenETA 工具下
-的 UniVTAC 自主操作后端仍待完成和验证；安装成功不代表该后端已接通。
+项目专用 r09 runtime 已支持 R1.4 通用工具自主操作 batch，三个开发 episode
+均可评价，成功 0/3。该直连 worker 不依赖通用 simulator registry 注册，运行
+沿用已工作的环境，无需重装。收尾 token 用量缺失等限制见研究计划。
 研究状态、同接口示例和 A/B/C 设计统一见
 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，版本和
 benchmark 解释见

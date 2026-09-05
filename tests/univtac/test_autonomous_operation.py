@@ -174,3 +174,16 @@ def test_r14_dashboard_keeps_debug_separate(tmp_path):
     d=load_autonomous_runs(tmp_path)
     assert d['batches'][0]['manifest']['mode']=='debug'
     assert d['batches'][0]['episodes'][0]['context']==[]
+
+
+def test_native_terminal_allows_process_to_finish_and_report(tmp_path):
+    import os
+    import sys
+
+    from scripts.univtac.run_codex_readonly_observation import _run_to_files
+    stop=tmp_path/'stop.json';stop.write_text('{}')
+    result=_run_to_files([sys.executable,'-c','print("final usage returned")'],cwd=tmp_path,
+        environment=dict(os.environ),stdout_path=tmp_path/'out',stderr_path=tmp_path/'err',
+        timeout_seconds=5,stop_path=stop)
+    assert result['returncode']==0 and not result['stopped_by_worker']
+    assert 'final usage returned' in (tmp_path/'out').read_text()

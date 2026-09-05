@@ -18,9 +18,10 @@ Current status:
 - R1.0–R1.3 include native expert successes, model-selected restricted skills,
   and expert-assisted continuations. They establish real execution, but not
   general-tool autonomous success rates or positive tactile ICL benefit;
-- UniVTAC integration with OpenETA's general operation tools is still pending.
-  The next work is direct Insert Hole operation, successful examples collected
-  through the same interface, then an A/B/C comparison;
+- R1.4 connected the general tools to a synchronous UniVTAC worker and ran
+  three fresh Insert Hole no-demo episodes: native success 0/3, all evaluable.
+  Two control-debug episodes are excluded. Successful same-interface examples
+  and the A/B/C comparison remain next work;
 - A has no examples; B has visual–action examples; C adds historical bilateral
   touch to exactly B's trajectories. All three retain current vision, touch,
   proprioception, and operation history;

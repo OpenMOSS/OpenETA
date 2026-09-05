@@ -66,7 +66,9 @@ def _run_to_files(
                 remaining = timeout_seconds - (time.monotonic() - started)
                 if stop_path is not None and stop_path.exists():
                     terminal_seen = terminal_seen or time.monotonic()
-                    if time.monotonic() - terminal_seen >= 15:
+                    # Native motion is already stopped. Allow the final model response
+                    # and usage to finish within the overall Codex deadline.
+                    if time.monotonic() - terminal_seen >= 300:
                         stopped_by_worker = True
                         raise subprocess.TimeoutExpired(command, timeout_seconds)
                 if remaining <= 0:

@@ -51,7 +51,8 @@ budget. These are distinct from restarting failed episodes or selecting the
 best attempt. Use OpenETA's minimal `check_task` success boolean; expose no
 hidden target error, ground-truth target pose, or correct-action suggestion.
 Ordinary feedback about the commanded motion and measured robot state remains
-available. This UniVTAC integration is **pending implementation and validation**.
+available. The R1.4 general-tool backend is implemented; live control validation and
+autonomous episode evaluation are still pending.
 
 ## What a demonstration contains
 
@@ -117,13 +118,12 @@ Codex MCP communication, actual action traces, and dashboard replay. Exact
 Agent inputs are retained in `operator_context.jsonl`; host-only diagnostics
 must not be substituted for what the Agent saw.
 
-Current code still uses a dedicated UniVTAC harness. The generic registry has
-no UniVTAC entry. The Pull Out Key MCP exposes
-`observe / execute_skill / finish_episode`, with task-specific native skills.
-The Insert Hole pilot records an opaque choice and then executes an
-expert-assisted continuation. Neither is a completed UniVTAC
-`observe / mark_point / move_to / check_task` backend. See
-[Architecture](../architecture.md) for implementation pointers.
+R1.4 adds a general-tool MCP/Gateway path with a synchronous UniVTAC worker,
+robot-target control, four-image observation projection, native checking, and
+control/physics counters. The original task-specific and expert-assisted paths
+remain historical implementations. Focused tests passed, but control debugging
+and the three fresh Codex episodes have not run; no R1.4 autonomous success rate
+is available. See [Architecture](../architecture.md) for implementation pointers.
 
 ### Historical evidence, with its original scope
 
@@ -174,6 +174,12 @@ capture-only record must not be relabelled as a completed transfer experiment.
    Start with Insert Hole and three fixed development seeds per round; the
    existing `1000003`, `1000004`, `1000005` are development data, not a formal
    held-out test batch. Keep the selected triplet fixed across conditions.
+   R1.4 uses only A with Terra medium. The
+   [configuration](../../configs/univtac/autonomous_insert_hole.yaml) sets
+   30 non-preview move requests, 100 tool calls, and 3600 Codex seconds per
+   episode alongside the native control budget. The
+   [runner](../../scripts/univtac/run_autonomous_insert_hole.py) separates
+   `--mode debug` from `--mode batch`; each requires a fresh output root.
 2. Collect a small set of successful same-interface operations, retaining real
    images, calls, feedback, recovery, and outcomes. No-demo performance need
    not be high before examples may be introduced.

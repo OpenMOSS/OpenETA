@@ -191,6 +191,37 @@ class GatewayResult:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+class LiveBackendGateway:
+    """Adapter for a synchronous general-tool worker, without LIBERO constants.
+
+    The worker owns initialization, control, calibrated geometry, and native
+    evaluation. Only its public projection and image descriptors cross here.
+    """
+
+    def __init__(self, *, root: Path, worker_url: str):
+        self.root = Path(root).resolve()
+        self.worker_url = worker_url
+
+    def call(self, tool: str, arguments: dict[str, Any]) -> GatewayResult:
+        import urllib.request
+
+        request = urllib.request.Request(
+            self.worker_url + "/call",
+            data=json.dumps({"tool": tool, "arguments": arguments}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=600) as response:
+            payload = json.load(response)
+        text = payload["text"]
+        observation = text.get("observation")
+        if observation is not None:
+            observation = dict(observation)
+            observation["images"] = [{"label": x["label"]} for x in observation["images"]]
+            text = {**text, "observation": observation}
+        images = [self.root / x["path"] for x in payload.get("images", [])]
+        return GatewayResult(bool(payload["ok"]), text, images=images)
+
+
 class EmbodiedGateway:
     """Own one LIBERO-backed episode and expose semantic Operator actions."""
 

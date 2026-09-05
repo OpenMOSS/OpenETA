@@ -2628,10 +2628,76 @@ def _shutdown() -> None:
             pass
 
 
+def build_live_backend_server(*, root: Path, worker_url: str) -> FastMCP:
+    """Register OpenETA's numeric tool surface for a capability-declaring worker."""
+    from tools.embodied_gateway import LiveBackendGateway
+    from tools.univtac_operation_mcp_server import _record_context
+
+    gateway = LiveBackendGateway(root=root, worker_url=worker_url)
+    server = FastMCP("OpenETA live robot", log_level="WARNING")
+
+    def call(name: str, arguments: dict[str, Any]) -> list[Any]:
+        result = gateway.call(name, arguments)
+        blocks = [TextContent(type="text", text=json.dumps(result.text))]
+        blocks.extend(Image(path=p) for p in result.images)
+        _record_context(episode_root=gateway.root, tool=name, arguments=arguments, blocks=blocks)
+        return blocks
+
+    @server.tool(structured_output=False)
+    def observe() -> list[Any]:
+        """Read current head/wrist RGB, bilateral touch, robot TCP state and budgets."""
+        return call("observe", {})
+
+    @server.tool(structured_output=False)
+    def mark_point(view: Literal["head", "wrist"], u: int, v: int, point_id: str = "P0") -> list[Any]:
+        """Back-project a pixel of the current image using aligned depth/calibration.
+
+        Returns a world point in metres, or unavailable if depth is missing.
+        """
+        return call("mark_point", {"view": view, "u": u, "v": v, "point_id": point_id})
+
+    @server.tool(structured_output=False, annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
+    def move_to(xyz_m: list[float] | None = None, delta_mm: list[float] | None = None,
+                delta_frame: Literal["world", "grip_site"] = "world",
+                approach_world: list[float] | None = None, jaw_world: list[float] | None = None,
+                gripper: Literal["open", "close"] | None = None, preview: bool = False,
+                execute_preview_id: str | None = None) -> list[Any]:
+        """Command the declared TCP; use xyz_m OR delta_mm. All vectors have 3 values.
+
+        xyz_m: world metres. delta_mm: millimetres in world or measured TCP axes.
+        approach_world sets TCP +Z; jaw_world sets TCP +X. Omitted axes preserve
+        current orientation. gripper changes finger actuator targets, not poses.
+        preview resolves without physics; execute_preview_id alone executes it.
+        A real request counts even if rejected; inspect new observations and
+        reached/error feedback. Not reached is recoverable unless terminal.
+        """
+        return call("move_to", {"xyz_m": xyz_m, "delta_mm": delta_mm, "delta_frame": delta_frame,
+                    "approach_world": approach_world, "jaw_world": jaw_world, "gripper": gripper,
+                    "preview": preview, "execute_preview_id": execute_preview_id})
+
+    @server.tool(structured_output=False)
+    def report_issue(message: str) -> list[Any]:
+        """Record a recoverable issue without ending the episode."""
+        return call("report_issue", {"message": message})
+
+    @server.tool(structured_output=False)
+    def check_task() -> list[Any]:
+        """Return available and the native success boolean; no task geometry."""
+        return call("check_task", {})
+
+    @server.tool(structured_output=False)
+    def finish_episode(reason: str = "") -> list[Any]:
+        """End interaction. Success is established by the native evaluator."""
+        return call("finish_episode", {"reason": reason})
+
+    return server
+
+
 def main(argv: list[str] | None = None) -> int:
     global _GATEWAY
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="fresh episode artifact root")
+    parser.add_argument("--live-worker-url", help="existing general-tool worker URL")
     parser.add_argument("--env-id", default="openeta/libero_libero_spatial_task0-v0")
     parser.add_argument("--task", default="pick up the black bowl between the plate and the ramekin and place it on the plate")
     parser.add_argument("--seed", type=int, default=17)
@@ -2651,6 +2717,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--control-host", default="127.0.0.1")
     parser.add_argument("--control-port", type=int, default=8790)
     args = parser.parse_args(argv)
+
+    if args.live_worker_url:
+        build_live_backend_server(root=args.root, worker_url=args.live_worker_url).run(transport="stdio")
+        return 0
 
     if __import__("os").environ.get("OPENETA_POINT_ONLY_OPERATOR") == "1":
         for legacy_name in (

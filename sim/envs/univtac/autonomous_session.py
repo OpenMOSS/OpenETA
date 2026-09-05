@@ -1,0 +1,179 @@
+"""Live observation/command session; all task truth stays behind evaluation."""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from PIL import Image
+
+from sim.envs.univtac.autonomous_operation import (
+    TOOLS,
+    NativeController,
+    append_row,
+    pose_dict,
+    quaternion_matrix,
+    resolve_target,
+)
+from sim.envs.univtac.observation import capture_snapshot, to_numpy
+from sim.envs.univtac.trace import write_json
+from tools.pointcloud_pose_marking import camera_ray_from_image_click
+
+
+class AutonomousSession:
+    def __init__(self, task, config, root: Path, seed: int):
+        self.task, self.config, self.root, self.seed = task, config, root, seed
+        self.controller = NativeController(task, config, root)
+        self.tool_count = self.move_requests = self.observation_index = 0
+        self.finished = False
+        self.finish_reason = self.infrastructure_error = None
+        self.latest = None
+        self.frames = []
+        self.feedback = None
+        self.previews = {}
+        self.started = time.monotonic()
+
+    def termination(self):
+        return self.controller.terminal() or ("move_request_limit" if self.move_requests >= self.config['max_move_requests'] else None) or ("tool_call_limit" if self.tool_count >= self.config['max_tool_calls'] else None)
+
+    def capture(self):
+        self.observation_index += 1
+        folder = self.root/'observations'/f'{self.observation_index:04d}'
+        obs = self.task._get_observations()
+        snap = capture_snapshot(obs, output_root=self.root, seed_dir=folder, task_name='insert_hole', seed=self.seed,
+            phase='pre_action', action_id=f'obs_{self.observation_index}', simulator_step=int(self.task.step_count),
+            take_action_count=int(self.task.take_action_cnt), task_instruction='Insert the held object into the hole.',
+            task_metadata={}, native_check_success=None, save_host_only=True,
+            strict_two_tactile_sensors=True, fail_on_missing_rgb_marker=True)
+        write_json(folder/'snapshot.json',snap.snapshot.to_dict())
+        visible = snap.snapshot.operator_visible
+        images = []
+        for name in ('head','wrist'):
+            images.append({'label':name+' RGB', 'path':visible['cameras'][name]['rgb']['path']})
+        for name in ('left_tactile','right_tactile'):
+            images.append({'label':name+' rgb_marker', 'path':visible['tactile'][name]['rgb_marker']['path']})
+        frames, availability = [], {}
+        for name in ('head','wrist'):
+            try:
+                cam = self.task._camera_manager.cameras[name]
+                depth = to_numpy(cam.data.output['depth'][0]).squeeze()
+                k = to_numpy(cam.data.intrinsic_matrices[0])
+                q = to_numpy(cam.data.quat_w_ros[0])
+                pos = to_numpy(cam.data.pos_w[0])
+                rgb = to_numpy(obs['observation'][name]['rgb'])
+                if depth.shape != rgb.shape[:2] or not np.isfinite(k).all() or k[0,0] <= 0 or k[1,1] <= 0:
+                    raise ValueError('depth/calibration does not align with RGB')
+                valid = np.isfinite(depth) & (depth > 0) & (depth < 65)
+                if not valid.any():
+                    raise ValueError('no valid sensor depth')
+                depth_path = folder/f'{name}_depth.png'
+                Image.fromarray(np.where(valid,np.clip(depth*1000,0,65535),0).astype(np.uint16)).save(depth_path)
+                extrinsics = {'pos':pos.tolist(), 'mat':quaternion_matrix(q[[1,2,3,0]]).reshape(-1).tolist(), 'camera_frame':'opencv'}
+                frame = {'camera_id':name, 'rgb_path':images[0 if name=='head' else 1]['path'], 'depth_path':str(depth_path.relative_to(self.root)),
+                         'metadata':{'intrinsics':{'fx':float(k[0,0]),'fy':float(k[1,1]),'cx':float(k[0,2]),'cy':float(k[1,2]),
+                         'width':depth.shape[1],'height':depth.shape[0],'scale':1000}, 'extrinsics':extrinsics}}
+                frames.append(frame)
+                availability[name] = {'available':True, 'depth_unit':'metre', 'depth_type':'camera_z', 'valid_pixels':int(valid.sum())}
+            except (KeyError, AttributeError, ValueError) as exc:
+                availability[name] = {'available':False,'reason':str(exc)}
+        self.frames = frames
+        write_json(folder/'geometry.json',{'frames':frames,'availability':availability})
+        self.latest = {'observation_id':f'obs_{self.observation_index}', 'task_instruction':'Insert the held object into the hole.',
+                       'robot':self.controller.state(), 'counts':self.controller.counts(),
+                       'remaining_budget':{'move_to':max(0,self.config['max_move_requests']-self.move_requests),
+                        'tools':max(0,self.config['max_tool_calls']-self.tool_count),
+                        'native_control_steps':max(0,self.task.cfg.step_lim-self.task.take_action_cnt)},
+                       'mark_point':availability, 'execution_feedback':self.feedback, 'terminal':self.termination(), 'images':images}
+        write_json(folder/'operator_observation.json',self.latest)
+        return self.latest
+
+    def call(self, tool: str, args: dict[str,Any]):
+        if self.tool_count >= self.config['max_tool_calls']:
+            return {'ok':False,'text':{'error':'tool_call_limit','terminal':True},'images':[]}
+        args = {k:v for k,v in args.items() if v is not None}
+        self.tool_count += 1
+        before = self.latest
+        result = {}
+        try:
+            if tool not in TOOLS:
+                raise ValueError('unsupported tool')
+            if tool == 'observe':
+                result = {'observation':self.capture()}
+            elif self.latest is None:
+                raise ValueError('call observe first')
+            elif tool == 'move_to':
+                preview = bool(args.get('preview',False))
+                if not preview:
+                    if self.termination():
+                        raise ValueError(self.termination())
+                    self.move_requests += 1
+                preview_id = args.get('execute_preview_id')
+                if preview_id:
+                    if any(v is not None and v is not False for k,v in args.items() if k not in ('execute_preview_id','delta_frame')):
+                        raise ValueError('execute_preview_id must be used alone')
+                    if preview_id not in self.previews:
+                        raise ValueError('preview is unavailable or expired')
+                    target, gripper = self.previews[preview_id]
+                else:
+                    target = resolve_target(self.controller.tcp(), args)
+                    gripper = args.get('gripper')
+                if preview:
+                    preview_id = f'preview_{self.tool_count}'
+                    self.previews[preview_id] = (target, gripper)
+                    result = {'preview_id':preview_id,'resolved_target':pose_dict(target),'gripper':gripper,'physics_stepped':False}
+                else:
+                    self.previews.clear()
+                    self.feedback = self.controller.execute(target, gripper)
+                    result = {'execution':self.feedback,'observation':self.capture()}
+            elif tool == 'mark_point':
+                name = args['view']
+                frame = next((f for f in self.frames if f['camera_id']==name),None)
+                if frame is None:
+                    raise ValueError('mark_point unavailable: no aligned sensor depth/calibration')
+                intr = frame['metadata']['intrinsics']
+                if not 0 <= args['u'] < intr['width'] or not 0 <= args['v'] < intr['height']:
+                    raise ValueError('pixel outside the current image')
+                ray = camera_ray_from_image_click({'frames':self.frames},camera_id=name,u=args['u'],v=args['v'],artifact_root=self.root)
+                xyz = ray.get('visible_surface', {}).get('xyz_m')
+                if xyz is None:
+                    raise ValueError('clicked pixel has no valid observed depth')
+                result = {'point_id':args.get('point_id','P0'),'observation_id':self.latest['observation_id'],'xyz_m':xyz,'frame':'world'}
+            elif tool == 'check_task':
+                result = self.controller.check()
+            elif tool == 'report_issue':
+                result = {'recorded':True, 'message':str(args.get('message',''))}
+            elif tool == 'finish_episode':
+                result = self.controller.check()
+                self.finished = True
+                self.finish_reason = 'agent_finish'
+                result['finished'] = True
+            result['terminal'] = self.termination()
+            image_descriptors = result.get('observation',{}).get('images',[])
+            payload = {'ok':True,'text':result,'images':image_descriptors}
+        except ValueError as exc:
+            result = {'error':str(exc),'recoverable':not bool(self.termination()),'terminal':self.termination()}
+            if tool=='move_to' and not args.get('preview',False):
+                self.previews.clear()
+                self.feedback = {'error':str(exc),'reached':False,'physical_motion':False}
+                result['observation'] = self.capture()
+            payload = {'ok':False,'text':result,'images':result.get('observation',{}).get('images',[])}
+        except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence
+            self.infrastructure_error = f'{type(exc).__name__}: {exc}'
+            self.finish_reason = 'infrastructure_error'
+            payload = {'ok':False,'text':{'error':self.infrastructure_error,'terminal':'infrastructure_error'},'images':[]}
+        append_row(self.root/'tool_trace.jsonl',{'tool':tool,'arguments':args,'before':before,'result':payload,'counts':self.controller.counts(),'timestamp_s':time.time()})
+        if self.termination() or self.infrastructure_error:
+            write_json(self.root/'stop.json',{'reason':self.termination() or self.infrastructure_error,'timestamp_s':time.time()})
+        return payload
+
+    def finalize(self, reason=None):
+        checker = self.controller.check()
+        result = {'round':'R1.4','seed':self.seed,'reset_valid':True,
+                  'native_success_available':checker['available'], 'task_success':checker['success'],
+                  'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or 'codex_exit',
+                  'infrastructure_error':self.infrastructure_error, 'tool_call_count':self.tool_count,
+                  'move_request_count':self.move_requests,'elapsed_seconds':time.monotonic()-self.started, **self.controller.counts()}
+        write_json(self.root/'final_result.json',result)
+        write_json(self.root/'host_evaluator.json',{'metadata':self.task.metadata,'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)})
+        return result

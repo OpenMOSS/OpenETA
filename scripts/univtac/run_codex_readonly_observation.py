@@ -44,6 +44,7 @@ def _run_to_files(
     stdout_path: Path,
     stderr_path: Path,
     timeout_seconds: float,
+    stop_path: Path | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     started_at = _utc_now()
@@ -58,10 +59,25 @@ def _run_to_files(
             start_new_session=True,
         )
         timed_out = False
+        stopped_by_worker = False
+        terminal_seen = None
         try:
-            returncode = process.wait(timeout=timeout_seconds)
+            while True:
+                remaining = timeout_seconds - (time.monotonic() - started)
+                if stop_path is not None and stop_path.exists():
+                    terminal_seen = terminal_seen or time.monotonic()
+                    if time.monotonic() - terminal_seen >= 15:
+                        stopped_by_worker = True
+                        raise subprocess.TimeoutExpired(command, timeout_seconds)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
+                try:
+                    returncode = process.wait(timeout=min(1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
         except subprocess.TimeoutExpired:
-            timed_out = True
+            timed_out = not stopped_by_worker
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 returncode = process.wait(timeout=15)
@@ -72,6 +88,7 @@ def _run_to_files(
         "command": command,
         "returncode": returncode,
         "timed_out": timed_out,
+        "stopped_by_worker": stopped_by_worker,
         "started_at": started_at,
         "ended_at": _utc_now(),
         "elapsed_seconds": time.monotonic() - started,

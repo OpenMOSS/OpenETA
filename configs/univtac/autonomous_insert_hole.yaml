@@ -1,0 +1,17 @@
+round: R1.4
+task: insert_hole
+seeds: [1000003, 1000004, 1000005]
+task_config: demo
+mode: eval
+device: cuda:0
+model: gpt-5.6-terra
+reasoning_effort: medium
+max_move_requests: 30
+max_tool_calls: 100
+codex_timeout_seconds: 3600
+startup_timeout_seconds: 900
+shutdown_timeout_seconds: 300
+max_control_steps_per_move: 80
+max_joint_delta_rad: 0.025
+position_tolerance_m: 0.003
+orientation_tolerance_rad: 0.05235987756

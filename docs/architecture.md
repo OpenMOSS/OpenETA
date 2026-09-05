@@ -65,11 +65,12 @@ These are real action paths, not general-tool autonomous operation. In these
 historical pilots the query's privileged state and native evaluation stay
 host-side; demonstration outcome labels may be part of the example context.
 
-### Target direct-operation integration — pending
+### Direct-operation integration — implemented, live validation pending
 
-The design reference is OpenMOSS/OpenETA's `openeta-for-codex` branch. Reuse the
-existing [`EmbodiedGateway`](../tools/embodied_gateway.py),
-[Operator MCP](../tools/embodied_mcp_server.py), worker isolation, and replay:
+The design reference is OpenMOSS/OpenETA's `openeta-for-codex` branch. R1.4 adds
+`LiveBackendGateway` in the existing [Gateway module](../tools/embodied_gateway.py)
+and a six-tool live backend mode in the [Operator MCP](../tools/embodied_mcp_server.py).
+The original LIBERO Gateway remains separate.
 
 ```text
 vision + bilateral tactile history + proprioception + operation history
@@ -78,11 +79,15 @@ vision + bilateral tactile history + proprioception + operation history
     -> minimal check_task native success boolean
 ```
 
-The [`simulator registry`](../sim/env_registry.py) does not yet register UniVTAC,
-and the existing task-specific workers are not connected to this general
-Gateway loop. UniVTAC action translation, calibrated marking, gripper control,
-and the complete native-checking loop remain to be implemented and validated.
-The inherited LIBERO implementation alone is not proof of UniVTAC integration.
+The [UniVTAC session](../sim/envs/univtac/autonomous_session.py) connects the
+general tools to a synchronous [Isaac51 worker](../scripts/univtac/serve_autonomous_worker.py).
+This direct worker route does not require generic simulator registry registration.
+The [controller](../sim/envs/univtac/autonomous_operation.py) uses robot-state
+Jacobian IK and native qpos control with `force=False`; target resolution supports
+world/TCP translation, orientation, gripper commands and numeric previews.
+`mark_point` reuses observed RGB-D back-projection when calibration is available.
+Live TCP, motion, image alignment and native counting validation is still pending;
+implementation and focused tests alone do not establish an autonomous baseline.
 
 Preserve official reset/`pre_move` initialization. At the official policy handoff,
 the Agent chooses targets, direction, magnitude, orientation, and gripper actions,
@@ -94,7 +99,7 @@ minimal native success feedback, with no hidden target error or action advice.
 
 The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
 A/B/C controls, historical result boundaries, and next work. This architecture
-section describes an integration target, not a completed autonomous backend.
+section distinguishes implemented interfaces from pending live validation.
 
 ## Geometry and visual feedback
 

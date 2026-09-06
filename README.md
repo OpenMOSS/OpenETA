@@ -29,6 +29,8 @@ Current status:
   role in selecting the next method.
 
 Read the [UniVTAC research plan](docs/univtac/research-plan.md) first. See
+[Related Work and bibliography](docs/univtac/related-work.md) for literature
+and its effect on the design,
 [Architecture](docs/architecture.md) for the system boundary,
 [Isaac 5.1 compatibility](docs/univtac/isaac51_compatibility_boundary.md) for
 benchmark interpretation, and [Vendor Notes](docs/vendor-notes.md) for source

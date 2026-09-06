@@ -1,9 +1,16 @@
 # UniVTAC tactile-agent research plan
 
 This is the canonical research-plan and status entry point for
-`tactile-agent-for-univtac`, updated on 2026-09-05 against the current checkout
+`tactile-agent-for-univtac`, updated on 2026-09-06 against the current checkout
 and retained run evidence. The design below is the next research direction;
-it is not a claim that the full autonomous backend already works.
+it is not a claim that all planned capabilities already work.
+
+[Related Work](related-work.md) and its [BibTeX](related-work.bib) collect the
+primary references, reading depth, and design implications. The current
+literature proposal is causal tactile-change clip selection, with local image
+difference as a control; it is not implemented slip recognition or an online
+motion interrupt. Event detection supports observations and example organization
+within the tactile ICL question, without changing the A/B/C comparison below.
 
 ## Research question
 

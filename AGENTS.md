@@ -3,6 +3,11 @@
 The current research direction and evidence boundaries are maintained in
 [the UniVTAC research plan](docs/univtac/research-plan.md).
 
+When a paper is actually cited or adopted, update
+[Related Work](docs/univtac/related-work.md) and its BibTeX with the verified
+source/version, reading depth, and concrete effect on the design. Keep one
+record per contribution; no separate document per paper is required.
+
 ## Neat after each experimental step
 
 After every substantive experimental step, spawn one subagent that forks the

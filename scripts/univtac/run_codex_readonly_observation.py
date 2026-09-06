@@ -45,6 +45,7 @@ def _run_to_files(
     stderr_path: Path,
     timeout_seconds: float,
     stop_path: Path | None = None,
+    terminal_grace_seconds: float = 300,
 ) -> dict[str, Any]:
     started = time.monotonic()
     started_at = _utc_now()
@@ -68,7 +69,7 @@ def _run_to_files(
                     terminal_seen = terminal_seen or time.monotonic()
                     # Native motion is already stopped. Allow the final model response
                     # and usage to finish within the overall Codex deadline.
-                    if time.monotonic() - terminal_seen >= 300:
+                    if time.monotonic() - terminal_seen >= terminal_grace_seconds:
                         stopped_by_worker = True
                         raise subprocess.TimeoutExpired(command, timeout_seconds)
                 if remaining <= 0:
@@ -91,6 +92,9 @@ def _run_to_files(
         "returncode": returncode,
         "timed_out": timed_out,
         "stopped_by_worker": stopped_by_worker,
+        "terminal_grace_seconds": terminal_grace_seconds,
+        "terminal_seen_after_seconds": terminal_seen - started if terminal_seen is not None else None,
+        "exit_mode": 'terminal_grace_expired' if stopped_by_worker else ('overall_deadline' if timed_out else 'natural_exit'),
         "started_at": started_at,
         "ended_at": _utc_now(),
         "elapsed_seconds": time.monotonic() - started,

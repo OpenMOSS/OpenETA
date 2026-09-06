@@ -18,6 +18,7 @@ from sim.envs.univtac.autonomous_operation import (
 )
 from sim.envs.univtac.observation import capture_snapshot, to_numpy
 from sim.envs.univtac.planner_diagnostics import safe_diagnostic_value
+from sim.envs.univtac.tactile_history import TactileRecorder
 from sim.envs.univtac.trace import write_json
 from tools.pointcloud_pose_marking import camera_ray_from_image_click
 
@@ -34,6 +35,12 @@ class AutonomousSession:
         self.feedback = None
         self.previews = {}
         self.started = time.monotonic()
+        self.recorder = None
+        if 'tactile_history' in config:
+            self.recorder = TactileRecorder(task, self.controller, root, config['tactile_history'])
+            self.recorder.sample()
+            self.controller.after_step = self.recorder.sample
+        self.terminal_saved = False
 
     def termination(self):
         return self.controller.terminal() or ("move_request_limit" if self.move_requests >= self.config['max_move_requests'] else None) or ("tool_call_limit" if self.tool_count >= self.config['max_tool_calls'] else None)
@@ -111,8 +118,8 @@ class AutonomousSession:
             elif tool == 'move_to':
                 preview = bool(args.get('preview',False))
                 if not preview:
-                    if self.termination():
-                        raise ValueError(self.termination())
+                    if self.termination() or self.finished:
+                        raise ValueError(self.termination() or 'episode_finished')
                     self.move_requests += 1
                 preview_id = args.get('execute_preview_id')
                 if preview_id:
@@ -130,8 +137,16 @@ class AutonomousSession:
                     result = {'preview_id':preview_id,'resolved_target':pose_dict(target),'gripper':gripper,'physics_stepped':False}
                 else:
                     self.previews.clear()
+                    if self.recorder:
+                        self.recorder.begin(f'action_{self.move_requests:03d}', args)
                     self.feedback = self.controller.execute(target, gripper)
-                    result = {'execution':self.feedback,'observation':self.capture()}
+                    observation = self.capture()
+                    if self.recorder:
+                        images, history = self.recorder.history()
+                        observation['images'] = observation['images'][:2] + images
+                        observation['tactile_history'] = history
+                        write_json(self.root/'observations'/f'{self.observation_index:04d}'/'operator_observation.json', observation)
+                    result = {'execution':self.feedback,'observation':observation}
             elif tool == 'mark_point':
                 name = args['view']
                 frame = next((f for f in self.frames if f['camera_id']==name),None)
@@ -171,15 +186,23 @@ class AutonomousSession:
         append_row(self.root/'tool_trace.jsonl',{'tool':tool,'arguments':args,'before':before,'result':payload,'counts':self.controller.counts(),'timestamp_s':time.time()})
         if self.termination() or self.infrastructure_error:
             write_json(self.root/'stop.json',{'reason':self.termination() or self.infrastructure_error,'timestamp_s':time.time()})
+            if not self.terminal_saved:
+                self.finalize()
+                self.terminal_saved = True
         return payload
 
     def finalize(self, reason=None):
         checker = self.controller.check()
-        result = {'round':'R1.4','seed':self.seed,'reset_valid':True,
+        result = {'round':self.config.get('round','R1.4'),'seed':self.seed,'reset_valid':True,
                   'native_success_available':checker['available'], 'task_success':checker['success'],
                   'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or 'codex_exit',
                   'infrastructure_error':self.infrastructure_error, 'tool_call_count':self.tool_count,
                   'move_request_count':self.move_requests,'elapsed_seconds':time.monotonic()-self.started, **self.controller.counts()}
+        if self.recorder:
+            result['recording'] = self.recorder.save_index()
+        if self.controller.grasp:
+            result['inherited_gripper'] = self.controller.grasp.inherited
+            result['final_robot'] = self.controller.state()
         write_json(self.root/'final_result.json',result)
         write_json(self.root/'host_evaluator.json',{'metadata':safe_diagnostic_value(self.task.metadata),'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)})
         return result

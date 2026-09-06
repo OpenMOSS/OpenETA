@@ -85,7 +85,7 @@ def test_control_path_uses_native_steps_without_expert():
     tree=ast.parse(path.read_text())
     attrs={n.attr for n in ast.walk(tree) if isinstance(n,ast.Attribute)}
     assert not attrs & {'play_once','expert_check','plan_arm','set_dof_positions','set_pose','prism','slot','target_pose'}
-    calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=='take_action']
+    calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='take_action']
     assert len(calls)==1
     values={k.arg:ast.literal_eval(k.value) for k in calls[0].keywords}
     assert values['force'] is False and values['action_type']=='qpos'
@@ -95,6 +95,9 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
     import sys
 
     class Array(np.ndarray):
+        @property
+        def device(self):
+            return 'cpu'
         def detach(self):
             return self
         def cpu(self):
@@ -109,6 +112,13 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
     physx=SimpleNamespace(get_jacobians=lambda:array(np.c_[np.eye(6),np.zeros(6)][None,None]))
     robot=SimpleNamespace(robot=SimpleNamespace(data=data,root_physx_view=physx),_arm_ids=np.arange(7),
         _jacobi_body_idx=0,_body_idx=0,get_gripper_qpos=lambda:0)
+    data.joint_pos_target = array(np.zeros((1, 9)))
+    data.joint_stiffness = data.joint_damping = data.joint_effort_limits = data.joint_pos_target.copy()
+    robot.robot._joint_pos_target_sim = data.joint_pos_target.copy()
+    robot._gripper_ids = np.array([7,8])
+    robot._gripper_joint_names = ['panda_finger_joint1', 'panda_finger_joint2']
+    robot.get_gripper_qpos_all = lambda: array([0,0])
+    robot.set_gripper = lambda *a, **k: None
     task=SimpleNamespace(_robot_manager=robot,step_count=20,_physics_step_count=20,take_action_cnt=0,
         cfg=SimpleNamespace(step_lim=2,sim=SimpleNamespace(dt=1/120)),eval_success=False,device='cpu',
         check_success=lambda:False,check_early_stop=lambda:False)

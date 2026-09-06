@@ -56,7 +56,7 @@ def main(argv=None):
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or b'{}')
                 if self.path == '/host_finalize':
-                    session.finished = True
+                    session.host_closed = True
                     payload = {'ok': True}
                 elif self.path == '/call':
                     payload = session.call(body['tool'], body.get('arguments', {}))
@@ -73,9 +73,11 @@ def main(argv=None):
         server.timeout = 1
         write_json(root/'ready.json',{'worker_url':f'http://127.0.0.1:{server.server_port}', 'reset_valid': True})
         deadline = time.monotonic() + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
-        while not session.finished and time.monotonic() < deadline:
+        # finish_episode stops motion but the MCP must stay readable until Codex
+        # naturally exits (or its bounded terminal grace expires).
+        while not getattr(session, 'host_closed', False) and time.monotonic() < deadline:
             server.handle_request()
-        session.finalize('worker_deadline' if not session.finished else None)
+        session.finalize('worker_deadline' if time.monotonic() >= deadline else None)
         return 0
     except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence
         (root/'worker_error.json').write_text(json.dumps({'error': str(exc), 'traceback': traceback.format_exc()}))
@@ -86,6 +88,8 @@ def main(argv=None):
     finally:
         if server:
             server.server_close()
+        if session and session.recorder:
+            session.recorder.close()
         if task:
             task.close()
         if app:

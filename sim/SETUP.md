@@ -67,7 +67,8 @@ UniVTAC 的 Isaac 5.1 环境是项目专用的隔离 runtime，不是
 
 项目专用 r09 runtime 已支持 R1.4 通用工具自主操作 batch，三个开发 episode
 均可评价，成功 0/3。该直连 worker 不依赖通用 simulator registry 注册，运行
-沿用已工作的环境，无需重装。收尾 token 用量缺失等限制见研究计划。
+沿用已工作的环境，无需重装；R1.5 首条控制/录像 debug 也复用了该 runtime。
+R1.4 冻结 batch 的 token 用量缺失；R1.5 自然收尾与 usage 仍待正式验证。
 研究状态、同接口示例和 A/B/C 设计统一见
 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，版本和
 benchmark 解释见

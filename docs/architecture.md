@@ -100,11 +100,16 @@ closed normally. In this frozen batch, Codex was stopped after a 15-second
 terminal grace period, so complete token usage is unavailable. The post-batch
 launcher allows 300 seconds for final reporting within the original 3600-second
 Codex deadline; that reporting fix has not been model-tested and did not rerun
-the batch. Contact reliability remains limited: omitted gripper commands currently
+the batch. Contact reliability remains limited: the frozen R1.4 omitted-gripper path
 reset the target to measured opening, not the prior commanded closing target.
 Its effect on grasp retention is unverified. Pose arrival also does not prove
-velocity settling. Touch observations are between tool calls; the inner IK
-controller uses robot state, not tactile feedback.
+velocity settling. R1.4 touch observations were between tool calls; the inner IK
+controller still uses robot state, not tactile feedback. R1.5 preserves the two
+submitted gripper targets, samples existing four-view buffers after native
+control steps, and returns segment-end tactile strips through the same MCP.
+`arm_reached` and finite gripper-wait completion are separate; neither implies
+stable contact. Full review video, raw frames and feature scores remain separate
+from the exact model-visible context. See [tactile history](../sim/envs/univtac/tactile_history.py).
 
 Preserve official reset/`pre_move` initialization. At the official policy handoff,
 the Agent chooses targets, direction, magnitude, orientation, and gripper actions,
@@ -116,7 +121,8 @@ minimal native success feedback, with no hidden target error or action advice.
 
 The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
 A/B/C controls, historical result boundaries, and next work. This architecture
-section distinguishes validated R1.4 capabilities from remaining limitations.
+section distinguishes historical R1.4 evidence, R1.5 debug validation, and
+remaining formal validation. No tactile controller or interruption is added.
 
 ## Geometry and visual feedback
 

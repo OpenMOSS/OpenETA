@@ -384,14 +384,18 @@ research machine; it is a temporary historical checkout, not a portable
 dependency. Current upstream branches may evolve. Cite an actually used
 release/commit when code is adopted; this index does not install or switch one.
 
-## First implementation candidate — proposal only
+## First implementation candidate — R1.5 segment-end implementation
 
-The current [live session](../../sim/envs/univtac/autonomous_session.py) captures
-touch between tools and after a completed control segment. R1.4 did **not**
-retain a full within-action tactile sequence or implement tactile interrupts.
-Such sequences need a later authorized sensing change before this proposal can
-be tested. The present literature pass runs no simulation, controller, detector,
-training, or Agent episode.
+R1.4 captured touch only between tools. R1.5 now records the existing native
+control/render updates and selects real frames at the end of each action
+segment. One unscored debug is complete; formal Agent validation is pending.
+This is a simplified implementation in [tactile_history.py](../../sim/envs/univtac/tactile_history.py),
+not reproduction of a cited detector: fixed-ROI integer patch matching on
+160-pixel-wide images, displacement/quality scores, and labelled image-difference
+fallback. It does not fit GelSlim's sticking-center rigid model, estimate force,
+or train a semantic event model. Both score streams operate on the same images.
+The online-trigger ideas below remain proposals: persistence, hysteresis and
+refractory intervals are not implemented for this segment-end selector.
 
 | Candidate | Required observed input | Advantage | Main risk / cost |
 | --- | --- | --- | --- |
@@ -467,6 +471,7 @@ changing the examples or giving B touch-derived annotations.
   Keep one record per contribution, with preprint/publication relationships;
   separate software and equipment entries. No per-paper document is required.
 
-Event selection, labeled event detection, temporal-model integration and tactile
-ICL gains remain **unimplemented or unverified here**. The existing R1.4 result,
+Segment-end selection is implemented and debug-tested in R1.5. Semantic event
+detection, online interruption, temporal-model integration and tactile ICL gains
+remain **unimplemented or unverified**. The existing R1.4 result,
 historical experiments and current A/B/C research question remain unchanged.

@@ -7,11 +7,12 @@ from pathlib import Path
 from sim.envs.univtac.codex_readonly import read_jsonl
 
 
-def load_autonomous_runs(runs_root: Path) -> dict:
+def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    for manifest_path in sorted(runs_root.glob('univtac-isaac51-r14*/run_manifest.json')):
+    pattern = 'univtac-isaac51-r15*/**/run_manifest.json' if round_name == 'R1.5' else 'univtac-isaac51-r14*/run_manifest.json'
+    for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
-        if manifest.get('round') != 'R1.4':
+        if manifest.get('round') != round_name:
             continue
         episodes = []
         for path in sorted(manifest_path.parent.glob('seed_*/episode.json')):
@@ -23,6 +24,9 @@ def load_autonomous_runs(runs_root: Path) -> dict:
                              'context':read_jsonl(root/'operator_context.jsonl'),
                              'execution':read_jsonl(root/'tool_trace.jsonl'),
                              'debug':read('debug_controls.json'),
+                             'samples':read_jsonl(root/'samples.jsonl'), 'video':read('video.json'),
+                             'recording':read('recording.json'), 'gripper_commands':read_jsonl(root/'gripper_commands.jsonl'),
+                             'agent_final': (root/'agent_final.md').read_text() if (root/'agent_final.md').exists() else None,
                              'host_evaluator':read('host_evaluator.json'),
                              'usage':read('codex_trace_summary.json'),
                              'worker_error':read('worker_error.json'), 'codex_lifecycle':read('codex_lifecycle.json')})
@@ -44,13 +48,34 @@ const pretty=x=>'<pre>'+esc(JSON.stringify(x,null,2))+'</pre>';
 const art=(r,p)=>'/artifact?run='+encodeURIComponent(r)+'&path='+encodeURIComponent(p);
 function images(run,paths,labels=[]){return '<div class="images">'+paths.map((p,i)=>'<figure><img loading="lazy" src="'+art(run,p)+'"><figcaption>'+esc(labels[i]??p)+'</figcaption></figure>').join('')+'</div>'}
 function observation(run,o){if(!o)return '';return '<p>'+esc(o.observation_id)+' · step '+esc(o.counts?.simulator_step)+'</p>'+images(run,(o.images||[]).map(x=>x.path),(o.images||[]).map(x=>x.label));}
+
+const reviews=[];
+function review(e){if(!e.samples?.length)return '';const k=reviews.push(e)-1;
+return '<section class="review host" data-review="'+k+'"><h3>完整审阅录像 · Host-only 标注，不是 Agent 输入</h3><p>按仿真时间回放；模型思考期间物理暂停。无插值生成的观测。下方逐帧滑杆查看原始四图。</p>'+
+(e.video?'<video style="width:100%;max-height:650px" controls preload="metadata" src="'+art(e.run,e.video.path)+'"></video>':'<p>视频尚未生成，原始帧仍可审阅。</p>')+
+'<label>速度 <select class="speed"><option value="1">1×</option><option value="0.25">0.25×</option><option value="0.1">0.1×</option></select></label> <button class="prev">上一帧</button> <button class="next">下一帧</button><input class="frame" type="range" min="0" max="'+(e.samples.length-1)+'" value="0" step="1" style="width:60%"><p class="frameinfo"></p><div class="curves"></div><div class="raw"></div><details><summary>采样与夹爪命令记录</summary>'+pretty({recording:e.recording,commands:e.gripper_commands})+'</details></section>';
+}
+function plot(rows,index,series,label){const W=900,H=140,ts=rows.map(r=>r.simulation_time_seconds),start=ts[0],span=Math.max(.001,ts.at(-1)-start),values=series.flatMap(s=>rows.map(s.get)),max=Math.max(.001,...values);let svg='<p>'+esc(label)+'</p><svg viewBox="0 0 '+W+' '+H+'" style="width:100%;background:#fafafa">';
+for(const s of series){const points=rows.map(r=>((r.simulation_time_seconds-start)/span*(W-40)+20)+','+(H-20-s.get(r)/max*(H-40))).join(' ');svg+='<polyline fill="none" stroke="'+s.color+'" stroke-width="2" points="'+points+'"/>';}
+const x=(ts[index]-start)/span*(W-40)+20;return svg+'<line x1="'+x+'" x2="'+x+'" y1="0" y2="'+H+'" stroke="black"/></svg><small>'+series.map(s=>'<span style="color:'+s.color+'">'+esc(s.name)+': '+s.get(rows[index]).toFixed(4)+'</span>').join(' · ')+'</small>';}
+function bindReviews(){document.querySelectorAll('.review').forEach(el=>{const e=reviews[+el.dataset.review],rows=e.samples,slider=el.querySelector('.frame'),video=el.querySelector('video');
+const show=(i,seek=false)=>{i=Math.max(0,Math.min(rows.length-1,i));slider.value=i;const r=rows[i];el.querySelector('.frameinfo').textContent='frame '+r.sample_id+' · sim '+r.simulation_time_seconds.toFixed(4)+'s · '+r.action_id+' · request '+JSON.stringify(r.request)+' · terminal '+(r.native_terminal??'none');
+el.querySelector('.raw').innerHTML=images(e.run,Object.values(r.images),Object.keys(r.images));
+const grip=[{name:'joint1 target (m)',color:'#1261a0',get:r=>r.robot.gripper_target_positions_m[0]},{name:'joint1 measured',color:'#79a7d3',get:r=>r.robot.gripper_finger_positions_m[0]},{name:'joint2 target',color:'#b94427',get:r=>r.robot.gripper_target_positions_m[1]},{name:'joint2 measured',color:'#ec9a6a',get:r=>r.robot.gripper_finger_positions_m[1]}];
+const change=[];for(const [side,color] of [['left_tactile','#7e46a8'],['right_tactile','#238764']]){change.push({name:side+' motion/fallback',color,get:r=>r.features?.[side]?.change_strength??0});change.push({name:side+' image difference',color:side==='left_tactile'?'#c1a0d8':'#82bea4',get:r=>r.features?.[side]?.difference_strength??0});}
+el.querySelector('.curves').innerHTML=plot(rows,i,grip,'夹爪命令与实测开度（米）')+plot(rows,i,change,'触觉变化强度（各自阈值归一化；不是滑移或力）');if(seek&&video)video.currentTime=r.simulation_time_seconds-rows[0].simulation_time_seconds;};
+slider.oninput=()=>show(+slider.value,true);el.querySelector('.prev').onclick=()=>show(+slider.value-1,true);el.querySelector('.next').onclick=()=>show(+slider.value+1,true);el.querySelector('.speed').onchange=ev=>{if(video)video.playbackRate=+ev.target.value;};
+if(video)video.ontimeupdate=()=>{let i=0;while(i+1<rows.length&&rows[i+1].simulation_time_seconds-rows[0].simulation_time_seconds<=video.currentTime)i++;if(+slider.value!==i)show(i);};show(0);});}
+
 async function render(){const d=await (await fetch('/api/r14-autonomous')).json();document.querySelector('#content').innerHTML=d.batches.map(b=>{
 const scored=b.manifest.mode==='batch',valid=b.episodes.filter(e=>e.episode.evaluable),wins=valid.filter(e=>e.episode.task_success);
 return '<section><h2>'+esc(b.name)+'</h2><p class="'+(scored?'metric':'debug')+'">'+(scored?(valid.length===3?'自主操作开发成功率 '+wins.length+'/3':'正式开发批次：可评价 '+valid.length+'/3；成功 '+wins.length+'；其余状态见下方'):'独立控制联调 · 不计分')+'</p>'+(b.validation_note?'<p class="debug">几何复验说明：'+esc(b.validation_note.geometry_validation)+'。腕部几何未通过；正式接口仅开放 head 标点。</p>':'')+b.episodes.map(e=>{
 const state=e.episode;return '<article><h3>seed '+esc(state.seed)+' · '+esc(state.status)+'</h3><p>Native outcome: '+esc(state.native_success_available?state.task_success:'unavailable / pending')+' · 结束原因 '+esc(reason(state.termination))+'</p>'+pretty({'工具调用':state.tool_call_count,'非预览请求':state.move_request_count,'实际运动请求':state.actual_motion_requests,'控制步':state.control_steps,'物理步':state.physics_steps,'仿真秒':state.simulation_time_seconds,'Codex耗时秒':e.codex_lifecycle?.elapsed_seconds,'token用量':e.usage?.usage??'未返回，不能记为0'})+
-'<h3>Agent Saw → Agent Requested → Environment Executed</h3>'+(e.context.length?e.context.map(row=>{
+review(e)+'<h3>Agent Saw → Agent Requested → Environment Executed</h3>'+(e.context.length?e.context.map(row=>{
 const execution=e.execution[row.seq-1];return '<details><summary>'+row.seq+' · '+esc(row.tool)+'</summary><h4>Agent Requested</h4>'+pretty(row.arguments)+'<h4>Agent Saw — 实际 MCP 返回图片</h4>'+images(e.run,row.response_image_paths||[])+ '<details><summary>完整 MCP 文本</summary>'+row.response_text_blocks.map(x=>'<pre>'+esc(x)+'</pre>').join('')+'</details>'+'<h4>Environment Executed</h4><p>'+esc(execution?.result?.text?.execution?.reached===true?'机器人到达请求目标（不代表任务成功）':execution?.result?.text?.execution?.error??'见工具反馈')+'</p><details><summary>实际目标、机器人状态与执行反馈</summary>'+pretty(execution?.result?.text?.execution??execution?.result?.text)+'</details>'+'<h4>Before / After Vision and Touch</h4>'+observation(e.run,execution?.before)+observation(e.run,execution?.result?.text?.observation)+'</details>'}).join(''):'<p>无模型上下文：尚未启动 Codex，或此为纯控制联调。</p>')+
 (e.debug?'<details><summary>不计分的调试请求、反馈与前后图片</summary>'+pretty(e.debug)+e.execution.filter(x=>x.tool==='move_to'&&!x.arguments.preview).map(x=>observation(e.run,x.before)+observation(e.run,x.result?.text?.observation)).join('')+'</details>':'')+
-'<details class="host"><summary>Host-only：原生评价、内部错误与成本</summary>'+pretty({episode:state,evaluator:e.host_evaluator,worker_error:e.worker_error,usage:e.usage?.usage??'unavailable',codex_lifecycle:e.codex_lifecycle})+'</details></article>'}).join('')+'</section>'}).join('')||'<p>尚无 R1.4 运行记录。</p>'}
-render();
+'<h4>Agent 自己的最终回答</h4><pre>'+esc(e.agent_final??'尚无自然收尾回答')+'</pre><details class="host"><summary>Host-only：原生评价、内部错误与成本</summary>'+pretty({episode:state,evaluator:e.host_evaluator,worker_error:e.worker_error,usage:e.usage?.usage??'unavailable',codex_lifecycle:e.codex_lifecycle})+'</details></article>'}).join('')+'</section>'}).join('')||'<p>尚无 R1.4 运行记录。</p>'}
+render().then(bindReviews);
 </script></body></html>'''
+
+R15_HTML = HTML.replace("R1.4", "R1.5").replace("r14-autonomous", "r15-autonomous")

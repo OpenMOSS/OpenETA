@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run unscored control debugging or the fixed three-episode R1.4 batch."""
+"""Run unscored controls or the fixed three-episode autonomous development batch."""
 from __future__ import annotations
 
 import argparse
@@ -25,6 +25,7 @@ from sim.envs.univtac.scoped_isaac51_launcher import (
     ScopedIsaac51LaunchSpec,
     run_scoped_isaac51_command,
 )
+from sim.envs.univtac.tactile_history import export_review_video
 from sim.envs.univtac.trace import write_json
 from tools.embodied_gateway import LiveBackendGateway
 
@@ -69,6 +70,8 @@ def debug_controls(gateway, root):
     call('move_to',{'approach_world':initial_rotation[:,2].tolist(),'jaw_world':initial_rotation[:,0].tolist()})
     # Gripper tests happen only after motion checks in this disposable episode.
     call('move_to',{'gripper':'close'})
+    call('observe',{})
+    call('move_to',{'delta_mm':[4,0,0]})
     call('move_to',{'gripper':'open'})
     call('finish_episode',{'reason':'unscored control debug complete'})
     return rows
@@ -76,7 +79,7 @@ def debug_controls(gateway, root):
 
 def run_episode(args, config, seed, root):
     root.mkdir(parents=True, exist_ok=False)
-    episode = {'round':'R1.4','task':'insert_hole','seed':seed,'scored':args.mode=='batch',
+    episode = {'round':config['round'],'task':'insert_hole','seed':seed,'scored':args.mode=='batch',
                'model':config['model'] if args.mode=='batch' else None,'status':'starting','codex_process_count':0}
     write_json(root/'episode.json',episode)
     command = [str(REPO/'scripts/univtac/serve_autonomous_worker.py'),'--repo-root',str(REPO),
@@ -111,7 +114,8 @@ def run_episode(args, config, seed, root):
                 write_json(root/'episode.json',episode)
                 life = _run_to_files(cmd,cwd=workspace,environment={**os.environ,'CODEX_HOME':str(codex_home)},
                          stdout_path=root/'codex_exec.jsonl',stderr_path=root/'codex_stderr.log',
-                         timeout_seconds=config['codex_timeout_seconds'],stop_path=root/'stop.json')
+                         timeout_seconds=config['codex_timeout_seconds'],stop_path=root/'stop.json',
+                         terminal_grace_seconds=config['terminal_grace_seconds'])
                 write_json(root/'codex_lifecycle.json',life)
                 write_json(root/'codex_trace_summary.json',summarize_codex_exec(read_jsonl(root/'codex_exec.jsonl')))
                 if life['returncode'] and not life['stopped_by_worker'] and not life['timed_out']:
@@ -135,6 +139,12 @@ def run_episode(args, config, seed, root):
                 episode['infrastructure_error'] = 'worker_shutdown_timeout'
             if codex_home.exists():
                 shutil.rmtree(codex_home)
+    if (root/'samples.jsonl').exists():
+        try:
+            export_review_video(root)
+        except Exception as exc:  # noqa: BLE001 -- raw recording is independently retained
+            write_json(root/'video_error.json', {'error': str(exc), 'rebuild': 'export_review_video(episode_root)'})
+            episode['video_error'] = str(exc)
     final = json.loads((root/'final_result.json').read_text()) if (root/'final_result.json').exists() else {'reset_valid':False,'native_success_available':False,'task_success':None}
     runner_error = episode.get('infrastructure_error')
     episode.update(final)
@@ -164,11 +174,11 @@ def main(argv=None):
     args.output_root.mkdir(parents=True)
     config = yaml.safe_load(args.config.read_text())
     if config['task']!='insert_hole' or config['seeds']!=[1000003,1000004,1000005] or config['mode']!='eval':
-        raise ValueError('R1.4 task/seed/mode contract mismatch')
+        raise ValueError('Autonomous task/seed/mode contract mismatch')
     source = subprocess.check_output(['git','-C',str(args.source_root),'rev-parse','HEAD'],text=True).strip()
     if source != '371fac67917307026be8f00869fcc1b61c623a9f':
         raise ValueError('pinned Isaac51 source mismatch')
-    manifest = {'round':'R1.4','mode':args.mode,'status':'running','config':config,
+    manifest = {'round':config['round'],'mode':args.mode,'status':'running','config':config,
                 'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
                 'source_head':source,'seeds':config['seeds'] if args.mode=='batch' else [config['seeds'][0]]}
     write_json(args.output_root/'run_manifest.json',manifest)

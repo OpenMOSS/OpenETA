@@ -14,6 +14,9 @@ R1.4 已接通 OpenETA 六个通用工具与同步 UniVTAC worker，完成三个
 Insert Hole 无示例自主 episode：原生可评价 3/3，成功 0/3，均由原生提前终止
 结束；两个独立联调 episode 不计分。head 支持 mark_point，wrist 几何暂不可用，
 四路视觉/触觉图片仍保留。同接口成功示例与 A/B/C 尚未开展。
+R1.5 已实现双指命令保持、动作内四路采样、段末触觉历史图片和四宫格视频。
+一条无 Codex 的不计分联调完成；正式三 seed 与自然收尾验证待完成。
+审阅录像与 Agent 实际输入分开保存，没有开展 A/B/C。
 研究计划见 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，
 运行版本边界见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。

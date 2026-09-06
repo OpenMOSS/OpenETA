@@ -11,7 +11,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from scripts.univtac.autonomous_dashboard import HTML as R14_HTML, load_autonomous_runs
+from scripts.univtac.autonomous_dashboard import HTML as R14_HTML
+from scripts.univtac.autonomous_dashboard import load_autonomous_runs
 from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
@@ -941,6 +942,11 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(R11_ICL_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/r12-branching":
                     return self._send(R12_BRANCHING_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/r15-autonomous":
+                    from scripts.univtac.autonomous_dashboard import R15_HTML
+                    return self._send(R15_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/api/r15-autonomous":
+                    return self._json(load_autonomous_runs(root, "R1.5"))
                 if parsed.path == "/r14-autonomous":
                     return self._send(R14_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/api/r14-autonomous":
@@ -976,6 +982,33 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._json(load_run_detail(run))
                 requested = query.get("path", [""])[0]
                 artifact = _safe_artifact(run, requested)
+                if parsed.path == "/artifact" and artifact.suffix == ".mp4":
+                    size = artifact.stat().st_size
+                    start, end = 0, size - 1
+                    requested_range = self.headers.get("Range")
+                    if requested_range:
+                        first, last = requested_range.removeprefix("bytes=").split("-", 1)
+                        start = int(first) if first else max(0, size-int(last))
+                        end = min(size-1, int(last)) if first and last else size-1
+                    self.send_response(206 if requested_range else 200)
+                    self.send_header("Content-Type", "video/mp4")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", str(end-start+1))
+                    if requested_range:
+                        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                    self.end_headers()
+                    with artifact.open("rb") as stream:
+                        stream.seek(start)
+                        remaining = end-start+1
+                        try:
+                            while remaining > 0:
+                                block = stream.read(min(1024*1024, remaining))
+                                if not block: break
+                                self.wfile.write(block)
+                                remaining -= len(block)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+                    return
                 if parsed.path == "/artifact":
                     return self._send(
                         artifact.read_bytes(),

@@ -6,10 +6,9 @@ and retained run evidence. The design below is the next research direction;
 it is not a claim that all planned capabilities already work.
 
 [Related Work](related-work.md) and its [BibTeX](related-work.bib) collect the
-primary references, reading depth, and design implications. The current
-literature proposal is causal tactile-change clip selection, with local image
-difference as a control; it is not implemented slip recognition or an online
-motion interrupt. Event detection supports observations and example organization
+primary references, reading depth, and design implications. R1.5 implements segment-end tactile-change clip selection, with local image
+difference as a control. This is neither slip recognition nor an online motion
+interrupt. Event detection supports observations and example organization
 within the tactile ICL question, without changing the A/B/C comparison below.
 
 ## Research question
@@ -169,7 +168,7 @@ This fix is not a rerun or recovered cost measurement; natural Agent finalizatio
 and complete cost reporting still need verification in a later authorized run.
 
 GPT-6 Pro accepted R1.4 delivery and the unchanged 0/3 result, with limits on
-failure attribution. When `gripper` is omitted, the controller currently uses
+failure attribution. In the frozen R1.4 implementation, when `gripper` was omitted, the controller used
 the measured finger opening as its next target, rather than retaining the
 previous commanded closing target. This is confirmed implementation behavior;
 its effect on loaded grasp retention and these failures is unverified. Likewise,
@@ -177,11 +176,11 @@ pose arrival does not establish velocity settling or contact stability. The
 formal trajectories contain no Agent-requested gripper changes, but that does
 not exclude a gripper-control contribution to failure.
 
-Touch is observed between tool calls. Control-step logs contain robot targets
+In R1.4, touch was observed between tool calls. Control-step logs contain robot targets
 and state, not a complete within-action tactile sequence. No real-time tactile
 controller or fully reliable contact-control capability is claimed. These
-limits are recorded for the next decision; no controller fix or rerun followed
-the review. If the controller or sensing interface changes, future B/C must be
+limits describe R1.4. R1.5 changes command retention and observation delivery as
+recorded below; the old batch has not been rerun or relabelled. If the controller or sensing interface changes, future B/C must be
 compared with A under that same version, not directly with this historical A.
 
 The reusable command uses the existing r09 runtime and pinned Isaac51 source:
@@ -189,13 +188,68 @@ The reusable command uses the existing r09 runtime and pinned Isaac51 source:
 ```bash
 uv run --frozen --extra dev python scripts/univtac/run_autonomous_insert_hole.py \
   --config configs/univtac/autonomous_insert_hole.yaml \
-  --mode batch --output-root outputs/univtac-isaac51-r14-new
+  --mode batch --output-root outputs/univtac-isaac51-r15-new
 ```
 
 Use a fresh output root. `--mode debug` runs separate unscored controls. These
 commands are usage documentation, not authorization to repeat the completed
 batch. Replay is at `http://127.0.0.1:9400/r14-autonomous`, served by the local
 `univtac-r14-dashboard.service`; raw outputs remain local and are not in Git.
+
+### R1.5 grasp commands and segment-end tactile history
+
+R1.5 reuses the general tools, synchronous worker, native dynamic controller,
+and r09 runtime. `GripperTargets` reads the last submitted two-finger command
+from `Articulation._joint_pos_target_sim` after official reset returns. A narrow
+adapter replaces only the scalar gripper dispatch inside the counted native
+qpos action. It preserves the two targets independently; omitted gripper
+commands never replace them with measured opening. Explicit close/open sets
+and retains the native targets. No extra closing motion happens at takeover.
+
+`arm_reached` is independent of gripper closure. A new gripper command gets a
+finite wait: target error at most 1 mm, or both positions vary by at most 0.2 mm
+in 0.10 simulation seconds, with a 40-control-step maximum wait. These settings
+were retained after unscored debugging, not selected from formal outcomes.
+Waiting ends without claiming stable grasp; subsequent moves retain the target.
+
+One fresh no-Codex debug episode completed in
+`outputs/univtac-isaac51-r15/debug/seed_1000003`: seven physical requests,
+28 native control steps, 56 physics steps, and 29 four-view samples including
+takeover. Inherited targets were 0.005721318535506725 and
+0.005722052417695522 m in native joint1/joint2 order. Translation/rotation
+preserved them. Close used six steps, and its zero targets persisted through
+an ensuing translation; open used 16 steps in the disposable debug state.
+Loaded stiffness/damping/effort limits were read as 2000/100/200 for both fingers
+and were not changed. This debug is not part of task success evaluation.
+
+Sampling reads the existing refreshed buffers after each native qpos control
+step, copies arrays before buffer reuse, and writes raw frames independently
+of offline video encoding. Debug intervals were 1/60 simulation second, with
+matching four-sensor timestamps and consecutive frame counters. This is not
+60 wall-clock frames/second or proof of zero renderer latency. No additional
+physics was used for recording. The four-panel H.264 video and raw frame index
+are retained for review; model thinking occurs while physics is paused.
+
+The implemented detector is small fixed-ROI integer patch matching plus a
+same-frame image-difference control, not a reproduction of a full slip method.
+Each pad has independent quality and scores; low quality is explicitly marked
+as image-difference fallback. Debug had one such left-pad transition among 28.
+The initial thresholds (2 original-image pixels, difference 0.015, quality 0.35)
+were retained after inspecting debug data. At segment end, up to four shared
+times select before/preceding-peak/peak/latest frames, sorted and deduplicated.
+Two labelled tactile strips plus current head/wrist use native MCP images;
+`operator_context.jsonl` records the actual delivered payload. No demonstrations,
+slip labels, automatic correction or tactile interrupts are added.
+
+Three fresh R1.5 no-demo episodes, natural Codex finalization and real usage
+are pending. The worker now remains available through `finish_episode` until
+host cleanup after Codex exits; native terminal saves results and blocks motion.
+The 300-second terminal grace remains bounded by the original 3600-second
+Codex limit. Replay uses `http://127.0.0.1:9401/r15-autonomous` (user service
+`univtac-r15-dashboard.service`), with videos/curves separate from actual Agent
+inputs. Debug and formal outputs live under the fresh R1.5 root in separate
+subdirectories. Future A/B/C must share this controller and observation version;
+a change relative to R1.4 cannot establish ICL or isolate selection benefit.
 
 ### Historical evidence, with its original scope
 

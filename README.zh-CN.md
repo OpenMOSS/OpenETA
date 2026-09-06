@@ -23,6 +23,9 @@ OpenETA 将从数字智能体（Digital Agent）到物理智能体（Physical Ag
 
 ## 最新动态
 
+- **2026-09-06** — **Stage 2 Agent Harness：** 我们将 Stage 2 闭环具身智能体 Harness
+  合入 `main`，新增 35 个经过验证的工具契约、支持持久化 Rollout 的有界多模态上下文、
+  统一评测入口、具备可达性与碰撞感知的运动能力，以及 Human VLM 人工操作工作台。
 - **2026-08-03** — **OpenETA for Codex：** 我们发布了
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
   分支，通过六个类型化工具与版本化 Operator 上下文，将 Codex TUI 接入 LIBERO。使用

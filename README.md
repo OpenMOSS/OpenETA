@@ -32,6 +32,11 @@ change reality.
 
 ## What's New
 
+- **2026-09-06** — **Stage 2 Agent Harness:** We publish the Stage 2 closed-loop
+  embodiment harness, adding 35 verified tool contracts, bounded
+  multimodal context with durable rollouts, a universal evaluation entry point,
+  reachability- and collision-aware motion, and a Human VLM operator console. 
+  We have canceled state machine in host, which once led to limited exploration and intelligence of agents.
 - **2026-08-03** — **OpenETA for Codex:** We released the
   [`openeta-light`](https://github.com/OpenMOSS/OpenETA/tree/openeta-light)
   branch, which connects the Codex TUI to LIBERO through six typed tools and a

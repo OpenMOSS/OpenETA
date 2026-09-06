@@ -6,8 +6,9 @@ and retained run evidence. The design below is the next research direction;
 it is not a claim that all planned capabilities already work.
 
 [Related Work](related-work.md) and its [BibTeX](related-work.bib) collect the
-primary references, reading depth, and design implications. R1.5 implements segment-end tactile-change clip selection, with local image
-difference as a control. This is neither slip recognition nor an online motion
+primary references, reading depth, and design implications. R1.5 implements
+segment-end tactile-change clip selection, with local image difference as a
+control. This is neither slip recognition nor an online motion
 interrupt. Event detection supports observations and example organization
 within the tactile ICL question, without changing the A/B/C comparison below.
 
@@ -165,7 +166,8 @@ token usage is unavailable, not zero. Seed 1000004 did not call `finish_episode`
 the host finalized its native outcome. The post-batch launcher extends final
 reporting grace to 300 seconds within the unchanged 3600-second Codex deadline.
 This fix is not a rerun or recovered cost measurement; natural Agent finalization
-and complete cost reporting still need verification in a later authorized run.
+and complete cost reporting were subsequently verified in R1.5 below; R1.4
+usage remains unavailable.
 
 GPT-6 Pro accepted R1.4 delivery and the unchanged 0/3 result, with limits on
 failure attribution. In the frozen R1.4 implementation, when `gripper` was omitted, the controller used
@@ -241,15 +243,108 @@ Two labelled tactile strips plus current head/wrist use native MCP images;
 `operator_context.jsonl` records the actual delivered payload. No demonstrations,
 slip labels, automatic correction or tactile interrupts are added.
 
-Three fresh R1.5 no-demo episodes, natural Codex finalization and real usage
-are pending. The worker now remains available through `finish_episode` until
-host cleanup after Codex exits; native terminal saves results and blocks motion.
-The 300-second terminal grace remains bounded by the original 3600-second
-Codex limit. Replay uses `http://127.0.0.1:9401/r15-autonomous` (user service
-`univtac-r15-dashboard.service`), with videos/curves separate from actual Agent
-inputs. Debug and formal outputs live under the fresh R1.5 root in separate
-subdirectories. Future A/B/C must share this controller and observation version;
-a change relative to R1.4 cannot establish ICL or isolate selection benefit.
+The frozen formal controller/observation version is commit `66afcc6`; one fresh
+no-demo episode per seed completed under `outputs/univtac-isaac51-r15/batch`.
+All three had valid reset, available native checking, and no infrastructure
+error: **autonomous development success is 0/3**. The single debug above is
+excluded. No formal episode was retried or used to tune the detector/controller.
+
+| Seed | Native success / ending | MCP calls | Non-preview requests received / admitted / physical moves | Control / physics steps | Simulation seconds | Four-view samples | Codex wall seconds |
+| --- | --- | ---: | --- | --- | ---: | ---: | ---: |
+| 1000003 | false / native early stop | 15 | 7 / 7 / 7 | 27 / 54 | 0.450 | 28 | 147.784 |
+| 1000004 | false / Agent finish | 17 | 9 / 9 / 9 | 72 / 144 | 1.200 | 73 | 166.735 |
+| 1000005 | false / native early stop | 14 | 6 / 5 / 5 | 6 / 12 | 0.100 | 7 | 120.584 |
+
+Counts start after official reset. Samples include takeover. Seed 1000005's
+sixth non-preview request arrived after native termination and was rejected
+before the session's admission counter; it caused no additional physical step.
+No episode exhausted a development or native step budget.
+
+The worker remained available for final reading and `finish_episode` until host
+cleanup after Codex exit. All three models exited naturally with return code 0
+and real usage. Seeds 1000003/5 continued for 20.767/32.568 wall seconds after
+the launcher observed native terminal, within the 300-second grace and original
+3600-second total limit. Seed 1000004 finished voluntarily; it is not a native
+terminal-grace witness. Live runs did not exercise full grace/total-time expiry;
+focused tests cover those cleanup branches. Results and recording indices were
+saved before `SimulationApp.close`.
+
+| Seed | Input tokens | Cached input tokens (included in input) | Output tokens | Reported reasoning tokens |
+| --- | ---: | ---: | ---: | ---: |
+| 1000003 | 581,584 | 522,880 | 2,947 | 1,870 |
+| 1000004 | 660,481 | 592,256 | 4,410 | 3,034 |
+| 1000005 | 482,666 | 433,408 | 2,195 | 1,149 |
+
+These are reported usage fields, not additive independent cost categories.
+Total input/output were 1,724,731/9,552 tokens; no monetary cost is inferred.
+
+**What the recordings show:**
+
+- **1000003:** the Agent requested four downward world-Z translations, opened
+  the gripper, moved down again, then requested a 50 mm retreat. The retreat
+  executed one control step before native early stop and did not reach its
+  target. Host-only `inhand_bias` was 41.61 mm, above the unchanged 40 mm
+  threshold. The final review image still shows the rod near the fixture;
+  neither complete dropping nor a unique failure cause is established.
+- **1000004:** downward probes were interleaved with open/close commands,
+  followed by a 35 mm upward request with open, another close, and voluntary
+  finish. Arm targets were reached, but native success remained false. The
+  final head image shows the rod leaning diagonally out of the fixture below
+  the gripper. Closing fingers to about 0.762 mm did not establish a retained
+  object or successful insertion.
+- **1000005:** three preview-resolved motions and two further downward moves
+  preceded native early stop (`inhand_bias` 46.29 mm, host-only). The later
+  15 mm retreat request was rejected without physics. The Agent never changed
+  the inherited gripper command. The tactile images change substantially, but
+  this is not a verified slip label or a correct-action diagnosis.
+
+The native joint1/joint2 inherited target pairs, in mm, were respectively
+(5.721921, 5.722739), (5.721828, 5.722760), and (5.721528, 5.722320). Command
+changes were open; open/close/open/close; and none. Final target pairs were
+(39, 39), (0, 0), and the retained initial pair; measured final openings were
+(38.653348, 38.662773), (0.762617, 0.762174), and (5.722758, 5.721204) mm.
+These names follow native finger-joint order; anatomical left/right mapping
+has not been independently checked. Holding a command does not prove grasp
+stability. All formal motion requests were translations; rotation was exercised
+in the separate debug, not claimed as formal Agent behavior.
+
+The formal recordings contain 108 four-view sample times and 105 control-step
+transitions. Recorded sensor IDs were consecutive, with no unrefreshed sample,
+no missing frame, matching four-sensor timestamps, and approximately 1/60-second
+simulation intervals. This metadata agreement does not prove zero renderer lag.
+Of 210 pad transitions, one used labelled image-difference fallback (the left
+pad in seed 1000003); none did so in the other seeds. Tracking quality is not
+semantic detection accuracy. The Agent received 7/9/5 segment histories with
+17/24/11 selected shared time points: 104 tactile image cells in total, including
+reused references. All delivered cells were checked against their raw PNGs and
+matched pixel-for-pixel. Video decode produced 28/73/7 recorded frames, without
+invented observations. Waiting for Codex does not advance simulation time.
+
+Replay is at `http://127.0.0.1:9401/r15-autonomous`, served by the local
+`univtac-r15-dashboard.service`. It separates full videos/raw frames and
+host-only curves/diagnostics from actual Agent images, requests and responses;
+it provides playback speed, frame stepping and both detectors' candidate windows.
+The retained videos are [1000003](../../outputs/univtac-isaac51-r15/batch/seed_1000003/review.mp4),
+[1000004](../../outputs/univtac-isaac51-r15/batch/seed_1000004/review.mp4),
+[1000005](../../outputs/univtac-isaac51-r15/batch/seed_1000005/review.mp4), and
+[unscored debug](../../outputs/univtac-isaac51-r15/debug/seed_1000003/review.mp4).
+[Delivery metrics](../../outputs/univtac-isaac51-r15/delivery_metrics.json)
+retain per-action feedback, command history, timing, sampling, usage and lifecycle
+fields. These artifacts are local and excluded from Git. Post-batch replay
+edits only clarify request counts, preview target annotations and display; they
+do not change the frozen controller, selector, prompt or retained raw runs.
+
+The 45 focused tests, scoped Ruff/compile checks, HTTP/range responses and video
+decoding passed. No browser was available for an interactive playback acceptance
+check; server/template and raw-frame checks do not replace that check.
+
+This completes the R1.5 development scope, with no successful autonomous
+trajectory to promote into a demonstration. No B/C runs or automatic example
+selection were performed. Future A/B/C must share this controller and current
+observation mechanism; a change relative to R1.4 cannot establish ICL benefit
+or isolate the value of change selection. Integer patch tracking, contact
+interpretation, reliable manipulation and success-example collection remain
+limitations or future work, not reasons to retune this completed batch.
 
 ### Historical evidence, with its original scope
 
@@ -295,8 +390,8 @@ capture-only record must not be relabelled as a completed transfer experiment.
 
 ## Next work and evaluation
 
-1. R1.4 completed the direct-operation development baseline on fixed seeds
-   `1000003`, `1000004`, `1000005`. Review the actual failures before the next
+1. R1.5 completed command-retention and tactile-history validation on fixed
+   seeds `1000003`, `1000004`, `1000005`. Review its actual failures before the next
    authorized step. These remain development data, not formal held-out tests.
    The [configuration](../../configs/univtac/autonomous_insert_hole.yaml) keeps
    Terra medium, 30 non-preview move requests, 100 tool calls, and 3600 Codex
@@ -305,8 +400,8 @@ capture-only record must not be relabelled as a completed transfer experiment.
    images, calls, feedback, recovery, and outcomes. No-demo performance need
    not be high before examples may be introduced.
 3. Run the A/B/C comparison. The same-interface successful example bank and
-   this comparison remain unfinished. R1.4 produced no successful example and
-   did not run B/C.
+   this comparison remain unfinished. Neither R1.4 nor R1.5 produced a successful
+   autonomous example or ran B/C.
 4. Use actual failures to improve tactile representation and experience
    organization, then extend task coverage.
 

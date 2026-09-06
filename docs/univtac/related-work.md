@@ -388,7 +388,9 @@ release/commit when code is adopted; this index does not install or switch one.
 
 R1.4 captured touch only between tools. R1.5 now records the existing native
 control/render updates and selects real frames at the end of each action
-segment. One unscored debug is complete; formal Agent validation is pending.
+segment. One unscored debug and three fresh no-demo Agent episodes completed
+(native success 0/3). This validates the delivery path, not event accuracy or
+ICL benefit.
 This is a simplified implementation in [tactile_history.py](../../sim/envs/univtac/tactile_history.py),
 not reproduction of a cited detector: fixed-ROI integer patch matching on
 160-pixel-wide images, displacement/quality scores, and labelled image-difference
@@ -471,7 +473,12 @@ changing the examples or giving B touch-derived annotations.
   Keep one record per contribution, with preprint/publication relationships;
   separate software and equipment entries. No per-paper document is required.
 
-Segment-end selection is implemented and debug-tested in R1.5. Semantic event
+Segment-end selection was exercised in R1.5 debug and all three formal episodes.
+The formal batch delivered 104 raw-matching tactile image cells (including
+reused references); one of 210 pad transitions used labelled difference
+fallback. These are delivery/quality counts, not slip-detection accuracy. No new
+paper method was adopted beyond the references already indexed here, so the
+BibTeX is unchanged. Semantic event
 detection, online interruption, temporal-model integration and tactile ICL gains
 remain **unimplemented or unverified**. The existing R1.4 result,
 historical experiments and current A/B/C research question remain unchanged.

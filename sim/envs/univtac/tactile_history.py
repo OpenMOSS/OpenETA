@@ -198,6 +198,13 @@ def export_review_video(root: Path):
     """Offline VFR H.264 export; failures leave raw images and an error record."""
     import imageio_ffmpeg
     rows = [json.loads(s) for s in (root/'samples.jsonl').read_text().splitlines() if s.strip()]
+    resolved = {}
+    if (root/'tool_trace.jsonl').exists():
+        for line in (root/'tool_trace.jsonl').read_text().splitlines():
+            record = json.loads(line)['result']['text']
+            history = record.get('observation', {}).get('tactile_history')
+            if history and 'execution' in record:
+                resolved[history['action_id']] = record['execution']['requested_target']
     folder = root/'review_frames'
     folder.mkdir(exist_ok=True)
     files = []
@@ -207,8 +214,11 @@ def export_review_video(root: Path):
         state = row['robot']
         first_xyz = np.asarray(rows[0]['robot']['xyz_m'])
         delta = (np.asarray(state['xyz_m'])-first_xyz)*1000
+        request = dict(row['request'])
+        if request.get('execute_preview_id') and row['action_id'] in resolved:
+            request['resolved_xyz_m'] = [round(v,5) for v in resolved[row['action_id']]['xyz_m']]
         lines = [f"sample {row['sample_id']}  sim {row['simulation_time_seconds']:.4f}s  action {row['action_id']}",
-                 'request '+json.dumps(row['request']),
+                 'request '+json.dumps(request),
                  f"TCP delta from takeover (mm): {delta.round(3).tolist()}",
                  f"gripper {state['gripper_command']} target(m): {state['gripper_target_positions_m']}",
                  f"measured(m): {state['gripper_finger_positions_m']}  terminal: {row['native_terminal']}",

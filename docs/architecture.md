@@ -99,8 +99,9 @@ success 0/3; all were evaluable and ended through native early stop. Workers
 closed normally. In this frozen batch, Codex was stopped after a 15-second
 terminal grace period, so complete token usage is unavailable. The post-batch
 launcher allows 300 seconds for final reporting within the original 3600-second
-Codex deadline; that reporting fix has not been model-tested and did not rerun
-the batch. Contact reliability remains limited: the frozen R1.4 omitted-gripper path
+Codex deadline; R1.5 subsequently verified natural finalization and real usage
+for all three episodes without rerunning R1.4. Contact reliability remains
+limited: the frozen R1.4 omitted-gripper path
 reset the target to measured opening, not the prior commanded closing target.
 Its effect on grasp retention is unverified. Pose arrival also does not prove
 velocity settling. R1.4 touch observations were between tool calls; the inner IK
@@ -121,8 +122,11 @@ minimal native success feedback, with no hidden target error or action advice.
 
 The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
 A/B/C controls, historical result boundaries, and next work. This architecture
-section distinguishes historical R1.4 evidence, R1.5 debug validation, and
-remaining formal validation. No tactile controller or interruption is added.
+section distinguishes historical R1.4 evidence from R1.5: one unscored debug
+and three evaluable no-demo episodes, native success 0/3. Two native-terminal
+episodes used 20.767/32.568 seconds of reporting grace; the third finished
+voluntarily. No tactile controller or interruption is added. Holding gripper
+targets and delivering real history do not establish stable grasp or ICL benefit.
 
 ## Geometry and visual feedback
 

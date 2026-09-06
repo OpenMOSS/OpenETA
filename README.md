@@ -22,6 +22,12 @@ Current status:
   three fresh Insert Hole no-demo episodes: native success 0/3, all evaluable.
   Two control-debug episodes are excluded. Successful same-interface examples
   and the A/B/C comparison remain next work;
+- R1.5 preserves native gripper commands and delivers recorded segment-end
+  tactile history. One unscored debug and three fresh no-demo episodes completed:
+  native success 0/3, all evaluable, all Codex processes exited naturally with
+  usage. Review videos and exact Agent inputs are separate in the
+  [local R1.5 dashboard](http://127.0.0.1:9401/r15-autonomous). This is control and
+  observation validation, not an ICL gain;
 - A has no examples; B has visual–action examples; C adds historical bilateral
   touch to exactly B's trajectories. All three retain current vision, touch,
   proprioception, and operation history;

@@ -630,6 +630,7 @@ and a fresh batch output directory:
 
 ```bash
 uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
+  --config configs/univtac/official_tactile_icl.yaml \
   --demonstrations outputs/univtac-isaac51-r17/demonstrations \
   --output-root outputs/univtac-isaac51-r17-new-batch
 ```
@@ -664,8 +665,9 @@ authorize execution of the next experiments.
 
 ## R1.8: public rules × tactile ICL with GPT-6 low
 
-R1.8 is the current planned 18-episode development ablation, not a completed
-result. New project operators and execution/review/neat agents use
+R1.8 completed all 18 fresh development episodes using execution commit
+`902178e`, starting from `3ae61ee`. All 18 were natively evaluable, with no
+infrastructure failures, natural Codex exits and recorded usage. New project operators and execution/review/neat agents use
 `gpt-6-astra` with `model_reasoning_effort="low"` explicitly passed to Codex.
 Historical R1.7 and earlier model labels remain unchanged.
 
@@ -707,5 +709,99 @@ generalization. Failures and incomplete cells remain visible.
 
 The existing dashboard exposes `/r18-autonomous`, `/r18-videos` and
 `/r18-demonstrations` on port 9401. It shows actual initial prompts and native MCP
-inputs separately from host-only review videos. These routes are implementation
-work until the actual batch and browser checks are recorded here.
+inputs separately from host-only review videos. All 18 four-view recordings and their slow versions were generated from retained
+frames. Browser playback reached the end for all 36 files; representative frames
+were also visually inspected. This is playback verification, not a claim of
+human inspection of every video frame.
+
+
+### R1.8 observed results
+
+| Task information | A: no demo | B: visual–motion | C: added historical touch |
+|---|---:|---:|---:|
+| U: official instruction | 1/3 | 1/3 | 3/3 |
+| R: instruction + public rules | 1/3 | 0/3 | 2/3 |
+
+Every cell is evaluable. The eight successes ended with `native_success`; the
+other ten ended with `native_early_stop`. No native/control/tool/wall-clock budget
+was extended and no failed cell was rerun. R remains the preselected full-input
+setting, despite U's higher C score.
+
+Rule contrasts RA−UA, RB−UB and RC−UC are respectively 0.0, −33.3 and −33.3
+percentage points. Within R, RB−RA is −33.3 pp, RC−RA is +33.3 pp, and RC−RB
+is +66.7 pp. UC−UB is also +66.7 pp. Thus this pilot observed a positive
+historical-touch difference against matched visual examples in both rows, but
+no success-rate improvement from supplying the additional rules. These are
+three-seed descriptive differences, not proof of a general benefit or of rules
+being harmful. Fresh resets showed initial-state differences; historical
+examples were fixed, but current physical states were not pixel-identical.
+R1.7 is not a same-model control.
+
+| Seed | Cell | Native result | Actual motions | Control / physics steps | Sim s | Codex / worker wall s |
+|---|---|---|---:|---:|---:|---:|
+| 1000003 | UA | early stop | 15 | 77 / 154 | 1.283 | 191.4 / 311.1 |
+| 1000003 | RA | early stop | 10 | 40 / 80 | 0.667 | 129.1 / 272.9 |
+| 1000003 | UB | early stop | 4 | 14 / 28 | 0.233 | 69.3 / 195.0 |
+| 1000003 | RB | early stop | 7 | 17 / 34 | 0.283 | 92.8 / 217.5 |
+| 1000003 | UC | success | 5 | 18 / 36 | 0.300 | 77.6 / 206.3 |
+| 1000003 | RC | success | 6 | 18 / 36 | 0.300 | 310.0 / 434.7 |
+| 1000004 | RB | early stop | 5 | 14 / 28 | 0.233 | 182.2 / 315.9 |
+| 1000004 | UB | early stop | 5 | 13 / 26 | 0.217 | 74.0 / 200.6 |
+| 1000004 | RC | early stop | 6 | 17 / 34 | 0.283 | 96.5 / 230.1 |
+| 1000004 | UC | success | 6 | 19 / 38 | 0.317 | 86.3 / 216.1 |
+| 1000004 | RA | early stop | 13 | 64 / 128 | 1.067 | 209.1 / 337.7 |
+| 1000004 | UA | early stop | 9 | 28 / 56 | 0.467 | 126.8 / 253.6 |
+| 1000005 | UC | success | 6 | 18 / 36 | 0.300 | 102.7 / 230.4 |
+| 1000005 | RC | success | 7 | 20 / 40 | 0.333 | 299.3 / 429.0 |
+| 1000005 | UA | success | 8 | 41 / 82 | 0.683 | 152.1 / 278.9 |
+| 1000005 | RA | success | 11 | 72 / 144 | 1.200 | 182.4 / 308.1 |
+| 1000005 | UB | success | 5 | 18 / 36 | 0.300 | 70.0 / 193.8 |
+| 1000005 | RB | early stop | 6 | 15 / 30 | 0.250 | 75.9 / 199.7 |
+
+Worker wall time includes initialization and shutdown; it excludes offline
+review encoding. Codex wall time includes model/tool waits. Two RC episodes
+had long waits after demonstration delivery and eventually completed normally;
+model-catalog refresh timeout messages in stderr did not become episode failures.
+Do not interpret shorter failed episodes as higher efficiency.
+
+| Cell | Input tokens | Cached input (subset) | Output tokens | Reasoning output (subset) |
+|---|---:|---:|---:|---:|
+| UA | 1,807,564 | 1,666,304 | 5,353 | 880 |
+| UB | 1,041,113 | 915,200 | 2,427 | 218 |
+| UC | 1,374,565 | 1,218,048 | 2,671 | 200 |
+| RA | 2,173,043 | 1,994,624 | 6,189 | 1,566 |
+| RB | 1,296,784 | 1,158,784 | 2,692 | 223 |
+| RC | 1,476,663 | 1,299,328 | 2,959 | 259 |
+
+These are raw CLI cumulative fields summed over three episodes per condition;
+cached input is not added to input, nor reasoning output to output. All actual
+commands record `gpt-6-astra`, `model_reasoning_effort="low"` and CLI 0.153.4.
+A/B/C delivered 0/12/24 historical images per context, once each. The ordinary
+model/effort, prompt, image-count and budget readback is retained in
+`outputs/univtac-isaac51-r18/delivery_validation.json`.
+
+**How to watch.** On [the video page](http://127.0.0.1:9401/r18-videos), start
+with seed 1000003 UB versus UC: UB explored positive x before returning downward
+and failed, while UC explored negative x before positive-x/downward moves and
+succeeded. Then compare seed 1000004 RC with UC, where the exploration directions
+also differed and only UC succeeded. Seed 1000005 UA/RA show successful explicit
+orientation adjustment without examples. All six A episodes explicitly requested
+orientation changes; B/C episodes requested translations without explicit orientation changes. Seed 1000005 UA and RA explicitly commanded close and later open with retreat;
+native success arrived during that final action. The other sixteen episodes
+retained inherited gripper commands. Seed 1000005 UA also recovered from one
+`mark_point` rejection for a pixel without valid observed depth by choosing
+other pixels; this was a recoverable tool response, not an infrastructure failure. These request patterns describe behavior, not evidence that a
+particular tactile feature caused a choice. Actual robot orientation can change
+even when no new orientation was requested.
+
+Videos use 0.1× for seed 1000003 UA/RA, seed 1000004 RA, and seed 1000005 UA/RA;
+the other thirteen use 0.05×. Each also has a 1× version. The
+[dashboard](http://127.0.0.1:9401/r18-autonomous) provides original-frame stepping,
+exact prompts, actual MCP images and responses, action feedback and separate
+host-only diagnostics. The [demonstration preview](http://127.0.0.1:9401/r18-demonstrations)
+shows the two fixed official experts separately from current Agent episodes.
+
+Validation: 51 focused tests, scoped Ruff, compileall and diff checks passed.
+No simulator/model capability pretest or extra physical attempt was added.
+The next experimental step is pending Pro review of these results; no extra
+seeds, prompt changes or model comparison are authorized by this result alone.

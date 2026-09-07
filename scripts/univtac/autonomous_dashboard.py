@@ -119,9 +119,14 @@ let t='<section><h2>GPT-6 / low：公开规则 × 历史示范</h2><p>R 为事�
 for(const row of ['U','R']){t+='<tr><th>'+row+'</th>';for(const col of ['A','B','C']){const c=row+col;t+='<td>'+wins(c)+'/3；可评价 '+valid(c)+'/3；基础设施异常 '+(groups[c]||[]).filter(e=>e.episode.infrastructure_error).length+'</td>';}t+='</tr>';}
 t+='</table><h3>固定比较（百分点）</h3>';
 for(const [a,b,label] of [['RA','UA','规则'],['RB','UB','规则'],['RC','UC','规则'],['RB','RA','视觉示范'],['RC','RA','完整示范'],['RC','RB','R 下历史触觉'],['UC','UB','U 下历史触觉']])t+='<p>'+a+'−'+b+' '+label+'：'+(valid(a)===3&&valid(b)===3?((wins(a)-wins(b))*100/3).toFixed(1)+' pp':'待完成／存在不可评价项')+'</p>';
+const prompts=d.batches[0]?.manifest?.prompts??{};for(const c of ['UA','RA'])if(prompts[c])t+='<details><summary>'+c[0]+' 完整冻结初始文本（A/B/C 共用）</summary><pre>'+esc(prompts[c])+'</pre></details>';
 t+='<p>cached input 为 input 子集，不重复求和。较早失败的短耗时不算效率提高。各格成本、原始回答与失败原因见下方。</p><h3>六条件导航</h3>'+Object.entries(names).map(([c,n])=>'<p>'+c+'：'+n+'</p>').join('');return t+'</section>';}
 '''
 R18_HTML = R17_HTML.replace('R1.7', 'R1.8').replace('r17-', 'r18-').replace(
     '九条视频', '十八条视频').replace(R17_SUMMARY, R18_SUMMARY).replace('primaryTable(d)', 'ruleTable(d)').replace(
     "review(e)+'<h3>Agent Saw", "'<details><summary>实际初始 prompt：官方任务说明、共同工具说明与本条件规则全文</summary><pre>'+esc(e.prompt??'尚未启动')+'</pre></details>'+review(e)+'<h3>Agent Saw").replace(
     "esc(state.seed)+' · '+esc(state.status)", "esc(state.seed)+' · '+esc(state.condition)+' · '+esc(state.model)+' / '+esc(state.reasoning_effort)+' · '+esc(state.status)")
+
+R18_HTML = R18_HTML.replace('三组当前观测相同', '六条件当前观测相同').replace(
+    "esc(state.condition)", "esc(state.condition??e.run.split('/').at(-1))").replace(
+    "wins(c)+'/3；可评价 '", "(valid(c)===3?wins(c)+'/3':wins(c)+' 成功（计划3，未完成）')+'；可评价 '")

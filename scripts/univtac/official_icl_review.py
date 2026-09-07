@@ -104,19 +104,20 @@ def episodes(root, rebuild=False):
     for path in sorted((root/'batch').glob('seed_*/*/episode.json')):
         folder=path.parent;state=json.loads(path.read_text());condition=folder.name
         title=f'seed {state["seed"]} · {names[condition]}'
-        if names is RULE_NAMES:
-            title += " · GPT-6 / low"
+        model_label = 'GPT-6 / low · ' if names is RULE_NAMES else ''
         outcome=state.get('task_success') if state.get('native_success_available') else 'unavailable/pending'
-        page+=f'<section><h2>{title}</h2><p>Agent 事先看到：{names[condition]}。最终 native outcome={outcome}；结束原因={html.escape(str(state.get("termination","进行中")))}。</p>'
+        page+=f'<section><h2>{model_label}{title}</h2><p>Agent 事先看到：{names[condition]}。最终 native outcome={outcome}；结束原因={html.escape(str(state.get("termination","进行中")))}。</p>'
         if state['status'] not in ('completed','infrastructure_issue') or not (folder/'review_frames').exists():
             page+='视频等待本格结束。</section>';continue
         rows=read_jsonl(folder/'samples.jsonl');files=[]
+        actions=list({r['action_id']:r for r in rows if r['action_id']!='takeover'}.values())
+        page+='<p>本条观察任务信息与历史示范如何影响自主操作。请按动作顺序看：'+html.escape('；'.join(describe_request(r) for r in actions))+'。原生结果以上述记录为准，画面中的接触或动作到位不等于成功。</p>'
         for row in rows:
             dest=folder/'review_labelled'/f'{row["sample_id"]:06d}.png'
             if rebuild or not dest.exists():
                 source=Image.open(folder/'review_frames'/f'{row["sample_id"]:06d}.png')
-                canvas=Image.new('RGB',(source.width,source.height+90),'white');canvas.paste(source,(0,90));draw=ImageDraw.Draw(canvas)
-                for n,line in enumerate([title+' · 现场 Codex 自主操作', describe_request(row), f'最终 native={outcome}；注意每帧 terminal 标记，任务结束后无物理推进。']):
+                canvas=Image.new('RGB',(source.width,source.height+120),'white');canvas.paste(source,(0,120));draw=ImageDraw.Draw(canvas)
+                for n,line in enumerate([f'seed {state["seed"]} · '+model_label+'现场 Codex 自主操作', names[condition], describe_request(row), f'最终 native={outcome}；注意每帧 terminal 标记，任务结束后无物理推进。']):
                     draw.text((10,4+28*n),line,font=ImageFont.truetype(FONT,20),fill='black')
                 dest.parent.mkdir(exist_ok=True);canvas.save(dest)
             files.append(dest)

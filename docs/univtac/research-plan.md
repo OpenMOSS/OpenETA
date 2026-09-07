@@ -803,17 +803,21 @@ shows the two fixed official experts separately from current Agent episodes.
 
 Validation: 51 focused tests, scoped Ruff, compileall and diff checks passed.
 No simulator/model capability pretest or extra physical attempt was added.
-The next experimental step is pending Pro review of these results; no extra
-seeds, prompt changes or model comparison are authorized by this result alone.
+Pro subsequently accepted this result and assigned the frozen new-seed
+validation below; no prompt or model comparison was added.
 
 
 ## R1.9: frozen method on twelve new query seeds
 
 Pro accepted R1.8 as a positive development signal for historical touch, while
-recognizing that extra public rules did not improve success. R1.9 is the next
-planned round, not a completed result: keep the preselected R input and run
-RA/RB/RC once on each seed 1000006–1000017, for 36 fresh episodes. The main
-comparison is RC−RB; RC−RA and RB−RA are secondary. R1.8 stays separate.
+recognizing that extra public rules did not improve success. R1.9 completed
+all 36 fresh episodes on seeds 1000006–1000017 with the preselected R input.
+RA/RB/RC achieved **3/12, 10/12 and 11/12** native successes. The main
+comparison RC−RB is **+8.3 percentage points**, only one discordant seed in
+RC’s favor; RC−RA and RB−RA are +66.7 and +58.3 points. This is a small
+positive new-seed signal for historical touch, much smaller than R1.8’s
+three-seed difference. It does not establish a robust or universal tactile
+advantage. R1.8 stays separate; its old seeds are not pooled into this table.
 
 The scoped search of this checkout's 505 episode/manifest/summary JSON files
 and documentation found no execution records for these seeds; only the R1.9
@@ -837,15 +841,136 @@ uv run --no-sync python scripts/univtac/run_official_tactile_icl.py \
   --output-root outputs/univtac-isaac51-r19/batch
 ```
 
-Report successes/12, planned/evaluable/native failures/infrastructure issues,
-all per-seed outcomes and costs, plus RC/RB and RC/RA paired outcome counts.
-Unrun or unavailable cells remain separate; no replacement seeds or favorable
-retries. A replication signal requires the new results to support it, without
-an invented acceptance threshold.
+All 36 planned cells were evaluable: 24 native successes and 12 native early
+stops, with no infrastructure failures, replacements, retries or extra debug
+episodes. No cell ended on a budget limit. All Codex processes exited naturally
+and provided usage. The execution version was `c22dade`, starting from `e6ae93a`;
+no controller, prompt, demonstration, sampling or budget changed during the
+batch. The unrelated untracked `heldout_grounding_skill.py` was preserved.
 
 The existing dashboard adds `/r19-autonomous`, `/r19-videos`,
 `/r19-demonstrations` and `/r19-pairs`. RB/RC paired videos reuse the recorded-frame
 alignment approach: common simulation time and playback rate, with the shorter
 side explicitly holding its final frame. Commands may differ because the Agent
-chooses them. These views are pending real-run/browser validation until the
-batch is complete. They do not launch or advance physics.
+chooses them. They do not launch or advance physics. Every episode has a 1× video and a
+slow version (0.05× below 0.5 seconds, otherwise 0.1×); each RB/RC pair has
+1× and 0.05× versions. Full playback validation is recorded separately below.
+
+
+### R1.9 outcomes and costs
+
+| Condition | Planned / evaluable | Native success | Native failure | Infrastructure |
+|---|---:|---:|---:|---:|
+| RA: no examples | 12 / 12 | 3/12 (25.0%) | 9 | 0 |
+| RB: visual–measured-motion examples | 12 / 12 | 10/12 (83.3%) | 2 | 0 |
+| RC: same examples plus touch | 12 / 12 | 11/12 (91.7%) | 1 | 0 |
+
+Each entry below is **native outcome; actual motion requests / control steps**.
+All failures are native early stops. Physics steps equal twice control steps;
+post-takeover simulation time is control steps / 60 seconds. Initialization is
+recorded separately and is not folded into these task-body counts.
+
+| Query seed | RA | RB | RC |
+|---|---|---|---|
+| 1000006 | early stop; 9 / 24 | success; 7 / 20 | success; 7 / 19 |
+| 1000007 | early stop; 26 / 202 | early stop; 6 / 18 | success; 7 / 19 |
+| 1000008 | success; 14 / 91 | success; 6 / 19 | success; 7 / 19 |
+| 1000009 | early stop; 13 / 52 | success; 6 / 23 | success; 11 / 97 |
+| 1000010 | early stop; 13 / 58 | success; 6 / 18 | success; 7 / 19 |
+| 1000011 | early stop; 16 / 81 | success; 7 / 17 | success; 5 / 18 |
+| 1000012 | success; 13 / 74 | success; 6 / 19 | success; 6 / 19 |
+| 1000013 | early stop; 18 / 92 | success; 6 / 16 | success; 6 / 13 |
+| 1000014 | early stop; 17 / 93 | success; 7 / 19 | success; 6 / 19 |
+| 1000015 | success; 20 / 96 | success; 6 / 18 | success; 7 / 20 |
+| 1000016 | early stop; 17 / 69 | early stop; 6 / 15 | early stop; 6 / 18 |
+| 1000017 | early stop; 14 / 66 | success; 5 / 17 | success; 7 / 20 |
+
+| Pair (RC versus control) | RC only succeeds | Control only succeeds | Both succeed | Both fail | Unavailable |
+|---|---:|---:|---:|---:|---:|
+| RC / RB | 1 | 0 | 10 | 1 | 0 |
+| RC / RA | 8 | 0 | 3 | 1 | 0 |
+
+The sole RC/RB discordant seed is 1000007. Both fail on 1000016. Thus the
+new batch supports a limited positive replication signal, not the large effect
+size seen on the old development seeds. The larger RB−RA difference belongs
+to visual–motion examples; it must not be called a tactile benefit. Current
+bilateral touch remains available in every condition. One attempt per cell
+cannot separate model variability from fresh-reset variability, and this remains
+one task on project-selected new seeds rather than a multi-task benchmark.
+
+The following totals cover twelve episodes per condition. Worker wall time
+includes initialization and shutdown, excludes offline review encoding; Codex
+wall time includes model/tool waiting. Shorter failure is not efficiency gain.
+
+| Condition | Motion requests | MCP calls | Control / physics steps | Sim seconds | Codex / worker wall seconds |
+|---|---:|---:|---:|---:|---:|
+| RA | 190 | 283 | 998 / 1996 | 16.633 | 3018.3 / 4682.4 |
+| RB | 74 | 123 | 219 / 438 | 3.650 | 1167.5 / 2784.2 |
+| RC | 82 | 140 | 300 / 600 | 5.000 | 1318.4 / 2889.0 |
+
+| Condition | Input tokens | Cached input (subset) | Output tokens | Reasoning output (subset) |
+|---|---:|---:|---:|---:|
+| RA | 12,283,829 | 11,498,496 | 35,175 | 9,666 |
+| RB | 5,109,416 | 4,546,944 | 12,201 | 1,508 |
+| RC | 6,690,215 | 6,096,128 | 13,649 | 1,797 |
+
+These are actual cumulative CLI fields, not estimates; subset fields are not
+added again. All 36 commands explicitly use `gpt-6-astra`,
+`model_reasoning_effort="low"`, CLI 0.153.4. Saved prompts equal the R1.8 R
+prompt, and each context delivers demonstrations once: RA/RB/RC 0/12/24 images.
+Readback of actual model arguments, prompt, demonstration text/image references,
+image existence and budget/step counters passed for all 36. Evidence:
+`outputs/univtac-isaac51-r19/delivery_validation.json`; full per-cell costs and
+outcomes are in `results.json` beside it. There are 1,553 synchronized recorded
+sample sets, including the takeover frame in each episode; no recording step
+was added to physics.
+
+### What to watch
+
+Start at [RB/RC paired replay](http://127.0.0.1:9401/r19-pairs), then use
+[all individual videos](http://127.0.0.1:9401/r19-videos) and
+[actual Agent inputs and actions](http://127.0.0.1:9401/r19-autonomous).
+The [fixed historical expert preview](http://127.0.0.1:9401/r19-demonstrations)
+is separate from these current Agent results.
+
+- **1000007 RB/RC:** the only RC-only success. Compare the actual requested
+  directions and returned observations; do not infer that a particular touch
+  feature caused the different decisions merely from the outcome.
+- **1000016 RB/RC:** both fail. RB explores positive x before reversing;
+  RC first explores negative x, then positive x/downward. Both retain inherited
+  gripper targets and request no explicit orientation change. Different
+  exploration directions did not ensure success. Watch the early-stop frame
+  and the labelled end-of-side hold at equal playback speed.
+- **1000009 RC:** a longer 97-step success, including translation, explicit
+  close/open and orientation requests. It is not the same short translation-only
+  pattern as most C episodes.
+- **1000012 RA and 1000015 RA:** successful no-example recovery attempts after
+  different orientation probes. Seed 1000012 succeeds during an open plus
+  pose-change request, before reaching that request’s final target. Seed
+  1000015 closes, tilts toward negative x and makes repeated diagonal moves,
+  succeeding with the close target retained. These are observed sequences,
+  not proof that opening or closing alone caused success.
+- **1000007 RA:** 26 actual motions and 202 control steps end in native early
+  stop, not budget exhaustion. Keep this long failed attempt alongside the
+  shorter successes.
+
+There was one recoverable `mark_point` invalid-depth-pixel response on
+1000012/RA; the Agent selected a different pixel and continued. This is not an
+infrastructure failure. A tool execution field containing `native_success`
+marks task termination even when the requested arm target was not reached;
+command arrival and native success remain distinct.
+
+Prelaunch validation passed 55 focused tests covering new ordering, frozen
+inputs/model, paired outcomes/timeline and previous interfaces, plus scoped
+Ruff, compileall and diff checks. No extra simulator/model test was launched.
+Final GPT-6 low full-history scoped neat found no result/cost inconsistency.
+All 96 files (36 individual episodes × two rates, 12 pairs × two rates) reached
+browser `ended`; receipts are in
+`outputs/univtac-isaac51-r19/browser_playback_check.json`. This verifies native
+playback, not manual viewing of every frame. Representative paired frames were
+also visually inspected. Two offline playback-check interruptions were resolved
+without regenerating observations: one long browser wait, and one navigation
+collision between page inspection and playback. Playback now uses its own browser
+session. Neither affected the simulator, Agent input or episode results.
+This round adds no mechanism ablation or task; subsequent experimental action
+requires the next concrete Pro instruction under the continuing project goal.

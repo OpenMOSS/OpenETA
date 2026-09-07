@@ -22,6 +22,20 @@ def test_same_prompt_and_balanced_order():
     assert len(set(ORDER)) == 9
 
 
+def test_dashboard_keeps_condition_denominators_separate(tmp_path):
+    from scripts.univtac.autonomous_dashboard import load_autonomous_runs
+
+    root=tmp_path/'univtac-isaac51-r17/batch';root.mkdir(parents=True)
+    (root/'run_manifest.json').write_text(json.dumps({'round':'R1.7'}))
+    for seed,condition in ORDER:
+        folder=root/f'seed_{seed}'/condition;folder.mkdir(parents=True)
+        (folder/'episode.json').write_text(json.dumps({'seed':seed,'evaluable':True,
+            'task_success':condition=='visual_action_icl' and seed!=1000005}))
+    groups=load_autonomous_runs(tmp_path,'R1.7')['batches']
+    assert [len(g['episodes']) for g in groups]==[3,3,3]
+    assert [sum(e['episode']['task_success'] for e in g['episodes']) for g in groups]==[0,2,0]
+
+
 def test_review_native_images_and_actual_context(tmp_path, monkeypatch):
     import tools.embodied_gateway as gateway
     from tools.embodied_gateway import GatewayResult

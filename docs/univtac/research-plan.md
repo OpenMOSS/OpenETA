@@ -101,7 +101,7 @@ observations, actual actions, feedback and success outcomes, without executable
 truth-based correction formulas, hidden-pose queries or future query answers.
 Visual-action and tactile-action exports share the same trajectories and
 non-tactile content; the latter adds only aligned historical touch. Historical
-native EE targets are not current-scene OpenETA TCP commands to copy blindly.
+EE poses and motions are not current-scene OpenETA TCP commands to copy blindly.
 
 ## Core comparison: change only historical examples
 
@@ -553,32 +553,90 @@ R0.9.19–R0.9.21 are historical exploration only: preserve their records, do no
 use them to choose the next method, and do not expand that branch. R0.9.21's
 capture-only record must not be relabelled as a completed transfer experiment.
 
-## Next work and evaluation
+## R1.7 autonomous tactile ICL pilot and next work
 
-1. R1.5 completed command-retention and tactile-history validation on fixed
-   seeds `1000003`, `1000004`, `1000005`. Review its actual failures before the next
-   authorized step. These remain development data, not formal held-out tests.
-   The [configuration](../../configs/univtac/autonomous_insert_hole.yaml) keeps
-   Terra medium, 30 non-preview move requests, 100 tool calls, and 3600 Codex
-   seconds per episode alongside the native control budget.
-2. R1.7 has prepared official HDF5 episodes 0/1 with 189/166 frames and three
-   movement/delay segments each. B receives 12 before/after vision strips;
-   C receives identical non-tactile content and vision strips plus 12 bilateral
-   tactile-history strips. Common boundaries and visual times use movement
-   metadata, independently of touch. Measured EE is base-relative panda_hand
-   xyz + wxyz, not current world TCP; nominal seconds use recorded step/120,
-   with no embedded per-frame clock. Published documentation revision is not
-   evidence of the data-producing commit or an upgrade to our pinned runtime.
-3. Nine fresh autonomous episodes are planned for the three query seeds × A/B/C,
-   using the original controller and identical current-observation mechanisms.
-   The optional review_demonstrations MCP entry and fixed projections are
-   implemented; real Codex delivery and task outcomes await the batch.
-   Reproduce with `uv run --no-sync python -m scripts.univtac.run_official_tactile_icl
-   --demonstrations outputs/univtac-isaac51-r17/demonstrations
-   --output-root outputs/univtac-isaac51-r17/batch` and the
-   [R1.7 configuration](../../configs/univtac/official_tactile_icl.yaml).
-4. Use actual failures to improve tactile representation and experience
-   organization, then extend task coverage.
+R1.7 completed nine fresh Insert Hole episodes with `gpt-5.6-terra` / medium,
+the original controller, and identical current tactile-history mechanisms.
+The task began at `b60aa97`; frozen experiment code was `51e6a0e`. There were
+no added expert/debug episodes, task-failure retries, or controller changes.
+
+Official HDF5 episodes 0/1 contain 189/166 recorded frames and three movement/
+delay segments each. B received 12 before/after vision strips; C received the
+same non-tactile content and vision strips plus 12 bilateral tactile-history
+strips. Common boundaries and visual times use movement metadata, independently
+of touch. HDF5 contains JPEG image streams, `embodiment/ee`, `embodiment/joint`,
+`step`, and `atom/id` / `atom/tag`, but no independent raw action commands.
+Measured EE is base-relative panda_hand xyz + wxyz, not current world TCP;
+nominal seconds use recorded step differences / 120, without an embedded clock.
+The documentation revision is not the data-producing commit and does not
+upgrade our pinned runtime. The task-specific train/test split remains unknown.
+Each real Codex context reviewed its fixed demonstration/empty result once.
+A received no demonstration images, B received 12 native MCP images, and C
+received 24, followed in all conditions by live observations and autonomous
+commands. Actual delivery is recorded in each `operator_context.jsonl`.
+
+A (`no_demo`), B (`visual_action_icl`), and C (`tactile_action_icl`) each achieved
+**0/3 native task successes**. All nine episodes were evaluable, ended with
+`native_early_stop`, and had natural Codex exits with recorded usage; no
+infrastructure errors were reported. C−A, C−B and B−A were all zero percentage
+points. This three-seed development pilot found no success-rate benefit; it
+does not establish that tactile ICL is generally ineffective.
+
+| Seed | Condition | Native success | Actual motions | Control steps | Simulation s | Codex wall s |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 1000003 | A | false | 4 | 11 | 0.183 | 348.21 |
+| 1000003 | B | false | 4 | 7 | 0.117 | 97.18 |
+| 1000003 | C | false | 3 | 11 | 0.183 | 144.83 |
+| 1000004 | A | false | 12 | 78 | 1.300 | 253.90 |
+| 1000004 | B | false | 3 | 15 | 0.250 | 124.53 |
+| 1000004 | C | false | 3 | 6 | 0.100 | 94.53 |
+| 1000005 | A | false | 5 | 24 | 0.400 | 170.19 |
+| 1000005 | B | false | 4 | 11 | 0.183 | 129.03 |
+| 1000005 | C | false | 2 | 6 | 0.100 | 110.93 |
+
+Physics steps are twice the control steps in this batch. The
+[results](../../outputs/univtac-isaac51-r17/results.json) retain per-episode
+tool counts, worker time, raw input/cached/output/reasoning token usage, video
+paths and errors; the [manifest](../../outputs/univtac-isaac51-r17/batch/run_manifest.json)
+records execution. Earlier termination or fewer actions is not evidence of
+greater task efficiency when the task failed.
+
+Most B/C runs mainly attempted downward motions. Seed 1000004 A made twelve
+motions including vertical probing and lateral adjustment; seed 1000005 A
+opened the gripper and subsequently lifted before early termination. Inspect
+these different trajectories individually rather than attributing all failures
+to a single claim that the Agent did not understand touch.
+
+The [episode dashboard](http://127.0.0.1:9401/r17-autonomous) shows actual
+operator input, requested commands, execution feedback, outcomes and cost.
+[Videos](http://127.0.0.1:9401/r17-videos) include all nine 1× recordings and
+slow versions: 0.1× for seed 1000004 A, 0.05× for the other eight. Existing raw
+frame views support frame-by-frame inspection. Slow playback repeats recorded
+frames, without synthesizing observations.
+[Demonstration previews](http://127.0.0.1:9401/r17-demonstrations) keep the
+historical official experts separate from autonomous episodes.
+
+Read the downloaded official files with the existing r09 Python (fresh output):
+
+```bash
+/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11 \
+  -m scripts.univtac.prepare_official_demonstrations \
+  --raw outputs/univtac-isaac51-r17/data/official \
+  --output outputs/official-demonstrations-new
+```
+
+Use the [fixed configuration](../../configs/univtac/official_tactile_icl.yaml)
+and a fresh batch output directory:
+
+```bash
+uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
+  --demonstrations outputs/univtac-isaac51-r17/demonstrations \
+  --output-root outputs/univtac-isaac51-r17-new-batch
+```
+
+These commands describe reuse, not authorization to repeat this pilot. The
+completed round stops for review of the actual inputs and videos. Additional
+seeds, model/controller changes, or another round require a new decision.
 
 The first representation is real tactile images and short action-aligned
 history. Later candidates include baseline/current or difference images,

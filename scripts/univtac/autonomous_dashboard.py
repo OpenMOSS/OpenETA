@@ -9,13 +9,13 @@ from sim.envs.univtac.codex_readonly import read_jsonl
 
 def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    pattern = 'univtac-isaac51-r15*/**/run_manifest.json' if round_name == 'R1.5' else 'univtac-isaac51-r14*/run_manifest.json'
+    pattern = {'R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
         if manifest.get('round') != round_name:
             continue
         episodes = []
-        for path in sorted(manifest_path.parent.glob('seed_*/episode.json')):
+        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name=='R1.7' else 'seed_*/episode.json')):
             root = path.parent
             def read(name, root=root):
                 candidate = root/name
@@ -24,7 +24,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
                              'context':read_jsonl(root/'operator_context.jsonl'),
                              'execution':read_jsonl(root/'tool_trace.jsonl'),
                              'debug':read('debug_controls.json'),
-                             'samples':read_jsonl(root/'samples.jsonl'), 'video':read('video.json'),
+                             'samples':read_jsonl(root/'samples.jsonl'), 'video':read('review_video.json') or read('video.json'),
                              'recording':read('recording.json'), 'gripper_commands':read_jsonl(root/'gripper_commands.jsonl'),
                              'selections':[json.loads(p.read_text()) for p in sorted(root.glob('history/action_*/selection.json'))],
                              'agent_final': (root/'agent_final.md').read_text() if (root/'agent_final.md').exists() else None,
@@ -34,6 +34,10 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         note_path=manifest_path.parent/'validation_note.json'
         note=json.loads(note_path.read_text()) if note_path.exists() else None
         batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
+    if round_name == 'R1.7':
+        batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
+                    'episodes':[e for e in b['episodes'] if e['run'].endswith('/'+c)]}
+                   for b in batches for c in ('no_demo','visual_action_icl','tactile_action_icl')]
     return {'batches':batches}
 
 
@@ -47,7 +51,7 @@ const esc=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replac
 const reason=x=>({native_early_stop:'原生提前终止',native_step_limit:'原生步数用尽',agent_finish:'交互结束',native_success:'原生成功'}[x]??x??'进行中');
 const pretty=x=>'<pre>'+esc(JSON.stringify(x,null,2))+'</pre>';
 const art=(r,p)=>'/artifact?run='+encodeURIComponent(r)+'&path='+encodeURIComponent(p);
-function images(run,paths,labels=[]){return '<div class="images">'+paths.map((p,i)=>'<figure><img loading="lazy" src="'+art(run,p)+'"><figcaption>'+esc(labels[i]??p)+'</figcaption></figure>').join('')+'</div>'}
+function images(run,paths,labels=[]){return '<div class="images">'+paths.map((p,i)=>'<figure><a target="_blank" href="'+art(run,p)+'"><img loading="lazy" src="'+art(run,p)+'"></a><figcaption>'+esc(labels[i]??p)+'</figcaption></figure>').join('')+'</div>'}
 function observation(run,o){if(!o)return '';return '<p>'+esc(o.observation_id)+' · step '+esc(o.counts?.simulator_step)+'</p>'+images(run,(o.images||[]).map(x=>x.path),(o.images||[]).map(x=>x.label));}
 
 const reviews=[];
@@ -80,3 +84,25 @@ render().then(bindReviews);
 </script></body></html>'''
 
 R15_HTML = HTML.replace("R1.4", "R1.5").replace("r14-autonomous", "r15-autonomous")
+
+R17_HTML = HTML.replace('R1.4', 'R1.7').replace('r14-autonomous', 'r17-autonomous').replace(
+    '当前视觉＋双侧触觉＋本体状态，无历史示例。',
+    '三组当前观测相同：视觉＋触觉历史＋本体状态。A 无示范；B 两条官方 expert 的视觉—运动示范；C 相同示范再加历史触觉。').replace(
+    '<main id="content">',
+    '<p><a href="/r17-demonstrations">先看历史 expert 与 B/C 实际示范预览</a> · <a href="/r17-videos">九条视频与慢放入口</a></p><main id="content">')
+
+R17_SUMMARY = r'''
+function primaryTable(d){
+const groups=d.batches.map(b=>({name:b.name.split(' / ').at(-1),entries:b.episodes,
+valid:b.episodes.filter(e=>e.episode.evaluable),wins:b.episodes.filter(e=>e.episode.evaluable&&e.episode.task_success).length}));
+const names={no_demo:'A 无示范',visual_action_icl:'B 视觉—运动示范',tactile_action_icl:'C 增加历史触觉'};
+const sum=(g,get)=>g.entries.length===3&&g.entries.every(e=>get(e)!=null)?g.entries.reduce((a,e)=>a+get(e),0).toLocaleString(): 'pending / unavailable';
+let table='<section><h2>主结果：原生任务成功率</h2><p>同一 original 控制器、当前视觉＋触觉历史；三个开发 seed，每格一次。较少动作若以失败结束，不算效率提升。</p><table style="width:100%;text-align:left"><tr><th>条件</th><th>Native success</th><th>实际运动 / 控制步</th><th>Codex 秒</th><th>Input / cached / output tokens</th></tr>';
+for(const g of groups)table+='<tr><td>'+esc(names[g.name]??g.name)+'</td><td>'+(g.valid.length===3?g.wins+'/3':g.wins+' 成功；可评价 '+g.valid.length+'/3')+'</td><td>'+sum(g,e=>e.episode.actual_motion_requests)+' / '+sum(g,e=>e.episode.control_steps)+'</td><td>'+sum(g,e=>e.codex_lifecycle?.elapsed_seconds)+'</td><td>'+sum(g,e=>e.usage?.usage?.input_tokens)+' / '+sum(g,e=>e.usage?.usage?.cached_input_tokens)+' / '+sum(g,e=>e.usage?.usage?.output_tokens)+'</td></tr>';
+table+='</table><p>token 为 CLI 返回的累计原始字段，cached 单列，不与 input 再相加。成本详单、基础设施状态和原始回答在各格下方。</p>';
+if(groups.length===3&&groups.every(g=>g.valid.length===3)){const m=Object.fromEntries(groups.map(g=>[g.name,g.wins]));table+='<p>成功数差（每组 3 次）：C−A = '+(m.tactile_action_icl-m.no_demo)+'；C−B = '+(m.tactile_action_icl-m.visual_action_icl)+'；B−A = '+(m.visual_action_icl-m.no_demo)+'。仅为本次开发 pilot，不能推广为通用收益或通用无效。</p>';}
+return table+'</section>';
+}
+'''
+R17_HTML = R17_HTML.replace('async function render()', R17_SUMMARY+'\nasync function render()').replace(
+    "document.querySelector('#content').innerHTML=d.batches.map", "document.querySelector('#content').innerHTML=primaryTable(d)+d.batches.map")

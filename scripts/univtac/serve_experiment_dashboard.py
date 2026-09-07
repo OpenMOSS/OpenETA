@@ -17,7 +17,7 @@ from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
 
 LIST_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC experiments</title>
 <style>body{font:14px system-ui;background:#101216;color:#e6e9ef;margin:24px}a{color:#8fd3ff}table{border-collapse:collapse;width:100%;background:#181c22}th,td{padding:9px;border:1px solid #303744;text-align:left}.ok{color:#76db8b}.failed{color:#ff8585}</style>
-<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><p><a href="/r12-branching">R1.2：筛选真正需要触觉分支的任务 →</a></p><p><a href="/r13-icl">R1.3：Insert Hole 接触前后 Tactile ICL →</a></p><p><a href="/r14-autonomous">R1.4 Autonomous Insert Hole →</a></p><p><a href="/r15-autonomous">R1.5：夹爪保持与触觉历史 →</a></p><p><a href="/r16-motion-pacing">R1.6：控制时序对照与 expert 示范 →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
+<h1>UniVTAC experiment runs</h1><p><a href="/progress">项目进展：我和 GPT-Pro 每轮做了什么 →</a></p><p><a href="/r10-operation">R1.0：第一次 Codex 真实操作 →</a></p><p><a href="/r11-icl">R1.1：第一次真实 Tactile-Action ICL →</a></p><p><a href="/r12-branching">R1.2：筛选真正需要触觉分支的任务 →</a></p><p><a href="/r13-icl">R1.3：Insert Hole 接触前后 Tactile ICL →</a></p><p><a href="/r14-autonomous">R1.4 Autonomous Insert Hole →</a></p><p><a href="/r15-autonomous">R1.5：夹爪保持与触觉历史 →</a></p><p><a href="/r16-motion-pacing">R1.6：控制时序对照与 expert 示范 →</a></p><p><a href="/r17-autonomous">R1.7：官方 expert 示范驱动的自主触觉 ICL →</a></p><div id="pilots"></div><table><thead><tr><th>round / directory</th><th>task</th><th>seed</th><th>model</th><th>status</th><th>start</th><th>duration</th><th>observe count</th></tr></thead><tbody id="runs"></tbody></table>
 <script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function tick(){const [xs,ps]=await Promise.all([fetch('/api/runs?t='+Date.now()).then(r=>r.json()),fetch('/api/pilots?t='+Date.now()).then(r=>r.json())]);document.querySelector('#pilots').innerHTML=ps.map(x=>`<p><a href="/pilot/${encodeURIComponent(x.directory)}">Causal Pilot: ${esc(x.directory)}</a> · ${esc(x.signal)} · ${esc(x.completed_call_count)} calls</p>`).join('');document.querySelector('#runs').innerHTML=xs.map(x=>`<tr><td><a href="/run/${encodeURIComponent(x.directory)}">${esc(x.round)} / ${esc(x.directory)}</a></td><td>${esc(x.task)}</td><td>${esc(x.seed)}</td><td>${esc(x.model)}</td><td class="${x.status==='completed'?'ok':'failed'}">${esc(x.status)}</td><td>${esc(x.started_at)}</td><td>${esc(x.duration_seconds??'')}</td><td>${esc(x.observe_count)}</td></tr>`).join('')}tick();setInterval(tick,2000)</script>"""
 
 PILOT_HTML = """<!doctype html><meta charset="utf-8"><title>UniVTAC Causal Pilot</title>
@@ -942,6 +942,14 @@ def make_handler(runs_root: Path) -> type[BaseHTTPRequestHandler]:
                     return self._send(R11_ICL_HTML.encode(), "text/html; charset=utf-8")
                 if parsed.path == "/r12-branching":
                     return self._send(R12_BRANCHING_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/r17-autonomous":
+                    from scripts.univtac.autonomous_dashboard import R17_HTML
+                    return self._send(R17_HTML.encode(), "text/html; charset=utf-8")
+                if parsed.path == "/api/r17-autonomous":
+                    return self._json(load_autonomous_runs(root, "R1.7"))
+                if parsed.path in ("/r17-demonstrations", "/r17-videos"):
+                    name = "demonstrations.html" if parsed.path.endswith("demonstrations") else "videos.html"
+                    return self._send((root/'univtac-isaac51-r17'/name).read_bytes(), "text/html; charset=utf-8")
                 if parsed.path == "/r16-motion-pacing":
                     page = root/'univtac-isaac51-r16/review.html'
                     return self._send(page.read_bytes(), "text/html; charset=utf-8")

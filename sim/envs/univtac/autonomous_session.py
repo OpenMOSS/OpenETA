@@ -24,6 +24,18 @@ from sim.envs.univtac.trace import write_json
 from tools.pointcloud_pose_marking import camera_ray_from_image_click
 
 
+def project_current_observation(payload, *, current_tactile=True):
+    """Remove only current touch at delivery; preserve host capture and demos."""
+    if current_tactile or 'observation' not in payload['text']:
+        return payload
+    observation = dict(payload['text']['observation'])
+    observation.pop('tactile_history', None)
+    observation['images'] = [im for im in observation['images']
+                             if im['label'] in ('head RGB', 'wrist RGB')]
+    return {**payload, 'text': {**payload['text'], 'observation': observation},
+            'images': observation['images']}
+
+
 class AutonomousSession:
     def __init__(self, task, config, root: Path, seed: int):
         self.task, self.config, self.root, self.seed = task, config, root, seed
@@ -215,6 +227,7 @@ class AutonomousSession:
             self.infrastructure_error = f'{type(exc).__name__}: {exc}'
             self.finish_reason = 'infrastructure_error'
             payload = {'ok':False,'text':{'error':self.infrastructure_error,'terminal':'infrastructure_error'},'images':[]}
+        payload = project_current_observation(payload, current_tactile=self.config.get('current_tactile', True))
         append_row(self.root/'tool_trace.jsonl',{'tool':tool,'arguments':args,'before':before,'result':payload,'counts':self.controller.counts(),'timestamp_s':time.time()})
         if self.termination() or self.infrastructure_error:
             write_json(self.root/'stop.json',{'reason':self.termination() or self.infrastructure_error,'timestamp_s':time.time()})

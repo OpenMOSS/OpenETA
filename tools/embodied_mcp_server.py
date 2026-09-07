@@ -2655,7 +2655,7 @@ def build_live_backend_server(*, root: Path, worker_url: str, demonstrations: bo
 
     @server.tool(structured_output=False)
     def observe() -> list[Any]:
-        """Read current head/wrist RGB, bilateral touch, robot TCP state and budgets."""
+        """Read current head/wrist RGB, bilateral touch when provided, robot TCP state and budgets."""
         return call("observe", {})
 
     @server.tool(structured_output=False)

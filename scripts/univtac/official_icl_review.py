@@ -24,6 +24,14 @@ RULE_NAMES = {r+c: f"{r} {'官方说明＋公开规则' if r=='R' else '官方�
 
 
 NEW_SEED_NAMES = {k:v for k,v in RULE_NAMES.items() if k.startswith('R')}
+CURRENT_TOUCH_NAMES = {
+    'B_live': 'B 视觉—运动示范 · 操作中有当前触觉',
+    'C_live': 'C 增加历史触觉 · 操作中有当前触觉',
+    'B_no_live': 'B 视觉—运动示范 · 操作中无当前触觉',
+    'C_no_live': 'C 增加历史触觉 · 操作中无当前触觉',
+}
+CURRENT_TOUCH_COMPARISONS = [('C_live','B_live'), ('C_no_live','B_no_live'),
+                             ('B_live','B_no_live'), ('C_live','C_no_live')]
 
 
 def round_manifest(root):
@@ -33,7 +41,7 @@ def round_manifest(root):
 
 def round_names(root):
     name = round_manifest(root).get('round')
-    return {'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES}.get(name, NAMES)
+    return {'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
 
 
 def round_seeds(root):
@@ -43,7 +51,7 @@ def round_seeds(root):
 
 def round_page(root, fallback='R1.7'):
     name = round_manifest(root).get('round', fallback)
-    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19'}[name]
+    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19', 'R1.10':'r110'}[name]
     return PAGE.replace('R1.7', name).replace('r17-', route+'-')
 
 
@@ -170,7 +178,7 @@ def summarize(root):
             state=read('episode.json');life=read('codex_lifecycle.json')
             context=read_jsonl(folder/'operator_context.jsonl')
             cells.append({'seed':seed,'condition':condition,'status':state.get('status','not_run'),
-                **{k:state.get(k) for k in ('model','reasoning_effort','codex_cli_version','evaluable','task_success','termination','infrastructure_error',
+                **{k:state.get(k) for k in ('model','reasoning_effort','codex_cli_version','current_tactile','evaluable','task_success','termination','infrastructure_error',
                     'move_request_count','actual_motion_requests','tool_call_count','control_steps','physics_steps','simulation_time_seconds')},
                 'codex_wall_seconds':life.get('elapsed_seconds'),
                 'worker_wall_seconds':read('worker_lifecycle.json').get('elapsed_seconds'),
@@ -192,8 +200,15 @@ def summarize(root):
             contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/groups[a]['planned'] if groups[a]['evaluable']==groups[b]['evaluable']==groups[a]['planned'] else None
         for b in ('RB','RA'):
             pairs['RC-'+b] = paired_outcomes(cells, 'RC', b)
+    if names is CURRENT_TOUCH_NAMES:
+        for a,b in CURRENT_TOUCH_COMPARISONS:
+            contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/8 if groups[a]['evaluable']==groups[b]['evaluable']==8 else None
+            pairs[a+'-'+b] = paired_outcomes(cells, a, b)
+        live, no_live = (contrasts[a+'-'+b] for a,b in CURRENT_TOUCH_COMPARISONS[:2])
+        contrasts['historical_touch_difference_in_differences'] = live-no_live if live is not None and no_live is not None else None
     write_json(root/'results.json',{'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
-        'interpretation':'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.'})
+        'interpretation':('Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
+            'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.')})
 
 
 def paired_timeline(streams):
@@ -208,41 +223,57 @@ def paired_timeline(streams):
     return mapping
 
 
+def pair_specs(root):
+    if round_names(root) is CURRENT_TOUCH_NAMES:
+        return [('B_live', 'B_no_live'), ('C_live', 'C_no_live')]
+    return [('RB', 'RC')]
+
+
 def review_pairs(root):
-    page = round_page(root)+'<h1>RB / RC 同 seed 并排审阅</h1><p>左：视觉—运动示范；右：同一示范增加历史触觉。两侧都是现场 GPT-6 low 自主操作，动作可以不同。按接管后的真实仿真时间对齐，同倍率播放；短侧结束后保持末帧，不拉伸归一化运动时长。历史 expert 不是这里的当前操作。</p>'
+    modality = round_names(root) is CURRENT_TOUCH_NAMES
+    route = 'r110' if modality else 'r19'
+    page = round_page(root)+'<h1>同 seed 并排审阅</h1><p>两侧都是现场 GPT-6 low 自主操作，动作可以不同。按接管后的真实仿真时间对齐，同倍率播放；短侧结束后保持末帧，不拉伸归一化运动时长。历史 expert 不是这里的当前操作。</p>'
+    if modality:
+        page += '<p>每对左侧有当前触觉，右侧无当前触觉。右侧录像中的触觉仅供用户审阅，本episode未送给Agent。历史示范在同一对中完全相同。</p>'
+    else:
+        page += '<p>左：视觉—运动示范；右：同一示范增加历史触觉。</p>'
     for seed in round_seeds(root):
         pair = root/'batch'/f'seed_{seed}'
-        folders = [pair/'RB', pair/'RC']
-        if not all((f/'review_video.json').exists() for f in folders):
-            page+=f'<section><h2>{seed}</h2><p>等待 RB/RC 两侧完成。</p></section>'
-            continue
-        streams = [read_jsonl(f/'samples.jsonl') for f in folders]
-        mapping = paired_timeline(streams)
-        states = [json.loads((f/'episode.json').read_text()) for f in folders]
-        page+=f'<section><h2>seed {seed}</h2><p>RB native={states[0].get("task_success")}；RC native={states[1].get("task_success")}。请比较动作方向、姿态、开合与结果；图片变化本身不是滑移或稳定抓取标签。</p>'
-        for rate in (1,.05):
-            output = pair/f'paired_rb_rc_{rate:g}x.mp4'
-            if not output.exists():
-                frames=[]
-                for i,m in enumerate(mapping):
-                    panels=[]
-                    for j,(folder,sid,ended) in enumerate(zip(folders,m['sample_ids'],m['ended'],strict=True)):
-                        with Image.open(folder/'review_labelled'/f'{sid:06d}.png') as im:
-                            panel=Image.new('RGB',(im.width,im.height+62),'white');panel.paste(im,(0,62))
-                        draw=ImageDraw.Draw(panel);font=ImageFont.truetype(FONT,20)
-                        draw.text((10,3),f'{"左 RB" if j==0 else "右 RC"} · {rate:g}× · 对齐仿真时间 {m["simulation_time_seconds"]:.3f}s',font=font,fill='black')
-                        draw.text((10,31),'此侧已结束，以下为末帧保持' if ended else '该侧实际记录；未生成中间观测',font=font,fill='black')
-                        panels.append(panel)
-                    canvas=Image.new('RGB',(panels[0].width*2,panels[0].height),'white')
-                    for j,panel in enumerate(panels):canvas.paste(panel,(j*panel.width,0))
-                    frame=pair/f'paired_frames_{rate:g}x'/f'{i:06d}.png';frame.parent.mkdir(exist_ok=True);canvas.save(frame);frames.append(frame)
-                times=[m['simulation_time_seconds'] for m in mapping]
-                durations=[(b-a)/rate for a,b in pairwise(times)]+[1.0]
-                encode_recorded_frames(frames,durations,output)
-                write_json(output.with_suffix('.json'),{'rate':rate,'frames':mapping,'final_display_hold_seconds':1,'synthetic_observations':0})
-            run=Path('univtac-isaac51-r19/batch')
-            page+=f'<h3>{rate:g}×（结尾另停留1秒供审阅）</h3>'+video(link(run,output.relative_to(root/'batch')))
-        page+='<p>原始逐帧、完整请求与示范：'+''.join(f'<a href="/r19-autonomous">{c} 实际输入与轨迹</a> ' for c in ('RB','RC'))+'</p></section>'
+        for conditions in pair_specs(root):
+            folders = [pair/c for c in conditions]
+            title = f'seed {seed} · {conditions[0]} / {conditions[1]}'
+            if not all((f/'review_video.json').exists() for f in folders):
+                page+=f'<section><h2>{title}</h2><p>等待两侧完成。</p></section>'
+                continue
+            streams = [read_jsonl(f/'samples.jsonl') for f in folders]
+            mapping = paired_timeline(streams)
+            states = [json.loads((f/'episode.json').read_text()) for f in folders]
+            page+=f'<section><h2>{title}</h2><p>左 native={states[0].get("task_success")}；右 native={states[1].get("task_success")}。请比较动作方向、姿态、开合与结果；图片变化本身不是滑移或稳定抓取标签。</p>'
+            key = '_'.join(conditions).lower()
+            for rate in (1,.05):
+                output = pair/f'paired_{key}_{rate:g}x.mp4'
+                if not output.exists():
+                    frames=[]
+                    for i,m in enumerate(mapping):
+                        panels=[]
+                        for j,(folder,sid,ended) in enumerate(zip(folders,m['sample_ids'],m['ended'],strict=True)):
+                            with Image.open(folder/'review_labelled'/f'{sid:06d}.png') as im:
+                                panel=Image.new('RGB',(im.width,im.height+62),'white');panel.paste(im,(0,62))
+                            draw=ImageDraw.Draw(panel);font=ImageFont.truetype(FONT,20)
+                            draw.text((10,3),f'{"左" if j==0 else "右"} {conditions[j]} · {rate:g}× · 仿真时间 {m["simulation_time_seconds"]:.3f}s',font=font,fill='black')
+                            draw.text((10,31),'此侧已结束，以下为末帧保持' if ended else '该侧实际记录；未生成中间观测',font=font,fill='black')
+                            panels.append(panel)
+                        canvas=Image.new('RGB',(panels[0].width*2,panels[0].height),'white')
+                        for j,panel in enumerate(panels):canvas.paste(panel,(j*panel.width,0))
+                        frame_dir = f'paired_frames_{key}_{rate:g}x' if modality else f'paired_frames_{rate:g}x'
+                        frame=pair/frame_dir/f'{i:06d}.png';frame.parent.mkdir(exist_ok=True);canvas.save(frame);frames.append(frame)
+                    times=[m['simulation_time_seconds'] for m in mapping]
+                    durations=[(b-a)/rate for a,b in pairwise(times)]+[1.0]
+                    encode_recorded_frames(frames,durations,output)
+                    write_json(output.with_suffix('.json'),{'conditions':conditions,'rate':rate,'frames':mapping,'final_display_hold_seconds':1,'synthetic_observations':0})
+                run=root.relative_to(root.parent)/'batch'
+                page+=f'<h3>{rate:g}×（结尾另停留1秒供审阅）</h3>'+video(link(run,output.relative_to(root/'batch')))
+            page+='<p>原始逐帧、完整请求与示范：'+''.join(f'<a href="/{route}-autonomous">{c} 实际输入与轨迹</a> ' for c in conditions)+'</p></section>'
     (root/'pairs.html').write_text(page)
 
 

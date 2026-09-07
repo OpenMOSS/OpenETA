@@ -34,7 +34,11 @@ def experiment_plan(base):
 def condition_config(base, condition):
     config = copy.deepcopy(base)
     config['condition'] = condition
-    if base.get('task_rule_ablation'):
+    if base.get('current_tactile_ablation'):
+        config['task_information'] = 'R'
+        config['demonstration_condition'] = CONDITIONS['ABC'.index(condition[0])]
+        config['current_tactile'] = condition in ('B_live', 'C_live')
+    elif base.get('task_rule_ablation'):
         config['task_information'] = condition[0]
         config['demonstration_condition'] = CONDITIONS['ABC'.index(condition[1])]
         # U workers do not need the R-only text, even in their host configuration.

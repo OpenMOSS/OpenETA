@@ -974,3 +974,68 @@ collision between page inspection and playback. Playback now uses its own browse
 session. Neither affected the simulator, Agent input or episode results.
 This round adds no mechanism ablation or task; subsequent experimental action
 requires the next concrete Pro instruction under the continuing project goal.
+
+
+## R1.10: historical versus current tactile input
+
+Pro accepted R1.9 while tightening the claim: expert demonstrations helped on
+this batch, but the single extra RC success does not establish a reliable
+historical-touch benefit. RB still had current touch; its 10/12 is not evidence
+that vision alone suffices. R1.10 is a supplementary modality ablation, not a
+change to the original A/B/C definitions or the complete multimodal method.
+
+The [fixed configuration](../../configs/univtac/current_tactile_ablation.yaml)
+plans eight new seeds 1000018–1000025, four conditions each (32 fresh episodes):
+B_live / C_live retain current bilateral tactile history; B_no_live / C_no_live
+omit it from Agent-visible outputs. B has the same twelve historical visual
+images and measured-motion text as R1.9; C adds the same twelve historical
+bilateral-touch images. C_no_live retains those historical tactile images.
+There is no no-example A condition or reuse of R1.9 outcomes in the new table.
+
+`project_current_observation` filters current touch after all normal and
+recoverable-error observation paths in the existing session. It leaves the
+host observation/recorder unchanged, removes current tactile image descriptors
+and the complete tactile-history selection metadata, and does not affect
+historical review. All four groups retain current head/wrist, robot/gripper
+state, execution feedback, budgets and minimal native checks. Sensors, sampling,
+reset/pre_move adaptive grasp and contact physics remain active in no_live;
+it is not a claim of a system that never used tactile sensing.
+
+All four prompts are identical. The R1.9 rule, coordinate and budget text is
+unchanged; tactile format statements gain “when provided” and a common missing-
+modality explanation. Model remains `gpt-6-astra` / low, with original control
+and unchanged 30 motion / 100 MCP / 3600 Codex-second / 300 native-step /
+80 segment-step limits and terminal grace. No debugging simulator episode,
+model pretest, expert screening/collection or parameter change is added.
+
+```bash
+uv run --no-sync python scripts/univtac/run_official_tactile_icl.py \
+  --config configs/univtac/current_tactile_ablation.yaml \
+  --demonstrations outputs/univtac-isaac51-r17/demonstrations \
+  --output-root outputs/univtac-isaac51-r110/batch
+```
+
+Prelaunch offline checks used retained R1.9 observations: removing current touch
+preserved other fields and the host payload; all four historical projections
+matched actual R1.9 delivery and the four prompts were equal. An explicitly
+labelled two-frame offline video test reused R1.9 data; it is not a new physical
+episode. The no_live touch region reads “仅供用户审阅，本episode未送给Agent”.
+Raw frame stepping is host-only; Agent Saw uses actual operator_context images.
+The existing dashboard adds `/r110-autonomous`, `/r110-videos`,
+`/r110-demonstrations` and `/r110-pairs`; paired views compare live/no_live within
+B and within C on common simulation time, holding an ended side's last frame.
+
+The planned 2×2 main table reports successes/8, evaluability, native failures and
+infrastructure issues. Fixed contrasts are C_live−B_live, C_no_live−B_no_live,
+B_live−B_no_live and C_live−C_no_live, each with paired outcomes. The difference
+between the first two is descriptive, not proof of model internals. Input length
+also changes when touch is omitted. If scores do not decrease, report that this
+batch did not detect a performance drop, not that the model ignored touch.
+
+Prelaunch validation passed 63 focused tests, scoped Ruff, compileall and diff
+checks. The MCP file retains 19 pre-existing Ruff diagnostics; comparison with
+the baseline found no new diagnostic from its changed tool description.
+GPT-6 low full-history scoped neat found no documentation inconsistency.
+The implementation and offline checks are complete; the 32-cell physical batch
+is pending launch. Preserve failures without replacement, keep previous rounds
+separate, and report actual results and costs before any subsequent instruction.

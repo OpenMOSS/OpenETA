@@ -1,0 +1,93 @@
+round: R1.10
+task: insert_hole
+seeds: [1000018, 1000019, 1000020, 1000021, 1000022, 1000023, 1000024, 1000025]
+task_config: demo
+mode: eval
+device: cuda:0
+model: gpt-6-astra
+reasoning_effort: low
+max_move_requests: 30
+max_tool_calls: 100
+codex_timeout_seconds: 3600
+startup_timeout_seconds: 900
+shutdown_timeout_seconds: 300
+max_control_steps_per_move: 80
+max_joint_delta_rad: 0.025
+position_tolerance_m: 0.003
+orientation_tolerance_rad: 0.05235987756
+gripper_settle_window_seconds: 0.10
+gripper_settle_tolerance_m: 0.0002
+gripper_target_tolerance_m: 0.001
+max_gripper_wait_steps: 40
+terminal_grace_seconds: 300
+tactile_history:
+  tracking_width: 160
+  roi_fraction: [0.08, 0.08, 0.92, 0.92]
+  patch_radius: 6
+  search_radius: 4
+  minimum_patch_std: 8.0
+  maximum_patch_mse: 900.0
+  minimum_match_margin: 1.0
+  minimum_tracking_quality: 0.35
+  motion_threshold_px: 2.0
+  difference_threshold: 0.015
+demonstrations: true
+task_instruction: >-
+  Explore the inclined hole through contact to determine its orientation,
+  then insert the test tube into the hole.
+task_rule_ablation: true
+public_task_rules: |-
+  Public task success and termination rules (static requirements, not measurements):
+  Success requires all of the following simultaneously:
+  - The object's pose origin, expressed in the target reference frame, has
+    lateral coordinates with |x| < 0.01 m and |y| < 0.01 m, and axial coordinate
+    z < -0.04 m.
+  - The dot product of the object's positive longitudinal axis and the target's
+    positive axis is greater than 0.99.
+  - The absolute change in the object's longitudinal position relative to the
+    gripper, measured from the end of official pre_move, is less than 0.04 m.
+  If that last grip-relative longitudinal change exceeds 0.04 m, native
+  evaluation immediately terminates the episode; further physical recovery in
+  that episode is unavailable. At exactly 0.04 m, this quantity neither satisfies
+  the strict success requirement nor triggers the strict early-stop condition.
+  The target reference frame defines the hole channel's position and direction;
+  its true transform for this instance is not supplied. The object's axial
+  coordinate is not a TCP downward displacement or a directly measured insertion
+  depth. Grip-relative longitudinal change is not finger opening or a tactile
+  image-change score. These are static requirements, not current-state values.
+  A false check_task result alone does not mean the episode has terminated;
+  use the terminal feedback to determine whether interaction can continue.
+current_tactile_ablation: true
+episode_order:
+  - [1000018, B_live]
+  - [1000018, C_live]
+  - [1000018, C_no_live]
+  - [1000018, B_no_live]
+  - [1000019, C_live]
+  - [1000019, B_no_live]
+  - [1000019, B_live]
+  - [1000019, C_no_live]
+  - [1000020, B_no_live]
+  - [1000020, C_no_live]
+  - [1000020, C_live]
+  - [1000020, B_live]
+  - [1000021, C_no_live]
+  - [1000021, B_live]
+  - [1000021, B_no_live]
+  - [1000021, C_live]
+  - [1000022, B_live]
+  - [1000022, C_live]
+  - [1000022, C_no_live]
+  - [1000022, B_no_live]
+  - [1000023, C_live]
+  - [1000023, B_no_live]
+  - [1000023, B_live]
+  - [1000023, C_no_live]
+  - [1000024, B_no_live]
+  - [1000024, C_no_live]
+  - [1000024, C_live]
+  - [1000024, B_live]
+  - [1000025, C_no_live]
+  - [1000025, B_live]
+  - [1000025, B_no_live]
+  - [1000025, C_live]

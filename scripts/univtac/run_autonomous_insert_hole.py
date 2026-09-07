@@ -59,6 +59,14 @@ def operator_prompt(config):
         )
         if config.get('task_information') == 'R':
             prompt += '\n' + config['public_task_rules'] + '\n'
+    if config.get('current_tactile_ablation'):
+        prompt = prompt.replace('bilateral tactile images, robot state',
+            'bilateral tactile images when provided, robot state').replace(
+            'show real segment-end tactile history',
+            'show, when provided, real segment-end tactile history')
+        prompt += ('\nSome observation modalities may be absent. Use only the\n'
+                   'images and measurements actually returned. Missing tactile\n'
+                   'input is not a tool failure.\n')
     return prompt
 
 
@@ -159,6 +167,7 @@ def run_episode(args, config, seed, root):
                'model':config['model'] if args.mode=='batch' else None,
                'reasoning_effort':config['reasoning_effort'] if args.mode=='batch' else None,
                'task_information':config.get('task_information'),
+               'current_tactile':config.get('current_tactile', True),
                'demonstration_condition':config.get('demonstration_condition',config.get('condition')),'status':'starting','codex_process_count':0}
     write_json(root/'episode.json',episode)
     command = [str(REPO/'scripts/univtac/serve_autonomous_worker.py'),'--repo-root',str(REPO),

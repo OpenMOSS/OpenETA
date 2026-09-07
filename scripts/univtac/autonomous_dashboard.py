@@ -9,13 +9,13 @@ from sim.envs.univtac.codex_readonly import read_jsonl
 
 def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    pattern = {'R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
+    pattern = {'R1.10':'univtac-isaac51-r110/**/run_manifest.json','R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
         if manifest.get('round') != round_name:
             continue
         episodes = []
-        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9') else 'seed_*/episode.json')):
+        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9','R1.10') else 'seed_*/episode.json')):
             root = path.parent
             def read(name, root=root):
                 candidate = root/name
@@ -35,10 +35,12 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         note_path=manifest_path.parent/'validation_note.json'
         note=json.loads(note_path.read_text()) if note_path.exists() else None
         batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
-    if round_name in ('R1.7', 'R1.8', 'R1.9'):
+    if round_name in ('R1.7', 'R1.8', 'R1.9', 'R1.10'):
         conditions = ('UA','UB','UC','RA','RB','RC') if round_name == 'R1.8' else ('no_demo','visual_action_icl','tactile_action_icl')
         if round_name == 'R1.9':
             conditions = ('RA','RB','RC')
+        if round_name == 'R1.10':
+            conditions = ('B_live','C_live','B_no_live','C_no_live')
         batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
                     'episodes':[e for e in b['episodes'] if e['run'].endswith('/'+c)]}
                    for b in batches for c in conditions]
@@ -156,3 +158,31 @@ R19_HTML = R17_HTML.replace(R17_SUMMARY, R19_SUMMARY).replace(
     "valid.length+'/3；成功 '", "valid.length+'/12；成功 '").replace(
     "review(e)+'<h3>Agent Saw", "'<details><summary>实际冻结初始 prompt 全文</summary><pre>'+esc(e.prompt??'尚未启动')+'</pre></details>'+review(e)+'<h3>Agent Saw").replace(
     "esc(state.seed)+' · '+esc(state.status)", "esc(state.seed)+' · '+esc(state.condition??e.run.split('/').at(-1))+' · '+esc(state.model)+' / '+esc(state.reasoning_effort)+' · '+esc(state.status)")
+
+R110_SUMMARY = r'''
+function currentTouchTable(d){
+const groups=Object.fromEntries(d.batches.map(b=>[b.name.split(' / ').at(-1),b.episodes]));
+const valid=c=>(groups[c]||[]).filter(e=>e.episode.evaluable).length;
+const wins=c=>(groups[c]||[]).filter(e=>e.episode.evaluable&&e.episode.task_success).length;
+const comparisons=[['C_live','B_live'],['C_no_live','B_no_live'],['B_live','B_no_live'],['C_live','C_no_live']];
+const delta=(a,b)=>valid(a)===8&&valid(b)===8?(wins(a)-wins(b))*100/8:null;
+let t='<section><h2>R1.10：历史触觉 × 当前触觉</h2><p>GPT-6 / low，R 完整规则、同一 original 控制器和两条官方 expert。八个新 seed；历史轮次不并表。no_live 只移除 Agent 操作中的当前触觉，不关闭传感器、初始化自适应抓持、物理或录像。</p><table style="width:100%;text-align:left"><tr><th>历史示范</th><th>有当前触觉 live</th><th>无当前触觉 no_live</th></tr>';
+for(const history of ['B','C']){t+='<tr><th>'+history+(history==='B'?' 视觉—运动':' 同示范＋历史触觉')+'</th>';for(const suffix of ['live','no_live']){const c=history+'_'+suffix,es=groups[c]||[];t+='<td>'+wins(c)+'/8；可评价 '+valid(c)+'/8；原生失败 '+es.filter(e=>e.episode.evaluable&&!e.episode.task_success).length+'；基础设施 '+es.filter(e=>e.episode.infrastructure_error).length+'</td>';}t+='</tr>';}
+t+='</table><h3>固定比较与逐 seed 配对</h3>';
+for(const [a,b] of comparisons){let counts=[0,0,0,0,0];for(let seed=1000018;seed<=1000025;seed++){const x=(groups[a]||[]).find(e=>e.episode.seed===seed)?.episode,y=(groups[b]||[]).find(e=>e.episode.seed===seed)?.episode;counts[!x?.evaluable||!y?.evaluable?4:x.task_success?(y.task_success?2:0):(y.task_success?1:3)]++;}const value=delta(a,b);t+='<p>'+a+'−'+b+'：'+(value===null?'待完成／不可评价':value.toFixed(1)+' pp')+'；仅前者 / 仅后者 / 共同成功 / 共同失败 / 未完成或不可评价：'+counts.join(' / ')+'</p>';}
+const a=delta('C_live','B_live'),b=delta('C_no_live','B_no_live');t+='<p>描述性差中差：(C_live−B_live)−(C_no_live−B_no_live) = '+(a===null||b===null?'待完成／不可评价':(a-b).toFixed(1)+' pp')+'；不是模型内部机制证明。</p>';
+const prompts=d.batches[0]?.manifest?.prompts??{};if(prompts.B_live)t+='<details><summary>四组共同 prompt 全文</summary><pre>'+esc(prompts.B_live)+'</pre></details>';
+return t+'<p>成本详单在下方；cached/ reasoning 是 input/output 子集，不重复求和。移除模态也改变上下文长度，未隔离全部内部机制。较早失败不算效率优势。</p></section>';
+}
+'''
+R110_HTML = R19_HTML.replace(R19_SUMMARY, R110_SUMMARY).replace(
+    'newSeedTable(d)', 'currentTouchTable(d)').replace('R1.9', 'R1.10').replace('r19-', 'r110-').replace(
+    '三十六条视频', '三十二条视频').replace('同 seed 的 RB/RC 并排慢放', '同 seed 的 live/no_live 并排慢放').replace(
+    'valid.length===12', 'valid.length===8').replace("wins.length+'/12'", "wins.length+'/8'").replace(
+    "valid.length+'/12；成功 '", "valid.length+'/8；成功 '").replace(
+    '三组当前观测相同：视觉＋触觉历史＋本体状态。A 无示范；B 两条官方 expert 的视觉—运动示范；C 相同示范再加历史触觉。',
+    '四组均有视觉、本体与两条官方 expert 示范。B/C 只差历史触觉；live/no_live 只差 Agent 操作中的当前触觉。后台四路录像均保留。').replace(
+    '调试用于验证接口，不计入成功率。', '本轮不新增联调或模型预试。').replace(
+    'Object.keys(r.images));', "Object.keys(r.images).map(n=>n+(e.episode.current_tactile===false&&n.includes('tactile')?' · 仅供用户审阅，本episode未送给Agent':'')));").replace(
+    '<h4>Before / After Vision and Touch</h4>',
+    '<h4>Host-only 前后记录：可能包含未交付触觉；真实 Agent 输入仅以上方 MCP 为准</h4>')

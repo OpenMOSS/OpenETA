@@ -7,13 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from sim.envs.univtac.autonomous_operation import append_row
 from sim.envs.univtac.observation import to_numpy
 from sim.envs.univtac.trace import write_json
 
 VIEWS = ('head', 'wrist', 'left_tactile', 'right_tactile')
+REVIEW_ONLY_TOUCH = '仅供用户审阅，本episode未送给Agent'
 
 
 def rgb_array(value):
@@ -218,11 +219,19 @@ def export_review_video(root: Path):
     """Offline VFR H.264 export; failures leave raw images and an error record."""
     import imageio_ffmpeg
     rows = [json.loads(s) for s in (root/'samples.jsonl').read_text().splitlines() if s.strip()]
+    episode_path = root/'episode.json'
+    episode = json.loads(episode_path.read_text()) if episode_path.exists() else {}
+    current_tactile = episode.get('current_tactile', True)
     resolved = {}
     if (root/'tool_trace.jsonl').exists():
         for line in (root/'tool_trace.jsonl').read_text().splitlines():
             record = json.loads(line)['result']['text']
             history = record.get('observation', {}).get('tactile_history')
+            if not current_tactile and 'execution' in record and 'observation' in record:
+                # The host observation retains history even when delivery omits it.
+                index = int(record['observation']['observation_id'].removeprefix('obs_'))
+                host = json.loads((root/'observations'/f'{index:04d}'/'operator_observation.json').read_text())
+                history = host.get('tactile_history')
             if history and 'execution' in record:
                 resolved[history['action_id']] = record['execution']['requested_target']
     folder = root/'review_frames'
@@ -248,6 +257,10 @@ def export_review_video(root: Path):
         for i,n in enumerate(VIEWS):
             x,y = (i%2)*480, 140+(i//2)*380
             draw.text((x+8,y+2), n, fill='black')
+            if not current_tactile and n in VIEWS[2:]:
+                draw.rectangle((x,y,x+480,y+20), fill='#fff0b3')
+                font = ImageFont.truetype('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', 14)
+                draw.text((x+4,y), n+' · '+REVIEW_ONLY_TOUCH, font=font, fill='#a40000')
             with Image.open(root/row['images'][n]) as im:
                 canvas.paste(im.convert('RGB').resize((480,360)), (x,y+20))
         file = folder/f"{row['sample_id']:06d}.png"

@@ -1,0 +1,21 @@
+round: R1.6
+base_config: configs/univtac/autonomous_insert_hole.yaml
+source_runs: outputs/univtac-isaac51-r15/batch
+order:
+  - [1000003, original]
+  - [1000003, paced_candidate]
+  - [1000004, paced_candidate]
+  - [1000004, original]
+  - [1000005, original]
+  - [1000005, paced_candidate]
+candidate:
+  linear_speed_m_s: 0.04
+  angular_speed_rad_s: 0.4
+rationale: >-
+  At eval control dt=1/60 s the reference advances at most 0.667 mm and
+  0.006667 rad per step. A 50 mm request takes 75 reference steps, within the
+  unchanged 80-step segment limit with only five remaining tracking steps.
+  No speed sweep or success-based tuning. Actual speeds must be measured.
+support_seeds: [1000000, 1000001]
+expert_source: outputs/univtac-isaac51-r12/insert_hole
+expert_reuse: native play_once successes with three aligned before/after segments; sparse only

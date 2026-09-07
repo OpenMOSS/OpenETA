@@ -140,6 +140,20 @@ def pose_error(actual: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.n
     return target[:3, 3] - actual[:3, 3], matrix_rotvec(target[:3, :3] @ actual[:3, :3].T)
 
 
+def paced_reference(start: np.ndarray, target: np.ndarray, elapsed: float,
+                    linear_speed: float, angular_speed: float) -> np.ndarray:
+    """Time-parameterized Cartesian reference; actual motion is measured separately."""
+    if linear_speed <= 0 or angular_speed <= 0:
+        raise ValueError('Reference speeds must be positive')
+    dp, dr = pose_error(start, target)
+    duration = max(np.linalg.norm(dp) / linear_speed, np.linalg.norm(dr) / angular_speed)
+    fraction = min(1.0, max(0.0, elapsed) / max(duration, 1e-12))
+    reference = np.array(start, copy=True)
+    reference[:3, 3] += dp * fraction
+    reference[:3, :3] = rotvec_matrix(dr * fraction) @ start[:3, :3]
+    return reference
+
+
 def damped_joint_delta(jacobian: np.ndarray, error: np.ndarray, max_delta: float) -> np.ndarray:
     delta = jacobian.T @ np.linalg.solve(jacobian @ jacobian.T + 0.0025 * np.eye(6), error)
     return delta * min(1.0, max_delta / max(float(np.max(np.abs(delta))), 1e-12))
@@ -271,7 +285,8 @@ class NativeController:
         reason = 'control_segment_limit'
         moved = False
         steps_before = self.control_steps
-        for _ in range(self.config["max_control_steps_per_move"]):
+        pacing = self.config.get('motion_pacing')
+        for step in range(self.config["max_control_steps_per_move"]):
             if self.terminal():
                 break
             actual = self.tcp()
@@ -280,6 +295,13 @@ class NativeController:
             if arm_reached and gripper_done:
                 reason = 'arm_reached' if gripper is None else 'arm_reached_and_gripper_wait_finished'
                 break
+            reference = target
+            if pacing:
+                dt = float(self.task.cfg.sim.dt) * int(self.task.cfg.decimation)
+                reference = paced_reference(before, target, (step + 1) * dt,
+                    pacing['linear_speed_m_s'], pacing['angular_speed_rad_s'])
+                dp, dr = pose_error(actual, reference)
+            counts_before = self.counts()
             # PhysX Jacobians are world-frame link Jacobians. Shift to the TCP.
             jac = r.robot.root_physx_view.get_jacobians()[0, r._jacobi_body_idx][:, joint_ids].detach().cpu().numpy().copy()
             link_pos = r.robot.data.body_link_pos_w[0, r._body_idx].detach().cpu().numpy()
@@ -297,7 +319,16 @@ class NativeController:
             moved = moved or not np.allclose(self.tcp(), before, atol=1e-7) or not np.allclose(measured, before_gripper, atol=1e-7)
             if not self.task.eval_success:
                 self.early_stop = bool(self.task.check_early_stop())
+            after = self.tcp()
+            measured_dp, measured_dr = pose_error(actual, after)
+            physical_dt = self.counts()['simulation_time_seconds'] - counts_before['simulation_time_seconds']
             append_row(self.root / "control_steps.jsonl", {"index": self.control_steps, "qpos_target": action.cpu().tolist(),
+                       "reference": pose_dict(reference), "final_target": pose_dict(target),
+                       "before_tcp": pose_dict(actual), "after_tcp": pose_dict(after),
+                       "measured_translation_m": measured_dp.tolist(), "measured_rotation_rad": measured_dr.tolist(),
+                       "measured_linear_speed_m_s": float(np.linalg.norm(measured_dp) / physical_dt),
+                       "measured_angular_speed_rad_s": float(np.linalg.norm(measured_dr) / physical_dt),
+                       "control_dt_seconds": physical_dt,
                        "actual": self.state(), "counts": self.counts(), "terminal": self.terminal()})
             if self.after_step:
                 self.after_step()

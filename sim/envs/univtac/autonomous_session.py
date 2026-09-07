@@ -40,7 +40,25 @@ class AutonomousSession:
             self.recorder = TactileRecorder(task, self.controller, root, config['tactile_history'])
             self.recorder.sample()
             self.controller.after_step = self.recorder.sample
+        if config.get('replay_diagnostics'):
+            self.record_replay_diagnostics()
+            def after_step():
+                if self.recorder:
+                    self.recorder.sample()
+                self.record_replay_diagnostics()
+            self.controller.after_step = after_step
         self.terminal_saved = False
+
+    def record_replay_diagnostics(self):
+        # Read-only host evidence; never feeds target resolution or IK.
+        prism = self.task.prism.get_pose()
+        relative = prism.rebase(self.task._robot_manager.get_gripper_center_pose())
+        append_row(self.root/'replay_host_contact.jsonl', {
+            'counts': self.controller.counts(), 'robot': self.controller.state(),
+            'prism_pose_native': safe_diagnostic_value(prism.tolist()),
+            'prism_in_gripper_native': safe_diagnostic_value(relative.tolist()),
+            'inhand_z_change_m': float(abs(self.task.origin_inhand_pose[2] - relative[2])),
+            'native_terminal': self.controller.terminal()})
 
     def termination(self):
         return self.controller.terminal() or ("move_request_limit" if self.move_requests >= self.config['max_move_requests'] else None) or ("tool_call_limit" if self.tool_count >= self.config['max_tool_calls'] else None)
@@ -167,7 +185,7 @@ class AutonomousSession:
             elif tool == 'finish_episode':
                 result = self.controller.check()
                 self.finished = True
-                self.finish_reason = 'agent_finish'
+                self.finish_reason = ('fixed_replay_' + str(args.get('reason', 'finish'))) if self.config.get('replay_diagnostics') else 'agent_finish'
                 result['finished'] = True
             result['terminal'] = self.termination()
             image_descriptors = result.get('observation',{}).get('images',[])

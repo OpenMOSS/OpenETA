@@ -91,7 +91,8 @@ def test_control_path_uses_native_steps_without_expert():
     assert values['force'] is False and values['action_type']=='qpos'
 
 
-def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("paced", [False, True])
+def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced):
     import sys
 
     class Array(np.ndarray):
@@ -120,7 +121,7 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
     robot.get_gripper_qpos_all = lambda: array([0,0])
     robot.set_gripper = lambda *a, **k: None
     task=SimpleNamespace(_robot_manager=robot,step_count=20,_physics_step_count=20,take_action_cnt=0,
-        cfg=SimpleNamespace(step_lim=2,sim=SimpleNamespace(dt=1/120)),eval_success=False,device='cpu',
+        cfg=SimpleNamespace(step_lim=2,sim=SimpleNamespace(dt=1/120),decimation=2),eval_success=False,device='cpu',
         check_success=lambda:False,check_early_stop=lambda:False)
     calls=[]
     def take_action(action,**kwargs):
@@ -135,6 +136,8 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
         'orientation_tolerance_rad':.052,'max_joint_delta_rad':.025},tmp_path)
     def tcp():
         m=np.eye(4);m[:3,3]=data.joint_pos[0,:3];return m
+    if paced:
+        c.config['motion_pacing'] = {'linear_speed_m_s':.04, 'angular_speed_rad_s':.4}
     c.tcp=tcp
     c.state=lambda:{'xyz_m':tcp()[:3,3].tolist()}
     target=np.eye(4);target[0,3]=.5
@@ -143,6 +146,12 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch):
     assert c.control_steps==task.take_action_cnt==2
     assert c.counts()['physics_steps']==4
     assert result['error']=='native_step_limit' and not result['reached']
+    # Original retains the R1.5 first IK correction; candidate reaches its
+    # intermediate reference without falsely claiming final arrival.
+    import json
+    first = json.loads((tmp_path/'control_steps.jsonl').read_text().splitlines()[0])
+    expected = (.04/60)/1.0025 if paced else .025
+    assert first['qpos_target'][0] == pytest.approx(expected)
 
 
 def test_camera_pose_refreshed_without_physics(tmp_path, monkeypatch):

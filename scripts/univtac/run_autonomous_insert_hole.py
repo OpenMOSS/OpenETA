@@ -77,6 +77,28 @@ def debug_controls(gateway, root):
     return rows
 
 
+def replay_controls(gateway, root, commands):
+    """Replay already-resolved targets; no model or online relative accumulation."""
+    gateway.call('observe', {})
+    rows = []
+    reason = 'sequence_complete'
+    for command in commands:
+        result = gateway.call('move_to', command['request'])
+        execution = result.text.get('execution')
+        rows.append({'source_seq': command['source_seq'], 'request': command['request'],
+                     'ok': result.success, 'result': result.text})
+        write_json(root/'replay_results.json', {'origin': 'fixed_R1.5_targets', 'rows': rows})
+        if not result.success or execution is None:
+            raise RuntimeError(f'Replay interface failure: {result.text}')
+        if result.text.get('terminal'):
+            break
+        if not execution['arm_reached']:
+            reason = 'segment_unfinished'
+            break
+    gateway.call('finish_episode', {'reason': reason})
+    return rows
+
+
 def run_episode(args, config, seed, root):
     root.mkdir(parents=True, exist_ok=False)
     episode = {'round':config['round'],'task':'insert_hole','seed':seed,'scored':args.mode=='batch',
@@ -99,6 +121,8 @@ def run_episode(args, config, seed, root):
             write_json(root/'episode.json',episode)
             if args.mode == 'debug':
                 debug_controls(LiveBackendGateway(root=root,worker_url=url),root)
+            elif args.mode == 'replay':
+                replay_controls(LiveBackendGateway(root=root,worker_url=url),root,args.replay_commands)
             else:
                 auth = Path.home()/'.codex/auth.json'
                 if not auth.is_file():

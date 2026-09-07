@@ -1,0 +1,71 @@
+"""Run the fixed nine-cell pilot through the existing autonomous live runner."""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import subprocess
+from pathlib import Path
+
+import yaml
+
+from scripts.univtac.run_autonomous_insert_hole import REPO, operator_prompt, run_episode
+from sim.envs.univtac.trace import write_json
+
+CONDITIONS = ('no_demo', 'visual_action_icl', 'tactile_action_icl')
+ORDER = [(1000003, c) for c in CONDITIONS] + [
+    (1000004, c) for c in CONDITIONS[1:] + CONDITIONS[:1]
+] + [(1000005, c) for c in CONDITIONS[2:] + CONDITIONS[:2]]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/official_tactile_icl.yaml')
+    parser.add_argument('--output-root', type=Path, required=True)
+    parser.add_argument('--demonstrations', type=Path, required=True)
+    parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
+    parser.add_argument('--source-root', type=Path, default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
+    args = parser.parse_args()
+    root = args.output_root.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    base = yaml.safe_load(args.config.read_text())
+    base['demonstration_package'] = str(args.demonstrations.resolve())
+    args.mode = 'batch'
+    source = subprocess.check_output(['git', '-C', str(args.source_root), 'rev-parse', 'HEAD'], text=True).strip()
+    if source != '371fac67917307026be8f00869fcc1b61c623a9f':
+        raise ValueError('pinned Isaac51 source mismatch')
+    if base.get('motion_pacing') or base['seeds'] != [1000003,1000004,1000005]:
+        raise ValueError('original controller and fixed query seeds required')
+    configs = {}
+    for condition in CONDITIONS:
+        config = copy.deepcopy(base)
+        config['condition'] = condition
+        path = root/f'{condition}.yaml'
+        path.write_text(yaml.safe_dump(config, sort_keys=False))
+        configs[condition] = (config, path)
+    manifest = {'round':'R1.7', 'status':'running', 'order':ORDER, 'source_head':source,
+                'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
+                'config':base, 'prompt':operator_prompt(base), 'controller':'original'}
+    write_json(root/'run_manifest.json', manifest)
+    (root/'git_status.txt').write_text(subprocess.check_output(['git','status','--short'],cwd=REPO,text=True))
+    (root/'git_diff.patch').write_text(subprocess.check_output(['git','diff'],cwd=REPO,text=True))
+    episodes = []
+    for seed, condition in ORDER:
+        config, args.config = configs[condition]
+        print(json.dumps({'starting':seed, 'condition':condition}), flush=True)
+        episode = run_episode(args,config,seed,root/f'seed_{seed}'/condition)
+        episode['condition'] = condition
+        write_json(root/f'seed_{seed}'/condition/'episode.json',episode)
+        episodes.append(episode)
+        write_json(root/'summary.json', {'episodes':episodes, 'planned':9})
+        print(json.dumps(episode), flush=True)
+        if episode.get('infrastructure_error'):
+            manifest['status'] = 'infrastructure_issue'
+            break
+    else:
+        manifest['status'] = 'completed'
+    write_json(root/'run_manifest.json',manifest)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,6 +1,7 @@
 """Live observation/command session; all task truth stays behind evaluation."""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ class AutonomousSession:
         self.tool_count = self.move_requests = self.observation_index = 0
         self.finished = False
         self.finish_reason = self.infrastructure_error = None
+        self.demonstrations_reviewed = False
         self.latest = None
         self.frames = []
         self.feedback = None
@@ -127,9 +129,19 @@ class AutonomousSession:
         before = self.latest
         result = {}
         try:
-            if tool not in TOOLS:
+            allowed = (*TOOLS, 'review_demonstrations') if self.config.get('demonstrations') else TOOLS
+            if tool not in allowed:
                 raise ValueError('unsupported tool')
-            if tool == 'observe':
+            if self.config.get('demonstrations') and not self.demonstrations_reviewed and tool != 'review_demonstrations':
+                raise ValueError('call review_demonstrations first')
+            if tool == 'review_demonstrations':
+                if self.demonstrations_reviewed:
+                    result = {'demonstrations': 'already delivered; refer to previous tool result', 'demonstration_images': []}
+                else:
+                    projection = json.loads((self.root/'demonstrations/projection.json').read_text())
+                    result = {'demonstrations': projection['text'], 'demonstration_images': projection['images']}
+                    self.demonstrations_reviewed = True
+            elif tool == 'observe':
                 result = {'observation':self.capture()}
             elif self.latest is None:
                 raise ValueError('call observe first')
@@ -188,11 +200,13 @@ class AutonomousSession:
                 self.finish_reason = ('fixed_replay_' + str(args.get('reason', 'finish'))) if self.config.get('replay_diagnostics') else 'agent_finish'
                 result['finished'] = True
             result['terminal'] = self.termination()
-            image_descriptors = result.get('observation',{}).get('images',[])
+            image_descriptors = result.pop('demonstration_images', result.get('observation',{}).get('images',[]))
+            if tool == 'review_demonstrations':
+                result['image_labels'] = [x['label'] for x in image_descriptors]
             payload = {'ok':True,'text':result,'images':image_descriptors}
         except ValueError as exc:
             result = {'error':str(exc),'recoverable':not bool(self.termination()),'terminal':self.termination()}
-            if tool=='move_to' and not args.get('preview',False):
+            if tool=='move_to' and not args.get('preview',False) and (not self.config.get('demonstrations') or self.demonstrations_reviewed):
                 self.previews.clear()
                 self.feedback = {'error':str(exc),'reached':False,'physical_motion':False}
                 result['observation'] = self.capture()

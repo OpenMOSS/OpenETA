@@ -1,0 +1,34 @@
+round: R1.7
+task: insert_hole
+seeds: [1000003, 1000004, 1000005]
+task_config: demo
+mode: eval
+device: cuda:0
+model: gpt-5.6-terra
+reasoning_effort: medium
+max_move_requests: 30
+max_tool_calls: 100
+codex_timeout_seconds: 3600
+startup_timeout_seconds: 900
+shutdown_timeout_seconds: 300
+max_control_steps_per_move: 80
+max_joint_delta_rad: 0.025
+position_tolerance_m: 0.003
+orientation_tolerance_rad: 0.05235987756
+gripper_settle_window_seconds: 0.10
+gripper_settle_tolerance_m: 0.0002
+gripper_target_tolerance_m: 0.001
+max_gripper_wait_steps: 40
+terminal_grace_seconds: 300
+tactile_history:
+  tracking_width: 160
+  roi_fraction: [0.08, 0.08, 0.92, 0.92]
+  patch_radius: 6
+  search_radius: 4
+  minimum_patch_std: 8.0
+  maximum_patch_mse: 900.0
+  minimum_match_margin: 1.0
+  minimum_tracking_quality: 0.35
+  motion_threshold_px: 2.0
+  difference_threshold: 0.015
+demonstrations: true

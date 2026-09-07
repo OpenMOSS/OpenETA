@@ -30,22 +30,37 @@ from sim.envs.univtac.trace import write_json
 from tools.embodied_gateway import LiveBackendGateway
 
 
+def operator_prompt(config):
+    if not config.get('demonstrations'):
+        return PROMPT
+    return PROMPT.replace('Start by calling observe.',
+        'Start by calling review_demonstrations once, then observe the current episode.').replace(
+        'No operation demonstrations are provided.',
+        'The demonstration tool may provide historical expert experience or no examples. '
+        'Use any examples as references for reasoning about the current observations, '
+        'not as absolute-coordinate scripts. Recorded measured movement is not necessarily '
+        'a recorded tool command. Historical success does not guarantee current success.')
+
+
 def codex_command(root: Path, url: str, config: dict) -> list[str]:
     mcp_args = [f'PYTHONPATH={REPO}',str(REPO/'.venv/bin/python'),'-m','tools.embodied_mcp_server',
                 '--root',str(root),'--live-worker-url',url]
+    if config.get('demonstrations'):
+        mcp_args.append('--demonstrations')
+    enabled_tools = list(TOOLS) + (['review_demonstrations'] if config.get('demonstrations') else [])
     options = ['features.memories=false','memories.use_memories=false','memories.generate_memories=false',
                'features.enable_request_compression=false','history.persistence="none"',
                'features.shell_tool=false','features.view_image=false','features.multi_agent=false','features.image_generation=false',
                f'model_reasoning_effort="{config["reasoning_effort"]}"',
                'mcp_servers.univtac.command="env"',f'mcp_servers.univtac.args={json.dumps(mcp_args)}',
-               'mcp_servers.univtac.required=true',f'mcp_servers.univtac.enabled_tools={json.dumps(list(TOOLS))}',
+               'mcp_servers.univtac.required=true',f'mcp_servers.univtac.enabled_tools={json.dumps(enabled_tools)}',
                'mcp_servers.univtac.default_tools_approval_mode="approve"','mcp_servers.univtac.tool_timeout_sec=600']
     command = [shutil.which('codex') or 'codex','-m',config['model'],'exec','-C',str(root/'operator-workspace'),
                '-s','read-only','--ephemeral','--ignore-user-config','--ignore-rules','--skip-git-repo-check',
                '--json','--output-last-message',str(root/'agent_final.md')]
     for option in options:
         command += ['-c',option]
-    return command + [PROMPT]
+    return command + [operator_prompt(config)]
 
 
 def debug_controls(gateway, root):
@@ -101,6 +116,16 @@ def replay_controls(gateway, root, commands):
 
 def run_episode(args, config, seed, root):
     root.mkdir(parents=True, exist_ok=False)
+    if config.get('demonstrations'):
+        package = Path(config['demonstration_package'])
+        projection = json.loads((package/f"{config['condition']}.json").read_text())
+        for image in projection['images']:
+            source = package/image['path']
+            destination = root/'demonstrations'/image['path']
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            image['path'] = str(destination.relative_to(root))
+        write_json(root/'demonstrations/projection.json', projection)
     episode = {'round':config['round'],'task':'insert_hole','seed':seed,'scored':args.mode=='batch',
                'model':config['model'] if args.mode=='batch' else None,'status':'starting','codex_process_count':0}
     write_json(root/'episode.json',episode)
@@ -133,7 +158,7 @@ def run_episode(args, config, seed, root):
                 (codex_home/'auth.json').symlink_to(auth)
                 cmd = codex_command(root,url,config)
                 write_json(root/'codex_command.json',{'command':cmd})
-                (root/'prompt.txt').write_text(PROMPT)
+                (root/'prompt.txt').write_text(operator_prompt(config))
                 episode['codex_process_count'] = 1
                 write_json(root/'episode.json',episode)
                 life = _run_to_files(cmd,cwd=workspace,environment={**os.environ,'CODEX_HOME':str(codex_home)},

@@ -67,13 +67,14 @@ with autonomous development success 0/3.
 Demonstrations must come from actual successful execution of the current
 UniVTAC-Isaac51 native expert. Human operations, Agent successes and fixed-target
 diagnostic replays do not substitute for this expert bank. Preserve the actual
-native API, parameters, units, coordinate frame and timing; do not rename native
-actions as OpenETA calls:
+commands when recorded, units, coordinate frame and timing. If only robot states
+are available, describe measured expert motion; do not invent original commands
+or execution feedback, and do not rename native actions as OpenETA calls:
 
 ```text
 task goal + pre-action vision / bilateral tactile short history / proprioception
-    -> actual native expert action and parameters
-    -> actual execution feedback
+    -> recorded expert action, or explicitly labelled measured expert motion
+    -> recorded execution feedback (or explicitly unavailable)
     -> post-action vision / touch / proprioception
     -> subsequent operations and final native outcome
 ```
@@ -89,8 +90,12 @@ State action units and coordinate frames explicitly, preserving the actual call
 and its scene context. New targets must be grounded in the current observation;
 examples must not encourage copying world coordinates from a different scene.
 
-Use Insert Hole support seeds `1000000` and `1000001`, separate from the
-control/query development seeds `1000003`–`1000005`. The offline expert may use
+R1.7 uses official published `isaac51/insert_hole` episodes 0 and 1, selected
+in numeric ID order. Metadata records success and seeds/source seeds 0 and 1,
+separate from query development seeds `1000003`–`1000005`. A task-specific
+train/test split and the data-producing commit are not recorded in the inspected
+release metadata. R1.6 local support data remain historical evidence and are not
+mixed into this package. The offline expert may use
 its native ground-truth algorithm. Agent-visible examples contain historical
 observations, actual actions, feedback and success outcomes, without executable
 truth-based correction formulas, hidden-pose queries or future query answers.
@@ -556,14 +561,22 @@ capture-only record must not be relabelled as a completed transfer experiment.
    The [configuration](../../configs/univtac/autonomous_insert_hole.yaml) keeps
    Terra medium, 30 non-preview move requests, 100 tool calls, and 3600 Codex
    seconds per episode alongside the native control budget.
-2. Use the native expert success bank curated in R1.6. Two R1.2 collect-mode
-   trajectories provide three aligned before/after action transitions each;
-   these are sparse boundary examples, not dense tactile histories or official
-   HDF5 collections. No human/Agent success prerequisite or new expert run was
-   needed. Preserve native control provenance when expressing historical actions.
-3. The A/B/C comparison remains unrun. All future conditions must share the same
-   current observation and controller version. R1.6 fixed-target controller
-   comparisons are named original/paced_candidate, not A/B/C.
+2. R1.7 has prepared official HDF5 episodes 0/1 with 189/166 frames and three
+   movement/delay segments each. B receives 12 before/after vision strips;
+   C receives identical non-tactile content and vision strips plus 12 bilateral
+   tactile-history strips. Common boundaries and visual times use movement
+   metadata, independently of touch. Measured EE is base-relative panda_hand
+   xyz + wxyz, not current world TCP; nominal seconds use recorded step/120,
+   with no embedded per-frame clock. Published documentation revision is not
+   evidence of the data-producing commit or an upgrade to our pinned runtime.
+3. Nine fresh autonomous episodes are planned for the three query seeds × A/B/C,
+   using the original controller and identical current-observation mechanisms.
+   The optional review_demonstrations MCP entry and fixed projections are
+   implemented; real Codex delivery and task outcomes await the batch.
+   Reproduce with `uv run --no-sync python -m scripts.univtac.run_official_tactile_icl
+   --demonstrations outputs/univtac-isaac51-r17/demonstrations
+   --output-root outputs/univtac-isaac51-r17/batch` and the
+   [R1.7 configuration](../../configs/univtac/official_tactile_icl.yaml).
 4. Use actual failures to improve tactile representation and experience
    organization, then extend task coverage.
 

@@ -24,6 +24,13 @@ RULE_ORDER = [(1000003, c) for c in ('UA', 'RA', 'UB', 'RB', 'UC', 'RC')] + [
 ] + [(1000005, c) for c in ('UC', 'RC', 'UA', 'RA', 'UB', 'RB')]
 
 
+def experiment_plan(base):
+    if base.get('episode_order'):
+        order = [tuple(row) for row in base['episode_order']]
+        return tuple(sorted({c for _,c in order})), order
+    return (RULE_CONDITIONS, RULE_ORDER) if base.get('task_rule_ablation') else (CONDITIONS, ORDER)
+
+
 def condition_config(base, condition):
     config = copy.deepcopy(base)
     config['condition'] = condition
@@ -38,7 +45,7 @@ def condition_config(base, condition):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/task_rule_tactile_icl.yaml')
+    parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/new_seed_tactile_icl.yaml')
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--demonstrations', type=Path, required=True)
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
@@ -52,10 +59,9 @@ def main():
     source = subprocess.check_output(['git', '-C', str(args.source_root), 'rev-parse', 'HEAD'], text=True).strip()
     if source != '371fac67917307026be8f00869fcc1b61c623a9f':
         raise ValueError('pinned Isaac51 source mismatch')
-    if base.get('motion_pacing') or base['seeds'] != [1000003,1000004,1000005]:
-        raise ValueError('original controller and fixed query seeds required')
-    conditions = RULE_CONDITIONS if base.get('task_rule_ablation') else CONDITIONS
-    order = RULE_ORDER if base.get('task_rule_ablation') else ORDER
+    if base.get('motion_pacing'):
+        raise ValueError('original controller required')
+    conditions, order = experiment_plan(base)
     configs = {}
     for condition in conditions:
         config = condition_config(base, condition)

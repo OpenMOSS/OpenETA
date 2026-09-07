@@ -9,13 +9,13 @@ from sim.envs.univtac.codex_readonly import read_jsonl
 
 def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    pattern = {'R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
+    pattern = {'R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
         if manifest.get('round') != round_name:
             continue
         episodes = []
-        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8') else 'seed_*/episode.json')):
+        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9') else 'seed_*/episode.json')):
             root = path.parent
             def read(name, root=root):
                 candidate = root/name
@@ -35,8 +35,10 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         note_path=manifest_path.parent/'validation_note.json'
         note=json.loads(note_path.read_text()) if note_path.exists() else None
         batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
-    if round_name in ('R1.7', 'R1.8'):
+    if round_name in ('R1.7', 'R1.8', 'R1.9'):
         conditions = ('UA','UB','UC','RA','RB','RC') if round_name == 'R1.8' else ('no_demo','visual_action_icl','tactile_action_icl')
+        if round_name == 'R1.9':
+            conditions = ('RA','RB','RC')
         batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
                     'episodes':[e for e in b['episodes'] if e['run'].endswith('/'+c)]}
                    for b in batches for c in conditions]
@@ -130,3 +132,27 @@ R18_HTML = R17_HTML.replace('R1.7', 'R1.8').replace('r17-', 'r18-').replace(
 R18_HTML = R18_HTML.replace('三组当前观测相同', '六条件当前观测相同').replace(
     "esc(state.condition)", "esc(state.condition??e.run.split('/').at(-1))").replace(
     "wins(c)+'/3；可评价 '", "(valid(c)===3?wins(c)+'/3':wins(c)+' 成功（计划3，未完成）')+'；可评价 '")
+
+R19_SUMMARY = r'''
+function newSeedTable(d){
+const names={RA:'RA 无示范',RB:'RB 视觉—运动示范',RC:'RC 增加历史触觉'};
+const groups=Object.fromEntries(d.batches.map(b=>[b.name.split(' / ').at(-1),b.episodes]));
+const valid=c=>(groups[c]||[]).filter(e=>e.episode.evaluable).length;
+const wins=c=>(groups[c]||[]).filter(e=>e.episode.evaluable&&e.episode.task_success).length;
+let t='<section><h2>R1.9：十二个新 seed，冻结 R 输入设置</h2><p>三个条件共用 GPT-6 / low、官方说明＋公开规则、original 控制器与当前触觉历史。不是官方 test split；R1.8 不并入此表。主比较 RC−RB。</p><table style="width:100%;text-align:left"><tr><th>条件</th><th>成功/计划</th><th>可评价</th><th>原生失败</th><th>基础设施异常</th></tr>';
+for(const c of ['RA','RB','RC'])t+='<tr><td>'+names[c]+'</td><td>'+wins(c)+'/12'+(valid(c)<12?'（尚未全部可评价）':'')+'</td><td>'+valid(c)+'/12</td><td>'+((groups[c]||[]).filter(e=>e.episode.evaluable&&!e.episode.task_success).length)+'</td><td>'+((groups[c]||[]).filter(e=>e.episode.infrastructure_error).length)+'</td></tr>';
+t+='</table>';
+for(const [a,b] of [['RC','RB'],['RC','RA'],['RB','RA']])t+='<p>'+a+'−'+b+'：'+(valid(a)===12&&valid(b)===12?((wins(a)-wins(b))*100/12).toFixed(1)+' pp':'待完成／存在不可评价项')+'</p>';
+for(const c of ['RB','RA']){let counts=[0,0,0,0,0];const index=new Map((groups[c]||[]).map(e=>[e.episode.seed,e.episode]));for(let seed=1000006;seed<=1000017;seed++){const a=(groups.RC||[]).find(e=>e.episode.seed===seed)?.episode,b=index.get(seed);counts[!a?.evaluable||!b?.evaluable?4:a.task_success?(b.task_success?2:0):(b.task_success?1:3)]++;}t+='<p>RC 对 '+c+'：仅 RC 成功 / 仅对照成功 / 都成功 / 都失败 / 未完成或不可评价 = '+counts.join(' / ')+'</p>';}
+const prompts=d.batches[0]?.manifest?.prompts??{};if(prompts.RA)t+='<details><summary>三组共同的完整冻结 prompt</summary><pre>'+esc(prompts.RA)+'</pre></details>';
+return t+'<p>逐 seed 成本与真实 usage 在下方。cached 是 input 子集，reasoning 是 output 子集，不重复求和。较早失败不算效率提高。</p></section>';
+}
+'''
+R19_HTML = R17_HTML.replace(R17_SUMMARY, R19_SUMMARY).replace(
+    'primaryTable(d)', 'newSeedTable(d)').replace('R1.7', 'R1.9').replace('r17-', 'r19-').replace(
+    '九条视频', '三十六条视频').replace(
+    '<main id="content">', '<p><a href="/r19-pairs">同 seed 的 RB/RC 并排慢放 →</a></p><main id="content">').replace(
+    'valid.length===3','valid.length===12').replace("wins.length+'/3'", "wins.length+'/12'").replace(
+    "valid.length+'/3；成功 '", "valid.length+'/12；成功 '").replace(
+    "review(e)+'<h3>Agent Saw", "'<details><summary>实际冻结初始 prompt 全文</summary><pre>'+esc(e.prompt??'尚未启动')+'</pre></details>'+review(e)+'<h3>Agent Saw").replace(
+    "esc(state.seed)+' · '+esc(state.status)", "esc(state.seed)+' · '+esc(state.condition??e.run.split('/').at(-1))+' · '+esc(state.model)+' / '+esc(state.reasoning_effort)+' · '+esc(state.status)")

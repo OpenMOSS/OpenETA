@@ -15,7 +15,7 @@ with reasoning effort `low`, unless the user changes this decision. Pass both
 explicitly to Codex (`-m gpt-6-astra -c model_reasoning_effort="low"`); never
 rely on global defaults or substitute another model. Keep historical run/model
 labels intact. The current official-demonstration runner defaults to
-`configs/univtac/task_rule_tactile_icl.yaml`; older configs are historical.
+`configs/univtac/new_seed_tactile_icl.yaml`; older configs are historical.
 This project rule does not authorize changing global Codex configuration.
 
 ## Neat after each experimental step

@@ -805,3 +805,47 @@ Validation: 51 focused tests, scoped Ruff, compileall and diff checks passed.
 No simulator/model capability pretest or extra physical attempt was added.
 The next experimental step is pending Pro review of these results; no extra
 seeds, prompt changes or model comparison are authorized by this result alone.
+
+
+## R1.9: frozen method on twelve new query seeds
+
+Pro accepted R1.8 as a positive development signal for historical touch, while
+recognizing that extra public rules did not improve success. R1.9 is the next
+planned round, not a completed result: keep the preselected R input and run
+RA/RB/RC once on each seed 1000006–1000017, for 36 fresh episodes. The main
+comparison is RC−RB; RC−RA and RB−RA are secondary. R1.8 stays separate.
+
+The scoped search of this checkout's 505 episode/manifest/summary JSON files
+and documentation found no execution records for these seeds; only the R1.9
+plan named them. Other historical worktrees and remotes were not searched.
+This is project new-seed validation, not an official published test split.
+No expert screening, model pretest or controller debug is part of this round.
+
+[The fixed R1.9 config](../../configs/univtac/new_seed_tactile_icl.yaml) records
+all 36 cells before launch, with six condition permutations repeated twice.
+Generated prompts were compared directly with R1.8's saved R prompt; all three
+are identical. Demonstration text/image references were also compared with
+R1.8's actual delivered projections. The same R1.7 source package and unchanged
+delivery transformation reproduce those projections; no data is reselected or
+resegmented. Model, current observation/history, tools, original controller,
+physical parameters and every budget remain unchanged.
+
+```bash
+uv run --no-sync python scripts/univtac/run_official_tactile_icl.py \
+  --config configs/univtac/new_seed_tactile_icl.yaml \
+  --demonstrations outputs/univtac-isaac51-r17/demonstrations \
+  --output-root outputs/univtac-isaac51-r19/batch
+```
+
+Report successes/12, planned/evaluable/native failures/infrastructure issues,
+all per-seed outcomes and costs, plus RC/RB and RC/RA paired outcome counts.
+Unrun or unavailable cells remain separate; no replacement seeds or favorable
+retries. A replication signal requires the new results to support it, without
+an invented acceptance threshold.
+
+The existing dashboard adds `/r19-autonomous`, `/r19-videos`,
+`/r19-demonstrations` and `/r19-pairs`. RB/RC paired videos reuse the recorded-frame
+alignment approach: common simulation time and playback rate, with the shorter
+side explicitly holding its final frame. Commands may differ because the Agent
+chooses them. These views are pending real-run/browser validation until the
+batch is complete. They do not launch or advance physics.

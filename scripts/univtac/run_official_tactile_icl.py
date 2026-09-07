@@ -1,4 +1,4 @@
-"""Run the fixed nine-cell pilot through the existing autonomous live runner."""
+"""Run the fixed official-demonstration pilot through the existing autonomous live runner."""
 from __future__ import annotations
 
 import argparse
@@ -18,9 +18,27 @@ ORDER = [(1000003, c) for c in CONDITIONS] + [
 ] + [(1000005, c) for c in CONDITIONS[2:] + CONDITIONS[:2]]
 
 
+RULE_CONDITIONS = ('UA', 'UB', 'UC', 'RA', 'RB', 'RC')
+RULE_ORDER = [(1000003, c) for c in ('UA', 'RA', 'UB', 'RB', 'UC', 'RC')] + [
+    (1000004, c) for c in ('RB', 'UB', 'RC', 'UC', 'RA', 'UA')
+] + [(1000005, c) for c in ('UC', 'RC', 'UA', 'RA', 'UB', 'RB')]
+
+
+def condition_config(base, condition):
+    config = copy.deepcopy(base)
+    config['condition'] = condition
+    if base.get('task_rule_ablation'):
+        config['task_information'] = condition[0]
+        config['demonstration_condition'] = CONDITIONS['ABC'.index(condition[1])]
+        # U workers do not need the R-only text, even in their host configuration.
+        if condition[0] == 'U':
+            config.pop('public_task_rules')
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/official_tactile_icl.yaml')
+    parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/task_rule_tactile_icl.yaml')
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--demonstrations', type=Path, required=True)
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
@@ -36,28 +54,32 @@ def main():
         raise ValueError('pinned Isaac51 source mismatch')
     if base.get('motion_pacing') or base['seeds'] != [1000003,1000004,1000005]:
         raise ValueError('original controller and fixed query seeds required')
+    conditions = RULE_CONDITIONS if base.get('task_rule_ablation') else CONDITIONS
+    order = RULE_ORDER if base.get('task_rule_ablation') else ORDER
     configs = {}
-    for condition in CONDITIONS:
-        config = copy.deepcopy(base)
-        config['condition'] = condition
+    for condition in conditions:
+        config = condition_config(base, condition)
         path = root/f'{condition}.yaml'
         path.write_text(yaml.safe_dump(config, sort_keys=False))
         configs[condition] = (config, path)
-    manifest = {'round':'R1.7', 'status':'running', 'order':ORDER, 'source_head':source,
+        (root/f'{condition}_prompt.txt').write_text(operator_prompt(config))
+    manifest = {'round':base['round'], 'status':'running', 'order':order, 'source_head':source,
                 'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
-                'config':base, 'prompt':operator_prompt(base), 'controller':'original'}
+                'config':base, 'prompts':{c:operator_prompt(v[0]) for c,v in configs.items()},
+                'codex_cli_version':subprocess.check_output(['codex','--version'],text=True).strip(),
+                'controller':'original'}
     write_json(root/'run_manifest.json', manifest)
     (root/'git_status.txt').write_text(subprocess.check_output(['git','status','--short'],cwd=REPO,text=True))
     (root/'git_diff.patch').write_text(subprocess.check_output(['git','diff'],cwd=REPO,text=True))
     episodes = []
-    for seed, condition in ORDER:
+    for seed, condition in order:
         config, args.config = configs[condition]
         print(json.dumps({'starting':seed, 'condition':condition}), flush=True)
         episode = run_episode(args,config,seed,root/f'seed_{seed}'/condition)
         episode['condition'] = condition
         write_json(root/f'seed_{seed}'/condition/'episode.json',episode)
         episodes.append(episode)
-        write_json(root/'summary.json', {'episodes':episodes, 'planned':9})
+        write_json(root/'summary.json', {'episodes':episodes, 'planned':len(order)})
         print(json.dumps(episode), flush=True)
         if episode.get('infrastructure_error'):
             manifest['status'] = 'infrastructure_issue'

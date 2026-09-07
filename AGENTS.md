@@ -8,11 +8,21 @@ When a paper is actually cited or adopted, update
 source/version, reading depth, and concrete effect on the design. Keep one
 record per contribution; no separate document per paper is required.
 
+## Current execution model
+
+New experiment operators and execution/review/neat subagents use `gpt-6-astra`
+with reasoning effort `low`, unless the user changes this decision. Pass both
+explicitly to Codex (`-m gpt-6-astra -c model_reasoning_effort="low"`); never
+rely on global defaults or substitute another model. Keep historical run/model
+labels intact. The current official-demonstration runner defaults to
+`configs/univtac/task_rule_tactile_icl.yaml`; older configs are historical.
+This project rule does not authorize changing global Codex configuration.
+
 ## Neat after each experimental step
 
 After every substantive experimental step, spawn one subagent that forks the
 current main conversation history and performs one scoped neat pass. Use GPT-6
-with low reasoning effort (`gpt-6-low`); inherit the full conversation, not just
+with low reasoning effort (`gpt-6-astra`, `reasoning_effort="low"`); inherit the full conversation, not just
 a handoff summary. This is an explicit exception to the ordinary scout rules
 requiring the default model, `fork_turns="none"`, and read-only exploration.
 

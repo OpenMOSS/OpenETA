@@ -31,15 +31,44 @@ from tools.embodied_gateway import LiveBackendGateway
 
 
 def operator_prompt(config):
-    if not config.get('demonstrations'):
-        return PROMPT
-    return PROMPT.replace('Start by calling observe.',
-        'Start by calling review_demonstrations once, then observe the current episode.').replace(
-        'No operation demonstrations are provided.',
-        'The demonstration tool may provide historical expert experience or no examples. '
-        'Use any examples as references for reasoning about the current observations, '
-        'not as absolute-coordinate scripts. Recorded measured movement is not necessarily '
-        'a recorded tool command. Historical success does not guarantee current success.')
+    prompt = PROMPT
+    if config.get('demonstrations'):
+        prompt = prompt.replace('Start by calling observe.',
+            'Start by calling review_demonstrations once, then observe the current episode.').replace(
+            'No operation demonstrations are provided.',
+            'The demonstration tool may provide historical expert experience or no examples. '
+            'Use any examples as references for reasoning about the current observations, '
+            'not as absolute-coordinate scripts. Recorded measured movement is not necessarily '
+            'a recorded tool command. Historical success does not guarantee current success.')
+    if config.get('task_instruction'):
+        prompt = prompt.replace('Insert the held object into the hole.', config['task_instruction'])
+    if config.get('task_rule_ablation'):
+        prompt += (
+            '\nShared episode budgets and termination semantics:\n'
+            f"At most {config['max_move_requests']} admitted non-preview move_to requests, "
+            f"{config['max_tool_calls']} MCP calls and {config['codex_timeout_seconds']} seconds "
+            'of total Codex wall time are available. Planning rejection of an admitted '
+            'motion request consumes its request budget.\n'
+            f"Native control is limited to 300 steps, with at most {config['max_control_steps_per_move']} "
+            'control steps per motion segment. Each control step advances two physics steps '
+            'at 120 Hz; physics pauses while you reason. A segment limit need not end the '
+            'episode: inspect the actual feedback. Native terminal or an episode budget '
+            'ends physical interaction. After native terminal, last-observation and completion '
+            f"tools remain available for up to {config['terminal_grace_seconds']} seconds, "
+            'within the total Codex wall-time limit. Finish naturally when done.\n'
+        )
+        if config.get('task_information') == 'R':
+            prompt += '\n' + config['public_task_rules'] + '\n'
+    return prompt
+
+
+def demonstration_projection(config):
+    package = Path(config['demonstration_package'])
+    condition = config.get('demonstration_condition', config['condition'])
+    projection = json.loads((package/f'{condition}.json').read_text())
+    if config.get('task_instruction') and 'task_goal' in projection['text']:
+        projection['text']['task_goal'] = config['task_instruction']
+    return projection
 
 
 def codex_command(root: Path, url: str, config: dict) -> list[str]:
@@ -118,7 +147,7 @@ def run_episode(args, config, seed, root):
     root.mkdir(parents=True, exist_ok=False)
     if config.get('demonstrations'):
         package = Path(config['demonstration_package'])
-        projection = json.loads((package/f"{config['condition']}.json").read_text())
+        projection = demonstration_projection(config)
         for image in projection['images']:
             source = package/image['path']
             destination = root/'demonstrations'/image['path']
@@ -127,7 +156,10 @@ def run_episode(args, config, seed, root):
             image['path'] = str(destination.relative_to(root))
         write_json(root/'demonstrations/projection.json', projection)
     episode = {'round':config['round'],'task':'insert_hole','seed':seed,'scored':args.mode=='batch',
-               'model':config['model'] if args.mode=='batch' else None,'status':'starting','codex_process_count':0}
+               'model':config['model'] if args.mode=='batch' else None,
+               'reasoning_effort':config['reasoning_effort'] if args.mode=='batch' else None,
+               'task_information':config.get('task_information'),
+               'demonstration_condition':config.get('demonstration_condition',config.get('condition')),'status':'starting','codex_process_count':0}
     write_json(root/'episode.json',episode)
     command = [str(REPO/'scripts/univtac/serve_autonomous_worker.py'),'--repo-root',str(REPO),
                '--source-root',str(args.source_root),'--output-root',str(root), '--config',str(args.config),
@@ -157,7 +189,10 @@ def run_episode(args, config, seed, root):
                 codex_home.mkdir(parents=True)
                 (codex_home/'auth.json').symlink_to(auth)
                 cmd = codex_command(root,url,config)
-                write_json(root/'codex_command.json',{'command':cmd})
+                cli_version = subprocess.check_output([cmd[0], '--version'], text=True).strip()
+                episode['codex_cli_version'] = cli_version
+                write_json(root/'codex_command.json',{'command':cmd, 'model':config['model'],
+                    'reasoning_effort':config['reasoning_effort'], 'cli_version':cli_version})
                 (root/'prompt.txt').write_text(operator_prompt(config))
                 episode['codex_process_count'] = 1
                 write_json(root/'episode.json',episode)

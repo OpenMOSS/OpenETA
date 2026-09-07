@@ -9,18 +9,19 @@ from sim.envs.univtac.codex_readonly import read_jsonl
 
 def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    pattern = {'R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
+    pattern = {'R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
         if manifest.get('round') != round_name:
             continue
         episodes = []
-        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name=='R1.7' else 'seed_*/episode.json')):
+        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8') else 'seed_*/episode.json')):
             root = path.parent
             def read(name, root=root):
                 candidate = root/name
                 return json.loads(candidate.read_text()) if candidate.exists() else None
             episodes.append({'run':str(root.relative_to(runs_root)), 'episode':read('episode.json'),
+                             'prompt':(root/'prompt.txt').read_text() if (root/'prompt.txt').exists() else None,
                              'context':read_jsonl(root/'operator_context.jsonl'),
                              'execution':read_jsonl(root/'tool_trace.jsonl'),
                              'debug':read('debug_controls.json'),
@@ -34,10 +35,11 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         note_path=manifest_path.parent/'validation_note.json'
         note=json.loads(note_path.read_text()) if note_path.exists() else None
         batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
-    if round_name == 'R1.7':
+    if round_name in ('R1.7', 'R1.8'):
+        conditions = ('UA','UB','UC','RA','RB','RC') if round_name == 'R1.8' else ('no_demo','visual_action_icl','tactile_action_icl')
         batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
                     'episodes':[e for e in b['episodes'] if e['run'].endswith('/'+c)]}
-                   for b in batches for c in ('no_demo','visual_action_icl','tactile_action_icl')]
+                   for b in batches for c in conditions]
     return {'batches':batches}
 
 
@@ -106,3 +108,20 @@ return table+'</section>';
 '''
 R17_HTML = R17_HTML.replace('async function render()', R17_SUMMARY+'\nasync function render()').replace(
     "document.querySelector('#content').innerHTML=d.batches.map", "document.querySelector('#content').innerHTML=primaryTable(d)+d.batches.map")
+
+
+R18_SUMMARY = r'''function ruleTable(d){
+const names={UA:'U 官方说明 · A 无示范',UB:'U 官方说明 · B 视觉示范',UC:'U 官方说明 · C 增加历史触觉',RA:'R 官方说明＋公开规则 · A 无示范',RB:'R 官方说明＋公开规则 · B 视觉示范',RC:'R 官方说明＋公开规则 · C 增加历史触觉'};
+const groups=Object.fromEntries(d.batches.map(b=>[b.name.split(' / ').at(-1),b.episodes]));
+const valid=c=>(groups[c]||[]).filter(e=>e.episode.evaluable).length;
+const wins=c=>(groups[c]||[]).filter(e=>e.episode.evaluable&&e.episode.task_success).length;
+let t='<section><h2>GPT-6 / low：公开规则 × 历史示范</h2><p>R 为事先选定的完整任务信息设置。所有当前观测与 original 控制器相同；每格三个开发 seed。历史 R1.7 使用另一模型，不能作本轮因果对照。</p><table style="width:100%;text-align:left"><tr><th>任务信息</th><th>A 无示范</th><th>B 视觉示范</th><th>C 增加历史触觉</th></tr>';
+for(const row of ['U','R']){t+='<tr><th>'+row+'</th>';for(const col of ['A','B','C']){const c=row+col;t+='<td>'+wins(c)+'/3；可评价 '+valid(c)+'/3；基础设施异常 '+(groups[c]||[]).filter(e=>e.episode.infrastructure_error).length+'</td>';}t+='</tr>';}
+t+='</table><h3>固定比较（百分点）</h3>';
+for(const [a,b,label] of [['RA','UA','规则'],['RB','UB','规则'],['RC','UC','规则'],['RB','RA','视觉示范'],['RC','RA','完整示范'],['RC','RB','R 下历史触觉'],['UC','UB','U 下历史触觉']])t+='<p>'+a+'−'+b+' '+label+'：'+(valid(a)===3&&valid(b)===3?((wins(a)-wins(b))*100/3).toFixed(1)+' pp':'待完成／存在不可评价项')+'</p>';
+t+='<p>cached input 为 input 子集，不重复求和。较早失败的短耗时不算效率提高。各格成本、原始回答与失败原因见下方。</p><h3>六条件导航</h3>'+Object.entries(names).map(([c,n])=>'<p>'+c+'：'+n+'</p>').join('');return t+'</section>';}
+'''
+R18_HTML = R17_HTML.replace('R1.7', 'R1.8').replace('r17-', 'r18-').replace(
+    '九条视频', '十八条视频').replace(R17_SUMMARY, R18_SUMMARY).replace('primaryTable(d)', 'ruleTable(d)').replace(
+    "review(e)+'<h3>Agent Saw", "'<details><summary>实际初始 prompt：官方任务说明、共同工具说明与本条件规则全文</summary><pre>'+esc(e.prompt??'尚未启动')+'</pre></details>'+review(e)+'<h3>Agent Saw").replace(
+    "esc(state.seed)+' · '+esc(state.status)", "esc(state.seed)+' · '+esc(state.condition)+' · '+esc(state.model)+' / '+esc(state.reasoning_effort)+' · '+esc(state.status)")

@@ -71,7 +71,7 @@ class AutonomousSession:
         obs = self.task._get_observations()
         snap = capture_snapshot(obs, output_root=self.root, seed_dir=folder, task_name='insert_hole', seed=self.seed,
             phase='pre_action', action_id=f'obs_{self.observation_index}', simulator_step=int(self.task.step_count),
-            take_action_count=int(self.task.take_action_cnt), task_instruction='Insert the held object into the hole.',
+            take_action_count=int(self.task.take_action_cnt), task_instruction=self.config.get('task_instruction', 'Insert the held object into the hole.'),
             task_metadata={}, native_check_success=None, save_host_only=True,
             strict_two_tactile_sensors=True, fail_on_missing_rgb_marker=True)
         write_json(folder/'snapshot.json',snap.snapshot.to_dict())
@@ -112,7 +112,7 @@ class AutonomousSession:
                 availability[name] = {'available':False,'reason':str(exc)}
         self.frames = frames
         write_json(folder/'geometry.json',{'frames':frames,'availability':availability})
-        self.latest = {'observation_id':f'obs_{self.observation_index}', 'task_instruction':'Insert the held object into the hole.',
+        self.latest = {'observation_id':f'obs_{self.observation_index}', 'task_instruction':self.config.get('task_instruction', 'Insert the held object into the hole.'),
                        'robot':self.controller.state(), 'counts':self.controller.counts(),
                        'remaining_budget':{'move_to':max(0,self.config['max_move_requests']-self.move_requests),
                         'tools':max(0,self.config['max_tool_calls']-self.tool_count),

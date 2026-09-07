@@ -8,6 +8,7 @@ from itertools import pairwise
 from pathlib import Path
 from urllib.parse import urlencode
 
+import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 from sim.envs.univtac.codex_readonly import read_jsonl
@@ -17,6 +18,16 @@ from sim.envs.univtac.trace import write_json
 FONT = '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'
 NAMES = {'no_demo':'A 无示范', 'visual_action_icl':'B 视觉—运动示范', 'tactile_action_icl':'C 视觉＋触觉—运动示范'}
 PAGE = '<!doctype html><meta charset="utf-8"><style>body{font:18px system-ui;max-width:1250px;margin:30px auto;background:#f4f6f8}section{background:white;padding:20px;margin:20px 0}img,video{max-width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#145e9d}</style><a href="/r17-autonomous">← R1.7 实际输入与操作回放</a>'
+
+RULE_NAMES = {r+c: f"{r} {'官方说明＋公开规则' if r=='R' else '官方说明'} · {NAMES[d]}"
+              for r in 'UR' for c,d in zip('ABC', NAMES)}
+
+
+def round_names(root):
+    manifest = root/'batch/run_manifest.json'
+    if manifest.exists() and json.loads(manifest.read_text()).get('round') == 'R1.8':
+        return RULE_NAMES
+    return NAMES
 
 
 def link(run, path):
@@ -45,11 +56,12 @@ def describe_request(row):
     return f"{row['action_id']}：{move}；{grip}"
 
 
-def demos(root):
-    package = root/'demonstrations'
-    write_json(package/'run_manifest.json',{'round':'R1.7 historical expert','source':'official data; not autonomous query'})
-    page = PAGE+'<h1>历史 expert 示范：B/C 实际输入</h1><p>官方 Isaac51 Insert Hole episode 0/1，metadata 均为 success。视频是历史采集，不计入自主成功率。步号来自 HDF5，时间按公开 collect 配置名义 120 Hz 换算；原始命令未记录，示范使用实测运动。</p>'
-    run = Path('univtac-isaac51-r17/demonstrations')
+def demos(root, package=None, task_instruction=None):
+    package = package or root/'demonstrations'
+    if not (package/'run_manifest.json').exists():
+        write_json(package/'run_manifest.json',{'round':'R1.7 historical expert','source':'official data; not autonomous query'})
+    page = PAGE.replace('r17-', 'r18-' if task_instruction else 'r17-').replace('R1.7', 'R1.8' if task_instruction else 'R1.7')+'<h1>历史 expert 示范：B/C 实际输入</h1><p>官方 Isaac51 Insert Hole episode 0/1，metadata 均为 success。视频是历史采集，不计入自主成功率。步号来自 HDF5，时间按公开 collect 配置名义 120 Hz 换算；原始命令未记录，示范使用实测运动。</p>'
+    run = package.relative_to(root.parent)
     for episode in (0,1):
         folder = package/'historical_expert'/f'episode_{episode}'
         record = json.loads((folder/'recording.json').read_text())
@@ -76,6 +88,8 @@ def demos(root):
         page+=f'<section><h2>历史 expert {episode}</h2>'+video(link(run,movie.relative_to(package)))+'</section>'
     for condition in ('visual_action_icl','tactile_action_icl'):
         projection=json.loads((package/f'{condition}.json').read_text())
+        if task_instruction:
+            projection['text']['task_goal'] = task_instruction
         page+=f'<section><h2>{NAMES[condition]}</h2><p>B/C 共同视觉和运动内容完全相同；C 下半部额外显示历史双侧触觉。标签中的 row/step 对应真实 HDF5 行。</p>'
         page+='<details><summary>完整模型示范文字</summary><pre>'+html.escape(json.dumps(projection['text'],ensure_ascii=False,indent=2))+'</pre></details>'
         for im in projection['images']:
@@ -85,12 +99,15 @@ def demos(root):
 
 
 def episodes(root, rebuild=False):
-    page=PAGE+'<h1>九格自主操作视频</h1><p>三个条件均由现场 Codex 自己决定动作。1× 按仿真时间；慢放重复显示已有帧，不生成观测。模型思考时物理暂停。逐帧及真实 MCP 输入见上方回放入口。</p>'
+    names=round_names(root)
+    page=PAGE.replace('r17-', 'r18-' if names is RULE_NAMES else 'r17-').replace('R1.7', 'R1.8' if names is RULE_NAMES else 'R1.7')+f'<h1>{len(names)*3} 格自主操作视频</h1><p>所有条件均由现场 Codex 自己决定动作。1× 按仿真时间；慢放重复显示已有帧，不生成观测。模型思考时物理暂停。逐帧及真实 MCP 输入见上方回放入口。</p>'
     for path in sorted((root/'batch').glob('seed_*/*/episode.json')):
         folder=path.parent;state=json.loads(path.read_text());condition=folder.name
-        title=f'seed {state["seed"]} · {NAMES[condition]}'
+        title=f'seed {state["seed"]} · {names[condition]}'
+        if names is RULE_NAMES:
+            title += " · GPT-6 / low"
         outcome=state.get('task_success') if state.get('native_success_available') else 'unavailable/pending'
-        page+=f'<section><h2>{title}</h2><p>Agent 事先看到：{NAMES[condition]}。最终 native outcome={outcome}；结束原因={html.escape(str(state.get("termination","进行中")))}。</p>'
+        page+=f'<section><h2>{title}</h2><p>Agent 事先看到：{names[condition]}。最终 native outcome={outcome}；结束原因={html.escape(str(state.get("termination","进行中")))}。</p>'
         if state['status'] not in ('completed','infrastructure_issue') or not (folder/'review_frames').exists():
             page+='视频等待本格结束。</section>';continue
         rows=read_jsonl(folder/'samples.jsonl');files=[]
@@ -125,8 +142,9 @@ def episodes(root, rebuild=False):
 
 def summarize(root):
     cells=[]
+    names=round_names(root)
     for seed in (1000003,1000004,1000005):
-        for condition in NAMES:
+        for condition in names:
             folder=root/'batch'/f'seed_{seed}'/condition
             def read(name,folder=folder):
                 p=folder/name
@@ -134,7 +152,7 @@ def summarize(root):
             state=read('episode.json');life=read('codex_lifecycle.json')
             context=read_jsonl(folder/'operator_context.jsonl')
             cells.append({'seed':seed,'condition':condition,'status':state.get('status','not_run'),
-                **{k:state.get(k) for k in ('evaluable','task_success','termination','infrastructure_error',
+                **{k:state.get(k) for k in ('model','reasoning_effort','codex_cli_version','evaluable','task_success','termination','infrastructure_error',
                     'move_request_count','actual_motion_requests','tool_call_count','control_steps','physics_steps','simulation_time_seconds')},
                 'codex_wall_seconds':life.get('elapsed_seconds'),
                 'worker_wall_seconds':read('worker_lifecycle.json').get('elapsed_seconds'),
@@ -143,8 +161,12 @@ def summarize(root):
                 'video_1x':str((folder/'autonomous_1x.mp4').relative_to(root)),
                 'video_slow':str((folder/('autonomous_0.05x.mp4' if (folder/'autonomous_0.05x.mp4').exists() else 'autonomous_0.1x.mp4')).relative_to(root))})
     groups={c:{'successes':sum(x['evaluable'] is True and x['task_success'] is True for x in cells if x['condition']==c),
-               'evaluable':sum(x['evaluable'] is True for x in cells if x['condition']==c),'planned':3} for c in NAMES}
-    write_json(root/'results.json',{'cells':cells,'groups':groups,
+               'evaluable':sum(x['evaluable'] is True for x in cells if x['condition']==c),'planned':3} for c in names}
+    contrasts = {}
+    if names is RULE_NAMES:
+        for a,b in [('RA','UA'),('RB','UB'),('RC','UC'),('RB','RA'),('RC','RA'),('RC','RB'),('UC','UB')]:
+            contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/3 if groups[a]['evaluable']==groups[b]['evaluable']==3 else None
+    write_json(root/'results.json',{'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,
         'interpretation':'Three-seed development pilot; ICL comparisons share original controller and current tactile history.'})
 
 
@@ -152,8 +174,12 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--demos',action='store_true')
+    parser.add_argument('--demonstrations',type=Path,help='Reuse an existing official demonstration package')
+    parser.add_argument('--config',type=Path,help='Task instruction used for this round delivery')
     parser.add_argument('--rebuild',action='store_true',help='Rebuild derived query videos from retained frames; no simulator access')
     args=parser.parse_args()
-    if args.demos:demos(args.root.resolve())
+    if args.demos:
+        instruction=yaml.safe_load(args.config.read_text()).get('task_instruction') if args.config else None
+        demos(args.root.resolve(),args.demonstrations.resolve() if args.demonstrations else None,instruction)
     episodes(args.root.resolve(),args.rebuild)
     summarize(args.root.resolve())

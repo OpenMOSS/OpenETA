@@ -1,7 +1,7 @@
 # UniVTAC tactile-agent research plan
 
 This is the canonical research-plan and status entry point for
-`tactile-agent-for-univtac`, updated on 2026-09-07 against the current checkout
+`tactile-agent-for-univtac`, updated on 2026-09-08 against the current checkout
 and retained run evidence. The design below is the next research direction;
 it is not a claim that all planned capabilities already work.
 
@@ -660,3 +660,52 @@ be presented as direct reproductions of FTP-1/Isaac 4.5 numbers. See
 [Isaac 5.1 compatibility boundary](isaac51_compatibility_boundary.md) and
 [Vendor Notes](../vendor-notes.md). This documentation update does not launch or
 authorize execution of the next experiments.
+
+
+## R1.8: public rules × tactile ICL with GPT-6 low
+
+R1.8 is the current planned 18-episode development ablation, not a completed
+result. New project operators and execution/review/neat agents use
+`gpt-6-astra` with `model_reasoning_effort="low"` explicitly passed to Codex.
+Historical R1.7 and earlier model labels remain unchanged.
+
+U uses the pinned Isaac51 seen instruction: “Explore the inclined hole through
+contact to determine its orientation, then insert the test tube into the hole.”
+R adds static public success/early-stop rules, without current hidden state or
+motion advice. R is the preselected full-information setting; U removes those
+extra rules. The exact rule text and unchanged control budgets are in
+[the R1.8 config](../../configs/univtac/task_rule_tactile_icl.yaml). Each frozen
+condition prompt is saved before the first episode; initial prompt and observe
+share the official instruction. U does not receive the additional numeric rules.
+
+A has no demonstrations; B reuses R1.7 official Isaac51 `0.hdf5`/`1.hdf5`
+visual–measured-motion examples; C adds their existing aligned bilateral touch.
+The historical package stays intact. Only its generic task-goal sentence is
+replaced at delivery with the same official sentence for B/C; examples,
+segmentation, selected images and measured movements are unchanged. Every
+condition retains current vision, tactile history, robot state and feedback.
+
+The fixed order is seed 1000003: UA/RA/UB/RB/UC/RC; seed 1000004:
+RB/UB/RC/UC/RA/UA; seed 1000005: UC/RC/UA/RA/UB/RB. Each cell is a fresh live
+Codex episode under the original controller, native 300-control-step budget,
+80-step segment budget, 30 admitted motion requests, 100 tools, 3600 seconds
+Codex and the existing terminal grace. No extra simulator debug, expert replay
+or model capability run is part of this round.
+
+```bash
+uv run --no-sync python scripts/univtac/run_official_tactile_icl.py \
+  --config configs/univtac/task_rule_tactile_icl.yaml \
+  --demonstrations outputs/univtac-isaac51-r17/demonstrations \
+  --output-root outputs/univtac-isaac51-r18/batch
+```
+
+Report six native successes/3 and evaluability separately. Fixed percentage-point
+contrasts are RA−UA, RB−UB and RC−UC for rules; RB−RA and RC−RA for demonstrations;
+RC−RB and UC−UB for historical touch. R1.7 differs in model and task wording and
+cannot isolate either effect. Three development seeds do not establish held-out
+generalization. Failures and incomplete cells remain visible.
+
+The existing dashboard exposes `/r18-autonomous`, `/r18-videos` and
+`/r18-demonstrations` on port 9401. It shows actual initial prompts and native MCP
+inputs separately from host-only review videos. These routes are implementation
+work until the actual batch and browser checks are recorded here.

@@ -71,7 +71,11 @@ UniVTAC 的 Isaac 5.1 环境是项目专用的隔离 runtime，不是
 R1.4 冻结 batch 的 token 用量仍缺失；R1.5 三个正式 episode 均可评价、
 成功 0/3，全部自然退出且有真实 usage。两个原生终止后的收尾分别用时
 20.767/32.568 秒，未触及 300 秒 grace；第三个由 Agent 主动结束。
-研究状态、同接口示例和 A/B/C 设计统一见
+R1.6 沿用该 runtime 完成六次 original/paced_candidate 固定目标对照，
+默认控制器未改变，未新增模型决策或 expert 补采。两个 support seed 复用
+R1.2 collect 模式原生 expert 成功记录，只有三段动作前后边界观测，
+不是连续 HDF5 采集。
+研究状态、原生 expert 成功示例与 A/B/C 设计统一见
 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，版本和
 benchmark 解释见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。

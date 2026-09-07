@@ -20,14 +20,20 @@ Current status:
   general-tool autonomous success rates or positive tactile ICL benefit;
 - R1.4 connected the general tools to a synchronous UniVTAC worker and ran
   three fresh Insert Hole no-demo episodes: native success 0/3, all evaluable.
-  Two control-debug episodes are excluded. Successful same-interface examples
-  and the A/B/C comparison remain next work;
+  Two control-debug episodes are excluded. The A/B/C comparison remains unrun;
+  R1.6 uses native expert successes as its demonstration source, without
+  requiring human or Agent successes first;
 - R1.5 preserves native gripper commands and delivers recorded segment-end
   tactile history. One unscored debug and three fresh no-demo episodes completed:
   native success 0/3, all evaluable, all Codex processes exited naturally with
   usage. Review videos and exact Agent inputs are separate in the
   [local R1.5 dashboard](http://127.0.0.1:9401/r15-autonomous). This is control and
   observation validation, not an ICL gain;
+- R1.6 completed six fixed-target controller replays: original native success
+  1/3, paced candidate 2/3, with measured timing and completion differences.
+  Original remains the default. Two sparse R1.2 native expert successes were
+  curated without recapture; these are the demonstration source, distinct from
+  replay success. See the [Chinese video comparison](http://127.0.0.1:9401/r16-motion-pacing);
 - A has no examples; B has visual–action examples; C adds historical bilateral
   touch to exactly B's trajectories. All three retain current vision, touch,
   proprioception, and operation history;

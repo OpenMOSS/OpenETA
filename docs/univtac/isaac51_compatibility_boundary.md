@@ -47,8 +47,10 @@ current within-version comparison.
 R1.0–R1.3 have progressed beyond reset and observation: retained results include
 native expert successes, restricted-skill Codex execution, and expert-assisted
 continuations. These do not establish a general-tool autonomous Agent baseline
-or positive tactile ICL benefit. The next work is direct OpenETA operation of
-Insert Hole, same-interface successful examples, and the A/B/C comparison.
+or positive tactile ICL benefit. Current evidence also includes R1.4–R1.5 direct
+OpenETA operation and R1.6 fixed-target controller comparisons plus sparse native
+expert success curation. These do not establish tactile ICL benefit; the
+research plan owns subsequent experiment decisions.
 
 The [research plan](research-plan.md) maintains current evidence and next steps.
 R0.9.19–R0.9.21 remain historical exploration and do not guide method selection.

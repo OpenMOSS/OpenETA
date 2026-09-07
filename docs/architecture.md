@@ -120,6 +120,20 @@ the task expert, hidden target poses, expert prefixes, correction formulas, or
 automatic final insertion to decide the task body. `check_task` returns only
 minimal native success feedback, with no hidden target error or action advice.
 
+The online expert prohibition does not apply to offline demonstration curation.
+R1.6 retains real native expert actions and success outcomes, without rerouting
+expert execution through OpenETA `move_to` or the paced candidate. The R1.2
+sources used the native planner/dense move with default `force=True`, which is
+not equivalent to the dynamic OpenETA IK backend.
+
+R1.6 adds an optional `motion_pacing` configuration: a reference progresses from
+the current segment's starting TCP pose toward the fixed final target using
+simulation control time, before the same IK and dynamic execution. Arrival is
+still evaluated against the final target. The default remains `original` with
+no pacing entry. Host-only contact diagnostics never feed reference generation.
+The terms original/paced_candidate describe a controller comparison, distinct
+from future ICL conditions A/B/C.
+
 The [UniVTAC research plan](univtac/research-plan.md) owns the example format,
 A/B/C controls, historical result boundaries, and next work. This architecture
 section distinguishes historical R1.4 evidence from R1.5: one unscored debug

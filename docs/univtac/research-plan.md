@@ -1,7 +1,7 @@
 # UniVTAC tactile-agent research plan
 
 This is the canonical research-plan and status entry point for
-`tactile-agent-for-univtac`, updated on 2026-09-06 against the current checkout
+`tactile-agent-for-univtac`, updated on 2026-09-07 against the current checkout
 and retained run evidence. The design below is the next research direction;
 it is not a claim that all planned capabilities already work.
 
@@ -64,12 +64,15 @@ with autonomous development success 0/3.
 
 ## What a demonstration contains
 
-A demonstration is a real successful episode completed through the same
-OpenETA operation interface:
+Demonstrations must come from actual successful execution of the current
+UniVTAC-Isaac51 native expert. Human operations, Agent successes and fixed-target
+diagnostic replays do not substitute for this expert bank. Preserve the actual
+native API, parameters, units, coordinate frame and timing; do not rename native
+actions as OpenETA calls:
 
 ```text
 task goal + pre-action vision / bilateral tactile short history / proprioception
-    -> actual tool call and parameters
+    -> actual native expert action and parameters
     -> actual execution feedback
     -> post-action vision / touch / proprioception
     -> subsequent operations and final native outcome
@@ -86,12 +89,14 @@ State action units and coordinate frames explicitly, preserving the actual call
 and its scene context. New targets must be grounded in the current observation;
 examples must not encourage copying world coordinates from a different scene.
 
-Start with a few examples, preferably successful Agent or human operations
-through the same interface. Label historical expert and expert-assisted data
-separately; do not rename them as autonomous demonstrations. Select examples
-from development data, separate from formal test episodes. The current query
-must never contain its future correct action, future images, or future outcome.
-Historical demonstration outcomes are part of the example, not query answers.
+Use Insert Hole support seeds `1000000` and `1000001`, separate from the
+control/query development seeds `1000003`–`1000005`. The offline expert may use
+its native ground-truth algorithm. Agent-visible examples contain historical
+observations, actual actions, feedback and success outcomes, without executable
+truth-based correction formulas, hidden-pose queries or future query answers.
+Visual-action and tactile-action exports share the same trajectories and
+non-tactile content; the latter adds only aligned historical touch. Historical
+native EE targets are not current-scene OpenETA TCP commands to copy blindly.
 
 ## Core comparison: change only historical examples
 
@@ -346,6 +351,161 @@ or isolate the value of change selection. Integer patch tracking, contact
 interpretation, reliable manipulation and success-example collection remain
 limitations or future work, not reasons to retune this completed batch.
 
+### R1.6 fixed-target pacing comparison and expert curation
+
+R1.6 started at `4161567`; the six replay runs used controller commit `96c85b2`.
+Subsequent changes concern offline videos, expert exports and documentation.
+There were exactly six fresh fixed-target episodes, zero new Codex decision
+experiments and zero expert recaptures. This is a controller diagnostic, not an
+Agent success batch or the ICL A/B/C experiment. All six resets/outcomes were
+valid; no infrastructure retry or speed/configuration search occurred.
+
+The [comparison configuration](../../configs/univtac/motion_pacing_comparison.yaml)
+freezes the 7/9/5 admitted R1.5 commands, including resolved world TCP position,
+orientation and explicit gripper changes. Preview IDs are resolved once from
+recorded execution; the rejected post-terminal request is excluded. Both variants
+receive identical absolute requests, without accumulating new relative targets.
+Execution order was original/candidate for 1000003, candidate/original for
+1000004, and original/candidate for 1000005. Prepared commands and variant
+configs were saved before the first launch.
+
+`original` retains R1.5 execution semantics and remains the default. The optional
+`paced_candidate` advances an intermediate Cartesian reference using control
+simulation time, then uses the same IK and dynamic actuators. Translation is
+bounded by a 0.04 m/s reference and shortest-path rotation by 0.4 rad/s; both
+share a duration so they arrive together. At 1/60-second control dt, these are
+at most 0.667 mm and 0.006667 rad per reference step. A 50 mm request requires
+75 reference steps, leaving only five of the unchanged 80 segment steps for
+tracking. Reference velocity is not an actual-velocity guarantee.
+
+Final-target arrival, 3 mm / 3 degree tolerances, IK correction limits, gripper
+commands, physics dt/decimation, actuator settings, native thresholds and the
+300-control-step budget are unchanged. A no-simulator test documents that an
+otherwise unchanged 1 mm request can return reached with zero physical steps
+under the existing tolerance; the tolerance was not fixed in this comparison.
+Native terminal stops immediately. A non-reached segment budget would stop the
+replay without hidden steps; none of these six reached that budget branch.
+
+| Seed | Variant | Native success / ending | Arrived / attempted / planned targets | Control / physics steps | Simulation seconds | Sample times | After-reset wall seconds |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: |
+| 1000003 | original | false / early stop | 6 / 6 / 7 | 24 / 48 | 0.400 | 25 | 7.752 |
+| 1000003 | paced_candidate | true / success | 6 / 7 / 7 | 127 / 254 | 2.117 | 128 | 25.731 |
+| 1000004 | original | true / success | 9 / 9 / 9 | 72 / 144 | 1.200 | 73 | 19.119 |
+| 1000004 | paced_candidate | true / success | 7 / 8 / 9 | 104 / 208 | 1.733 | 105 | 24.396 |
+| 1000005 | original | false / early stop | 5 / 5 / 5 | 6 / 12 | 0.100 | 7 | 4.969 |
+| 1000005 | paced_candidate | false / early stop | 4 / 5 / 5 | 89 / 178 | 1.483 | 90 | 19.734 |
+
+The after-reset wall clock includes synchronous tool handling, not initialization,
+video export or model thinking. Full worker wall times in seed order,
+original/candidate, were 88.078/101.005, 108.491/112.291 and 85.659/109.106 seconds.
+Every sampled transition corresponds to one native control step and two physics
+steps; each episode has takeover plus one sample per control, without missing
+or unrefreshed samples in the retained records. The native success latch can end
+a request before its arm target is reached: this happened during retreat in
+1000003 candidate and during the upward/open request in 1000004 candidate.
+Those partial targets are not counted as arrived. No replay success enters the
+expert demonstration bank.
+
+**Measured comparison and limitations.** Peak sampled-interval TCP speeds were
+0.616/0.045, 0.962/0.042 and 0.785/0.042 m/s (original/candidate); these are norms
+of net displacement per control interval, not instantaneous physics-step peaks.
+The candidate changed actual timing rather than just a reference plot. Maximum
+along-request positional overshoot was approximately 2.059/0.017,
+8.946/0.008 and 2.293/0 mm; this is a directional projection, not every possible
+contact instability. Candidate arrived endpoints commonly stop near the 3 mm
+tolerance boundary, so smaller image changes alone are not comparable progress.
+
+Before the first explicit gripper change, both variants completed the same first
+four targets for 1000003 and first three for 1000004. Maximum host-only native
+in-hand Z change over those prefixes was 32.58/27.44 and 15.41/10.89 mm.
+Later explicit opens are retained, not attributed entirely to motion speed.
+1000005 never changed gripper command: both variants stopped early. Its candidate
+ended 7.07 mm from the final target versus original's 2.15 mm, so the smaller
+40.36 versus 46.32 mm in-hand change does not establish better stability at
+matched completion. This field is the native relative-pose indicator, not a
+measured cumulative slip path.
+
+Initial states were not bit-identical. Candidate-minus-original initial TCP
+position differences (mm) were (0.031, 0.024, -0.295),
+(-0.046, -0.001, -0.001), and (-0.087, -0.023, -0.320). Initial prism-relative-to-
+gripper X differed by about +1.76, -0.97 and -2.48 mm; orientations, robot joints,
+finger targets and measured openings are retained in the offline comparison.
+These contact differences limit causal attribution from three single pairs.
+1000004 succeeded in both variants; 1000005 failed in both, with more candidate
+steps and less final completion. The observed native-success count 1/3 versus
+2/3 is a development result for these commands, not evidence that speed is the
+unique cause of historical failures or an ICL gain. Keep the candidate for user
+review; do not replace the default on this evidence alone.
+
+**How to watch.** The [local R1.6 page](http://127.0.0.1:9401/r16-motion-pacing)
+provides Chinese explanations, separate four-view videos, side-by-side 1× and
+0.05× simulation-time versions, and one-second-per-frame inspection copies.
+Both sides share the takeover-relative clock and playback multiplier. A shorter
+side explicitly holds its last frame; no independent length normalization or
+synthetic intermediate observations are used. Display holds, including the final
+one-second hold, are playback metadata rather than additional physical time.
+
+- **1000003:** first compare the four-target prefix, then action 5 open and the
+  retreat. Original stops during action 6; candidate reaches native success
+  during action 7 before completing that retreat target. The final external
+  views show a released rod near the fixture; native success is reported from
+  the checker, not inferred from the image.
+- **1000004:** both succeed. Compare the first three targets and action 8's
+  upward/open operation. Candidate terminates earlier in that command; original
+  completes the final close too. Do not present different termination points
+  as equal completion of the full nine-command list.
+- **1000005:** the 0.1-second original is especially short; use its frame-hold
+  version, then the common-rate side-by-side video. Both show tactile-pattern
+  changes, and both stop early. Candidate moves more slowly but has not finished
+  the final target; the pattern difference is not a slip label.
+
+**Expert bank.** Support seeds 1000000/1000001 reuse actual R1.2 native
+`task.play_once()` successes under the pinned Isaac51 collect configuration:
+120 Hz control/physics, decimation 1, native planner/dense moves (default
+`force=True`). These are not the dynamic OpenETA replay controller and not
+proof that the backends are equivalent. Each has three aligned before/after
+vision, bilateral touch, robot-state and native-action pairs. Source steps were
+395→560→646→724 (checker at 744) and 446→671→811→934 (checker at 954).
+The timestamps derive from these collect step differences / 120; no dense
+sensor frame IDs or instantaneous velocity is fabricated. Native save/video
+frequency had been disabled in the R1.2 harness, so these are not official
+full HDF5 collections. Existing data suffice for sparse boundary examples;
+no expert recapture was required.
+
+Each export preserves native EE/base position in metres, quaternion wxyz,
+actual target, realized displacement, time-dilation parameter and outcome;
+it does not claim the expert called OpenETA tools. Dense tactile motion,
+per-frame sensor IDs and gripper target-buffer history remain unavailable.
+The visual-action and tactile-action JSONs differ only by aligned touch, with
+real PNGs copied from the same original trajectory. Provenance manifests remain
+host-only. The separately labelled expert videos dwell on six boundary images,
+not a continuous physical process. No human/Agent/fixed-replay success was
+substituted and no ICL inference was run.
+
+Artifacts live in `outputs/univtac-isaac51-r16/`: `commands.json`, per-variant
+control/sample/contact logs, `comparison_summary.json`, three pair folders,
+and `expert/seed_1000000` / `seed_1000001`. They are excluded from Git.
+Reproduction uses a fresh output root; the second command is offline only:
+
+```bash
+uv run --frozen --extra dev python -m scripts.univtac.run_motion_pacing_comparison \
+  --output-root outputs/univtac-isaac51-r16-new
+uv run --frozen --extra dev python -m scripts.univtac.motion_pacing_review \
+  --root outputs/univtac-isaac51-r16-new
+```
+
+The 47 focused tests, scoped Ruff/compile checks and Markdown links passed.
+Video presentation timestamps were checked against the simulation-time mapping;
+actual browser loading, playback and seeking were exercised, and key frames
+were visually inspected. This is not a claim of an independent frame-by-frame
+review of every video. Scoped neat reconciled the current expert-source rule
+and retained the historical results.
+
+This completed batch is not authorization to repeat it. The replay page's fixed
+route points at the retained R1.6 root; another root's generated `review.html`
+can be served through the existing artifact route. No new autonomous or ICL
+batch starts until the user has reviewed the videos and decided.
+
 ### Historical evidence, with its original scope
 
 These are development results, not one autonomous-success leaderboard. Raw
@@ -396,12 +556,14 @@ capture-only record must not be relabelled as a completed transfer experiment.
    The [configuration](../../configs/univtac/autonomous_insert_hole.yaml) keeps
    Terra medium, 30 non-preview move requests, 100 tool calls, and 3600 Codex
    seconds per episode alongside the native control budget.
-2. Collect a small set of successful same-interface operations, retaining real
-   images, calls, feedback, recovery, and outcomes. No-demo performance need
-   not be high before examples may be introduced.
-3. Run the A/B/C comparison. The same-interface successful example bank and
-   this comparison remain unfinished. Neither R1.4 nor R1.5 produced a successful
-   autonomous example or ran B/C.
+2. Use the native expert success bank curated in R1.6. Two R1.2 collect-mode
+   trajectories provide three aligned before/after action transitions each;
+   these are sparse boundary examples, not dense tactile histories or official
+   HDF5 collections. No human/Agent success prerequisite or new expert run was
+   needed. Preserve native control provenance when expressing historical actions.
+3. The A/B/C comparison remains unrun. All future conditions must share the same
+   current observation and controller version. R1.6 fixed-target controller
+   comparisons are named original/paced_candidate, not A/B/C.
 4. Use actual failures to improve tactile representation and experience
    organization, then extend task coverage.
 

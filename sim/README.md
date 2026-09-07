@@ -13,12 +13,16 @@ R1.0–R1.3 已执行 native expert、Codex 受限技能和专家辅助 continua
 R1.4 已接通 OpenETA 六个通用工具与同步 UniVTAC worker，完成三个 fresh
 Insert Hole 无示例自主 episode：原生可评价 3/3，成功 0/3，均由原生提前终止
 结束；两个独立联调 episode 不计分。head 支持 mark_point，wrist 几何暂不可用，
-四路视觉/触觉图片仍保留。同接口成功示例与 A/B/C 尚未开展。
+四路视觉/触觉图片仍保留。R1.4 当时未开展成功示例整理或 A/B/C。
 R1.5 已实现双指命令保持、动作内四路采样、段末触觉历史图片和四宫格视频。
 一条无 Codex 的不计分联调和三个正式 seed 已完成：均可评价，成功 0/3；
 三个 Codex 都自然退出且有真实 usage。两个原生提前终止，一个由 Agent 结束。
 回放入口：`http://127.0.0.1:9401/r15-autonomous`。
 审阅录像与 Agent 实际输入分开保存，没有开展 A/B/C。
+R1.6 完成六次固定目标诊断重放：original 原生成功 1/3、paced_candidate 2/3，
+不是新 Agent 决策实验或 ICL 对照，默认仍为 original。部分原生终止发生在
+目标未到时。复用两个 R1.2 原生 expert 成功轨迹，导出稀疏动作前后示例，
+没有补采。1×、0.05× 与逐帧视频：`http://127.0.0.1:9401/r16-motion-pacing`。
 研究计划见 [`docs/univtac/research-plan.md`](../docs/univtac/research-plan.md)，
 运行版本边界见
 [`docs/univtac/isaac51_compatibility_boundary.md`](../docs/univtac/isaac51_compatibility_boundary.md)。

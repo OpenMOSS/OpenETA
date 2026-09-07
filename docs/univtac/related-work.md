@@ -375,13 +375,24 @@ root tracker is not a queue of experiments to resume.
 | Reference | What was inspected and what we reuse | Boundary |
 | --- | --- | --- |
 | **OpenMOSS/OpenETA, `openeta-for-codex` branch**. `openetaSoftware` ([repository](https://github.com/OpenMOSS/OpenETA/tree/openeta-for-codex)) | Upstream README and local [architecture](../architecture.md); [MCP server](../../tools/embodied_mcp_server.py), [Gateway](../../tools/embodied_gateway.py), synchronous worker, native images and replay | Software branch, not an additional ETA paper or automatic proof of UniVTAC control reliability |
-| **robocurve/inspect-robots**. `inspectRobotsSoftware` ([repository](https://github.com/robocurve/inspect-robots)) | README and retained exploration checkout: `src/inspect_robots/{controller,rollout}.py`, agent `_tools.py`, CaP-X `_motion.py`; separation of policy calls, chunks, low-level steps, semantics and logs | Engineering comparison previously explored; no dependency/integration found in the scoped project search. Its controllers and adapters are not our validated UniVTAC backend |
+| **robocurve/inspect-robots**. `inspectRobotsSoftware` ([repository](https://github.com/robocurve/inspect-robots)) | README and retained exploration checkout: `src/inspect_robots/{controller,rollout}.py`, agent `_tools.py`, CaP-X `_motion.py`; separation of policy calls, chunks, low-level steps, semantics and logs | R1.6 borrows only the bounded-step/intermediate-reference idea; no Inspect dependency or robot-specific defaults are copied. UniVTAC IK, actuator settings, tolerances and native budgets remain unchanged |
 | **OpenETA-UniVTAC adapters** (this repository) | [OpenEtaAgentAdapter](../../adapter/openeta_agent.py), [UnifiedSimulatorAdapter](../../sim/adapter.py), [RobotState / EnvObservation / EnvAction](../../adapter/protocol.py), [NativeController](../../sim/envs/univtac/autonomous_operation.py), [live session](../../sim/envs/univtac/autonomous_session.py) | Concrete current implementation. Robot FK/Jacobian and measured TCP feedback are distinct from hidden object geometry; LIBERO Panda grip-site assumptions must not be copied to UniVTAC's native gripper-center TCP |
 | **GelSight Mini product sheet**. `gelsightMiniSheet` ([manufacturer PDF](https://www.gelsight.com/wp-content/uploads/productsheet/Mini/GS_Mini_Product_Sheet_10.07.24.pdf)) | Manufacturer equipment description; local [runtime assets](../../sim/envs/univtac/runtime.py) name GelSight Mini calibration and Franka gelpad assets | A device document, not simulated-sensor fidelity validation. No hardware rate, force calibration, or slip guarantee is inferred for our renderer |
 
 The retained Inspect exploration is `/tmp/inspect-robots-explore-wbAvxx` on the
 research machine; it is a temporary historical checkout, not a portable
-dependency. Current upstream branches may evolve. Cite an actually used
+dependency. The inspected commit is `7e4d1b7aee1c0d3cfc3a05a7492b9d12cda666f9`.
+In `plugins/inspect-robots-capx/src/inspect_robots_capx/_motion.py`,
+`MotionQueue._queue_target` (lines 207–227) computes a common number of steps
+from the maximum per-dimension distance/budget ratio, then linearly interpolates
+joint targets and explicitly ends at the requested target
+([inspected source](https://github.com/robocurve/inspect-robots/blob/7e4d1b7aee1c0d3cfc3a05a7492b9d12cda666f9/plugins/inspect-robots-capx/src/inspect_robots_capx/_motion.py#L207-L227)). `controller.py`
+consumes buffered actions; it is not that interpolator. R1.6 borrows the separation
+of intermediate references from execution. Our Cartesian position-norm duration
+and shortest SO(3) rotation interpolation are project-specific choices, not a
+reproduction of Inspect's component-wise joint interpolation. Actual measured
+motion can exceed the reference speed and must be reported separately.
+Current upstream branches may evolve. Cite an actually used
 release/commit when code is adopted; this index does not install or switch one.
 
 ## First implementation candidate — R1.5 segment-end implementation

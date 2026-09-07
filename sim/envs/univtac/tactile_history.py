@@ -194,6 +194,26 @@ class TactileRecorder:
             self.closed = True
 
 
+def encode_recorded_frames(files, durations, video: Path):
+    """Display existing frames for specified durations; never synthesize observations."""
+    import imageio_ffmpeg
+    manifest = video.with_suffix('.ffconcat')
+    entries = ['ffconcat version 1.0']
+    for file, duration in zip(files, durations, strict=True):
+        escaped = str(Path(file).resolve()).replace("'", "'\\''")
+        entries += [f"file '{escaped}'", 'option framerate 1000', f'duration {duration:.9f}']
+    entries += [f"file '{escaped}'", 'option framerate 1000']
+    manifest.write_text('\n'.join(entries)+'\n')
+    write_json(video.with_suffix('.playback.json'), {'source_frame_count':len(files),
+        'display_durations_seconds':durations, 'final_frame_anchor_repeat':1,
+        'synthetic_sensor_observations':0})
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-loglevel', 'error',
+        '-f', 'concat', '-safe', '0', '-i', str(manifest), '-fps_mode', 'vfr',
+        '-c:v', 'libx264', '-bf', '0', '-threads', '2', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(video)],
+        check=True, capture_output=True)
+    return video
+
+
 def export_review_video(root: Path):
     """Offline VFR H.264 export; failures leave raw images and an error record."""
     import imageio_ffmpeg

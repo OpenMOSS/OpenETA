@@ -1573,7 +1573,7 @@ create its physics scene; 1000040/1000041 logs explicitly report GPU OOM.
 1000042 had entered native pre_move before cancellation. The batch aborted and
 all four worker groups were cleaned; batch wall time was 120.53 s. No four-ready
 residency interval, autonomous action overlap or evaluable task video exists.
-No retry or reduced-concurrency batch ran.
+No retry or reduced-concurrency fallback ran within that four-way batch.
 
 The bounded entry point is `uv run --no-sync python scripts/univtac/run_fourway_capacity.py
 --output-root outputs/<fresh-dir>`; it defaults to the retained successful C_live
@@ -1582,3 +1582,32 @@ normal single-worker control/observation semantics remain unchanged.
 [Capacity report and raw evidence](http://127.0.0.1:9401/artifact?run=univtac-fourway-capacity&path=report.html)
 record this attempt. R1.12 remains 9 valid/1 failed initialization/22 not_run;
 the proposed D condition and eight-task rollout remain unstarted.
+
+
+### Two-way Insert Hole capacity test — completed, unscored
+
+A separate fixed batch reused `run_fourway_capacity.py --concurrency 2`
+for seeds 1000040/1000041 with C_live and gpt-6-astra/low. Both workers
+initialized concurrently, passed the all-ready barrier, and completed autonomous
+episodes with native success and natural Codex exit. No infrastructure error
+was recorded; both lanes cleaned up. Batch wall time was 385.17 s. Worker
+lifetimes were 381.44/369.29 s and Codex lifetimes 100.08/87.98 s.
+Each episode used 5 motion requests, 9 tool calls, 17 control steps and
+34 physics steps (0.2833 s of task simulation, excluding initialization).
+
+Across 385 resource samples, GPU memory peaked at 20,726 MiB with a minimum
+11,376 MiB free; minimum system MemAvailable was 53.33 GiB. Swap started
+at 2,147,438,592 bytes (about 2 GiB of pre-existing occupancy), with zero
+sampled peak increase, and ended at 2,146,717,696 bytes. Conservative simultaneous
+ready residency was 88.028 s, Codex lifetime overlap 87.975 s, and three
+pairs of motion execution intervals overlapped for 4.325 s in total.
+Each episode recorded 18 samples after existing control/render steps.
+Both 1× and 0.05× labelled videos reached browser playback end without error.
+Cleanup left GPU usage at 987 MiB and system MemAvailable at 68.96 GiB.
+
+[Two-way capacity report, videos and actual inputs](http://127.0.0.1:9401/artifact?run=univtac-two-way-capacity&path=report.html)
+remain separate from the retained four-way OOM evidence. This is an unscored
+capacity test, excluded from paper success rates. It establishes only this
+Insert Hole two-way run; without a serial control it establishes neither 2×
+speedup nor long-term concurrency stability across tasks. D, the eight-task
+rollout and the full batch remain unstarted.

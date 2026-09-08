@@ -234,7 +234,7 @@ def run_episode(args, config, seed, root):
         finally:
             if coordinator:
                 if episode.get('infrastructure_error'):
-                    coordinator.abort(episode['infrastructure_error'])
+                    coordinator.abort(episode['infrastructure_error'], seed)
                 coordinator.phase(seed, 'cleanup')
             if url and not future.done():
                 try:
@@ -266,11 +266,14 @@ def run_episode(args, config, seed, root):
     else:
         episode['evaluable'] = bool(final['reset_valid'] and final['native_success_available'])
     episode['status'] = 'completed' if episode['evaluable'] or (args.mode == 'observe_only' and not episode.get('infrastructure_error')) else 'infrastructure_issue'
+    if coordinator and coordinator.cancel.is_set() and coordinator.abort_seed != seed and episode.get('infrastructure_error'):
+        episode['status'] = 'cancelled'
+        episode['cancelled_due_to_seed'] = coordinator.abort_seed
     write_json(root/'episode.json',episode)
     if coordinator:
         coordinator.phase(seed, episode['status'])
         if episode.get('infrastructure_error'):
-            coordinator.abort(episode['infrastructure_error'])
+            coordinator.abort(episode['infrastructure_error'], seed)
     return episode
 
 

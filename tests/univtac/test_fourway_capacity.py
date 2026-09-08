@@ -50,3 +50,22 @@ def test_operator_cancellation_cleans_owned_process(tmp_path):
     assert result['exit_mode'] == 'batch_cancelled'
     with pytest.raises(ProcessLookupError):
         os.kill(result['pid'], 0)
+
+
+def test_two_way_barrier_and_abort_source(tmp_path):
+    seeds = SEEDS[:2]
+    coordinator = Coordinator(tmp_path, seeds)
+    coordinator.processes = {(s, 'worker'): SimpleNamespace(poll=lambda: None) for s in seeds}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        coordinator.ready[seeds[0]] = {}
+        first = pool.submit(coordinator.barrier, seeds[0])
+        time.sleep(0.2)
+        assert not coordinator.release.is_set()
+        coordinator.ready[seeds[1]] = {}
+        second = pool.submit(coordinator.barrier, seeds[1])
+        first.result(timeout=2)
+        second.result(timeout=2)
+    assert len(coordinator.phases) == 2
+    coordinator.abort('initialization failure', seeds[0])
+    coordinator.abort('collateral cancellation', seeds[1])
+    assert coordinator.abort_seed == seeds[0]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One unscored four-worker batch, using the existing autonomous runner."""
+"""One unscored two- or four-worker batch, using the existing autonomous runner."""
 from __future__ import annotations
 
 import argparse
@@ -25,15 +25,17 @@ SEEDS = (1000040, 1000041, 1000042, 1000043)
 
 
 class Coordinator:
-    def __init__(self, root):
+    def __init__(self, root, seeds=SEEDS):
         self.root = root
+        self.seeds = tuple(seeds)
         self.cancel = threading.Event()
         self.lock = threading.RLock()
         self.processes = {}
-        self.phases = dict.fromkeys(SEEDS, 'submitted')
+        self.phases = dict.fromkeys(self.seeds, 'submitted')
         self.ready = {}
         self.release = threading.Event()
         self.abort_reason = None
+        self.abort_seed = None
         self.events = []
 
     def event(self, seed, name, **extra):
@@ -57,11 +59,12 @@ class Coordinator:
                 self.event(seed, kind+'_started', pid=process.pid)
         return {'cancel_event': self.cancel, 'on_started': started}
 
-    def abort(self, reason):
+    def abort(self, reason, seed=None):
         with self.lock:
             if not self.cancel.is_set():
                 self.abort_reason = str(reason)
-                self.event(None, 'batch_abort', reason=str(reason))
+                self.abort_seed = seed
+                self.event(seed, 'batch_abort', reason=str(reason))
                 self.cancel.set()
 
     def wait_ready(self, seed, root, future, timeout):
@@ -90,8 +93,8 @@ class Coordinator:
             with self.lock:
                 if self.cancel.is_set():
                     raise RuntimeError('batch cancelled before release')
-                if len(self.ready) == 4:
-                    if any(self.processes[s, 'worker'].poll() is not None for s in SEEDS):
+                if len(self.ready) == len(self.seeds) and not self.release.is_set():
+                    if any(self.processes[s, 'worker'].poll() is not None for s in self.seeds):
                         self.abort('worker exited at all-ready barrier')
                         raise RuntimeError(self.abort_reason)
                     self.event(None, 'all_ready_resident')
@@ -134,7 +137,7 @@ def resources(coordinator, previous):
         trees.append({'seed': seed, 'kind': kind, 'root_pid': process.pid, 'pids': sorted(members),
                       'rss_bytes_sum': sum(processes[p]['rss'] for p in members), 'cpu_percent': cpu})
         if kind == 'worker' and process.poll() is not None and phases[seed] in ('initializing', 'ready_resident', 'operating'):
-            coordinator.abort(f'{seed}: worker exited during {phases[seed]}, code={process.returncode}')
+            coordinator.abort(f'{seed}: worker exited during {phases[seed]}, code={process.returncode}', seed)
     return {'timestamp_s': now, 'gpu_csv': gpu.stdout.strip(), 'gpu_error': gpu.stderr.strip(),
             'MemAvailable': mem['MemAvailable'], 'MemTotal': mem['MemTotal'],
             'swap_used_bytes': mem['SwapTotal']-mem['SwapFree'], 'trees': trees, 'phases': phases}
@@ -142,16 +145,18 @@ def resources(coordinator, previous):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--concurrency', type=int, choices=(2, 4), default=4)
     parser.add_argument('--config', type=Path, default=REPO/'outputs/univtac-isaac51-r110/batch/C_live.yaml')
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
     parser.add_argument('--source-root', type=Path, default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
     args = parser.parse_args()
+    seeds = SEEDS[:args.concurrency]
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     config = yaml.safe_load(args.config.read_text())
     original_prompt = operator_prompt(config)
-    config.update(round='Four-way capacity', seeds=list(SEEDS), scored=False, wait_for_operator_release=True)
+    config.update(round=('Two-way capacity' if args.concurrency == 2 else 'Four-way capacity'), seeds=list(seeds), scored=False, wait_for_operator_release=True)
     config.pop('episode_order', None)
     if (config['task'], config['model'], config['reasoning_effort'], config['condition']) != ('insert_hole', 'gpt-6-astra', 'low', 'C_live'):
         raise ValueError('Expected successful Insert Hole C_live configuration')
@@ -160,9 +165,9 @@ def main():
     args.config.write_text(yaml.safe_dump(config, sort_keys=False))
     (root/'prompt.txt').write_text(original_prompt)
     args.mode = 'batch'
-    args.coordinator = coordinator = Coordinator(root)
-    write_json(root/'run_manifest.json', {'scored': False, 'seeds': SEEDS, 'max_simulator_starts': 4,
-        'max_codex_starts': 4, 'config': config, 'started_s': time.time(),
+    args.coordinator = coordinator = Coordinator(root, seeds)
+    write_json(root/'run_manifest.json', {'scored': False, 'seeds': seeds, 'max_simulator_starts': args.concurrency,
+        'max_codex_starts': args.concurrency, 'config': config, 'started_s': time.time(),
         'repo_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=REPO, text=True).strip(),
         'source_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=args.source_root, text=True).strip()})
     (root/'git_status.txt').write_text(subprocess.check_output(['git','status','--short'], cwd=REPO,text=True))
@@ -181,10 +186,10 @@ def main():
                 # Actual critical memory exhaustion, not an estimated concurrency gate.
                 if row['MemAvailable'] < 256*1024**2:
                     coordinator.abort('MemAvailable below 256 MiB during live batch')
-                for seed in SEEDS:
+                for seed in seeds:
                     error = root/f'seed_{seed}'/'worker_error.json'
                     if error.exists() and not coordinator.cancel.is_set():
-                        coordinator.abort(f'{seed}: '+error.read_text())
+                        coordinator.abort(f'{seed}: '+error.read_text(), seed)
             except Exception as exc:  # noqa: BLE001 -- retain batch/resource failure evidence
                 coordinator.event(None, 'resource_sampling_error', error=str(exc))
             done.wait(max(0, 1-(time.monotonic()-start)))
@@ -192,8 +197,8 @@ def main():
     monitor.start()
     episodes = []
     try:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futures = [pool.submit(run_episode, args, config, seed, root/f'seed_{seed}') for seed in SEEDS]
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            futures = [pool.submit(run_episode, args, config, seed, root/f'seed_{seed}') for seed in seeds]
             for future in futures:
                 try:
                     episodes.append(future.result())
@@ -204,7 +209,7 @@ def main():
         done.set(); monitor.join()
         write_json(root/'resources_after.json', resources(coordinator, previous))
     write_json(root/'summary.json', {'scored': False, 'ended_s': time.time(), 'episodes': episodes,
-        'all_ready': coordinator.release.is_set(), 'abort_reason': coordinator.abort_reason,
+        'all_ready': coordinator.release.is_set(), 'abort_reason': coordinator.abort_reason, 'abort_seed': coordinator.abort_seed,
         'completed_count': sum(e.get('evaluable', False) for e in episodes), 'events': coordinator.events})
     return int(coordinator.cancel.is_set())
 

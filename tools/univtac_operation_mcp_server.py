@@ -75,6 +75,13 @@ def _record_context(
         else []
     )
     root = episode_root.resolve(strict=True)
+    def recorded_path(block):
+        path = Path(block.path).resolve(strict=True)
+        if tool == "review_demonstrations" and not path.is_relative_to(root):
+            # Shared immutable expert media are not copied into each query episode.
+            return path.as_posix()
+        return path.relative_to(root).as_posix()
+
     row = {
         "seq": len(existing) + 1,
         "timestamp_s": time.time(),
@@ -84,7 +91,7 @@ def _record_context(
             block.text for block in blocks if isinstance(block, TextContent)
         ],
         "response_image_paths": [
-            Path(block.path).resolve(strict=True).relative_to(root).as_posix()
+            recorded_path(block)
             for block in blocks
             if isinstance(block, Image)
         ],

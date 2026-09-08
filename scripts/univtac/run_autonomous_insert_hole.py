@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -174,6 +175,9 @@ def run_episode(args, config, seed, root):
         projection = demonstration_projection(config)
         for image in projection['images']:
             source = package/image['path']
+            if config.get('shared_demonstration_media'):
+                image['path'] = str(source.resolve())
+                continue
             destination = root/'demonstrations'/image['path']
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
@@ -185,6 +189,9 @@ def run_episode(args, config, seed, root):
                'task_information':config.get('task_information'),
                'current_tactile':config.get('current_tactile', True),
                'demonstration_condition':config.get('demonstration_condition',config.get('condition')),'status':'starting','codex_process_count':0}
+    if getattr(args, 'execution_head', None):
+        episode['execution_head'] = args.execution_head
+    episode.update({k:config[k] for k in ('condition','shot','expert_ids','expert_source_seeds','demonstration_set_id','query_index','cell_key') if k in config})
     write_json(root/'episode.json',episode)
     command = [str(REPO/'scripts/univtac/serve_autonomous_worker.py'),'--repo-root',str(REPO),
                '--source-root',str(args.source_root),'--output-root',str(root), '--config',str(args.config),
@@ -199,11 +206,13 @@ def run_episode(args, config, seed, root):
     hooks = coordinator.hooks(coord_key, 'worker') if coordinator else {}
     url = None
     codex_home = root/'runtime/codex-home'
+    worker_start = time.monotonic()
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_scoped_isaac51_command,spec, **hooks)
         try:
             ready = (coordinator.wait_ready(coord_key, root, future, config['startup_timeout_seconds']) if coordinator else
                      _wait_for_worker(root/'ready.json',future,config['startup_timeout_seconds']))
+            episode['initialization_wall_seconds'] = time.monotonic()-worker_start
             url = ready['worker_url']
             if coordinator:
                 coordinator.barrier(coord_key)
@@ -248,6 +257,8 @@ def run_episode(args, config, seed, root):
                     episode['codex_time_limit'] = True
         except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence
             episode['infrastructure_error'] = f'{type(exc).__name__}: {exc}'
+            if episode['status']=='starting':
+                episode['startup_failure_wall_seconds'] = time.monotonic()-worker_start
         finally:
             if coordinator:
                 if episode.get('infrastructure_error'):
@@ -267,7 +278,7 @@ def run_episode(args, config, seed, root):
                 episode['infrastructure_error'] = 'worker_shutdown_timeout'
             if codex_home.exists():
                 shutil.rmtree(codex_home)
-    if (root/'samples.jsonl').exists():
+    if (root/'samples.jsonl').exists() and not config.get('defer_review_video'):
         try:
             export_review_video(root)
         except Exception as exc:  # noqa: BLE001 -- raw recording is independently retained

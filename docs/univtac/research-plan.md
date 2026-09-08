@@ -156,9 +156,11 @@ metadata-success episodes in ID order. Four-shot nests the unchanged first two
 examples. For one-shot, even query-list indices use example 0 and odd indices
 use example 1, identically in B/C (50 queries each).
 
-No previously confirmed 100-seed list was found in the current research/config
-entrypoints. This experiment freezes 1000100–1000199 in one shared configuration
-file; the future main table must reference that same list. Query seeds are
+The user subsequently fixed 1000000–1000099, replacing the initial fallback
+1000100–1000199 before any simulator or operator Codex launch. The complete list
+is stored in `configs/univtac/main_query_seeds.json`; the future main table must
+reference that same file. This range overlaps retained development seeds, which
+is disclosed rather than described as an independent held-out test. Query seeds are
 planned slots, not a quota of successful resets or successful tasks. Failed
 initializations, accepted task failures and voluntary endings remain separate.
 Completed accepted cells must be skipped after a runner interruption, including
@@ -1817,3 +1819,63 @@ multi-seed reliability.
 uses real recorded frames; slow playback adds display time, not observations.
 Host outcome labels are user-only. No benchmark, motion algorithm, physical
 parameter, solver setting or success threshold changed.
+
+
+### Four-task shot scaling — preparation and resumption
+
+The design-only update was pushed as `c99e39e` before implementation. The user
+then changed the shared query list to 1000000–1000099 before any new simulator
+or operator started. `configs/univtac/shot_scaling.yaml` references the full
+`configs/univtac/main_query_seeds.json` list. Four-task coverage records at seed
+1000040 overlap this range and remain disclosed separately, not reused as this
+shot experiment's cells. Expert source seeds do not overlap the query range.
+
+Use `uv run --no-sync python scripts/univtac/run_shot_scaling.py --phase download`,
+then `--phase prepare`. The immutable `manifest.json` under
+`outputs/univtac-shot-scaling/` contains all 2400 cell identities, ordered expert
+IDs/source seeds, effective configurations and one-shot assignment. Preparation
+refuses to overwrite an existing frozen manifest. The original 0/1 exports are
+shared unchanged; only official episodes 2/3 are newly processed. Lift Bottle
+episode 3 has source seed 4.
+
+After the implementation is committed and pushed, use the same command with
+`--phase run`; this is also the resumption command. It reconstructs all accepted
+completed states before dispatch, including unsuccessful tasks, and never
+restarts them. A crash after native finalization and complete worker/model
+cleanup can be reconciled from those persisted records without a new rollout.
+Unresolved accepted attempts and persisted delivery failures pause dispatch.
+Attempt directories retain each cell's three-attempt initialization budget.
+An interrupted run cannot erase a delivery error or turn it into an evaluable
+result. Each accepted episode records its actual execution commit.
+
+Simulator slots include cleanup but exclude offline review encoding. One
+independent media worker produces 0.05× review videos with task, seed, condition
+and shot labels and checks full decoding/frame counts. Raw frames are retained;
+media failures can be rebuilt without rerunning completed tasks. No 1× videos
+are required. Shared expert images use absolute source references in historical
+MCP context; current query image path rules remain unchanged. A 5 GiB free-disk
+reserve stops new dispatch and defers media rather than deleting evidence.
+
+`results.json` always includes every planned cell. The existing dashboard's
+artifact route serves `report.html`, cell review pages, actual operator context,
+host results and slow videos. `summarize_shot_scaling.py` reports planned,
+evaluable, successes and unavailable separately; Wilson intervals condition on
+evaluability. Same-seed paired C−B and 2−1/4−2 comparisons retain effective pair
+counts and paired empirical bootstrap intervals, including their possible
+degeneracy. Use the existing r09 Python with `summarize_shot_scaling.py
+outputs/univtac-shot-scaling --plots` to render the four task curves; no new
+plotting dependency is installed. Cached input/reasoning remain subset fields.
+
+This entry describes the prepared execution path, not completed experiments.
+No simulator or operation Codex has started at this preparation checkpoint.
+Future Pro reports use https://chatgpt.com/c/6aa00ac2-bef8-83ee-9a7d-82186e056c59.
+
+Preparation completed with all 2400 frozen cells, 100 shared seeds and 32 actual
+MCP B/C image-return checks (one-shot checks both balanced expert assignments).
+All four old 0/1 text projections are unchanged; eight new HDF5 files were
+downloaded. Four-shot C delivers 92/144/192/64 images for Tube/Can/Bottle/Key
+respectively, without dropping segments or reducing resolution. The focused
+suite passed 63 tests; Ruff and compile checks passed. The native/model path
+for these larger inputs still requires the planned formal episodes, not an
+extra model pretest. The preparation checkpoint consumed zero simulator and
+zero operator Codex starts.

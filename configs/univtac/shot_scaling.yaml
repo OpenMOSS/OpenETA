@@ -1,0 +1,24 @@
+round: Four-task B/C shot selection
+seed_list: configs/univtac/main_query_seeds.json
+tasks:
+- insert_tube
+- lift_can
+- lift_bottle
+- pull_out_key
+shots:
+- 1
+- 2
+- 4
+conditions:
+- B
+- C
+source_coverage: outputs/univtac-eight-task-coverage
+concurrency: 2
+max_initialization_attempts: 3
+max_codex_starts: 2400
+max_simulator_starts: 7200
+video_playback_rate: 0.05
+media_workers: 1
+minimum_disk_free_bytes: 5368709120
+feedback_protocol: native_eval_no_online_task_feedback_v1
+pro_conversation: https://chatgpt.com/c/6aa00ac2-bef8-83ee-9a7d-82186e056c59

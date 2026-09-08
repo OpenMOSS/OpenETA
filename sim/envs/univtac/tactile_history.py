@@ -215,7 +215,7 @@ def encode_recorded_frames(files, durations, video: Path):
     return video
 
 
-def export_review_video(root: Path):
+def export_review_video(root: Path, *, playback_rate=1.0, review_label=None):
     """Offline VFR H.264 export; failures leave raw images and an error record."""
     import imageio_ffmpeg
     rows = [json.loads(s) for s in (root/'samples.jsonl').read_text().splitlines() if s.strip()]
@@ -263,6 +263,14 @@ def export_review_video(root: Path):
                 draw.text((x+4,y), n+' · '+REVIEW_ONLY_TOUCH, font=font, fill='#a40000')
             with Image.open(root/row['images'][n]) as im:
                 canvas.paste(im.convert('RGB').resize((480,360)), (x,y+20))
+        if review_label:
+            labelled = Image.new('RGB', (960, 960), 'white')
+            labelled.paste(canvas, (0, 60))
+            label_draw = ImageDraw.Draw(labelled)
+            font = ImageFont.truetype('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc', 17)
+            label_draw.text((8, 3), review_label, font=font, fill='black')
+            label_draw.text((8, 30), f'{playback_rate:g}×仿真时间；后台判分仅供用户，未交付Agent；仅延长真实帧显示。', font=font, fill='black')
+            canvas = labelled
         file = folder/f"{row['sample_id']:06d}.png"
         canvas.save(file)
         files.append(file)
@@ -271,16 +279,16 @@ def export_review_video(root: Path):
     durations = []
     for i, file in enumerate(files):
         duration = rows[i+1]['simulation_time_seconds']-rows[i]['simulation_time_seconds'] if i+1<len(rows) else 1/60
-        duration = max(duration, .001)
+        duration = max(duration, .001) / playback_rate
         durations.append(duration)
         entries += [f"file '{file.relative_to(root)}'", 'option framerate 1000', f'duration {duration:.9f}']
     manifest.write_text('\n'.join(entries)+'\n')
     video = root/'review.mp4'
     proc = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0',
                            '-i',str(manifest), '-fps_mode', 'vfr', '-c:v','libx264','-pix_fmt','yuv420p',
-                           '-movflags','+faststart',str(video)], capture_output=True, text=True, check=False)
+                           '-threads','2','-movflags','+faststart',str(video)], capture_output=True, text=True, check=False)
     if proc.returncode:
         raise RuntimeError(proc.stderr)
     write_json(root/'video.json', {'path':'review.mp4','frame_count':len(rows),'durations_seconds':durations,
-                                 'clock':'simulation time; millisecond video time base', 'interpolation':False})
+                                 'clock':'simulation time; millisecond video time base', 'playback_rate':playback_rate, 'interpolation':False})
     return video

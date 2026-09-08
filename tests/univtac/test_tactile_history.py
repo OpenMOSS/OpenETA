@@ -126,6 +126,11 @@ def test_sampling_copies_buffers_without_physics_and_builds_exact_strips(tmp_pat
     export_review_video(tmp_path)
     assert (tmp_path/'review.mp4').stat().st_size>0
     assert json.loads((tmp_path/'video.json').read_text())['frame_count']==2
+    export_review_video(tmp_path, playback_rate=.05, review_label='B 4-shot seed 1000000')
+    video = json.loads((tmp_path/'video.json').read_text())
+    assert video['playback_rate']==.05 and video['frame_count']==2
+    assert video['durations_seconds'][0]==pytest.approx(.4)
+    assert any('B 4-shot' in text for text in drawn)
 
 
 @pytest.mark.parametrize('deadline,grace,expected',[(4,.05,'terminal_grace_expired'),(.05,4,'overall_deadline')])

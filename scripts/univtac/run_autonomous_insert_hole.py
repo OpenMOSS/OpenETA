@@ -58,7 +58,7 @@ def operator_prompt(config):
             f"{config['max_tool_calls']} MCP calls and {config['codex_timeout_seconds']} seconds "
             'of total Codex wall time are available. Planning rejection of an admitted '
             'motion request consumes its request budget.\n'
-            f"Native control is limited to 300 steps, with at most {config['max_control_steps_per_move']} "
+            f"Native control is limited to {config.get('native_control_step_limit', 300)} steps, with at most {config['max_control_steps_per_move']} "
             'control steps per motion segment. Each control step advances two physics steps '
             'at 120 Hz; physics pauses while you reason. A segment limit need not end the '
             'episode: inspect the actual feedback. Native terminal or an episode budget '
@@ -195,17 +195,18 @@ def run_episode(args, config, seed, root):
     spec = ScopedIsaac51LaunchSpec(python_executable=args.runtime_python,command=tuple(command),
             cwd=args.source_root,output_root=root,timeout_seconds=timeout)
     coordinator = getattr(args, 'coordinator', None)
-    hooks = coordinator.hooks(seed, 'worker') if coordinator else {}
+    coord_key = tuple(config['cell_key']) if config.get('cell_key') else seed
+    hooks = coordinator.hooks(coord_key, 'worker') if coordinator else {}
     url = None
     codex_home = root/'runtime/codex-home'
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_scoped_isaac51_command,spec, **hooks)
         try:
-            ready = (coordinator.wait_ready(seed, root, future, config['startup_timeout_seconds']) if coordinator else
+            ready = (coordinator.wait_ready(coord_key, root, future, config['startup_timeout_seconds']) if coordinator else
                      _wait_for_worker(root/'ready.json',future,config['startup_timeout_seconds']))
             url = ready['worker_url']
             if coordinator:
-                coordinator.barrier(seed)
+                coordinator.barrier(coord_key)
                 _post(url, '/host_release')
             episode['status'] = 'running'
             write_json(root/'episode.json',episode)
@@ -238,7 +239,7 @@ def run_episode(args, config, seed, root):
                          stdout_path=root/'codex_exec.jsonl',stderr_path=root/'codex_stderr.log',
                          timeout_seconds=config['codex_timeout_seconds'],stop_path=root/'stop.json',
                          terminal_grace_seconds=config['terminal_grace_seconds'],
-                         **(coordinator.hooks(seed, 'codex') if coordinator else {}))
+                         **(coordinator.hooks(coord_key, 'codex') if coordinator else {}))
                 write_json(root/'codex_lifecycle.json',life)
                 write_json(root/'codex_trace_summary.json',summarize_codex_exec(read_jsonl(root/'codex_exec.jsonl')))
                 if life['returncode'] and not life['stopped_by_worker'] and not life['timed_out']:
@@ -250,8 +251,8 @@ def run_episode(args, config, seed, root):
         finally:
             if coordinator:
                 if episode.get('infrastructure_error'):
-                    coordinator.abort(episode['infrastructure_error'], seed)
-                coordinator.phase(seed, 'cleanup')
+                    coordinator.abort(episode['infrastructure_error'], coord_key)
+                coordinator.phase(coord_key, 'cleanup')
             if url and not future.done():
                 try:
                     _post(url,'/host_finalize')
@@ -282,14 +283,14 @@ def run_episode(args, config, seed, root):
     else:
         episode['evaluable'] = bool(final['reset_valid'] and final['native_success_available'])
     episode['status'] = 'completed' if episode['evaluable'] or (args.mode == 'observe_only' and not episode.get('infrastructure_error')) else 'infrastructure_issue'
-    if coordinator and coordinator.cancel.is_set() and coordinator.abort_seed != seed and episode.get('infrastructure_error'):
+    if coordinator and coordinator.cancel.is_set() and coordinator.abort_seed != coord_key and episode.get('infrastructure_error'):
         episode['status'] = 'cancelled'
         episode['cancelled_due_to_seed'] = coordinator.abort_seed
     write_json(root/'episode.json',episode)
     if coordinator:
-        coordinator.phase(seed, episode['status'])
+        coordinator.phase(coord_key, episode['status'])
         if episode.get('infrastructure_error'):
-            coordinator.abort(episode['infrastructure_error'], seed)
+            coordinator.abort(episode['infrastructure_error'], coord_key)
     return episode
 
 

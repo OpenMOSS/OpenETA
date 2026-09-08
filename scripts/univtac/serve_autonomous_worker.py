@@ -55,6 +55,8 @@ def main(argv=None):
         config = yaml.safe_load(args.config.read_text())
         native, _ = load_task_config(args.source_root / 'task_config' / f"{config['task_config']}.yml")
         module, cfg, timing, _ = build_task_env_cfg(config['task'], native, config['task_config'], 'eval', device=args.device, save_dir=root/'native')
+        if config.get('native_control_step_limit', cfg.step_lim) != cfg.step_lim:
+            raise ValueError('Declared control budget does not match native task step_lim')
         reset_limit = {'native_default_seconds':float(cfg.reset_time_limit),
                        'override_seconds':config.get('native_reset_time_limit_seconds')}
         if reset_limit['override_seconds'] is not None:

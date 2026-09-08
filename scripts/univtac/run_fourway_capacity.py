@@ -46,6 +46,8 @@ class Coordinator:
     def event(self, seed, name, **extra):
         with self.lock:
             row = {'timestamp_s': time.time(), 'seed': seed, 'event': name, **extra}
+            if isinstance(seed, tuple):
+                row.update(cell=list(seed), task=seed[0], seed=seed[1], condition=seed[2])
             self.events.append(row)
             with (self.root/'events.jsonl').open('a') as f:
                 f.write(json.dumps(row)+'\n')
@@ -163,7 +165,8 @@ def resources(coordinator, previous):
             coordinator.abort(f'{seed}: worker exited during {phases[seed]}, code={process.returncode}', seed)
     return {'timestamp_s': now, 'gpu_csv': gpu.stdout.strip(), 'gpu_error': gpu.stderr.strip(),
             'MemAvailable': mem['MemAvailable'], 'MemTotal': mem['MemTotal'],
-            'swap_used_bytes': mem['SwapTotal']-mem['SwapFree'], 'trees': trees, 'phases': phases}
+            'swap_used_bytes': mem['SwapTotal']-mem['SwapFree'], 'trees': trees,
+            'phases': {str(k): v for k,v in phases.items()}}
 
 
 

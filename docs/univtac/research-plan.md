@@ -133,6 +133,11 @@ not replace A/B/C. Removing tactile input does not disable contact physics or
 change the controller. The older vision-only pilot arms are not automatically
 this new B condition.
 
+D is an auxiliary historical-touch control, not a replacement for A/B/C. It
+uses C's same demonstrations, measured actions, proprioception, feedback,
+outcomes and bilateral tactile history, removing only historical external
+vision images and their references. Current vision and touch stay unchanged.
+
 ## Evidence and implementation status
 
 The existing Isaac 5.1 harness provides reusable simulation startup, native
@@ -1691,3 +1696,33 @@ remain separate from legacy two-way/four-way evidence and the paused R1.12
 ledger. These two episodes do not enter paper success rates and establish
 neither old/new protocol equivalence nor absence of performance loss. D,
 eight-task rollout and the full batch remain unstarted.
+
+
+### Eight-task new-protocol coverage — prepared, not yet run
+
+`configs/univtac/eight_task_coverage.yaml` fixes eight new cells at seed
+1000040: Insert Hole D and one C cell each for Grasp & Classify, Insert Tube,
+Insert HDMI, Pull Out Key, Lift Bottle, Lift Can and Put Bottle in Shelf.
+The completed new-protocol Insert Hole C episode is referenced without rerunning
+it. All cells retain `native_eval_no_online_task_feedback_v1` and
+`gpt-6-astra` / low.
+
+Offline preparation completed for all eight cells. The 32 A/B/C/D demonstration
+returns passed actual MCP image decoding and pixel comparisons. Existing Insert
+Hole and Grasp & Classify packages were copied unchanged, with D added separately.
+The six new task packages preserve recorded action-atom segments rather than
+forcing three segments per example. Official episodes 0/1 are used throughout;
+Shelf episode 1 records source seed 2, which is retained in provenance.
+
+The runner reuses the existing Coordinator and episode runner, with two slots
+including cleanup, at most three pre-ready initialization attempts per cell,
+and limits of eight operator Codex starts and 24 simulator starts. Native task
+control limits remain 600 for HDMI, 500 for Lift Bottle and 300 for the others.
+The focused offline suite passed 55 tests. This is preparation evidence, not
+autonomous coverage or a success-rate result. Live execution has not started at
+this checkpoint. R1.12 remains paused; no full batch is resumed.
+
+Prepare with `uv run --no-sync python scripts/univtac/run_eight_task_coverage.py
+--phase prepare`, then run the frozen queue with the same command and
+`--phase run`. Artifacts use `outputs/univtac-eight-task-coverage/`; persistent
+attempt directories retain the initialization budget across invocations.

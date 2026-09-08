@@ -18,7 +18,10 @@ from sim.envs.univtac.trace import write_json
 REPO=Path(__file__).resolve().parents[2]
 
 
-def segment_bounds(atom_ids, tags):
+def segment_bounds(atom_ids, tags, *, all_atoms=False):
+    if all_atoms:
+        starts=[i for i in range(len(tags)) if i==0 or atom_ids[i]!=atom_ids[i-1] or tags[i]!=tags[i-1]]
+        return [(max(0,a-1),b-1) for a,b in zip(starts,starts[1:]+[len(tags)])]
     starts=[i for i,t in enumerate(tags) if t==b'move' and (i==0 or atom_ids[i]!=atom_ids[i-1])]
     ends=[i-1 for i in starts[1:]]+[len(tags)-1]
     return [(0 if k==0 else ends[k-1],end) for k,end in enumerate(ends)]
@@ -31,6 +34,18 @@ def strip(frames, selected, steps, path, label):
         canvas.paste(frames[index],(i*w,30))
         draw.text((i*w+5,8),f'{label} | row {index} | step {int(steps[index])}',fill='black')
     path.parent.mkdir(parents=True,exist_ok=True);canvas.save(path)
+
+
+
+def tactile_without_vision(full):
+    """D reuses C exactly, removing only historical external-vision references."""
+    result = copy.deepcopy(full)
+    removed = set()
+    for example in result['text']['examples']:
+        for segment in example['segments']:
+            removed.update(segment.pop('vision_labels', []))
+    result['images'] = [im for im in result['images'] if im['label'] not in removed]
+    return result
 
 
 def prepare(raw: Path, out: Path, *, config_path=None, episodes=(0,1)):
@@ -77,8 +92,9 @@ def prepare(raw: Path, out: Path, *, config_path=None, episodes=(0,1)):
             for n in VIEWS:
                 path=out/'historical_expert'/f'episode_{episode}'/f'{i:04d}'/f'{n}.png'
                 path.parent.mkdir(parents=True,exist_ok=True);frames[n][i].save(path)
+        bounds=segment_bounds(ids,tags,all_atoms=config.get('demonstration_segment_policy')=='all_atoms')
         example={'example_id':f'official_episode_{episode}', 'outcome':'success', 'segments':[]}
-        for k,(a,b) in enumerate(segment_bounds(ids,tags),1):
+        for k,(a,b) in enumerate(bounds,1):
             label=f'example {episode} segment {k}'
             def state(i,ee=ee,joint=joint,steps=steps):return {'ee_xyz_wxyz':ee[i].tolist(),'joint':joint[i].tolist(),'recorded_step':int(steps[i])}
             ra=quaternion_matrix(ee[a,3:][[1,2,3,0]]);rb=quaternion_matrix(ee[b,3:][[1,2,3,0]])
@@ -110,11 +126,13 @@ def prepare(raw: Path, out: Path, *, config_path=None, episodes=(0,1)):
             'metadata_result':info['result'],'file':str((raw/f'{episode}.hdf5').resolve()),'sample_count':len(steps),
             'step_range':[int(steps[0]),int(steps[-1])],'step_deltas':np.unique(np.diff(steps)).tolist(),
             'attrs':{},'fields':fields,'has_raw_action_commands':False,
-            'segments':segment_bounds(ids,tags), 'native_outcome_recomputed':False})
+            'segments':bounds, 'segmentation':config.get('demonstration_segment_policy','legacy_move_blocks'), 'native_outcome_recomputed':False})
     write_json(out/'no_demo.json',{'text':{'examples':[],'message':'No historical demonstrations are provided.'},'images':[]})
     write_json(out/'visual_action_icl.json',{'text':base,'images':vision_images})
     full=copy.deepcopy(base);full['historical_touch']=touch_content
-    write_json(out/'tactile_action_icl.json',{'text':full,'images':vision_images+touch_images})
+    projection = {'text':full,'images':vision_images+touch_images}
+    write_json(out/'tactile_action_icl.json',projection)
+    write_json(out/'tactile_action_no_vision_icl.json',tactile_without_vision(projection))
     write_json(out/'provenance.json',{'official_dataset':f'byml2024/UniVTAC isaac51/{task}',
         'task':task,'selected_episode_ids':list(episodes),
         'selection':selection or 'Numeric episode ID order: 0,1; both metadata successes; no task-specific split manifest found.',

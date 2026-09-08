@@ -1,0 +1,86 @@
+round: Eight-task new-protocol coverage
+seed: 1000040
+concurrency: 2
+max_initialization_attempts: 3
+base_config: outputs/univtac-isaac51-r110/batch/C_live.yaml
+existing_insert_hole_C: outputs/univtac-no-online-feedback-live-smoke/seed_1000040/attempt_1
+queue:
+  - [insert_hole, D]
+  - [grasp_classify, C]
+  - [insert_tube, C]
+  - [insert_HDMI, C]
+  - [pull_out_key, C]
+  - [lift_bottle, C]
+  - [lift_can, C]
+  - [put_bottle_in_shelf, C]
+tasks:
+  insert_hole:
+    native_control_step_limit: 300
+    package: outputs/univtac-isaac51-r17/demonstrations
+  grasp_classify:
+    native_control_step_limit: 300
+    native_reset_time_limit_seconds: 600
+    package: outputs/univtac-isaac51-r111/demonstrations
+    public_task_rules: >-
+      Static native rules: one sampled cylinder is present in an episode. Rough belongs
+      to orange; plain belongs to green. Success requires the object's pose origin in
+      the class-specific target frame to satisfy |x|<0.02 m, |y|<0.02 m, |z|<0.01 m,
+      and its positive z axis dotted with the target positive z axis >0.965.
+      There is no task-specific early-stop predicate; shared budgets still apply.
+      The current cylinder class and target transform are not supplied.
+  insert_tube:
+    native_control_step_limit: 300
+    public_task_rules: >-
+      Static native rules: the object's pose origin in the hole frame must satisfy
+      x<0.005 m, y<0.005 m (these are signed comparisons, not absolute values),
+      z<-0.03 m, and the object's positive z axis dotted with the hole positive
+      z axis >0.965. The absolute change of object z relative to the gripper from
+      the native reference must be <0.03 m. That change >0.03 m triggers early
+      termination. Equality does not satisfy success or that early-stop test.
+      Object axial position is not TCP displacement. Current hole transform and
+      grip-relative drift are not supplied.
+  insert_HDMI:
+    native_control_step_limit: 600
+    public_task_rules: >-
+      Static native rules: the connector pose origin in the target frame must
+      satisfy |x|<0.005 m, |y|<0.005 m and z<0.005 m; its positive z axis dotted
+      with the target positive z axis must be >0.965. Robot-base-relative native
+      end-effector z must be >0.145 m. There is no task-specific early-stop
+      predicate; shared budgets still apply. Current target transform is not supplied.
+  pull_out_key:
+    native_control_step_limit: 300
+    public_task_rules: >-
+      Static native rules: key world z >0.09 m, key positive z axis dotted with
+      world positive z >0.965, and slot x axis expressed relative to its native
+      initial reference dotted with [1,0,0] >0.99. The absolute difference between
+      native robot-base-relative end-effector z and key world z must be <0.14 m.
+      That difference >=0.14 m or the slot-axis dot product <0.99 triggers early
+      termination. These are the native comparisons; current key/slot ground
+      truth and these measured values are not supplied.
+  lift_bottle:
+    native_control_step_limit: 500
+    public_task_rules: >-
+      Static native rules: bottle origin in the native target frame must satisfy
+      x>-0.02 m, |y|<0.1 m and |z|<0.001 m; the absolute dot product of its x axis
+      expressed in that frame with [0,0,1] must be >0.99. After more than 300 native
+      action steps, absolute dot product of that x axis with [-1,0,0] >0.99 causes
+      early termination. These are target-relative pose comparisons, not a
+      minimum lift-height rule. The current target transform is not supplied.
+  lift_can:
+    native_control_step_limit: 300
+    public_task_rules: >-
+      Static native rules: can world pose-origin z <0.01 m and absolute dot product
+      of its x axis with world [0,0,1] >0.99. With the configured gsmini sensor,
+      maximum native indentation depth >8.0 mm causes early termination. Also,
+      absolute in-hand z change from the native reference >0.05 m together with
+      absolute dot product of the can z axis with world [0,0,1] >0.99 causes early
+      termination. These are the native predicates, not a minimum lift-height rule.
+      Current indentation, in-hand drift and object ground truth are not supplied.
+  put_bottle_in_shelf:
+    native_control_step_limit: 300
+    public_task_rules: >-
+      Static native rules: bottle pose origin in the native placement-target frame
+      must satisfy |x|<0.02 m, |y|<0.1 m, |z|<0.02 m; its positive z axis dotted
+      with the target positive z axis must be >0.965. With the configured gsmini
+      sensor, maximum native indentation depth >8.0 mm causes early termination.
+      Current placement-target transform and indentation measurements are not supplied.

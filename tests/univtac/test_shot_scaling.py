@@ -220,3 +220,31 @@ def test_one_attempt_resume_retains_later_historical_success(tmp_path):
     atomic_json(second/'episode.json',{'status':'completed','task_success':True})
     result=recover_cell(tmp_path,c,1)
     assert result['status']=='completed' and result['attempts']==2
+
+
+def test_reviewed_issue_skipped_without_hiding_original_or_retrying(tmp_path,monkeypatch):
+    from scripts.univtac.run_eight_task_coverage import run_cell
+    from scripts.univtac.run_fourway_capacity import Coordinator
+    c,f=make_cell(tmp_path,'C_4shot')
+    c['cell_key']=[c['task'],c['seed'],c['condition']]
+    (f/'ready.json').unlink()
+    episode={'status':'infrastructure_issue','codex_process_count':0,
+             'reset_valid':False,'infrastructure_error':'native SIGABRT'}
+    atomic_json(f/'episode.json',episode)
+    atomic_json(f/'worker_lifecycle.json',{'cleanup_complete':True,
+                'final_process_group_members':[],'returncode':-6})
+    assert recover_cell(tmp_path,c,1)['status']=='unresolved_previous_attempt'
+    atomic_json(f/'reviewed_initialization_issue.json',{
+        'pro_message_id':'79a54d66-91fb-4a0f-a49d-dd2826296502',
+        'cell_key':c['cell_key'],'attempt':'attempt_1','original_error':'native SIGABRT',
+        'returncode':-6,'subtype':'pre_ready_native_abort'})
+    result=recover_cell(tmp_path,c,1)
+    assert result['status']=='infrastructure_issue' and result['reviewed_skip']
+    assert result['episode']==episode
+    monkeypatch.setattr('scripts.univtac.run_eight_task_coverage.run_episode',
+                        lambda *_:(_ for _ in ()).throw(AssertionError('must not run')))
+    co=Coordinator(tmp_path,[tuple(c['cell_key'])],protocol_smoke=True)
+    assert run_cell(SimpleNamespace(output_root=tmp_path,max_initialization_attempts=1),c,co)['reviewed_skip']
+    assert not (f.parent/'attempt_2').exists()
+    atomic_json(f/'protocol_delivery_error.json',{'error':'leak'})
+    assert recover_cell(tmp_path,c,1)['status']=='unresolved_previous_attempt'

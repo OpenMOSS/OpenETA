@@ -30,6 +30,7 @@ if str(REPO) not in sys.path:
 from scripts.univtac.run_autonomous_insert_hole import codex_command, operator_prompt
 from scripts.univtac.run_eight_task_coverage import (
     retryable_initialization,
+    reviewed_initialization_issue,
     run_cell,
     startup_crashes_since_ready,
 )
@@ -259,6 +260,9 @@ def recover_cell(root, cell, attempt_limit=3):
                 return {**cell,'status':'initialization_unavailable','attempts':number-1,
                         'episode_path':str(base/f'attempt_{number-1}')}
             return None
+        reviewed=reviewed_initialization_issue(folder,cell)
+        if reviewed:
+            return reviewed
         episode = load(folder/'episode.json') if (folder/'episode.json').exists() else {}
         life = load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}
         accepted = (folder/'ready.json').exists() or (folder/'codex_command.json').exists()

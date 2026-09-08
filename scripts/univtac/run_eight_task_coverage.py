@@ -227,6 +227,31 @@ def retryable_initialization(folder):
             (folder/'native_reset_limit.json').exists())
 
 
+def reviewed_initialization_issue(folder, cell):
+    """Skip only explicitly reviewed, cleaned, pre-ready issues; never retry."""
+    marker=folder/'reviewed_initialization_issue.json'
+    if not marker.exists():
+        return None
+    review=load(marker)
+    if review.get('pro_message_id')!='79a54d66-91fb-4a0f-a49d-dd2826296502':
+        return None
+    if review.get('cell_key')!=cell['cell_key'] or review.get('attempt')!=folder.name:
+        return None
+    if any((folder/n).exists() for n in ('ready.json','codex_command.json',
+            'codex_lifecycle.json','operator_context.jsonl','tool_trace.jsonl',
+            'protocol_delivery_error.json')):
+        return None
+    episode=load(folder/'episode.json'); life=load(folder/'worker_lifecycle.json')
+    if (episode.get('codex_process_count')!=0 or episode.get('reset_valid') is not False
+            or not life.get('cleanup_complete') or life.get('final_process_group_members')!=[]
+            or review.get('original_error')!=episode.get('infrastructure_error')
+            or review.get('returncode')!=life.get('returncode')):
+        return None
+    return {**cell,'status':'infrastructure_issue','episode':episode,'episode_path':str(folder),
+            'attempts':int(folder.name.split('_')[-1]),'reviewed_skip':True,
+            'infrastructure_subtype':review['subtype'],'root_cause':'unknown'}
+
+
 def run_cell(args,cell,coordinator):
     key=tuple(cell['cell_key']);root=args.output_root/'cells'/cell['task']/str(cell['seed'])/cell['condition']
     root.mkdir(parents=True,exist_ok=True)
@@ -234,6 +259,9 @@ def run_cell(args,cell,coordinator):
     for number in range(1,4):
         folder=root/f'attempt_{number}'
         if not folder.exists():break
+        reviewed=reviewed_initialization_issue(folder,cell)
+        if reviewed:
+            return reviewed
         if (folder/'ready.json').exists() or (folder/'codex_command.json').exists():
             episode=load(folder/'episode.json') if (folder/'episode.json').exists() else {}
             life=load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}

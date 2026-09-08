@@ -2026,3 +2026,35 @@ and a current crash streak of one. No additional simulator/model was used for
 these checks. Existing runtime, WebSocket/HTTPS behavior, model, task inputs and
 budgets remain unchanged. Restart the same service once after commit/push,
 with Restart=no; do not create another queue or rerun prepare.
+
+### Seed 1000005 startup pause — 2026-09-09
+
+Insert Tube C_4shot attempt_1 exited before ready with SIGABRT (returncode -6,
+18.01 s); Lift Bottle C_1shot attempt_1 was cancelled by the batch (host SIGTERM,
+returncode 0, 28.37 s). Neither launched Codex. All 75 worker starts have complete
+cleanup. C remains 52 evaluable (12 successes), eight initialization unavailable,
+two infrastructure issues and 1138 not_run; historical B remains six completed.
+All 52 C videos passed decoding checks. No failed identity will be replaced.
+
+Pro message `79a54d66-91fb-4a0f-a49d-dd2826296502` is recorded in per-attempt
+reviewed markers. Both recovery paths preserve the original error and skip these
+reviewed, cleaned, pre-ready issues without creating another attempt. They remain
+`infrastructure_issue`, not completed or native failures. Unknown handoff state,
+incomplete cleanup and delivery errors still block recovery. The focused suite
+passed 25 tests; Ruff and diff checks passed.
+
+The single local read-only check recorded an inotify instance limit of 128 and
+165 inotify FD references for UID 1000. Shared/inherited descriptors can duplicate
+instances; this is not 165 distinct instances. There were 3376 watch references
+against a 65536 watch limit, six read races/permission failures, and service soft
+and hard LimitNOFILE of 1048576. System file-nr was 59008; the system maximum was
+9223372036854775807. Failure logs place inotify warnings before the kvdb warning
+and the final std::system_error, but provide neither specific errno nor a kvdb
+lock path/holder. The historical SIGABRT root cause remains unknown.
+
+Available inotify instance capacity remains unconfirmed, so dispatch stays paused
+under Pro's resource-check condition. No sysctl, cache, lock, runtime, connection,
+model or budget was changed; the check started zero simulator/operator processes.
+The earlier three-attempt recovery is historical. New dispatch remains limited
+to one total initialization. The 30-minute monitor must not treat the old drain
+handover instructions as permission to release this new resource-related pause.

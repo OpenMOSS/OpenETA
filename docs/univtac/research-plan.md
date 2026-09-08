@@ -1480,7 +1480,7 @@ with formal9 valid/1 failed/22 unstarted unchanged. See the
 [short diagnostic report](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r112/uipc-diagnostic&path=report.html)
 and `outputs/univtac-isaac51-r112/uipc-diagnostic/report.json` for raw references.
 
-#### Planned goal-pad scene diagnostic (O/K/Z, unscored)
+#### Goal-pad scene diagnostic (O/K/Z, unscored): completed
 
 The next authorized diagnostic holds grasp_classify/1000034 fixed for nine fresh
 processes: O/K/Z, K/Z/O, Z/O/K. O keeps both pads dynamic at z0.002; K changes only
@@ -1504,4 +1504,52 @@ instrumentation remain. Expected initialization timeouts are comparison outcomes
 continue the next predeclared cell only after cleanup. Any unrelated startup,
 configuration, CUDA or cleanup error pauses. No replacement attempts. Maximum9
 new starts brings related R1.12 total to20; formal9 valid/1 failed/22not_run and
-R1.11 remain unchanged. Runtime results are not yet available at this checkpoint.
+R1.11 remain unchanged. Runtime results were pending at that historical prelaunch checkpoint; final results follow.
+
+
+All nine fixed starts completed reset; no task-body/checker/model runs occurred.
+Related R1.12 starts are now20, while the formal9 valid/1 failed/22not_run ledger
+is unchanged. No candidate was adopted and no formal recovery was started.
+
+| Repeat | O reset seconds / first Newton count | K | Z |
+| --- | --- | --- | --- |
+| 1 | 48.684 / 140 | 47.777 / 87 | 45.712 / 60 |
+| 2 | 46.692 / 118 | 45.828 / 59 | 46.955 / 69 |
+| 3 | 46.547 / 152 | 120.370 / 1024 | 43.660 / 71 |
+
+K3's second step also required844 scopes; native Info records one max-iteration
+exit. K therefore did not reliably remove slow startup computation. Z reduced
+first-step iterations in all three paired repetitions, but full-reset time was
+not always lower and all O runs were normal. This does not establish a repair
+for historical persistent slow steps or stability across seeds. Complete30-step
+counts, nested timing and common-step differences remain in the diagnostic CSV.
+
+Native fixed flags were1 only for K; contact element and collision surfaces
+remained present. Recorded pad-to-UIPC-ground surface distances stayed positive:
+K about1mm, O/Z settling near0.48mm. Z fell after creation; K stayed fixed and its
+native target reference z became0.017000m versus about0.016486m for O/Z, with no
+compensation. Thus these interventions change scene semantics. After construction,
+other prism translations differed by up to0.681mm across conditions despite
+unchanged inputs; robot joint arrays matched. Do not claim identical initial state.
+Native initialization counters239–242 exclude two earlier construction UIPC
+frames, which are separately visible in native logs (total241–244). Neither is
+zero motion. Early construction camera frames were not fabricated.
+
+The recorded render buffers are replayed at1× and0.1× simulation time; solver
+wall time is shown separately in curves. Raw same-time refreshes are retained,
+while video takes the last real image per timestamp. Recording/Info overhead and
+resource variation limit precise wall-time attribution; some offline encoding
+overlapped the later matrix cells. Twelve scoped tests passed; runtime configs
+match across all nine, and all processes cleaned up. See
+[goal-pad diagnostic table, curves and initialization replay](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r112/pad-scene-diagnostic&path=report.html)
+and `outputs/univtac-isaac51-r112/pad-scene-diagnostic/report.md` for full values.
+All18 final videos with unavailable-camera warnings reached browser playback
+end; this verifies playback only, not successful capture of dynamic camera views.
+
+Post-matrix media inspection found head/wrist frame IDs stayed1 and sensor time0
+throughout all nine runs: the passive `_data` reads did not trigger camera lazy
+buffer updates. Only bilateral tactile frames refreshed. The raw camera caches
+remain evidence but are not current visual trajectories; delivery masks those
+panels as unavailable and preserves actual touch/state/geometry. Complete dynamic
+four-view recording was not achieved. This was found after all nine had ended;
+no physical restart or retrospective control change is authorized.

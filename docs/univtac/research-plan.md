@@ -1367,3 +1367,31 @@ moves the robot and physics. Logs are separate under
 `outputs/univtac-isaac51-r111/reset-diagnostic/`; no diagnostic outcome enters
 A/B/C statistics. Two focused tests verify call count/order and exception
 preservation. This is instrumentation, not a fix or claim of a known root cause.
+
+The single authorized diagnostic completed normally: **not reproduced, not
+fixed**. Task construction took 16.346 seconds and `Task.reset` 39.703 seconds.
+First-five `_step` durations were 6.294/0.167/0.167/0.125/0.106 seconds. In this
+normal sample the first `UipcSim.step` (native `world.advance` + `world.retrieve`)
+accounted for 6.223 seconds; `task._update_render` was 0.063 seconds. That does
+not identify which subcall caused either historical timeout. First-step process
+CPU was 7.283 seconds across all process threads; a contemporaneous device-wide
+5-second GPU sample reported 93% utilization. Neither is a per-kernel trace or
+evidence of the failed runs' resource state. No step exceeded 30 seconds, so no
+timeout stack was captured. Nested spans overlap and must not be summed twice.
+
+Native reset/pre_move advanced 240 physics steps. Zero Codex processes and zero
+task-body actions occurred; no extra success check was invoked. The scoped
+launcher exited normally in 70.017 seconds, cleanup complete. GPU sampling was
+stopped after this diagnostic; no unrelated process was touched. Total R1.11
+simulator invocations are now 12. The formal 8-success/1-unavailable/9-not-run
+state is unchanged. No second diagnostic or formal continuation was launched.
+
+No specific behavior fix is justified yet: the missing evidence is an abnormal
+call's nested timing/stack and contemporaneous resource state. Retain the opt-in
+instrumentation for a future explicitly authorized attempt; do not claim that
+raising the timeout, clearing caches or changing runtime would solve it.
+The separate human-readable report is
+[reset diagnosis](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r111/reset-diagnostic&path=report.html),
+with `report.json`, `retained_timing_comparison.json`, `gpu_samples.csv` and raw
+`seed_1000028/reset_timing.jsonl` beside it. This diagnostic is excluded from
+all autonomous and ICL statistics.

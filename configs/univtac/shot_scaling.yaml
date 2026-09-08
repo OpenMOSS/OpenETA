@@ -22,3 +22,6 @@ media_workers: 1
 minimum_disk_free_bytes: 5368709120
 feedback_protocol: native_eval_no_online_task_feedback_v1
 pro_conversation: https://chatgpt.com/c/6aa00ac2-bef8-83ee-9a7d-82186e056c59
+# Dispatch overlay only; frozen B/C manifest and episode configs stay unchanged.
+dispatch_conditions:
+- C

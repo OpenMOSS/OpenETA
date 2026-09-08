@@ -338,10 +338,62 @@ def render_media(folder, cell, rate):
     episode_page(folder,cell)
 
 
+def scoped_cells(cells, conditions):
+    """Keep the original order and records; annotate excluded pending cells."""
+    result = []
+    for cell in cells:
+        row = dict(cell)
+        row['in_current_scope'] = row['comparison_condition'] in conditions
+        if not row['in_current_scope']:
+            row['scope_disposition'] = (
+                'deferred_to_main_table' if row['status'] == 'not_run'
+                else 'executed_before_scope_revision'
+            )
+        result.append(row)
+    return result
+
+
+def revise_scope(args, settings):
+    """Offline scope overlay; never prepare again or release a paused queue."""
+    root = args.output_root
+    manifest = load(root/'manifest.json')
+    frozen_settings = {k:v for k,v in settings.items() if k != 'dispatch_conditions'}
+    assert frozen_settings == manifest['settings']
+    validate_frozen(manifest)
+    conditions = settings['dispatch_conditions']
+    assert conditions == ['C']
+    data = load(root/'results.json')
+    # Preserve the original pause views once; raw episodes and manifest are untouched.
+    for name in ('results.json', 'run_manifest.json', 'statistics.json', 'report.html'):
+        source = root/name
+        target = root/'pre_c_only_scope'/name
+        if source.exists() and not target.exists():
+            target.parent.mkdir(exist_ok=True)
+            shutil.copy2(source, target)
+    for cell in manifest['cells']:
+        assert yaml.safe_load(Path(cell['config']).read_text()) == cell['effective_config']
+        old = recover_cell(root, cell)
+        saved = next(c for c in data['cells'] if c['cell_key'] == cell['cell_key'])
+        assert (old['status'] if old else 'not_run') == saved['status']
+    data['cells'] = scoped_cells(data['cells'], conditions)
+    active = [c for c in data['cells'] if c['in_current_scope']]
+    assert len(active) == 1200
+    revision = {'dispatch_conditions':conditions, 'planned':len(active),
+                'original_planned':len(manifest['cells']), 'pause_released':False,
+                'ordered_cell_keys':[c['cell_key'] for c in active]}
+    atomic_json(root/'scope_revision.json', revision)
+    data.update(planned=len(active), original_planned=len(manifest['cells']),
+                dispatch_conditions=conditions)
+    atomic_json(root/'results.json', data)
+    from scripts.univtac.summarize_shot_scaling import report
+    report(root)
+
+
 def run(args, settings):
     root = args.output_root
     manifest = load(root/'manifest.json')
-    assert manifest['settings']==settings, 'Use frozen settings to resume'
+    assert manifest['settings']=={k:v for k,v in settings.items() if k!='dispatch_conditions'}, 'Use frozen settings to resume'
+    conditions=settings.get('dispatch_conditions',['B','C'])
     if 'seed_list' in settings:
         validate_frozen(manifest)
         assert load(REPO/settings['seed_list'])==manifest['seeds'], 'Shared seed list differs from frozen manifest'
@@ -367,11 +419,12 @@ def run(args, settings):
             state[tuple(cell['cell_key'])] = old
             if old['status']=='unresolved_previous_attempt':
                 coordinator.abort('Unresolved prior accepted/in-flight attempt: '+old['episode_path'])
-        else:
+        elif cell['comparison_condition'] in conditions:
             pending.append(cell)
     def save():
-        atomic_json(root/'results.json',{'feedback_protocol':PROTOCOL,'planned':len(cells),
-            'cells':list(state.values()),'abort_reason':coordinator.abort_reason,'updated_s':time.time()})
+        atomic_json(root/'results.json',{'feedback_protocol':PROTOCOL,'planned':sum(c['comparison_condition'] in conditions for c in cells),
+            'original_planned':len(cells),'dispatch_conditions':conditions,
+            'cells':scoped_cells(list(state.values()),conditions),'abort_reason':coordinator.abort_reason,'updated_s':time.time()})
     save()
     from scripts.univtac.summarize_shot_scaling import report
     report(root)
@@ -408,6 +461,7 @@ def run(args, settings):
     session={'started_s':time.time(),'head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()}
     args.execution_head=session['head']
     runtime=load(root/'run_manifest.json') if (root/'run_manifest.json').exists() else {'feedback_protocol':PROTOCOL,'started_s':session['started_s'],'planned':2400}
+    runtime.update(planned=sum(c['comparison_condition'] in conditions for c in cells), original_planned=len(cells), dispatch_conditions=conditions)
     runtime.setdefault('sessions',[]).append(session);runtime['status']='running';atomic_json(root/'run_manifest.json',runtime)
     media=[]
     def media_job(folder,cell):
@@ -469,7 +523,7 @@ def run(args, settings):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase',choices=('download','prepare','run'),required=True)
+    parser.add_argument('--phase',choices=('download','prepare','revise-scope','run'),required=True)
     parser.add_argument('--config',type=Path,default=REPO/'configs/univtac/shot_scaling.yaml')
     parser.add_argument('--output-root',type=Path,default=REPO/'outputs/univtac-shot-scaling')
     parser.add_argument('--runtime-python',type=Path,default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
@@ -480,6 +534,8 @@ def main():
         fetch_additional(args,settings)
     elif args.phase=='prepare':
         prepare(args,settings)
+    elif args.phase=='revise-scope':
+        revise_scope(args,settings)
     else:
         run(args,settings)
 

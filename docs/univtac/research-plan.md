@@ -148,13 +148,15 @@ state and execution feedback. The number of expert episodes in B/C is not yet
 fixed at two.
 
 Before that main table, the authorized experiment is Insert Tube, Lift Can,
-Lift Bottle and Pull Out Key × B/C × 1/2/4-shot × 100 seeds: 2400 planned
-fresh autonomous episodes. It contains no A/0-shot. A shot is a complete official
+Lift Bottle and Pull Out Key × C × 1/2/4-shot × 100 seeds: 1200 planned
+fresh autonomous episodes. This supersedes the original B/C dispatch scope;
+the original 2400-cell manifest and all executed B/C records remain intact. It contains no A/0-shot. A shot is a complete official
 successful expert episode, retaining its existing segmentation and image format.
 Each task reuses its unchanged official episodes 0/1 and adds the next two
 metadata-success episodes in ID order. Four-shot nests the unchanged first two
 examples. For one-shot, even query-list indices use example 0 and odd indices
-use example 1, identically in B/C (50 queries each).
+use example 1 (50 queries each). The original assignment is unchanged.
+C retains historical vision as well as bilateral touch; it is not touch-only D.
 
 The user subsequently fixed 1000000–1000099, replacing the initial fallback
 1000100–1000199 before any simulator or operator Codex launch. The complete list
@@ -168,9 +170,11 @@ completed native failures; neither their attempts nor their sample count resets.
 
 The user will review the complete curves and select one common K for all main-
 table tasks and both B/C. No per-task or per-condition best-K selection is
-allowed. The matching four-task B_K/C_K results (800 planned cells) will be
+allowed. The matching four-task C_K results (400 planned cells) will be
 referenced directly in the main table, including failures and unavailable cells,
-without rerunning or counting them twice. Reuse requires identical expert IDs
+without rerunning or counting them twice. Already executed B cells matching K
+can also be reused; remaining main-table B cells are measured later. This round
+does not require full B curves or C−B comparisons. Reuse requires identical expert IDs
 and one-shot assignment, prompt, model/effort, protocol, controller and budgets;
 matching query seeds alone is insufficient. Retain all shot curves and disclose
 that these four tasks participated in selecting K: the reused data are not an
@@ -186,7 +190,9 @@ update does not open a new literature survey.
 The shot experiment keeps gpt-6-astra/low, the no-online-task-feedback protocol,
 original control, pinned Isaac51 and each task's accepted public rules/budgets.
 Use two simulator slots including cleanup and at most three pre-ready attempts
-per cell (2400 Codex / 7200 simulator upper bounds). Model-started episodes are
+per cell, with attempts retained across the scope revision. The old
+2400 Codex / 7200 simulator ceilings are historical upper bounds, not an
+authorization to dispatch B or replenish any exhausted cell. Model-started episodes are
 not initialization retries. Fixed expert media are shared read-only. Only slow
 review videos are required by the latest user amendment; bounded offline media
 processing must not hold up simulator/operator dispatch. Preserve every raw
@@ -1821,7 +1827,34 @@ Host outcome labels are user-only. No benchmark, motion algorithm, physical
 parameter, solver setting or success threshold changed.
 
 
-### Four-task shot scaling — preparation and resumption
+### Four-task C: 1/2/4-shot — current dispatch and historical preparation
+
+The current C-only overlay is `dispatch_conditions: [C]` in
+`configs/univtac/shot_scaling.yaml`. Apply it offline with
+`uv run --no-sync python scripts/univtac/run_shot_scaling.py --phase revise-scope`.
+Do not rerun prepare or clear the old output. The original manifest and effective
+episode configurations remain unchanged; `scope_revision.json` selects C in
+its original relative order. The pre-revision result/runtime/page snapshots are
+retained under `pre_c_only_scope/`. This operation does not release the current
+service-error pause or launch any simulator/model.
+
+The user has explicitly authorized recovery. The existing `--phase run` command
+dispatches only pending C cells. Completed C episodes, including incomplete
+model final/usage, and Lift Can C_1shot's exhausted three attempts are skipped.
+B results remain queryable; unrun B cells carry `deferred_to_main_table` scope
+metadata while their original not_run state is preserved. The C report contains
+one curve per task, equal-task means, same-seed 2−1/4−2 pairs, costs and missing
+states. Historical B is separate, not a completed B/C comparison.
+
+The verified revision ledger is 1200 C planned = 4 evaluable + 1 initialization
+unavailable + 1195 not_run; B has 6 completed and 1194 deferred cells. No new
+starts occurred for this revision. WebSocket, automatic HTTPS fallback/reconnect,
+service-error pause policy, CLI, model, prompt, control and budgets are unchanged.
+The user subsequently released the pause. Resume only pending C cells and
+monitor/report every 30 minutes after launch; the service-error policy remains
+unchanged. The scope-edit check itself consumed no simulator or model starts.
+
+The following records describe the original preparation, before scope reduction.
 
 The design-only update was pushed as `c99e39e` before implementation. The user
 then changed the shared query list to 1000000–1000099 before any new simulator
@@ -1860,7 +1893,8 @@ reserve stops new dispatch and defers media rather than deleting evidence.
 artifact route serves `report.html`, cell review pages, actual operator context,
 host results and slow videos. `summarize_shot_scaling.py` reports planned,
 evaluable, successes and unavailable separately; Wilson intervals condition on
-evaluability. Same-seed paired C−B and 2−1/4−2 comparisons retain effective pair
+evaluability. The original B/C report supported C−B; the current C-only report retains
+same-seed 2−1/4−2 comparisons and effective pair
 counts and paired empirical bootstrap intervals, including their possible
 degeneracy. Use the existing r09 Python with `summarize_shot_scaling.py
 outputs/univtac-shot-scaling --plots` to render the four task curves; no new

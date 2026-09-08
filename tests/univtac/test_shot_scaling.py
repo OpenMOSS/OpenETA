@@ -85,7 +85,7 @@ def test_cleanup_slots_do_not_wait_for_media_and_resume_retains_old_results(tmp_
     from scripts.univtac import run_shot_scaling as module
     cells=[]
     for i in range(4):
-        task=f'task{i}';cells.append({'task':task,'seed':1000000,'condition':'B_1shot','cell_key':[task,1000000,'B_1shot'],'status':'not_run'})
+        task=f'task{i}';cells.append({'task':task,'seed':1000000,'condition':'B_1shot','comparison_condition':'B','cell_key':[task,1000000,'B_1shot'],'status':'not_run'})
     for cell in cells:
         config=tmp_path/(cell['task']+'.json');atomic_json(config,{})
         cell.update(config=str(config),effective_config={})
@@ -147,3 +147,61 @@ def test_shared_demonstration_image_is_delivered_and_recorded(tmp_path):
     assert result['B']['images']==1 and result['C']['native_mcp_pixels_match']
     rows=[json.loads(x) for x in (package/'offline_mcp_context.jsonl').read_text().splitlines()]
     assert rows[0]['response_image_paths']==[str(shared)]
+
+
+def test_c_only_preserves_order_assignments_and_history():
+    from scripts.univtac.run_shot_scaling import scoped_cells
+    from scripts.univtac.summarize_shot_scaling import statistics
+    cells=[{**c, 'status':'not_run'} for c in ordered_cells(TASKS,list(range(1000000,1000100)))]
+    before=copy.deepcopy(cells)
+    b=next(c for c in cells if c['comparison_condition']=='B')
+    b.update(status='completed',episode={'evaluable':True,'task_success':False})
+    revised=scoped_cells(cells,['C'])
+    active=[c for c in revised if c['in_current_scope']]
+    assert len(active)==1200
+    assert [(c['task'],c['seed'],c['shot'],c['expert_ids']) for c in active]==[
+        (c['task'],c['seed'],c['shot'],c['expert_ids']) for c in before if c['comparison_condition']=='C']
+    historical=[c for c in revised if not c['in_current_scope']]
+    assert sum(c['scope_disposition']=='executed_before_scope_revision' for c in historical)==1
+    assert sum(c['scope_disposition']=='deferred_to_main_table' for c in historical)==1199
+    assert b['episode']['task_success'] is False
+    stats=statistics(revised,['C'])
+    assert len(stats['groups'])==12 and sum(g['planned'] for g in stats['groups'])==1200
+    assert not any('C-B' in c['comparison'] for c in stats['paired'])
+
+
+def test_c_dispatch_skips_completed_grace_and_exhausted_initialization(tmp_path,monkeypatch):
+    from scripts.univtac import run_shot_scaling as module
+    cells=[]
+    for i,condition in enumerate(['B_1shot','C_1shot','C_2shot','C_4shot']):
+        c={'task':f'task{i}','seed':1000000,'condition':condition,
+           'comparison_condition':condition[0],'cell_key':[i],'status':'not_run',
+           'config':str(tmp_path/f'{i}.json'),'effective_config':{}}
+        atomic_json(Path(c['config']),{})
+        cells.append(c)
+    settings={'media_workers':1,'video_playback_rate':.05,'minimum_disk_free_bytes':0}
+    atomic_json(tmp_path/'manifest.json',{'settings':settings,'cells':cells})
+    def recover(root,c):
+        if c['condition']=='C_1shot':
+            return {**c,'status':'initialization_unavailable','attempts':3}
+        if c['condition']=='C_2shot':
+            folder=tmp_path/'ended';folder.mkdir(exist_ok=True)
+            atomic_json(folder/'protocol_delivery_check.json',{'passed':True})
+            return {**c,'status':'completed','episode_path':str(folder),
+                    'episode':{'evaluable':True,'task_success':True,'model_exit_mode':'terminal_grace_expired'}}
+    dispatched=[]
+    def execute(args,c,coordinator):
+        dispatched.append(c['condition'])
+        return {**c,'status':'initialization_unavailable','attempts':3}
+    monkeypatch.setattr(module,'recover_cell',recover)
+    monkeypatch.setattr(module,'run_cell',execute)
+    monkeypatch.setattr(module,'render_media',lambda *_:None)
+    monkeypatch.setattr(module,'resources',lambda *_:{})
+    monkeypatch.setattr('scripts.univtac.summarize_shot_scaling.report',lambda *_:None)
+    module.run(SimpleNamespace(output_root=tmp_path),{**settings,'dispatch_conditions':['C']})
+    assert dispatched==['C_4shot']
+    saved=json.loads((tmp_path/'results.json').read_text())
+    assert saved['planned']==3 and len(saved['cells'])==4
+    assert saved['cells'][0]['scope_disposition']=='deferred_to_main_table'
+    assert saved['cells'][1]['attempts']==3
+    assert saved['cells'][2]['status']=='completed'

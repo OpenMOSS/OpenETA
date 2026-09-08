@@ -5,6 +5,7 @@ import argparse
 import html
 import json
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -34,11 +35,11 @@ def paired(left,right):
         'interval_note':'Paired empirical bootstrap over evaluable pairs only; degenerate samples can yield zero-width intervals.'}
 
 
-def statistics(cells):
+def statistics(cells, conditions=('B','C')):
     groups=[];comparisons=[];outcomes={}
     tasks=sorted({c['task'] for c in cells})
     for task in tasks:
-        for condition in ('B','C'):
+        for condition in conditions:
             for shot in (1,2,4):
                 subset=[c for c in cells if c['task']==task and c['comparison_condition']==condition and c['shot']==shot]
                 evaluated=[c for c in subset if c.get('episode',{}).get('evaluable') and not c.get('delivery_or_runner_error')]
@@ -54,13 +55,13 @@ def statistics(cells):
                     'states':states,'evaluable_rate':success/len(evaluated) if evaluated else None,
                     'wilson_95_evaluable':wilson(success,len(evaluated)),
                     'success_per_planned':success/len(subset) if subset else None})
-        for shot in (1,2,4):
+        for shot in ((1,2,4) if 'B' in conditions and 'C' in conditions else ()):
             comparisons.append({'task':task,'comparison':f'C-B_{shot}shot',**paired(outcomes[task,'B',shot],outcomes[task,'C',shot])})
-        for condition in ('B','C'):
+        for condition in conditions:
             for lo,hi in ((1,2),(2,4)):
                 comparisons.append({'task':task,'comparison':f'{condition}_{hi}-{lo}shot',**paired(outcomes[task,condition,lo],outcomes[task,condition,hi])})
     averages=[]
-    for condition in ('B','C'):
+    for condition in conditions:
         for shot in (1,2,4):
             rows=[g for g in groups if g['condition']==condition and g['shot']==shot]
             rates=[g['evaluable_rate'] for g in rows]
@@ -97,9 +98,11 @@ def episode_page(folder,cell):
 
 
 def report(root, *, plots=False):
-    data=json.loads((root/'results.json').read_text());stats=statistics(data['cells'])
+    data=json.loads((root/'results.json').read_text())
+    conditions=data.get('dispatch_conditions',['B','C'])
+    stats=statistics(data['cells'],conditions)
     (root/'statistics.json').write_text(json.dumps(stats,indent=2))
-    page='<meta charset="utf-8"><style>body{max-width:1300px;margin:25px auto;font:17px/1.5 sans-serif}td,th{padding:6px;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>四任务 B/C · 1/2/4-shot</h1><p>2400个计划格；共用seed1000000–1000099。缺失不算native失败；已完成格在恢复后保留。仅历史示范数量和触觉投影变化，当前视觉/触觉均完整。</p>'
+    page='<meta charset="utf-8"><style>body{max-width:1300px;margin:25px auto;font:17px/1.5 sans-serif}td,th{padding:6px;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>四任务 C：1/2/4-shot</h1><p>1200个计划格；共用seed1000000–1000099。缺失不算native失败；已完成格在恢复后保留。仅历史示范数量变化，当前视觉/触觉均完整。</p>'
     if data.get('abort_reason'):
         page+='<p><strong>当前暂停，曲线不完整：</strong>'+html.escape(data['abort_reason'])+'</p>'
     page+='<p>完整矩阵未结束前不选择K。四任务参与shot选择，未来引用不是独立测试。旧0-shot不拼入曲线。</p><table><tr><th>任务</th><th>条件</th><th>shot</th><th>planned/evaluable/success/unavailable</th><th>状态</th><th>可评价成功率及95% Wilson区间</th></tr>'
@@ -112,7 +115,7 @@ def report(root, *, plots=False):
         import matplotlib.pyplot as plt
         for task in sorted({g['task'] for g in stats['groups']}):
             fig,ax=plt.subplots(figsize=(8,5))
-            for condition in ('B','C'):
+            for condition in conditions:
                 gs=[g for g in stats['groups'] if g['task']==task and g['condition']==condition]
                 gs=[g for g in gs if g['evaluable_rate'] is not None]
                 x=[g['shot'] for g in gs];y=[g['evaluable_rate']*100 for g in gs]
@@ -122,13 +125,20 @@ def report(root, *, plots=False):
                 for i,g in enumerate(gs):ax.annotate(f'P/E/S/U={g["planned"]}/{g["evaluable"]}/{g["success"]}/{g["unavailable"]}',(x[i],y[i]),xytext=(0,12 if condition=='C' else -25),textcoords='offset points',fontsize=7)
             ax.set(title=task,xlabel='Official expert episodes (shots)',ylabel='Success among evaluable episodes (%)',xticks=[1,2,4],ylim=(-5,105));ax.legend();ax.grid(alpha=.2);fig.tight_layout();fig.savefig(root/f'{task}_shots.png',dpi=140);plt.close(fig)
     for task in sorted({g['task'] for g in stats['groups']}):
-        if (root/f'{task}_shots.png').exists():page+=f'<img src="{artifact(root/f"{task}_shots.png")}">'
-    page+=f'<p><a href="{artifact(root/"statistics.json")}">同seed配对差值、有效配对数与等权平均</a></p><h2>全部计划格</h2><table><tr><th>任务/seed/条件</th><th>状态</th><th>Host结果</th><th>审阅</th></tr>'
-    for c in data['cells']:
+        if (root/f'{task}_shots.png').exists():page+=f'<p>曲线快照生成于 {datetime.fromtimestamp((root/f"{task}_shots.png").stat().st_mtime,tz=timezone.utc).isoformat(timespec="seconds")}；上表为最新账本。</p><img src="{artifact(root/f"{task}_shots.png")}">'
+    page+='<h2>四任务等权平均（仅各任务均有可评价结果时显示）</h2><pre>'+html.escape(json.dumps(stats['equal_task_average'],ensure_ascii=False,indent=2))+'</pre>'
+    page+=f'<p><a href="{artifact(root/"statistics.json")}">同seed配对差值、有效配对数与等权平均</a></p><h2>当前C计划与修订前B账本（B不纳入本轮曲线）</h2><table><tr><th>任务/seed/条件</th><th>状态</th><th>Host结果</th><th>审阅</th></tr>'
+    for c in sorted(data['cells'], key=lambda c: not c.get('in_current_scope',True)):
         e=c.get('episode',{});link=''
         if c.get('episode_path'):
             folder=Path(c['episode_path']);target=folder/('review.html' if (folder/'review.html').exists() else 'episode.json');link=f'<a href="{artifact(target)}">输入、动作、结果与慢放</a>'
-        page+=f'<tr><td>{c["task"]}/{c["seed"]}/{c["condition"]}</td><td>{c["status"]}</td><td>{e.get("task_success","unavailable")}</td><td>{link}</td></tr>'
+        page+=f'<tr><td>{c["task"]}/{c["seed"]}/{c["condition"]}</td><td>{c.get("scope_disposition",c["status"])} / {c["status"]}</td><td>{e.get("task_success","unavailable")}</td><td>{link}</td></tr>'
+    page+='</table><h2>已执行格的用量与耗时（B单列历史身份）</h2><table><tr><th>任务/seed/条件</th><th>当前范围</th><th>control/physics</th><th>仿真秒</th><th>Codex秒/退出</th><th>实际usage（子集不重复相加）</th><th>初始化attempt成本</th></tr>'
+    for c in data['cells']:
+        if not c.get('episode_path'):
+            continue
+        e=c.get('episode',{});cost=c.get('costs',{})
+        page+=f'<tr><td>{c["task"]}/{c["seed"]}/{c["condition"]}</td><td>{c["comparison_condition"] in conditions}</td><td>{e.get("control_steps","unavailable")}/{e.get("physics_steps","unavailable")}</td><td>{e.get("simulation_time_seconds","unavailable")}</td><td>{cost.get("codex_seconds","unavailable")} / {cost.get("model_exit_mode","unavailable")}</td><td>{html.escape(json.dumps(cost.get("usage") if cost.get("usage") is not None else "unavailable",ensure_ascii=False))}</td><td>{html.escape(json.dumps(cost.get("initialization_attempts",[]),ensure_ascii=False))}</td></tr>'
     page+='</table>'
     (root/'report.html').write_text(page)
 

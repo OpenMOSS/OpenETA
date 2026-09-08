@@ -1282,3 +1282,59 @@ infrastructure errors remain visible even if recovery succeeds. Paired differenc
 use only jointly evaluable seeds and report their count; missing cells are not
 native failures. No new physical startup has yet occurred at this authorization
 checkpoint.
+
+### Recovery outcome: paused again at the required boundary
+
+The one authorized 1000026/B recovery succeeded. Seven valid episodes completed
+in the recovery continuation before 1000028/B hit the same reset-test limit:
+120 seconds allowed, 133.95139663503505 seconds measured. Codex had not started.
+The runner immediately stopped, as Pro required; no 1000029–1000031 episode
+was launched. No limits or task/controller parameters changed.
+
+Total startup count is **11**: one debug, eight evaluable autonomous episodes,
+and two failed initialization attempts. The earlier 1000026/B failure remains
+retained even though its sole recovery succeeded. Current 18-cell state is
+8 successful/evaluable, 1 unavailable, 9 not run; no completed native failure.
+There is no complete six-seed success-rate result.
+
+| Seed | A | B | C |
+|---|---|---|---|
+| 1000026 | success; 3 moves / 24 control | success after one reset recovery; 1 / 11 | success; 1 / 9 |
+| 1000027 | success; 5 / 39 | success; 3 / 22 | success; 2 / 11 |
+| 1000028 | success; 6 / 58 | reset unavailable; no Codex | success; 1 / 10 |
+| 1000029–1000031 | not run | not run | not run |
+
+A=3 successes/3 evaluable/6 planned, B=2/2/6, C=3/3/6. C−B and B−A are
+0 pp across two jointly evaluable seeds; C−A is 0 pp across three. These partial
+pairs do not establish an ICL gain or general lack of value. Host-only classes
+among evaluable episodes are A/C: two rough, one plain; B: one rough, one plain.
+No missing episode was assigned a class from another run or removed from plan.
+
+All eight operators exited naturally with actual usage; actual-input readback
+passed, with 0/4/8 historical images for A/B/C and four current images per
+observation return. There were no task-phase tool errors. The recordings retain
+192 four-view sample sets, including each takeover, without added physics.
+Costs below cover only evaluable episodes (unequal counts), not initialization
+failures, so totals must not be compared as matched efficiency estimates.
+
+| Condition (completed n) | Motions / MCP | Control / physics | Sim s | Codex / worker wall s | Input / cached subset | Output / reasoning subset |
+|---|---:|---:|---:|---:|---:|---:|
+| A (3) | 14 / 42 | 121 / 242 | 2.017 | 416.615 / 691.654 | 1,079,677 / 983,936 | 3,937 / 967 |
+| B (2) | 4 / 16 | 33 / 66 | 0.550 | 172.101 / 413.511 | 517,324 / 459,904 | 1,241 / 136 |
+| C (3) | 4 / 27 | 30 / 60 | 0.500 | 259.163 / 473.243 | 911,599 / 820,224 | 2,147 / 318 |
+
+For viewing, 1000027/A includes an explicit open followed by native success;
+1000028/A contains several position adjustments before success. B/C on the first
+two seeds both succeed; no extra success is attributable to historical touch in
+those pairs. Native success is not evidence that the Agent's stated texture
+reasoning was necessary. Further initialization diagnosis or physical recovery
+requires the next Pro instruction; no automatic additional attempts are made.
+
+All 20 derived videos for completed cells reached browser `ended`: eight
+individual episodes × 1×/slow playback, plus two B/C pairs × 1×/0.05×.
+Individual slow playback is 0.1× for 1000027/A and 1000028/A, otherwise 0.05×.
+Receipts are retained in `outputs/univtac-isaac51-r111/browser_playback_check.json`.
+Representative frames and the partial-result page were visually inspected;
+this is not a claim of manually watching every frame. No video was fabricated
+for a failed initialization or an unrun cell. The final focused suite passed
+56 tests, with scoped Ruff, compileall, diff checks and GPT-6 low scoped neat.

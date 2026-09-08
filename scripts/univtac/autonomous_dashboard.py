@@ -12,7 +12,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     pattern = {'R1.11':'univtac-isaac51-r111/**/run_manifest.json','R1.10':'univtac-isaac51-r110/**/run_manifest.json','R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
-        if manifest.get('round') != round_name:
+        if manifest.get('round') != round_name or manifest.get('mode') == 'observe_only':
             continue
         episodes = []
         for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9','R1.10','R1.11') else 'seed_*/episode.json')):

@@ -1159,7 +1159,7 @@ frames were visually inspected, including the no_live warning. This is not a
 claim of manually reviewing every frame. Final GPT-6 low full-history scoped neat completed a read-only result/cost and
 claim-boundary check; no numerical inconsistency was found.
 
-## R1.11: second-task autonomous pilot (checked; formal batch pending)
+## R1.11: second-task autonomous pilot (partial; reset blocker)
 
 Pro accepted R1.10 and stopped further Insert Hole mechanism ablations. Expert
 examples have helped autonomous insertion, but stable additional benefit from
@@ -1223,3 +1223,40 @@ Success was deliberately not evaluated. Its retained termination label
 `codex_exit` is an old generic host-close label, not evidence that Codex ran;
 the subsequent label-only fix names future observe-only closure explicitly.
 No physical rerun was needed. Formal native results and video delivery remain pending. Review entry: `http://127.0.0.1:9401/r111-autonomous`.
+
+### R1.11 partial execution and initialization blocker
+
+The frozen formal version is `370366a`. Two formal simulator invocations occurred,
+plus the single debug above; 16 planned cells have not started. The runner stopped
+on the second cell through its existing infrastructure-error mechanism.
+
+- 1000026/A: native success, 3 physical motions, 24 control / 48 physics steps,
+  0.4 simulation seconds, 11 MCP calls. GPT-6 low exited naturally after
+  114.046 Codex seconds; worker wall time was 254.776 seconds. Actual usage:
+  input 292,516, cached-input subset 260,864, output 1,021, reasoning subset 200.
+  The host-only class was rough. Agent requested a 30 mm upward move with close,
+  then an absolute placement target and a downward adjustment. Its final text
+  attributes classification to touch; this self-report does not establish a
+  tactile mechanism. Native checking, not the explanation, establishes success.
+- 1000026/B: official reset raised `Timeout: reset exceed time limit of 120.0 s,
+  cost 166.90325421496527 s.` in `_base_task.py:462`, during the initial five-step
+  reset test. No Codex process, operator observation or task-body action occurred.
+  `native_success_available=false`, `task_success=null`, not a native failure.
+  The launcher observed return code 0 despite the persisted worker exception;
+  the not-ready record still correctly makes the cell infrastructure/unavailable.
+
+There is no completed A/B/C success-rate comparison: A has 1 evaluable success
+of 6 planned, B has one unavailable attempt of 6 planned, C has no attempts.
+No cell was retried, no reset-time limit changed, and no query was replaced.
+The remaining 16 cells are pending Pro's decision about recovery within the
+invocation budget. The reset failure is a startup wall-time issue, distinct from
+native task control-step exhaustion or an Agent timeout; its low-level cause is
+not yet established.
+
+A's actual MCP input, prompt and counters passed readback. Its 1× and 0.05×
+videos both reached browser ended; no B task-body video exists because takeover
+was never reached. The historical expert preview and B/C matched images are
+available at the R1.11 dashboard; missing formal videos/results remain labelled
+pending rather than manufactured. A subsequent UI-only correction excludes the
+observe-only manifest from formal group aggregation; it does not change the
+frozen controller, prompt, examples or physical outcome.

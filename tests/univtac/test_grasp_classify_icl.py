@@ -90,6 +90,8 @@ def test_six_denominators_class_subgroups_and_bc_pairs(tmp_path):
     assert result['contrasts_percentage_points']['C-B']==100
     assert result['class_subgroups_host_only']['C']['rough']=={'episodes':3,'successes':3}
     assert pair_specs(root)==[('B','C')]
+    debug=root/'debug';debug.mkdir()
+    (debug/'run_manifest.json').write_text(json.dumps({'round':'R1.11','mode':'observe_only'}))
     groups=load_autonomous_runs(tmp_path,'R1.11')['batches']
     assert [len(g['episodes']) for g in groups]==[6,6,6]
     assert '/r111-pairs' in R111_HTML and 'Insert Hole' not in R111_HTML.split('<script>')[0]

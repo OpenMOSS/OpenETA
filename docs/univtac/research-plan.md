@@ -138,6 +138,59 @@ uses C's same demonstrations, measured actions, proprioception, feedback,
 outcomes and bilateral tactile history, removing only historical external
 vision images and their references. Current vision and touch stay unchanged.
 
+## Current paper design and shot-selection experiment
+
+The planned main table is eight tasks × A/B/C × 100 fixed query seeds (2400
+planned cells). A has no historical examples; B has expert visual observations,
+measured motion, proprioception, time and outcomes; C adds historical touch to
+exactly B. All current inputs retain vision, bilateral tactile history, robot
+state and execution feedback. The number of expert episodes in B/C is not yet
+fixed at two.
+
+Before that main table, the authorized experiment is Insert Tube, Lift Can,
+Lift Bottle and Pull Out Key × B/C × 1/2/4-shot × 100 seeds: 2400 planned
+fresh autonomous episodes. It contains no A/0-shot. A shot is a complete official
+successful expert episode, retaining its existing segmentation and image format.
+Each task reuses its unchanged official episodes 0/1 and adds the next two
+metadata-success episodes in ID order. Four-shot nests the unchanged first two
+examples. For one-shot, even query-list indices use example 0 and odd indices
+use example 1, identically in B/C (50 queries each).
+
+No previously confirmed 100-seed list was found in the current research/config
+entrypoints. This experiment freezes 1000100–1000199 in one shared configuration
+file; the future main table must reference that same list. Query seeds are
+planned slots, not a quota of successful resets or successful tasks. Failed
+initializations, accepted task failures and voluntary endings remain separate.
+Completed accepted cells must be skipped after a runner interruption, including
+completed native failures; neither their attempts nor their sample count resets.
+
+The user will review the complete curves and select one common K for all main-
+table tasks and both B/C. No per-task or per-condition best-K selection is
+allowed. The matching four-task B_K/C_K results (800 planned cells) will be
+referenced directly in the main table, including failures and unavailable cells,
+without rerunning or counting them twice. Reuse requires identical expert IDs
+and one-shot assignment, prompt, model/effort, protocol, controller and budgets;
+matching query seeds alone is insufficient. Retain all shot curves and disclose
+that these four tasks participated in selecting K: the reused data are not an
+independent test outside configuration selection.
+
+D (historical touch without external vision), E (expert motion records only),
+current-touch ablations and sol/luna/terra model comparisons are deferred until
+after the main table, with scope to be decided later. No tactile mismatch
+experiment is authorized here. LEMMo-Plan remains a closest related-work
+comparison; tactile ICL itself is not claimed as a first proposal. This design
+update does not open a new literature survey.
+
+The shot experiment keeps gpt-6-astra/low, the no-online-task-feedback protocol,
+original control, pinned Isaac51 and each task's accepted public rules/budgets.
+Use two simulator slots including cleanup and at most three pre-ready attempts
+per cell (2400 Codex / 7200 simulator upper bounds). Model-started episodes are
+not initialization retries. Fixed expert media are shared read-only. Only slow
+review videos are required by the latest user amendment; bounded offline media
+processing must not hold up simulator/operator dispatch. Preserve every raw
+recording; media can be rebuilt without replaying physics. The full main table
+and all other ablations remain unstarted and unauthorized by this round.
+
 ## Evidence and implementation status
 
 The existing Isaac 5.1 harness provides reusable simulation startup, native

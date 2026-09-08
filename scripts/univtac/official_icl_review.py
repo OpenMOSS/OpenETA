@@ -23,6 +23,8 @@ RULE_NAMES = {r+c: f"{r} {'官方说明＋公开规则' if r=='R' else '官方�
               for r in 'UR' for c,d in zip('ABC', NAMES)}
 
 
+GRASP_NAMES = dict(zip('ABC', NAMES.values()))
+
 NEW_SEED_NAMES = {k:v for k,v in RULE_NAMES.items() if k.startswith('R')}
 CURRENT_TOUCH_NAMES = {
     'B_live': 'B 视觉—运动示范 · 操作中有当前触觉',
@@ -41,7 +43,7 @@ def round_manifest(root):
 
 def round_names(root):
     name = round_manifest(root).get('round')
-    return {'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
+    return {'R1.11':GRASP_NAMES, 'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
 
 
 def round_seeds(root):
@@ -51,7 +53,7 @@ def round_seeds(root):
 
 def round_page(root, fallback='R1.7'):
     name = round_manifest(root).get('round', fallback)
-    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19', 'R1.10':'r110'}[name]
+    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19', 'R1.10':'r110', 'R1.11':'r111'}[name]
     return PAGE.replace('R1.7', name).replace('r17-', route+'-')
 
 
@@ -85,9 +87,12 @@ def demos(root, package=None, task_instruction=None):
     package = package or root/'demonstrations'
     if not (package/'run_manifest.json').exists():
         write_json(package/'run_manifest.json',{'round':'R1.7 historical expert','source':'official data; not autonomous query'})
-    page = round_page(root, 'R1.8' if task_instruction else 'R1.7')+'<h1>历史 expert 示范：B/C 实际输入</h1><p>官方 Isaac51 Insert Hole episode 0/1，metadata 均为 success。视频是历史采集，不计入自主成功率。步号来自 HDF5，时间按公开 collect 配置名义 120 Hz 换算；原始命令未记录，示范使用实测运动。</p>'
+    provenance = json.loads((package/'provenance.json').read_text())
+    task = provenance.get('task', 'insert_hole')
+    selected = provenance.get('selected_episode_ids', [0,1])
+    page = round_page(root, 'R1.8' if task_instruction else 'R1.7')+f'<h1>历史 expert 示范：B/C 实际输入</h1><p>官方 Isaac51 {task} episode {selected}，metadata 均为 success。视频是历史采集，不计入自主成功率。步号来自 HDF5，时间按公开 collect 配置名义 120 Hz 换算；原始命令未记录，示范使用实测运动。</p>'
     run = package.relative_to(root.parent)
-    for episode in (0,1):
+    for episode in selected:
         folder = package/'historical_expert'/f'episode_{episode}'
         record = json.loads((folder/'recording.json').read_text())
         out = folder/'review_frames_labelled';out.mkdir(exist_ok=True)
@@ -182,6 +187,7 @@ def summarize(root):
                     'move_request_count','actual_motion_requests','tool_call_count','control_steps','physics_steps','simulation_time_seconds')},
                 'codex_wall_seconds':life.get('elapsed_seconds'),
                 'worker_wall_seconds':read('worker_lifecycle.json').get('elapsed_seconds'),
+                'object_class_host_only':read('host_evaluator.json').get('object_class'),
                 'model_exit':life.get('exit_mode'),'usage':read('codex_trace_summary.json').get('usage'),
                 'demonstration_image_counts':[len(x['response_image_paths']) for x in context if x['tool']=='review_demonstrations'],
                 'video_1x':str((folder/'autonomous_1x.mp4').relative_to(root)),
@@ -200,6 +206,10 @@ def summarize(root):
             contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/groups[a]['planned'] if groups[a]['evaluable']==groups[b]['evaluable']==groups[a]['planned'] else None
         for b in ('RB','RA'):
             pairs['RC-'+b] = paired_outcomes(cells, 'RC', b)
+    if names is GRASP_NAMES:
+        for a,b in [('C','B'),('B','A'),('C','A')]:
+            contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/6 if groups[a]['evaluable']==groups[b]['evaluable']==6 else None
+            pairs[a+'-'+b] = paired_outcomes(cells, a, b)
     if names is CURRENT_TOUCH_NAMES:
         for a,b in CURRENT_TOUCH_COMPARISONS:
             contrasts[a+'-'+b] = (groups[a]['successes']-groups[b]['successes'])*100/8 if groups[a]['evaluable']==groups[b]['evaluable']==8 else None
@@ -207,7 +217,8 @@ def summarize(root):
         live, no_live = (contrasts[a+'-'+b] for a,b in CURRENT_TOUCH_COMPARISONS[:2])
         contrasts['historical_touch_difference_in_differences'] = live-no_live if live is not None and no_live is not None else None
     write_json(root/'results.json',{'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
-        'interpretation':('Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
+        'class_subgroups_host_only':{c:{kind:{'episodes':sum(x['condition']==c and x['object_class_host_only']==kind for x in cells), 'successes':sum(x['condition']==c and x['object_class_host_only']==kind and x['evaluable'] is True and x['task_success'] is True for x in cells)} for kind in ('rough','plain')} for c in names} if names is GRASP_NAMES else {},
+        'interpretation':('Six-seed grasp_classify autonomous pilot; historical class is used only for offline demo selection; current class only for host post-run subgroups. Cross-task results remain separate.' if names is GRASP_NAMES else 'Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
             'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.')})
 
 
@@ -226,12 +237,12 @@ def paired_timeline(streams):
 def pair_specs(root):
     if round_names(root) is CURRENT_TOUCH_NAMES:
         return [('B_live', 'B_no_live'), ('C_live', 'C_no_live')]
-    return [('RB', 'RC')]
+    return [('B', 'C')] if round_names(root) is GRASP_NAMES else [('RB', 'RC')]
 
 
 def review_pairs(root):
     modality = round_names(root) is CURRENT_TOUCH_NAMES
-    route = 'r110' if modality else 'r19'
+    route = 'r110' if modality else 'r111' if round_names(root) is GRASP_NAMES else 'r19'
     page = round_page(root)+'<h1>同 seed 并排审阅</h1><p>两侧都是现场 GPT-6 low 自主操作，动作可以不同。按接管后的真实仿真时间对齐，同倍率播放；短侧结束后保持末帧，不拉伸归一化运动时长。历史 expert 不是这里的当前操作。</p>'
     if modality:
         page += '<p>每对左侧有当前触觉，右侧无当前触觉。右侧录像中的触觉仅供用户审阅，本episode未送给Agent。历史示范在同一对中完全相同。</p>'

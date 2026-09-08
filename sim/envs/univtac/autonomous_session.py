@@ -81,7 +81,7 @@ class AutonomousSession:
         self.observation_index += 1
         folder = self.root/'observations'/f'{self.observation_index:04d}'
         obs = self.task._get_observations()
-        snap = capture_snapshot(obs, output_root=self.root, seed_dir=folder, task_name='insert_hole', seed=self.seed,
+        snap = capture_snapshot(obs, output_root=self.root, seed_dir=folder, task_name=self.config.get('task', 'insert_hole'), seed=self.seed,
             phase='pre_action', action_id=f'obs_{self.observation_index}', simulator_step=int(self.task.step_count),
             take_action_count=int(self.task.take_action_cnt), task_instruction=self.config.get('task_instruction', 'Insert the held object into the hole.'),
             task_metadata={}, native_check_success=None, save_host_only=True,
@@ -237,7 +237,7 @@ class AutonomousSession:
         return payload
 
     def finalize(self, reason=None):
-        checker = self.controller.check()
+        checker = ({'available':False, 'success':None} if self.config.get('observe_only') else self.controller.check())
         result = {'round':self.config.get('round','R1.4'),'seed':self.seed,'reset_valid':True,
                   'native_success_available':checker['available'], 'task_success':checker['success'],
                   'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or 'codex_exit',
@@ -249,5 +249,9 @@ class AutonomousSession:
             result['inherited_gripper'] = self.controller.grasp.inherited
             result['final_robot'] = self.controller.state()
         write_json(self.root/'final_result.json',result)
-        write_json(self.root/'host_evaluator.json',{'metadata':safe_diagnostic_value(self.task.metadata),'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)})
+        host = {'metadata':safe_diagnostic_value(self.task.metadata),'plan_success':bool(self.task.plan_success),'eval_success':bool(self.task.eval_success)}
+        if self.config.get('task') == 'grasp_classify':
+            # Post-run subgroup evidence only; never used in observations or targets.
+            host['object_class'] = str(self.task.choice)
+        write_json(self.root/'host_evaluator.json', host)
         return result

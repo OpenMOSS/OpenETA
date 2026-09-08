@@ -1,0 +1,113 @@
+round: R1.11
+task: grasp_classify
+seeds:
+- 1000026
+- 1000027
+- 1000028
+- 1000029
+- 1000030
+- 1000031
+task_config: demo
+mode: eval
+device: cuda:0
+model: gpt-6-astra
+reasoning_effort: low
+max_move_requests: 30
+max_tool_calls: 100
+codex_timeout_seconds: 3600
+startup_timeout_seconds: 900
+shutdown_timeout_seconds: 300
+max_control_steps_per_move: 80
+max_joint_delta_rad: 0.025
+position_tolerance_m: 0.003
+orientation_tolerance_rad: 0.05235987756
+gripper_settle_window_seconds: 0.1
+gripper_settle_tolerance_m: 0.0002
+gripper_target_tolerance_m: 0.001
+max_gripper_wait_steps: 40
+terminal_grace_seconds: 300
+tactile_history:
+  tracking_width: 160
+  roi_fraction:
+  - 0.08
+  - 0.08
+  - 0.92
+  - 0.92
+  patch_radius: 6
+  search_radius: 4
+  minimum_patch_std: 8.0
+  maximum_patch_mse: 900.0
+  minimum_match_margin: 1.0
+  minimum_tracking_quality: 0.35
+  motion_threshold_px: 2.0
+  difference_threshold: 0.015
+demonstrations: true
+task_instruction: Touch the cylinders to perceive their surface texture, classify each object, and
+  place it at the goal region for its class.
+task_rule_ablation: true
+public_task_rules: 'Public task rules (static requirements, not current-state measurements):
+
+  There is one active object in this episode. The fixed class mapping is:
+
+  rough object -> orange goal region; plain/smooth object -> green goal region.
+
+  Success requires the active object''s pose origin, expressed in its correct
+
+  class goal reference frame, to satisfy |x| < 0.02 m, |y| < 0.02 m and
+
+  |z| < 0.01 m simultaneously. The dot product of the object''s positive
+
+  longitudinal axis and that goal''s positive axis must be greater than 0.965.
+
+  The goal reference frame defines the placement position and direction; its
+
+  true transform and the current object''s class are not supplied. These are
+
+  object-relative placement requirements, not TCP displacement or finger opening.
+
+  No task-specific wrong-goal early stop is added: exploration and multiple
+
+  attempts are allowed within the shared native and tool budgets.
+
+  A false check_task result alone does not mean the episode has terminated;
+
+  use terminal feedback to determine whether physical interaction can continue.'
+episode_order:
+- - 1000026
+  - A
+- - 1000026
+  - B
+- - 1000026
+  - C
+- - 1000027
+  - B
+- - 1000027
+  - C
+- - 1000027
+  - A
+- - 1000028
+  - C
+- - 1000028
+  - A
+- - 1000028
+  - B
+- - 1000029
+  - A
+- - 1000029
+  - C
+- - 1000029
+  - B
+- - 1000030
+  - C
+- - 1000030
+  - B
+- - 1000030
+  - A
+- - 1000031
+  - B
+- - 1000031
+  - A
+- - 1000031
+  - C
+task_display_name: Grasp & Classify
+task_information: R

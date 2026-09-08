@@ -33,24 +33,28 @@ def strip(frames, selected, steps, path, label):
     path.parent.mkdir(parents=True,exist_ok=True);canvas.save(path)
 
 
-def prepare(raw: Path, out: Path):
+def prepare(raw: Path, out: Path, *, config_path=None, episodes=(0,1)):
     import h5py
     out.mkdir(parents=True,exist_ok=False)
     spec=importlib.util.spec_from_file_location('native_hdf_reader',
         '/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081/envs/utils/data.py')
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     metadata=json.loads((raw/'metadata.json').read_text())
-    cfg=yaml.safe_load((REPO/'configs/univtac/autonomous_insert_hole.yaml').read_text())['tactile_history']
-    base={'task_goal':'Insert the held object into the hole.', 'examples':[],
+    config=yaml.safe_load((config_path or REPO/'configs/univtac/autonomous_insert_hole.yaml').read_text())
+    cfg=config['tactile_history']
+    task=config['task']
+    selection_path=raw/'selection.json'
+    selection=json.loads(selection_path.read_text()) if selection_path.exists() else None
+    base={'task_goal':config.get('task_instruction','Insert the held object into the hole.'), 'examples':[],
           'interpretation':'Historical measured expert motion, not recorded move_to commands. Do not copy historical absolute coordinates into the current scene.',
           'robot_convention':'EE is measured panda_hand pose relative to robot base: metres then quaternion wxyz; not OpenETA world gripper-center TCP. Joint vector: seven arm radians then two finger positions in metres.',
           'time_convention':'Frame step values are recorded. Seconds below are nominal step differences / 120 from published collect timing, not an embedded per-frame clock.',
           'outcome_convention':'Success is the official per-episode metadata result; no checker rerun.',
           'unrecorded':'Original actuator/tool commands and force/grasp-state labels are unavailable.'}
     vision_images=[];touch_images=[];touch_content=[];provenance=[]
-    for episode in (0,1):
+    for episode in episodes:
         info=metadata[str(episode)]
-        if info['result']!='success' or info.get('source_seed',info['seed']) in (1000003,1000004,1000005):
+        if info['result']!='success' or info.get('source_seed',info['seed']) in config['seeds']:
             raise ValueError('Fixed official demonstration selection is not eligible')
         with h5py.File(raw/f'{episode}.hdf5') as f:
             ee=f['embodiment/ee'][()];joint=f['embodiment/joint'][()];steps=f['step'][()]
@@ -61,7 +65,7 @@ def prepare(raw: Path, out: Path):
             pixels={n:module.HDF5Handler.stream_to_img(f[key][()]) for n,key in keys.items()}
             # Native producer encoded its RGB numeric array with cv2.imencode;
             # native imdecode restores those original numbers. Do not swap again.
-        if any(len(x)!=len(steps) for x in [ee,joint,ids,*pixels.values()]):
+        if len(steps)<2 or any(len(x)!=len(steps) for x in [ee,joint,ids,tags,*pixels.values()]) or not np.all(np.diff(steps)>0):
             raise ValueError('Image/state lengths do not align')
         frames={n:[Image.fromarray(x) for x in arrays] for n,arrays in pixels.items()}
         recorded=[]
@@ -111,10 +115,11 @@ def prepare(raw: Path, out: Path):
     write_json(out/'visual_action_icl.json',{'text':base,'images':vision_images})
     full=copy.deepcopy(base);full['historical_touch']=touch_content
     write_json(out/'tactile_action_icl.json',{'text':full,'images':vision_images+touch_images})
-    write_json(out/'provenance.json',{'official_dataset':'byml2024/UniVTAC isaac51/insert_hole',
-        'selection':'Numeric episode ID order: 0,1; both metadata successes; no task-specific split manifest found.',
+    write_json(out/'provenance.json',{'official_dataset':f'byml2024/UniVTAC isaac51/{task}',
+        'task':task,'selected_episode_ids':list(episodes),
+        'selection':selection or 'Numeric episode ID order: 0,1; both metadata successes; no task-specific split manifest found.',
         'producer_commit':'not recorded in release metadata',
-        'documentation_revision':'d541e5568227ca3b66104d294f63c80acad7c52c; documentation only, runtime stays pinned',
+        'documentation_revision':('d541e5568227ca3b66104d294f63c80acad7c52c; documentation only, runtime stays pinned' if task=='insert_hole' else 'Current official dataset/download documentation; producer revision not published; runtime stays pinned'),
         'time_basis':'Observed step gap 2; collect/physical 120 Hz in official documentation; no timestamp attributes in HDF5',
         'episodes':provenance,'selection_config':cfg})
 
@@ -122,4 +127,6 @@ def prepare(raw: Path, out: Path):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--raw',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
-    args=parser.parse_args();prepare(args.raw.resolve(),args.output.resolve())
+    parser.add_argument('--config',type=Path)
+    parser.add_argument('--episodes',type=int,nargs='+',default=[0,1])
+    args=parser.parse_args();prepare(args.raw.resolve(),args.output.resolve(),config_path=args.config,episodes=args.episodes)

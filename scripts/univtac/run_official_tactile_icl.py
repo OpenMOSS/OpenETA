@@ -38,6 +38,8 @@ def condition_config(base, condition):
         config['task_information'] = 'R'
         config['demonstration_condition'] = CONDITIONS['ABC'.index(condition[0])]
         config['current_tactile'] = condition in ('B_live', 'C_live')
+    elif base.get('task_information') == 'R' and condition in ('A', 'B', 'C'):
+        config['demonstration_condition'] = CONDITIONS['ABC'.index(condition)]
     elif base.get('task_rule_ablation'):
         config['task_information'] = condition[0]
         config['demonstration_condition'] = CONDITIONS['ABC'.index(condition[1])]

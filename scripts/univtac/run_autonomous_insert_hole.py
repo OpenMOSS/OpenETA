@@ -31,7 +31,7 @@ from tools.embodied_gateway import LiveBackendGateway
 
 
 def operator_prompt(config):
-    prompt = PROMPT
+    prompt = PROMPT.replace('UniVTAC Insert Hole', 'UniVTAC ' + config.get('task_display_name', 'Insert Hole'))
     if config.get('demonstrations'):
         prompt = prompt.replace('Start by calling observe.',
             'Start by calling review_demonstrations once, then observe the current episode.').replace(
@@ -163,7 +163,7 @@ def run_episode(args, config, seed, root):
             shutil.copyfile(source, destination)
             image['path'] = str(destination.relative_to(root))
         write_json(root/'demonstrations/projection.json', projection)
-    episode = {'round':config['round'],'task':'insert_hole','seed':seed,'scored':args.mode=='batch',
+    episode = {'round':config['round'],'task':config['task'],'seed':seed,'scored':args.mode=='batch',
                'model':config['model'] if args.mode=='batch' else None,
                'reasoning_effort':config['reasoning_effort'] if args.mode=='batch' else None,
                'task_information':config.get('task_information'),
@@ -185,7 +185,12 @@ def run_episode(args, config, seed, root):
             url = ready['worker_url']
             episode['status'] = 'running'
             write_json(root/'episode.json',episode)
-            if args.mode == 'debug':
+            if args.mode == 'observe_only':
+                result = LiveBackendGateway(root=root,worker_url=url).call('observe', {})
+                write_json(root/'observe_only.json', {'scored':False, 'ok':result.success, 'text':result.text})
+                if not result.success:
+                    raise RuntimeError(f'observe-only check failed: {result.text}')
+            elif args.mode == 'debug':
                 debug_controls(LiveBackendGateway(root=root,worker_url=url),root)
             elif args.mode == 'replay':
                 replay_controls(LiveBackendGateway(root=root,worker_url=url),root,args.replay_commands)
@@ -247,7 +252,7 @@ def run_episode(args, config, seed, root):
         episode['evaluable'] = False
     else:
         episode['evaluable'] = bool(final['reset_valid'] and final['native_success_available'])
-    episode['status'] = 'completed' if episode['evaluable'] else 'infrastructure_issue'
+    episode['status'] = 'completed' if episode['evaluable'] or (args.mode == 'observe_only' and not episode.get('infrastructure_error')) else 'infrastructure_issue'
     write_json(root/'episode.json',episode)
     return episode
 
@@ -258,7 +263,7 @@ def main(argv=None):
     parser.add_argument('--runtime-python',type=Path,default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
     parser.add_argument('--source-root',type=Path,default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
     parser.add_argument('--output-root',type=Path,required=True)
-    parser.add_argument('--mode',choices=['debug','batch'],required=True)
+    parser.add_argument('--mode',choices=['debug','batch','observe_only'],required=True)
     args = parser.parse_args(argv)
     args.config = args.config.resolve()
     args.output_root = args.output_root.resolve()
@@ -266,14 +271,19 @@ def main(argv=None):
         raise FileExistsError('Use a fresh output root; no automatic episode retries')
     args.output_root.mkdir(parents=True)
     config = yaml.safe_load(args.config.read_text())
-    if config['task']!='insert_hole' or config['seeds']!=[1000003,1000004,1000005] or config['mode']!='eval':
+    if args.mode == 'observe_only':
+        config['demonstrations'] = False
+        config['observe_only'] = True
+        args.config = args.output_root/'observe_only.yaml'
+        args.config.write_text(yaml.safe_dump(config, sort_keys=False))
+    if config['mode']!='eval' or (args.mode != 'observe_only' and (config['task']!='insert_hole' or config['seeds']!=[1000003,1000004,1000005])):
         raise ValueError('Autonomous task/seed/mode contract mismatch')
     source = subprocess.check_output(['git','-C',str(args.source_root),'rev-parse','HEAD'],text=True).strip()
     if source != '371fac67917307026be8f00869fcc1b61c623a9f':
         raise ValueError('pinned Isaac51 source mismatch')
     manifest = {'round':config['round'],'mode':args.mode,'status':'running','config':config,
                 'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
-                'source_head':source,'seeds':config['seeds'] if args.mode=='batch' else [config['seeds'][0]]}
+                'source_head':source,'seeds':([999999] if args.mode=='observe_only' else config['seeds'] if args.mode=='batch' else [config['seeds'][0]])}
     write_json(args.output_root/'run_manifest.json',manifest)
     shutil.copyfile(args.config,args.output_root/'config.snapshot.yaml')
     (args.output_root/'git_status.txt').write_text(subprocess.check_output(['git','status','--short'],cwd=REPO,text=True))
@@ -288,7 +298,7 @@ def main(argv=None):
             break
     manifest['status']='completed' if len(episodes)==len(manifest['seeds']) else 'infrastructure_issue'
     write_json(args.output_root/'run_manifest.json',manifest)
-    return 0 if all(e['evaluable'] for e in episodes) else 1
+    return 0 if all(e['status']=='completed' for e in episodes) else 1
 
 
 if __name__ == '__main__':

@@ -1158,3 +1158,64 @@ All 96 playback files reached browser `ended`; receipts are in
 frames were visually inspected, including the no_live warning. This is not a
 claim of manually reviewing every frame. Final GPT-6 low full-history scoped neat completed a read-only result/cost and
 claim-boundary check; no numerical inconsistency was found.
+
+## R1.11: second-task autonomous pilot (prepared, not yet run)
+
+Pro accepted R1.10 and stopped further Insert Hole mechanism ablations. Expert
+examples have helped autonomous insertion, but stable additional benefit from
+historical touch, and positive interaction between historical and current touch,
+remain unestablished. The descriptive −25 pp interaction is not proof of
+negative synergy or substitution.
+
+R1.11 extends the same method to `grasp_classify`, with fresh seeds
+1000026–1000031 and A/B/C, 18 planned autonomous episodes. All groups retain
+current head/wrist, bilateral tactile history, robot state and execution feedback,
+GPT-6 `gpt-6-astra` / low, original control, 30 admitted motion requests,
+100 MCP calls, 3600 Codex seconds, native 300 control steps, 80-step segments
+and existing terminal grace. No controller or native task parameters change.
+The task's own initialization has `use_adaptive_grasp=False`; its native friction
+and grasp initialization are retained. It has no task-specific early-stop
+predicate; wrong-goal placement does not create an extra failure rule.
+
+The common prompt uses the official seen instruction, one active object,
+rough → orange / plain → green, and static native placement tolerances:
+object origin in its correct goal frame has strict |x|/|y| < 0.02 m and
+|z| < 0.01 m, and positive-axis dot product > 0.965. No current class,
+true target transform or target error enters the operator. Class is recorded
+only in host finalization for post-run subgroup analysis. The goal must be
+located from ordinary observations and supported head-camera marking.
+
+Official `isaac51/grasp_classify` metadata records success for episodes 0 and 1.
+They are the first plain and rough records respectively in ascending ID order;
+only these two were downloaded/inspected. Metadata lacks class, so historical
+active-actor/final-goal records establish class only for host selection. The
+Agent-visible package contains no hidden class or asset-name answer label.
+Both HDF5s have 48 aligned rows, steps 222–316 with gap 2, and one actual motion
+segment. All 384 four-view images decoded. Metadata ends at step 337; the saved
+sequence does not cover the expert's final unsaved delay. No continuous frames
+are fabricated. Original action commands are absent: examples contain measured
+EE/joint changes, not invented OpenETA calls. B delivers four visual strips;
+C adds four bilateral tactile strips, with identical non-tactile content.
+
+Configuration: `configs/univtac/grasp_classify_tactile_icl.yaml`.
+Official source: [ModelScope UniVTAC](https://modelscope.cn/datasets/byml2024/UniVTAC),
+[Isaac51 download script](https://github.com/univtac/UniVTAC/blob/isaac51/data/download.sh).
+Data, matched projections and provenance are retained locally under
+`outputs/univtac-isaac51-r111/{data/official,demonstrations}`. A maximum of one
+unscored reset/observe/shutdown check at seed 999999 is allowed before the
+18 formal episodes; it executes no task-body motion and no Codex.
+
+```bash
+uv run --no-sync python -m scripts.univtac.run_autonomous_insert_hole \
+  --config configs/univtac/grasp_classify_tactile_icl.yaml --mode observe_only \
+  --output-root outputs/univtac-isaac51-r111/debug
+uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
+  --config configs/univtac/grasp_classify_tactile_icl.yaml \
+  --demonstrations outputs/univtac-isaac51-r111/demonstrations \
+  --output-root outputs/univtac-isaac51-r111/batch
+```
+
+These commands require fresh output subdirectories and do not authorize retries.
+The reused runner filenames retain their historical names. At this preparation
+checkpoint no R1.11 simulator or Codex episode has started; native results and
+video delivery remain pending. Review entry: `http://127.0.0.1:9401/r111-autonomous`.

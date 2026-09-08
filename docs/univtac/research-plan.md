@@ -1346,7 +1346,7 @@ is host-only and excluded from task success.
 
 Validation: 65 focused tests passed; scoped Ruff, compileall and git diff checks passed. All 48 query video files (36 individual 1×/slow videos and 12 paired 1×/0.05× videos) reached browser playback end. Individual slow versions use 0.1× or 0.05× according to duration. This verifies playable delivery, not a human watching every frame; representative failure and success frames were inspected separately. No generated intermediate observations were used. Scoped GPT-6 low neat confirmed the result and cost statements.
 
-### R1.12 planned: Grasp & Classify current/history touch ablation
+### R1.12 Grasp & Classify current/history touch ablation — infrastructure pause
 
 Pro accepted R1.11, including the descriptive secondary result that C used fewer
 control steps than B in all six jointly successful pairs (94 versus 64 total).
@@ -1381,7 +1381,7 @@ fresh Task reset and Codex context per cell. No debug, warmup, expert or retry
 reserve. Any infrastructure error pauses the remaining batch; native failure
 continues the frozen order. No UIPC performance diagnosis is added.
 
-Planned command (not yet executed at this entry):
+Historical prelaunch checkpoint: the following command had not yet run when frozen; execution and pause are recorded below.
 
 ```bash
 uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
@@ -1397,6 +1397,50 @@ Complete delivery is 64 individual and 32 paired video files. No_live touch is
 labelled host-only; missing/unready episodes do not receive fabricated videos.
 Implementation/configuration and offline checks precede all physical execution.
 
-Prelaunch evidence records 32 passing offline tests, equal B/C non-tactile
+Historical prelaunch evidence records 32 passing offline tests, equal B/C non-tactile
 content, and 4/8 historical images. Simulator and operator starts are both zero
 at this checkpoint; runtime delivery remains unverified.
+
+
+#### R1.12 infrastructure pause (2026-09-08)
+
+Frozen implementation `7dd93c0` ran ten simulator starts and nine Codex contexts.
+The tenth start, seed 1000034 / C_no_live, did not reach ready. The runner recorded
+its outer 900-second ready timeout; the worker subsequently preserved the native
+reset error at `_base_task.py:478`: second initialization interval 670.778 s >
+600 s. The first five-step interval was 250.640 s; complete failed reset took
+921.815 s and worker lifecycle 950.301 s. These overlapping durations are not
+additive. Native checks occur after a step returns, so the interval can exceed
+600 before the exception. Cleanup completed with no SIGTERM/SIGKILL; no Codex or
+query action started for this cell. This is not a native task failure.
+
+The remaining 22 cells were not started. No retry or new diagnostic was launched.
+All nine evaluable trajectories succeeded and naturally returned model usage:
+
+| Seed | B_live | B_no_live | C_live | C_no_live |
+| --- | --- | --- | --- | --- |
+| 1000032 | success, 15 steps | success, 10 | success, 11 | success, 9 |
+| 1000033 | success, 21 steps | success, 11 | success, 14 | success, 10 |
+| 1000034 | not run | success, 10 | not run | initialization failure, unavailable |
+| 1000035–1000039 | not run | not run | not run | not run |
+
+Planned denominators stay eight per condition. Evaluable/success counts are
+B_live 2/2, B_no_live 3/3, C_live 2/2 and C_no_live 2/2; these are **partial counts,
+not completed eight-seed success rates**. Each fixed contrast has only two valid
+pairs, both jointly successful, paired difference 0 pp. Full-batch contrasts and
+difference-in-differences remain unavailable. No modality conclusion is supported.
+
+Nine actual operator contexts passed model/prompt/once-only demonstration,
+current-image and metadata checks. Live delivered four current images; no_live
+delivered two and no tactile selection metadata; C_no_live kept eight historical
+images. All nine preserved four-view host recording and native control/physics
+counts. `results.json` contains all-evaluable costs and joint-success paired
+costs with missing values left unavailable. Failed initialization has no model
+usage because no model was started. Old R1.11 results remain unchanged.
+
+Delivery at this pause is 18 individual videos and 8 paired videos for the two
+complete seeds. No task video is fabricated for the unready cell. Detailed
+attempts, timing and actions are in `outputs/univtac-isaac51-r112/partial_analysis.json`.
+All 26 delivered video files reached browser playback end (18 individual and
+8 paired); this verifies playable delivery, not human inspection of every frame.
+Receipts are in `browser_playback_check.json`.

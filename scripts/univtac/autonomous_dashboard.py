@@ -211,7 +211,7 @@ R111_HTML = R111_HTML.replace("const prompts=d.batches[0]?.manifest?.prompts??{}
 R111_HTML = R111_HTML.replace('evaluator:e.host_evaluator,worker_error', 'evaluator:e.host_evaluator,native_reset_limit:e.native_reset_limit,worker_error').replace('<main id="content">','<p>后续恢复启动的原生初始化墙钟限额统一为600秒，旧有效轨迹为120秒；任务预算/输入/控制/评价未改。这是超时缓解，不是UIPC性能修复。</p><main id="content">')
 
 
-R112_HTML = R110_HTML.replace('R1.10', 'R1.12').replace('r110-', 'r112-').replace(
+R112_HTML = R110_HTML.replace('三十二条视频与慢放入口', '计划32格：已完成视频与慢放入口').replace('R1.10', 'R1.12').replace('r110-', 'r112-').replace(
     'Autonomous Insert Hole', 'Autonomous Grasp & Classify').replace(
     '1000018', '1000032').replace('1000025', '1000039').replace(
     '不关闭传感器、初始化自适应抓持、物理或录像。',

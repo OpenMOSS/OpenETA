@@ -119,8 +119,9 @@ def report(root, *, plots=False):
                 gs=[g for g in stats['groups'] if g['task']==task and g['condition']==condition]
                 gs=[g for g in gs if g['evaluable_rate'] is not None]
                 x=[g['shot'] for g in gs];y=[g['evaluable_rate']*100 for g in gs]
-                err=[[y[i]-g['wilson_95_evaluable'][0]*100 for i,g in enumerate(gs)],
-                     [g['wilson_95_evaluable'][1]*100-y[i] for i,g in enumerate(gs)]]
+                # Roundoff at zero successes can put the Wilson lower bound just above zero.
+                err=[[max(0.,y[i]-g['wilson_95_evaluable'][0]*100) for i,g in enumerate(gs)],
+                     [max(0.,g['wilson_95_evaluable'][1]*100-y[i]) for i,g in enumerate(gs)]]
                 ax.errorbar(x,y,yerr=err,label=condition,marker='o',capsize=4)
                 for i,g in enumerate(gs):ax.annotate(f'P/E/S/U={g["planned"]}/{g["evaluable"]}/{g["success"]}/{g["unavailable"]}',(x[i],y[i]),xytext=(0,12 if condition=='C' else -25),textcoords='offset points',fontsize=7)
             ax.set(title=task,xlabel='Official expert episodes (shots)',ylabel='Success among evaluable episodes (%)',xticks=[1,2,4],ylim=(-5,105));ax.legend();ax.grid(alpha=.2);fig.tight_layout();fig.savefig(root/f'{task}_shots.png',dpi=140);plt.close(fig)

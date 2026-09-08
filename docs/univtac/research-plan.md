@@ -1444,3 +1444,17 @@ attempts, timing and actions are in `outputs/univtac-isaac51-r112/partial_analys
 All 26 delivered video files reached browser playback end (18 individual and
 8 paired); this verifies playable delivery, not human inspection of every frame.
 Receipts are in `browser_playback_check.json`.
+
+#### Authorized UIPC internal-timer diagnostic (not formal recovery)
+
+After the R1.12 pause, one reset-only grasp_classify/1000034 start is authorized,
+with the failed C_no_live configuration and unchanged native600/ready900/cleanup300
+limits. It is unscored, has no operator, task-body actions, or additional success-checker calls, and cannot be
+reused as a formal attempt. The 9 valid/1 failed/22 unstarted records stay frozen.
+Existing outputs contain no native Timer tree. The installed Timer export clears
+its window; inclusive nested durations must not be added. UipcSim already enables
+Timer (including its existing CUDA timing synchronization); this diagnostic adds
+no Timer enable or explicit sync. It exports construction/before/after-step/final
+windows and export overhead, covers the native 5/20/5 intervals, and changes only
+the existing diagnostic process's UIPC logger from Error to Info. No solver fix
+or additional retry is authorized. Runtime internal evidence remains pending.

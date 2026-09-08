@@ -126,3 +126,49 @@ def test_native_interval_clock_is_read_not_replaced(tmp_path):
     assert len(measured)==2 and all(r['interval_start_monotonic_s']==origin for r in measured)
     assert measured[1]['native_interval_elapsed_s']>=measured[0]['native_interval_elapsed_s']>=0
     assert next(r for r in rows if r['event']=='reset_pretest_guard')['native_elapsed_s']==.1
+
+
+def test_native_reports_cover_three_intervals_without_extra_steps(tmp_path):
+    import time
+    events=[]
+    noop=lambda *a,**k:None
+    task=SimpleNamespace(step_count=0,first_frame=None,scene=SimpleNamespace(write_data_to_sim=noop,update=noop),
+        sim=SimpleNamespace(step=noop,render=noop),_actor_manager=SimpleNamespace(update=noop),
+        _tactile_manager=SimpleNamespace(update=noop),_update_render=noop)
+    def step(is_save=False):
+        events.append(('step',is_save));task.step_count+=1
+        return 'original'
+    task._step=step
+    class Native:
+        @staticmethod
+        def get_sim_time_report(as_json):
+            assert as_json is True
+            events.append(('report',task.step_count))
+            return {'name':'GlobalTimer','duration':0,'count':1,'children':[]}
+    probe=ResetTiming(tmp_path);probe.enable_native_reports(Native);probe.install_task(task)
+    probe.export_native_report('after_construct',0)
+    def reset():
+        for count in (5,20,5):
+            reset_test_start=time.perf_counter()
+            for _ in range(count):assert task._step(is_save=False)=='original'
+            task.first_frame=7
+            assert reset_test_start>0
+    reset();probe.export_native_report('reset_final',task.step_count);probe.close()
+    rows=[json.loads(l) for l in (tmp_path/'reset_timing.jsonl').read_text().splitlines()]
+    steps=[r for r in rows if r.get('name')=='task._step' and r['event']=='exit']
+    assert [r['reset_test_step'] for r in steps]==list(range(1,31))
+    assert [r['test_interval'] for r in steps]==['initial_5']*5+['post_actor_20']*20+['final_5']*5
+    assert len([r for r in events if r[0]=='step'])==30
+    assert len(list((tmp_path/'uipc_timer').glob('*.json')))==62
+    assert task._step is step
+
+
+def test_native_report_failure_does_not_replace_native_exception(tmp_path):
+    class Native:
+        @staticmethod
+        def get_sim_time_report(as_json):raise RuntimeError('report unavailable')
+    probe=ResetTiming(tmp_path);probe.enable_native_reports(Native)
+    probe.export_native_report('reset_final',15);probe.close()
+    row=json.loads(next((tmp_path/'uipc_timer').glob('*.json')).read_text())
+    assert row['unavailable']=='RuntimeError: report unavailable'
+    assert row['export_call_seconds']>=0

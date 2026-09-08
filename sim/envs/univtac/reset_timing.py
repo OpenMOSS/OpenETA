@@ -9,10 +9,16 @@ import resource
 import sys
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 
 class ResetTiming:
     def __init__(self, root):
+        self.root = root
+        self.native_report = None
+        self.report_index = 0
+        self.intervals = {}
+        self.active_interval = None
         self.log = (root/'reset_timing.jsonl').open('x')
         self.stacks = (root/'reset_stacks.txt').open('x')
         self.started = time.perf_counter()
@@ -21,6 +27,7 @@ class ResetTiming:
         self.write(event='diagnostic_enter', pid=os.getpid())
 
     def write(self, **row):
+        row.setdefault('test_interval', self.active_interval)
         row.update(monotonic_s=time.perf_counter(), utc_timestamp_s=time.time())
         self.log.write(json.dumps(row)+'\n')
         self.log.flush()
@@ -61,6 +68,48 @@ class ResetTiming:
         self.wrap(cls, 'step', 'UipcSim.step[advance+retrieve]')
         self.wrap(cls, 'update_render_meshes', 'UipcSim.update_render_meshes')
 
+    def enable_native_reports(self, cls):
+        # UipcSim already enables Timer. Export drains its existing window;
+        # never toggle Timer or add device synchronization here.
+        self.native_report = cls.get_sim_time_report
+        (self.root/'uipc_timer').mkdir(exist_ok=True)
+
+    def export_native_report(self, boundary, native_step=None):
+        if self.native_report is None:
+            return
+        self.report_index += 1
+        started = time.perf_counter()
+        row = {'boundary':boundary, 'native_step':native_step,
+               'test_interval':self.active_interval, 'window':'since_previous_export; export clears native timer'}
+        try:
+            report = self.native_report(as_json=True)
+            row['export_call_seconds'] = time.perf_counter()-started
+            row['tree'] = report
+        except Exception as exc:  # noqa: BLE001 -- retain the original reset failure even if report export fails
+            row['export_call_seconds'] = time.perf_counter()-started
+            row['unavailable'] = f'{type(exc).__name__}: {exc}'
+        path = self.root/'uipc_timer'/f'{self.report_index:04d}_{boundary}.json'
+        path.write_text(json.dumps(row, indent=2))
+        self.write(event='native_timer_export', path=str(path.relative_to(self.root)),
+                   export_call_seconds=row['export_call_seconds'],
+                   export_and_write_seconds=time.perf_counter()-started,
+                   native_step=native_step, unavailable=row.get('unavailable'))
+
+    def record_uipc_configuration(self, task):
+        import importlib.metadata
+
+        import uipc
+        sim = task.uipc_sim
+        data = {'python_module':uipc.__file__,
+                'versions':{name:importlib.metadata.version(name) for name in ('pyuipc','tacex_uipc')},
+                'loaded_uipc_binaries':sorted({line.split()[-1] for line in Path('/proc/self/maps').read_text().splitlines()
+                                               if '.so' in line and 'uipc' in line}),
+                'workspace':sim.cfg.workspace, 'logger_level':sim.cfg.logger_level,
+                'effective_scene_config':sim.scene.config().to_json(),
+                'configured_uipc':sim.cfg.to_dict(),
+                'timer_semantics':'Existing Timer enabled by UipcSim; export drains. Nested inclusive seconds/count per path. No added sync.'}
+        (self.root/'uipc_configuration.json').write_text(json.dumps(data,indent=2,default=str))
+
     def install_task(self, task):
         for obj, method, label in (
             (task.scene, 'write_data_to_sim', 'scene.write_data_to_sim'),
@@ -93,7 +142,13 @@ class ResetTiming:
                                native_step=task.step_count)
                 return value
             index = task.step_count+1
-            if task.first_frame is not None or index > 5:
+            testing = caller.f_code.co_name == 'reset' and native_clock is not None
+            if self.native_report and testing:
+                if native_clock not in self.intervals:
+                    self.intervals[native_clock] = ('initial_5', 'post_actor_20', 'final_5')[len(self.intervals)]
+                self.active_interval = self.intervals[native_clock]
+                self.export_native_report('before_test_step', task.step_count)
+            elif task.first_frame is not None or index > 5:
                 return invoke()
             self.active_step = index
             faulthandler.dump_traceback_later(30, repeat=False, file=self.stacks)
@@ -102,7 +157,10 @@ class ResetTiming:
                     return invoke()
             finally:
                 faulthandler.cancel_dump_traceback_later()
+                if self.native_report and testing:
+                    self.export_native_report('after_test_step', task.step_count)
                 self.active_step = None
+                self.active_interval = None
         task._step = step
         self.restores.append((task, '_step', original))
 

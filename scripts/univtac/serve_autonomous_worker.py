@@ -20,7 +20,10 @@ def main(argv=None):
     parser.add_argument('--seed', type=int, required=True)
     parser.add_argument('--reset-timing-only', action='store_true')
     parser.add_argument('--reset-timing', action='store_true')
+    parser.add_argument('--uipc-native-report', action='store_true')
     base, _ = parser.parse_known_args(argv)
+    if base.uipc_native_report and not base.reset_timing_only:
+        parser.error('--uipc-native-report requires --reset-timing-only')
     root = base.output_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     app = task = server = session = timing_probe = None
@@ -59,11 +62,17 @@ def main(argv=None):
         if timing_probe:
             from tacex_uipc.sim.uipc_sim import UipcSim
             timing_probe.install_uipc_callbacks(UipcSim)
+            if args.uipc_native_report:
+                cfg.uipc_sim.logger_level = 'Info'
+                timing_probe.enable_native_reports(UipcSim)
             with timing_probe.span('Task.construct'):
                 task = module.Task(cfg, mode='eval')
             reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
             write_json(root/'native_reset_limit.json', reset_limit)
             timing_probe.install_task(task)
+            if args.uipc_native_report:
+                timing_probe.record_uipc_configuration(task)
+                timing_probe.export_native_report('after_construct', task.step_count)
             with timing_probe.span('Task.reset'):
                 task.reset(seed=args.seed)
             write_json(root/'reset_diagnostic_result.json', {
@@ -73,6 +82,8 @@ def main(argv=None):
                 'native_reset_time_limit_s':cfg.reset_time_limit,
                 'initialization_steps':task.step_count,
                 'initialization_physics_steps':task._physics_step_count})
+            if args.uipc_native_report:
+                timing_probe.export_native_report('reset_final', task.step_count)
             timing_probe.close()
             timing_probe = None
             if args.reset_timing_only:
@@ -130,6 +141,8 @@ def main(argv=None):
             server.server_close()
         if session and session.recorder:
             session.recorder.close()
+        if timing_probe and base.uipc_native_report:
+            timing_probe.export_native_report('reset_final', getattr(task, 'step_count', None))
         if task:
             task.close()
         if timing_probe:

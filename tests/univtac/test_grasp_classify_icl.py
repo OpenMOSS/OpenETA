@@ -100,3 +100,49 @@ def test_six_denominators_class_subgroups_and_bc_pairs(tmp_path):
 def test_completed_six_not_labelled_pending():
     assert 'valid(c)<12' not in R111_HTML
     assert 'valid(c)<6' in R111_HTML
+
+
+def test_recovery_keeps_failed_attempt_and_stops_on_next_infrastructure(tmp_path, monkeypatch):
+    import scripts.univtac.run_official_tactile_icl as runner
+    root=tmp_path/'batch';a=root/'seed_1000026/A';b=root/'seed_1000026/B'
+    a.mkdir(parents=True);b.mkdir()
+    (a/'episode.json').write_text(json.dumps({'evaluable':True}))
+    original={'evaluable':False,'reset_valid':False,'codex_process_count':0,'task_success':None}
+    (b/'episode.json').write_text(json.dumps(original))
+    _,order=experiment_plan(BASE)
+    (root/'run_manifest.json').write_text(json.dumps({'round':'R1.11','order':order}))
+    for c in 'ABC':(root/f'{c}.yaml').write_text(yaml.safe_dump(condition_config(BASE,c)))
+    calls=[]
+    def fake(args,config,seed,folder):
+        calls.append((seed,config['condition'],folder))
+        folder.mkdir(parents=True)
+        return {'evaluable':False,'task_success':None,'infrastructure_error':'reset timeout','codex_process_count':0}
+    monkeypatch.setattr(runner,'run_episode',fake)
+    runner.resume_r111(SimpleNamespace(output_root=root))
+    assert calls==[(1000026,'B',b/'attempt_2')]
+    assert json.loads((b/'episode.json').read_text())==original
+    assert json.loads((root/'recovery_manifest.json').read_text())['status']=='infrastructure_issue'
+    import pytest
+    with pytest.raises(FileExistsError):runner.resume_r111(SimpleNamespace(output_root=root))
+
+
+def test_recovery_failure_is_not_replaced_by_original_and_pairs_exclude_missing(tmp_path):
+    from scripts.univtac.official_icl_review import effective_episode_folder
+    root=tmp_path/'univtac-isaac51-r111';batch=root/'batch';batch.mkdir(parents=True)
+    _,order=experiment_plan(BASE)
+    (batch/'run_manifest.json').write_text(json.dumps({'round':'R1.11','order':order}))
+    for seed,c in order:
+        folder=batch/f'seed_{seed}'/c;folder.mkdir(parents=True)
+        (folder/'episode.json').write_text(json.dumps({'seed':seed,'evaluable':True,'task_success':True}))
+    b=batch/'seed_1000026/B';second=b/'attempt_2';second.mkdir()
+    (second/'episode.json').write_text(json.dumps({'seed':1000026,'evaluable':False,'task_success':None,'infrastructure_error':'reset'}))
+    assert effective_episode_folder(b)==second
+    summarize(root)
+    d=json.loads((root/'results.json').read_text())
+    assert d['groups']['B']['evaluable']==5
+    assert d['paired_comparisons']['C-B']=={'evaluable_pairs':5,'difference_percentage_points':0}
+    assert d['contrasts_percentage_points']['C-B'] is None
+    groups=load_autonomous_runs(tmp_path,'R1.11')['batches']
+    bgroup=next(g for g in groups if g['name'].endswith('/ B'))
+    assert len(bgroup['episodes'])==6
+    assert bgroup['episodes'][0]['run'].endswith('/B/attempt_2')

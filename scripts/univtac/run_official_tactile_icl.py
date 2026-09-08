@@ -49,14 +49,58 @@ def condition_config(base, condition):
     return config
 
 
+def resume_r111(args):
+    """One explicitly authorized initialization recovery, then the untouched tail."""
+    root = args.output_root.resolve()
+    manifest = json.loads((root/'run_manifest.json').read_text())
+    first = json.loads((root/'seed_1000026/A/episode.json').read_text())
+    failed = json.loads((root/'seed_1000026/B/episode.json').read_text())
+    if manifest['round'] != 'R1.11' or not first['evaluable'] or failed['codex_process_count'] != 0 or failed['reset_valid']:
+        raise ValueError('This recovery is only for the recorded R1.11 B initialization failure')
+    record = {'authorization':'Pro b42baf5b-0e18-467a-88e7-162a7a2149bf',
+              'total_invocation_limit':20, 'previous_invocations':3, 'maximum_new_invocations':17,
+              'reset_time_limit_unchanged':120, 'status':'running', 'attempts':[]}
+    with (root/'recovery_manifest.json').open('x') as f:
+        json.dump(record, f, indent=2)
+    manifest['status'] = 'recovering'
+    write_json(root/'run_manifest.json', manifest)
+    args.mode = 'batch'
+    for seed, condition in manifest['order'][1:]:
+        args.config = root/f'{condition}.yaml'
+        config = yaml.safe_load(args.config.read_text())
+        folder = root/f'seed_{seed}'/condition
+        if (seed, condition) == (1000026, 'B'):
+            folder = folder/'attempt_2'
+        print(json.dumps({'starting':seed,'condition':condition,'attempt_root':str(folder)}),flush=True)
+        episode = run_episode(args,config,seed,folder)
+        episode['condition'] = condition
+        write_json(folder/'episode.json',episode)
+        record['attempts'].append({'seed':seed,'condition':condition,'path':str(folder.relative_to(root)),
+                                   'evaluable':episode['evaluable'],'infrastructure_error':episode.get('infrastructure_error')})
+        write_json(root/'recovery_manifest.json',record)
+        print(json.dumps({'finished':seed,'condition':condition,'success':episode.get('task_success'),
+                          'evaluable':episode['evaluable'],'error':episode.get('infrastructure_error')}),flush=True)
+        if episode.get('infrastructure_error'):
+            record['status'] = 'infrastructure_issue'
+            break
+    else:
+        record['status'] = 'completed'
+    manifest['status'] = record['status']
+    write_json(root/'recovery_manifest.json', record)
+    write_json(root/'run_manifest.json', manifest)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=REPO/'configs/univtac/new_seed_tactile_icl.yaml')
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--demonstrations', type=Path, required=True)
+    parser.add_argument('--resume-r111', action='store_true', help='Only the Pro-authorized one-time R1.11 recovery')
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
     parser.add_argument('--source-root', type=Path, default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
     args = parser.parse_args()
+    if args.resume_r111:
+        return resume_r111(args)
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     base = yaml.safe_load(args.config.read_text())

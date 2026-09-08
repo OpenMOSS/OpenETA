@@ -41,6 +41,12 @@ def round_manifest(root):
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+def effective_episode_folder(folder):
+    """Use the authorized recovery regardless of outcome, never select the best run."""
+    recovery = folder/'attempt_2'
+    return recovery if (recovery/'episode.json').exists() else folder
+
+
 def round_names(root):
     name = round_manifest(root).get('round')
     return {'R1.11':GRASP_NAMES, 'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
@@ -132,7 +138,8 @@ def episodes(root, rebuild=False):
     names=round_names(root)
     page=round_page(root)+f'<h1>{len(names)*len(round_seeds(root))} 格自主操作视频</h1><p>所有条件均由现场 Codex 自己决定动作。1× 按仿真时间；慢放重复显示已有帧，不生成观测。模型思考时物理暂停。逐帧及真实 MCP 输入见上方回放入口。</p>'
     for path in sorted((root/'batch').glob('seed_*/*/episode.json')):
-        folder=path.parent;state=json.loads(path.read_text());condition=folder.name
+        condition=path.parent.name;folder=effective_episode_folder(path.parent)
+        state=json.loads((folder/'episode.json').read_text())
         title=f'seed {state["seed"]} · {names[condition]}'
         model_label = 'GPT-6 / low · ' if names is not NAMES else ''
         outcome=state.get('task_success') if state.get('native_success_available') else 'unavailable/pending'
@@ -176,13 +183,16 @@ def summarize(root):
     names=round_names(root)
     for seed in round_seeds(root):
         for condition in names:
-            folder=root/'batch'/f'seed_{seed}'/condition
+            original=root/'batch'/f'seed_{seed}'/condition
+            folder=effective_episode_folder(original)
             def read(name,folder=folder):
                 p=folder/name
                 return json.loads(p.read_text()) if p.exists() else {}
             state=read('episode.json');life=read('codex_lifecycle.json')
             context=read_jsonl(folder/'operator_context.jsonl')
             cells.append({'seed':seed,'condition':condition,'status':state.get('status','not_run'),
+                'episode_path':str(folder.relative_to(root)),
+                'previous_infrastructure_attempt':json.loads((original/'episode.json').read_text()) if folder!=original else None,
                 **{k:state.get(k) for k in ('model','reasoning_effort','codex_cli_version','current_tactile','evaluable','task_success','termination','infrastructure_error',
                     'move_request_count','actual_motion_requests','tool_call_count','control_steps','physics_steps','simulation_time_seconds')},
                 'codex_wall_seconds':life.get('elapsed_seconds'),
@@ -216,7 +226,13 @@ def summarize(root):
             pairs[a+'-'+b] = paired_outcomes(cells, a, b)
         live, no_live = (contrasts[a+'-'+b] for a,b in CURRENT_TOUCH_COMPARISONS[:2])
         contrasts['historical_touch_difference_in_differences'] = live-no_live if live is not None and no_live is not None else None
-    write_json(root/'results.json',{'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
+    paired_comparisons = {}
+    if names is GRASP_NAMES:
+        for key, counts in pairs.items():
+            n = sum(v for k,v in counts.items() if k!='unavailable')
+            paired_comparisons[key] = {'evaluable_pairs':n, 'difference_percentage_points':(counts['method_only_success']-counts['control_only_success'])*100/n if n else None}
+    recovery_path = root/'batch/recovery_manifest.json'
+    write_json(root/'results.json',{'paired_comparisons':paired_comparisons, 'recovery':json.loads(recovery_path.read_text()) if recovery_path.exists() else None, 'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
         'class_subgroups_host_only':{c:{kind:{'episodes':sum(x['condition']==c and x['object_class_host_only']==kind for x in cells), 'successes':sum(x['condition']==c and x['object_class_host_only']==kind and x['evaluable'] is True and x['task_success'] is True for x in cells)} for kind in ('rough','plain')} for c in names} if names is GRASP_NAMES else {},
         'interpretation':('Six-seed grasp_classify autonomous pilot; historical class is used only for offline demo selection; current class only for host post-run subgroups. Cross-task results remain separate.' if names is GRASP_NAMES else 'Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
             'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.')})
@@ -251,7 +267,7 @@ def review_pairs(root):
     for seed in round_seeds(root):
         pair = root/'batch'/f'seed_{seed}'
         for conditions in pair_specs(root):
-            folders = [pair/c for c in conditions]
+            folders = [effective_episode_folder(pair/c) for c in conditions]
             title = f'seed {seed} · {conditions[0]} / {conditions[1]}'
             if not all((f/'review_video.json').exists() for f in folders):
                 page+=f'<section><h2>{title}</h2><p>等待两侧完成。</p></section>'

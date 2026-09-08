@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from scripts.univtac.official_icl_review import effective_episode_folder
 from sim.envs.univtac.codex_readonly import read_jsonl
 
 
@@ -16,11 +17,13 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
             continue
         episodes = []
         for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9','R1.10','R1.11') else 'seed_*/episode.json')):
-            root = path.parent
+            root = effective_episode_folder(path.parent)
             def read(name, root=root):
                 candidate = root/name
                 return json.loads(candidate.read_text()) if candidate.exists() else None
-            episodes.append({'run':str(root.relative_to(runs_root)), 'episode':read('episode.json'),
+            episodes.append({'run':str(root.relative_to(runs_root)), 'condition':path.parent.name,
+                             'previous_infrastructure_attempt':json.loads(path.read_text()) if root!=path.parent else None,
+                             'episode':{**read('episode.json'), 'condition':path.parent.name},
                              'prompt':(root/'prompt.txt').read_text() if (root/'prompt.txt').exists() else None,
                              'context':read_jsonl(root/'operator_context.jsonl'),
                              'execution':read_jsonl(root/'tool_trace.jsonl'),
@@ -44,7 +47,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         if round_name == 'R1.10':
             conditions = ('B_live','C_live','B_no_live','C_no_live')
         batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
-                    'episodes':[e for e in b['episodes'] if e['run'].endswith('/'+c)]}
+                    'episodes':[e for e in b['episodes'] if e['condition']==c]}
                    for b in batches for c in conditions]
     return {'batches':batches}
 
@@ -200,3 +203,5 @@ R111_HTML = R19_HTML.replace(R19_SUMMARY, R111_SUMMARY).replace('R1.9','R1.11').
     '三十六条视频','十八条视频').replace('Autonomous Insert Hole','Autonomous Grasp & Classify').replace(
     'valid.length===12','valid.length===6').replace("wins.length+'/12'", "wins.length+'/6'").replace(
     "valid.length+'/12；成功 '", "valid.length+'/6；成功 '").replace('RB/RC','B/C')
+
+R111_HTML = R111_HTML.replace("review(e)+'<h3>Agent Saw", "(e.previous_infrastructure_attempt?'<details class=host><summary>此格首次初始化失败，已保留；下面为唯一恢复尝试</summary>'+pretty(e.previous_infrastructure_attempt)+'</details>':'')+review(e)+'<h3>Agent Saw")

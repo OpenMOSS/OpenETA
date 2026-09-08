@@ -1260,3 +1260,25 @@ available at the R1.11 dashboard; missing formal videos/results remain labelled
 pending rather than manufactured. A subsequent UI-only correction excludes the
 observe-only manifest from formal group aggregation; it does not change the
 frozen controller, prompt, examples or physical outcome.
+
+### Explicit one-time recovery authorization
+
+Pro reply `b42baf5b-0e18-467a-88e7-162a7a2149bf` accepts the partial report,
+not a completed R1.11 result. It explicitly raises the simulator invocation cap
+from 19 to 20: exactly one unchanged-configuration recovery for 1000026/B,
+then the remaining 16 cells in original order. A and debug are never rerun.
+Any subsequent worker-not-ready infrastructure error pauses the entire tail.
+The native reset wall-time limit remains 120 seconds; worker total wall time
+is not evidence that this reset limit is inadequate.
+
+Use the existing runner with `--resume-r111` and the same config, demonstrations
+and `--output-root outputs/univtac-isaac51-r111/batch`. The original B error stays
+in its directory; recovery uses `seed_1000026/B/attempt_2`. A dedicated recovery
+manifest records authorization, attempts and stop state. Review selects that
+one authorized recovery regardless of success/failure, never the better result.
+The original partial `batch/summary.json` remains retained; `results.json` and
+`batch/recovery_manifest.json` describe the combined current state. Historical
+infrastructure errors remain visible even if recovery succeeds. Paired differences
+use only jointly evaluable seeds and report their count; missing cells are not
+native failures. No new physical startup has yet occurred at this authorization
+checkpoint.

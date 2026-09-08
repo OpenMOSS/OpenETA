@@ -1415,3 +1415,38 @@ not a claimed behavior fix; the native 120-second guard remains unchanged.
 the earlier recovery. The standalone reset-only diagnostic never fills B28.
 Thirteen focused tests cover the split, exact ten-cell order, original calls,
 exception preservation and accepting native failure without retry.
+
+### Timed recovery reproduced the initialization stall
+
+The first authorized timed continuation, 1000028/B `attempt_2`, again failed
+before ready; no further cell started. The native five-step-loop check reported
+120.782643 seconds against 120 seconds. Total `Task.reset` wall time was
+121.133265 seconds. Both measured `_step` calls returned before the native
+exception; the 30-second stack timer did not terminate either call.
+
+| Reset test step | Whole `_step` s | UipcSim advance+retrieve s | `_update_render` s | Process CPU in UIPC span s |
+|---|---:|---:|---:|---:|
+| 1 | 66.515655 | 66.441903 | 0.064119 | 76.203689 |
+| 2 | 54.266845 | 54.195770 | 0.064827 | 62.344447 |
+
+Both 30-second main-thread stack samples point to
+`tacex_uipc/sim/uipc_sim.py:241`, `self.world.advance()`. This identifies the
+slow call interval and its sampled location; the wrapper times advance and
+retrieve jointly, so it is not separate timing of every inner operation.
+Render was approximately 0.017/0.019 seconds and tactile update 0.042/0.040
+seconds, unlike the long physics callback. During the first long call, a saved
+snapshot showed device GPU utilization 95% and process CPU 200% (lifetime
+average); the interval CPU totals above sum all process threads. These are
+consistent with computational activity, not proof of any specific solver,
+compilation, contact or driver cause. Native internals remain unlocalized.
+
+The formal grid is still eight successes, B28 unavailable and nine not run.
+There are now **13 starts = eight valid + three failed initializations + two
+non-scored starts**. No B28 Codex process was launched, no valid trajectory/video
+was rerun, and no timeout/physics/input change was applied after the failure.
+Failed startup worker wall costs are 198.161 s (B26 original), 164.059 s (B28
+original), and 150.342 s (B28 timed recovery), separate from Agent costs. All
+three retained worker exceptions despite launcher returncode 0; cleanup was
+complete. Details are in `timed_recovery_pause.json` and
+`batch/seed_1000028/B/attempt_2/{reset_timing.jsonl,reset_stacks.txt,worker_error.json}`.
+The remaining formal recovery is paused for the next Pro decision.

@@ -181,7 +181,7 @@ def test_c_dispatch_skips_completed_grace_and_exhausted_initialization(tmp_path,
         cells.append(c)
     settings={'media_workers':1,'video_playback_rate':.05,'minimum_disk_free_bytes':0}
     atomic_json(tmp_path/'manifest.json',{'settings':settings,'cells':cells})
-    def recover(root,c):
+    def recover(root,c,attempt_limit=3):
         if c['condition']=='C_1shot':
             return {**c,'status':'initialization_unavailable','attempts':3}
         if c['condition']=='C_2shot':
@@ -205,3 +205,18 @@ def test_c_dispatch_skips_completed_grace_and_exhausted_initialization(tmp_path,
     assert saved['cells'][0]['scope_disposition']=='deferred_to_main_table'
     assert saved['cells'][1]['attempts']==3
     assert saved['cells'][2]['status']=='completed'
+
+
+def test_one_attempt_resume_retains_later_historical_success(tmp_path):
+    c,f=make_cell(tmp_path,'C_1shot')
+    (f/'ready.json').unlink()
+    atomic_json(f/'worker_lifecycle.json',{'cleanup_complete':True})
+    atomic_json(f/'worker_error.json',{'traceback':'task.reset(seed=args.seed)'})
+    result=recover_cell(tmp_path,c,1)
+    assert result['status']=='initialization_unavailable' and result['attempts']==1
+    second=f.parent/'attempt_2';second.mkdir()
+    atomic_json(second/'ready.json',{})
+    atomic_json(second/'worker_lifecycle.json',{'cleanup_complete':True})
+    atomic_json(second/'episode.json',{'status':'completed','task_success':True})
+    result=recover_cell(tmp_path,c,1)
+    assert result['status']=='completed' and result['attempts']==2

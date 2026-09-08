@@ -247,9 +247,13 @@ def run_cell(args,cell,coordinator):
             return {**cell,'status':'unresolved_previous_attempt','episode_path':str(folder)}
     else:
         return {**cell,'status':'initialization_unavailable','attempts':3}
+    attempt_limit=getattr(args,'max_initialization_attempts',3)
+    if number>attempt_limit:
+        return {**cell,'status':'initialization_unavailable','attempts':number-1,
+                'episode_path':str(root/f'attempt_{number-1}')}
     config=yaml.safe_load(Path(cell['config']).read_text())
     lane_args=SimpleNamespace(**vars(args));lane_args.config=Path(cell['config']);lane_args.mode='batch';lane_args.coordinator=coordinator
-    for attempt in range(number,4):
+    for attempt in range(number,attempt_limit+1):
         if coordinator.cancel.is_set():return {**cell,'status':'cancelled'}
         folder=root/f'attempt_{attempt}'
         with coordinator.lock:
@@ -268,7 +272,7 @@ def run_cell(args,cell,coordinator):
         if native_startup_crash(folder) and startup_crashes_since_ready(args.output_root)>=3:
             coordinator.abort('Three omniClient startup crashes without an intervening ready')
             return {**cell,'status':'infrastructure_issue','episode_path':str(folder),'episode':episode,'attempts':attempt}
-    return {**cell,'status':'initialization_unavailable','episode_path':str(folder),'episode':episode,'attempts':3}
+    return {**cell,'status':'initialization_unavailable','episode_path':str(folder),'episode':episode,'attempts':attempt_limit}
 
 
 def run_queue(args):

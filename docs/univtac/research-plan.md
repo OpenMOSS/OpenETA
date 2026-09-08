@@ -1829,7 +1829,8 @@ parameter, solver setting or success threshold changed.
 
 ### Four-task C: 1/2/4-shot — current dispatch and historical preparation
 
-The current C-only overlay is `dispatch_conditions: [C]` in
+The current C-only overlays are `dispatch_conditions: [C]` and
+`dispatch_max_initialization_attempts: 1` in
 `configs/univtac/shot_scaling.yaml`. Apply it offline with
 `uv run --no-sync python scripts/univtac/run_shot_scaling.py --phase revise-scope`.
 Do not rerun prepare or clear the old output. The original manifest and effective
@@ -1841,6 +1842,12 @@ service-error pause or launch any simulator/model.
 The user has explicitly authorized recovery. The existing `--phase run` command
 dispatches only pending C cells. Completed C episodes, including incomplete
 model final/usage, and Lift Can C_1shot's exhausted three attempts are skipped.
+For new dispatch, each cell has one total initialization start, not one retry.
+A cleaned ordinary initialization failure becomes unavailable without another
+start. Historical attempt_2/3 results and exhausted attempts remain unchanged;
+recovery scans them before applying the new start limit. The old active queue
+is drained before restarting with this policy; in-flight cells keep their
+original execution version. Unexpected infrastructure-error pause rules remain.
 B results remain queryable; unrun B cells carry `deferred_to_main_table` scope
 metadata while their original not_run state is preserved. The C report contains
 one curve per task, equal-task means, same-seed 2−1/4−2 pairs, costs and missing
@@ -1877,7 +1884,8 @@ completed states before dispatch, including unsuccessful tasks, and never
 restarts them. A crash after native finalization and complete worker/model
 cleanup can be reconciled from those persisted records without a new rollout.
 Unresolved accepted attempts and persisted delivery failures pause dispatch.
-Attempt directories retain each cell's three-attempt initialization budget.
+At original preparation, attempt directories retained a three-attempt budget;
+the current one-attempt dispatch overlay supersedes that policy for new starts.
 An interrupted run cannot erase a delivery error or turn it into an evaluable
 result. Each accepted episode records its actual execution commit.
 

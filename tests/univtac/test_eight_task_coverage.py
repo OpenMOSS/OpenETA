@@ -202,3 +202,22 @@ def test_third_startup_crash_pauses_before_another_attempt(tmp_path,monkeypatch)
     result=run_cell(SimpleNamespace(output_root=tmp_path),cell,coordinator)
     assert calls==['attempt_1'] and result['status']=='infrastructure_issue'
     assert coordinator.cancel.is_set()
+
+
+def test_single_initialization_failure_does_not_retry(tmp_path,monkeypatch):
+    from scripts.univtac import run_eight_task_coverage as module
+    key=('lift_can',1000000,'C_1shot')
+    coordinator=Coordinator(tmp_path,[key],protocol_smoke=True)
+    cell={'task':key[0],'seed':key[1],'condition':key[2],'cell_key':list(key),
+          'config':str(tmp_path/'config.json')}
+    Path(cell['config']).write_text('{}')
+    seen=[]
+    def episode(args,config,seed,folder):
+        seen.append(folder.name);folder.mkdir(parents=True)
+        (folder/'worker_lifecycle.json').write_text(json.dumps({'cleanup_complete':True}))
+        (folder/'worker_error.json').write_text(json.dumps({'traceback':'task.reset(seed=args.seed)'}))
+        return {'status':'infrastructure_issue','codex_process_count':0}
+    monkeypatch.setattr(module,'run_episode',episode)
+    result=run_cell(SimpleNamespace(output_root=tmp_path,max_initialization_attempts=1),cell,coordinator)
+    assert seen==['attempt_1'] and result['status']=='initialization_unavailable'
+    assert result['attempts']==1 and not coordinator.cancel.is_set()

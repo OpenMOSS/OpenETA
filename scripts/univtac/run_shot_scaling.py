@@ -249,12 +249,15 @@ def validate_frozen(manifest):
     return {'cells_checked':len(manifest['cells']),'effective_settings_match':True}
 
 
-def recover_cell(root, cell):
+def recover_cell(root, cell, attempt_limit=3):
     """Read accepted outcomes before dispatch, including interruption after cleanup."""
     base = root/'cells'/cell['task']/str(cell['seed'])/cell['condition']
     for number in range(1,4):
         folder = base/f'attempt_{number}'
         if not folder.exists():
+            if number>attempt_limit:
+                return {**cell,'status':'initialization_unavailable','attempts':number-1,
+                        'episode_path':str(base/f'attempt_{number-1}')}
             return None
         episode = load(folder/'episode.json') if (folder/'episode.json').exists() else {}
         life = load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}
@@ -361,7 +364,7 @@ def revise_scope(args, settings):
     """Offline scope overlay; never prepare again or release a paused queue."""
     root = args.output_root
     manifest = load(root/'manifest.json')
-    frozen_settings = {k:v for k,v in settings.items() if k != 'dispatch_conditions'}
+    frozen_settings = {k:v for k,v in settings.items() if k not in ('dispatch_conditions','dispatch_max_initialization_attempts')}
     assert frozen_settings == manifest['settings']
     validate_frozen(manifest)
     conditions = settings['dispatch_conditions']
@@ -396,8 +399,9 @@ def revise_scope(args, settings):
 def run(args, settings):
     root = args.output_root
     manifest = load(root/'manifest.json')
-    assert manifest['settings']=={k:v for k,v in settings.items() if k!='dispatch_conditions'}, 'Use frozen settings to resume'
+    assert manifest['settings']=={k:v for k,v in settings.items() if k not in ('dispatch_conditions','dispatch_max_initialization_attempts')}, 'Use frozen settings to resume'
     conditions=settings.get('dispatch_conditions',['B','C'])
+    args.max_initialization_attempts=settings.get('dispatch_max_initialization_attempts',3)
     if 'seed_list' in settings:
         validate_frozen(manifest)
         assert load(REPO/settings['seed_list'])==manifest['seeds'], 'Shared seed list differs from frozen manifest'
@@ -408,7 +412,7 @@ def run(args, settings):
     if startup_crashes_since_ready(root)>=3:
         coordinator.abort('Three preserved omniClient startup crashes without an intervening ready')
     for cell in cells:
-        old = recover_cell(root,cell)
+        old = recover_cell(root,cell,args.max_initialization_attempts)
         if old:
             if old['status']=='completed' and not old.get('delivery_or_runner_error'):
                 folder=Path(old['episode_path'])
@@ -430,6 +434,7 @@ def run(args, settings):
     def save():
         atomic_json(root/'results.json',{'feedback_protocol':PROTOCOL,'planned':sum(c['comparison_condition'] in conditions for c in cells),
             'original_planned':len(cells),'dispatch_conditions':conditions,
+            'dispatch_max_initialization_attempts':args.max_initialization_attempts,
             'cells':scoped_cells(list(state.values()),conditions),'abort_reason':coordinator.abort_reason,'updated_s':time.time()})
     save()
     from scripts.univtac.summarize_shot_scaling import report
@@ -467,6 +472,7 @@ def run(args, settings):
     session={'started_s':time.time(),'head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()}
     args.execution_head=session['head']
     runtime=load(root/'run_manifest.json') if (root/'run_manifest.json').exists() else {'feedback_protocol':PROTOCOL,'started_s':session['started_s'],'planned':2400}
+    runtime['dispatch_max_initialization_attempts']=args.max_initialization_attempts
     runtime.update(planned=sum(c['comparison_condition'] in conditions for c in cells), original_planned=len(cells), dispatch_conditions=conditions)
     runtime.setdefault('sessions',[]).append(session);runtime['status']='running';atomic_json(root/'run_manifest.json',runtime)
     media=[]

@@ -1553,3 +1553,32 @@ remain evidence but are not current visual trajectories; delivery masks those
 panels as unavailable and preserves actual touch/state/geometry. Complete dynamic
 four-view recording was not achieved. This was found after all nine had ended;
 no physical restart or retrospective control change is authorized.
+
+
+### Four-way Insert Hole capacity test — initialization failed
+
+The unscored fixed batch used seeds 1000040–1000043 and the existing successful
+C_live input: official instruction/public rules, two official visual/tactile
+expert measured-motion demonstrations, and current four-view observations.
+The original controller, benchmark, physics and r09 runtime stayed unchanged.
+Native reset remained 120 s and outer ready 900 s; the Grasp & Classify 600-second
+override was not imported. Four workers started within 0.037 s, but none reached
+ready: zero Codex contexts and zero autonomous rollouts completed. This is an
+infrastructure capacity failure, not Agent success 0/4.
+
+Across 121 approximately one-second samples, GPU usage peaked at 32,061 MiB with
+only 40 MiB free; system MemAvailable reached 22.96 GiB and swap grew from 3 MiB
+to about 2 GiB. Seed 1000040 failed a 256 MiB PhysX GPU allocation and could not
+create its physics scene; 1000040/1000041 logs explicitly report GPU OOM.
+1000042 had entered native pre_move before cancellation. The batch aborted and
+all four worker groups were cleaned; batch wall time was 120.53 s. No four-ready
+residency interval, autonomous action overlap or evaluable task video exists.
+No retry or reduced-concurrency batch ran.
+
+The bounded entry point is `uv run --no-sync python scripts/univtac/run_fourway_capacity.py
+--output-root outputs/<fresh-dir>`; it defaults to the retained successful C_live
+configuration. The all-ready barrier and operator release are capacity-only;
+normal single-worker control/observation semantics remain unchanged.
+[Capacity report and raw evidence](http://127.0.0.1:9401/artifact?run=univtac-fourway-capacity&path=report.html)
+record this attempt. R1.12 remains 9 valid/1 failed initialization/22 not_run;
+the proposed D condition and eight-task rollout remain unstarted.

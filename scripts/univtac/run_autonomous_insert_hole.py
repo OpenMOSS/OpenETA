@@ -163,7 +163,7 @@ def run_episode(args, config, seed, root):
             shutil.copyfile(source, destination)
             image['path'] = str(destination.relative_to(root))
         write_json(root/'demonstrations/projection.json', projection)
-    episode = {'round':config['round'],'task':config['task'],'seed':seed,'scored':args.mode=='batch',
+    episode = {'round':config['round'],'task':config['task'],'seed':seed,'scored':config.get('scored', args.mode=='batch'),
                'model':config['model'] if args.mode=='batch' else None,
                'reasoning_effort':config['reasoning_effort'] if args.mode=='batch' else None,
                'task_information':config.get('task_information'),
@@ -178,13 +178,19 @@ def run_episode(args, config, seed, root):
     timeout = config['startup_timeout_seconds'] + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
     spec = ScopedIsaac51LaunchSpec(python_executable=args.runtime_python,command=tuple(command),
             cwd=args.source_root,output_root=root,timeout_seconds=timeout)
+    coordinator = getattr(args, 'coordinator', None)
+    hooks = coordinator.hooks(seed, 'worker') if coordinator else {}
     url = None
     codex_home = root/'runtime/codex-home'
     with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(run_scoped_isaac51_command,spec)
+        future = pool.submit(run_scoped_isaac51_command,spec, **hooks)
         try:
-            ready = _wait_for_worker(root/'ready.json',future,config['startup_timeout_seconds'])
+            ready = (coordinator.wait_ready(seed, root, future, config['startup_timeout_seconds']) if coordinator else
+                     _wait_for_worker(root/'ready.json',future,config['startup_timeout_seconds']))
             url = ready['worker_url']
+            if coordinator:
+                coordinator.barrier(seed)
+                _post(url, '/host_release')
             episode['status'] = 'running'
             write_json(root/'episode.json',episode)
             if args.mode == 'observe_only':
@@ -215,7 +221,8 @@ def run_episode(args, config, seed, root):
                 life = _run_to_files(cmd,cwd=workspace,environment={**os.environ,'CODEX_HOME':str(codex_home)},
                          stdout_path=root/'codex_exec.jsonl',stderr_path=root/'codex_stderr.log',
                          timeout_seconds=config['codex_timeout_seconds'],stop_path=root/'stop.json',
-                         terminal_grace_seconds=config['terminal_grace_seconds'])
+                         terminal_grace_seconds=config['terminal_grace_seconds'],
+                         **(coordinator.hooks(seed, 'codex') if coordinator else {}))
                 write_json(root/'codex_lifecycle.json',life)
                 write_json(root/'codex_trace_summary.json',summarize_codex_exec(read_jsonl(root/'codex_exec.jsonl')))
                 if life['returncode'] and not life['stopped_by_worker'] and not life['timed_out']:
@@ -225,6 +232,10 @@ def run_episode(args, config, seed, root):
         except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence
             episode['infrastructure_error'] = f'{type(exc).__name__}: {exc}'
         finally:
+            if coordinator:
+                if episode.get('infrastructure_error'):
+                    coordinator.abort(episode['infrastructure_error'])
+                coordinator.phase(seed, 'cleanup')
             if url and not future.done():
                 try:
                     _post(url,'/host_finalize')
@@ -256,6 +267,10 @@ def run_episode(args, config, seed, root):
         episode['evaluable'] = bool(final['reset_valid'] and final['native_success_available'])
     episode['status'] = 'completed' if episode['evaluable'] or (args.mode == 'observe_only' and not episode.get('infrastructure_error')) else 'infrastructure_issue'
     write_json(root/'episode.json',episode)
+    if coordinator:
+        coordinator.phase(seed, episode['status'])
+        if episode.get('infrastructure_error'):
+            coordinator.abort(episode['infrastructure_error'])
     return episode
 
 

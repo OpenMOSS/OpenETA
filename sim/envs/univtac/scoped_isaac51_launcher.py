@@ -400,7 +400,7 @@ def build_scoped_isaac51_dry_run(
     }
 
 
-def run_scoped_isaac51_command(spec: ScopedIsaac51LaunchSpec) -> ScopedIsaac51LaunchResult:
+def run_scoped_isaac51_command(spec: ScopedIsaac51LaunchSpec, *, cancel_event=None, on_started=None) -> ScopedIsaac51LaunchResult:
     """Run one child in an isolated process group with the private driver alias."""
 
     output_root = spec.output_root.expanduser().resolve()
@@ -460,9 +460,11 @@ def run_scoped_isaac51_command(spec: ScopedIsaac51LaunchSpec) -> ScopedIsaac51La
             start_new_session=True,
         )
         process_group_id = os.getpgid(process.pid)
+        if on_started is not None:
+            on_started(process)
         deadline = started + spec.timeout_seconds
         observed_libcuda_paths: set[str] = set()
-        while process.poll() is None and time.monotonic() < deadline:
+        while process.poll() is None and time.monotonic() < deadline and not (cancel_event is not None and cancel_event.is_set()):
             mapped = _mapped_libcuda_paths(process.pid)
             observed_libcuda_paths.update(mapped)
             _append_jsonl(
@@ -483,7 +485,7 @@ def run_scoped_isaac51_command(spec: ScopedIsaac51LaunchSpec) -> ScopedIsaac51La
                 pass
         observed_libcuda_paths.update(_mapped_libcuda_paths(process.pid))
         if process.poll() is None:
-            timed_out = True
+            timed_out = not (cancel_event is not None and cancel_event.is_set())
             sigterm_sent = True
             try:
                 os.killpg(process_group_id, signal.SIGTERM)

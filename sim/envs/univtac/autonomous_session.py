@@ -181,7 +181,16 @@ class AutonomousSession:
                     self.previews.clear()
                     if self.recorder:
                         self.recorder.begin(f'action_{self.move_requests:03d}', args)
-                    self.feedback = self.controller.execute(target, gripper)
+                    motion_start = time.time()
+                    motion_before = self.controller.counts().copy()
+                    try:
+                        self.feedback = self.controller.execute(target, gripper)
+                    finally:
+                        append_row(self.root/'motion_intervals.jsonl', {
+                            'action_id': f'action_{self.move_requests:03d}',
+                            'started_s': motion_start, 'ended_s': time.time(),
+                            'before': motion_before, 'after': self.controller.counts(),
+                        })
                     observation = self.capture()
                     if self.recorder:
                         images, history = self.recorder.history()

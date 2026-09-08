@@ -113,14 +113,20 @@ def main(argv=None):
         write_json(root/'native_configuration.json', {'mode': task.mode, 'step_lim': cfg.step_lim,
                    'dt': cfg.sim.dt, 'decimation': cfg.decimation, 'timing': vars(timing)})
 
+        released_at = None
+
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass
 
             def do_POST(self):
+                nonlocal released_at
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))) or b'{}')
                 if self.path == '/host_finalize':
                     session.host_closed = True
+                    payload = {'ok': True}
+                elif self.path == '/host_release' and config.get('wait_for_operator_release'):
+                    released_at = released_at or time.monotonic()
                     payload = {'ok': True}
                 elif self.path == '/call':
                     payload = session.call(body['tool'], body.get('arguments', {}))
@@ -136,11 +142,13 @@ def main(argv=None):
         server = HTTPServer(('127.0.0.1',0),Handler)
         server.timeout = 1
         write_json(root/'ready.json',{'worker_url':f'http://127.0.0.1:{server.server_port}', 'reset_valid': True})
-        deadline = time.monotonic() + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
+        deadline = time.monotonic() + (config['startup_timeout_seconds'] if config.get('wait_for_operator_release') else config['codex_timeout_seconds'] + config['shutdown_timeout_seconds'])
         # finish_episode stops motion but the MCP must stay readable until Codex
         # naturally exits (or its bounded terminal grace expires).
         while not getattr(session, 'host_closed', False) and time.monotonic() < deadline:
             server.handle_request()
+            if released_at is not None:
+                deadline = released_at + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
         session.finalize('worker_deadline' if time.monotonic() >= deadline else None)
         return 0
     except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence

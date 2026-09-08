@@ -46,6 +46,8 @@ def _run_to_files(
     timeout_seconds: float,
     stop_path: Path | None = None,
     terminal_grace_seconds: float = 300,
+    cancel_event=None,
+    on_started=None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     started_at = _utc_now()
@@ -59,11 +61,17 @@ def _run_to_files(
             stderr=stderr,
             start_new_session=True,
         )
+        if on_started is not None:
+            on_started(process)
+        cancelled = False
         timed_out = False
         stopped_by_worker = False
         terminal_seen = None
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    raise subprocess.TimeoutExpired(command, timeout_seconds)
                 remaining = timeout_seconds - (time.monotonic() - started)
                 if stop_path is not None and stop_path.exists():
                     terminal_seen = terminal_seen or time.monotonic()
@@ -80,7 +88,7 @@ def _run_to_files(
                 except subprocess.TimeoutExpired:
                     continue
         except subprocess.TimeoutExpired:
-            timed_out = not stopped_by_worker
+            timed_out = not stopped_by_worker and not cancelled
             os.killpg(process.pid, signal.SIGTERM)
             try:
                 returncode = process.wait(timeout=15)
@@ -89,12 +97,14 @@ def _run_to_files(
                 returncode = process.wait(timeout=15)
     return {
         "command": command,
+        "cancelled": cancelled,
+        "pid": process.pid,
         "returncode": returncode,
         "timed_out": timed_out,
         "stopped_by_worker": stopped_by_worker,
         "terminal_grace_seconds": terminal_grace_seconds,
         "terminal_seen_after_seconds": terminal_seen - started if terminal_seen is not None else None,
-        "exit_mode": 'terminal_grace_expired' if stopped_by_worker else ('overall_deadline' if timed_out else 'natural_exit'),
+        "exit_mode": 'batch_cancelled' if cancelled else 'terminal_grace_expired' if stopped_by_worker else ('overall_deadline' if timed_out else 'natural_exit'),
         "started_at": started_at,
         "ended_at": _utc_now(),
         "elapsed_seconds": time.monotonic() - started,

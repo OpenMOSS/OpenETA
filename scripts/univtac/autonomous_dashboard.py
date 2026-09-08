@@ -195,6 +195,7 @@ R111_SUMMARY = R19_SUMMARY.replace('R1.9：十二个新 seed，冻结 R 输入�
     '第二任务开发 pilot，Insert Hole 历史结果不并表。主比较 C−B；类别仅用于事后 host 分析。').replace(
     '/12', '/6').replace('===12', '===6').replace('<12', '<6').replace('1000006', '1000026').replace('1000017', '1000031').replace(
     'RA', 'A').replace('RB', 'B').replace('RC', 'C')
+R111_SUMMARY = R111_SUMMARY.replace("return t+'<p>逐 seed", "t+='<details class=host><summary>Host-only：实际类别分布与成功数</summary>';for(const c of ['A','B','C'])for(const kind of ['rough','plain']){const es=(groups[c]||[]).filter(e=>e.host_evaluator?.object_class===kind);t+='<p>'+c+' / '+kind+'：'+es.filter(e=>e.episode.evaluable&&e.episode.task_success).length+' 成功 / '+es.length+' 条</p>';}t+='</details>';return t+'<p>逐 seed")
 R111_HTML = R19_HTML.replace(R19_SUMMARY, R111_SUMMARY).replace('R1.9','R1.11').replace('r19-', 'r111-').replace(
     '三十六条视频','十八条视频').replace('Autonomous Insert Hole','Autonomous Grasp & Classify').replace(
     'valid.length===12','valid.length===6').replace("wins.length+'/12'", "wins.length+'/6'").replace(

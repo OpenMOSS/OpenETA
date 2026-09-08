@@ -1159,7 +1159,7 @@ frames were visually inspected, including the no_live warning. This is not a
 claim of manually reviewing every frame. Final GPT-6 low full-history scoped neat completed a read-only result/cost and
 claim-boundary check; no numerical inconsistency was found.
 
-## R1.11: second-task autonomous pilot (prepared, not yet run)
+## R1.11: second-task autonomous pilot (checked; formal batch pending)
 
 Pro accepted R1.10 and stopped further Insert Hole mechanism ablations. Expert
 examples have helped autonomous insertion, but stable additional benefit from
@@ -1216,6 +1216,10 @@ uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
 ```
 
 These commands require fresh output subdirectories and do not authorize retries.
-The reused runner filenames retain their historical names. At this preparation
-checkpoint no R1.11 simulator or Codex episode has started; native results and
-video delivery remain pending. Review entry: `http://127.0.0.1:9401/r111-autonomous`.
+The reused runner filenames retain their historical names. The one allowed seed-999999 observation check completed: four images, head
+marking available, wrist geometry unavailable, zero post-reset control/physics
+steps and zero Codex processes. The worker exited normally in 184.98 seconds.
+Success was deliberately not evaluated. Its retained termination label
+`codex_exit` is an old generic host-close label, not evidence that Codex ran;
+the subsequent label-only fix names future observe-only closure explicitly.
+No physical rerun was needed. Formal native results and video delivery remain pending. Review entry: `http://127.0.0.1:9401/r111-autonomous`.

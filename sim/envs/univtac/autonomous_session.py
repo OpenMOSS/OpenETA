@@ -240,7 +240,7 @@ class AutonomousSession:
         checker = ({'available':False, 'success':None} if self.config.get('observe_only') else self.controller.check())
         result = {'round':self.config.get('round','R1.4'),'seed':self.seed,'reset_valid':True,
                   'native_success_available':checker['available'], 'task_success':checker['success'],
-                  'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or 'codex_exit',
+                  'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or ('unscored_observation_check' if self.config.get('observe_only') else 'codex_exit'),
                   'infrastructure_error':self.infrastructure_error, 'tool_call_count':self.tool_count,
                   'move_request_count':self.move_requests,'elapsed_seconds':time.monotonic()-self.started, **self.controller.counts()}
         if self.recorder:

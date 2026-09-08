@@ -1,4 +1,4 @@
-"""Host-owned preparation for articulated-handle attachment probes."""
+"""Host-owned preparation and visual review for bounded attachment probes."""
 
 from __future__ import annotations
 
@@ -11,6 +11,10 @@ from typing import Any
 from adapter.protocol import JsonDict
 from agent.backends.planner import PlannerBackend, PlannerBackendRequest
 from agent.tools.registry import ToolExecutionContext, ToolHandler, make_tool_result
+from agent.tools.gripper_evidence import (
+    gripper_actuation_receipt_error,
+    measured_gripper_open,
+)
 
 
 ARTICULATED_ATTACHMENT_PROBE_SCHEMA = "openeta.articulated_attachment_probe.v1"
@@ -37,12 +41,13 @@ _ARTICULATED_PROXY_NOT_APPLICABLE_REASONS = frozenset(
 )
 
 ARTICULATED_ATTACHMENT_ASSESSMENT_PROMPT = """You are an independent attachment reviewer.
-The robot closed on an articulated handle and executed one host-frozen 5 cm probe.
+The robot closed on a target, either a portable object or an articulated handle,
+and executed one host-frozen 5 cm probe.
 Compare the ordered before/after agentview and wrist images. Return PASS only when
-the same target handle or articulated body visibly co-moved along the probe path and
-remains engaged by the gripper. Return FAIL only when direct evidence shows the handle
-stayed behind, moved inconsistently, or separated from the gripper. Return UNKNOWN for
-occlusion, conflicting views, identity ambiguity, or insufficient motion evidence.
+the same target object, handle, or articulated body visibly co-moved along the probe
+path and remains engaged by the gripper. Return FAIL only when direct evidence shows
+the target stayed behind, moved inconsistently, or separated from the gripper. Return
+UNKNOWN for occlusion, conflicting views, identity ambiguity, or insufficient motion evidence.
 Do not infer PASS from controller success, gripper closure, or reward. Return exactly:
 {"verdict":"PASS|FAIL|UNKNOWN","reason":"concise visual evidence"}
 """
@@ -60,7 +65,7 @@ class AttachmentProbeError(ValueError):
 
 
 def build_prepare_attachment_probe_handler() -> ToolHandler:
-    """Build the read-only articulated probe compiler."""
+    """Build the read-only bounded attachment-probe compiler."""
 
     def handler(context: ToolExecutionContext):
         try:
@@ -73,7 +78,7 @@ def build_prepare_attachment_probe_handler() -> ToolHandler:
             return make_tool_result(
                 context,
                 success=False,
-                content=f"articulated attachment probe rejected: {exc}",
+                content=f"attachment probe rejected: {exc}",
                 outputs={
                     "reason": "articulated_attachment_probe_rejected",
                     "checked_by": "host_probe_geometry",
@@ -90,7 +95,7 @@ def build_prepare_attachment_probe_handler() -> ToolHandler:
             context,
             success=True,
             content=(
-                "articulated attachment probe geometry frozen; run the returned "
+                "attachment probe geometry frozen; run the returned "
                 "ordered IK preview requests, then execute by receipt id(s)"
             ),
             outputs=outputs,
@@ -100,7 +105,7 @@ def build_prepare_attachment_probe_handler() -> ToolHandler:
 
 
 def build_assess_attachment_probe_handler(backend: PlannerBackend) -> ToolHandler:
-    """Build the independent before/after articulated attachment reviewer."""
+    """Build the independent before/after attachment reviewer."""
 
     def handler(context: ToolExecutionContext):
         try:
@@ -112,7 +117,7 @@ def build_assess_attachment_probe_handler(backend: PlannerBackend) -> ToolHandle
             return make_tool_result(
                 context,
                 success=False,
-                content=f"articulated attachment assessment failed: {exc}",
+                content=f"attachment assessment failed: {exc}",
                 outputs={
                     "reason": "articulated_attachment_assessment_failed",
                     "checked_by": "independent_attachment_reviewer",
@@ -128,7 +133,7 @@ def build_assess_attachment_probe_handler(backend: PlannerBackend) -> ToolHandle
         return make_tool_result(
             context,
             success=True,
-            content=f"articulated attachment assessment: {outputs['verdict']}",
+            content=f"attachment assessment: {outputs['verdict']}",
             outputs=outputs,
         )
 
@@ -140,7 +145,7 @@ def assess_attachment_probe(
     *,
     backend: PlannerBackend,
 ) -> JsonDict:
-    """Assess articulated co-motion from the frozen probe's before/after views."""
+    """Assess target co-motion from the frozen probe's before/after views."""
 
     memory = _memory_context(context.metadata.get("supervision_context"))
     probe = _mapping(
@@ -199,13 +204,14 @@ def assess_attachment_probe(
             ),
             tool_context={
                 "schema_version": ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA,
-                "role": "independent_articulated_attachment_reviewer",
+                "role": "independent_attachment_reviewer",
                 "task": str(context.metadata.get("task") or ""),
                 "probe_id": probe.get("probe_id"),
                 "candidate_id": probe.get("candidate_id"),
                 "motion_type": probe.get("motion_type"),
                 "distance_m": probe.get("distance_m"),
                 "direction_world_xyz": probe.get("direction_world_xyz"),
+                "interaction_family": probe.get("interaction_family"),
                 "image_order": image_order,
                 "vision_image_paths": paths,
             },
@@ -276,6 +282,23 @@ def prepare_attachment_probe(
     candidate_id = str(grasp_node.get("candidate_id") or "")
     if not candidate_id:
         raise AttachmentProbeError("compiled grasp candidate provenance is incomplete")
+    target_geometry_family = str(
+        grasp_node.get("target_geometry_family") or ""
+    ).strip().lower()
+    interaction_family = (
+        "articulated_handle"
+        if target_geometry_family == "articulated_handle"
+        else "portable_object"
+        if target_geometry_family
+        else "unspecified_target"
+    )
+    probe_type = (
+        "articulated_attachment"
+        if interaction_family == "articulated_handle"
+        else "portable_object_attachment"
+        if interaction_family == "portable_object"
+        else "generic_attachment"
+    )
     scene_epoch = _nonnegative_int(memory.get("scene_epoch"), "scene_epoch")
     robot_motion_epoch = _nonnegative_int(
         memory.get("robot_motion_epoch", 0),
@@ -311,6 +334,7 @@ def prepare_attachment_probe(
             candidate_id=candidate_id,
             compiled_grasp_id=compiled_grasp_id,
             scene_epoch=scene_epoch,
+            probe_type=probe_type,
         )
         frozen_path = [target_pose]
         tool_name = "move_to"
@@ -350,6 +374,7 @@ def prepare_attachment_probe(
                 candidate_id=candidate_id,
                 compiled_grasp_id=compiled_grasp_id,
                 scene_epoch=scene_epoch,
+                probe_type=probe_type,
                 waypoint_index=index,
             )
             for index, point in enumerate(absolute)
@@ -369,6 +394,7 @@ def prepare_attachment_probe(
         "compiled_grasp_id": compiled_grasp_id,
         "scene_epoch": scene_epoch,
         "motion_type": motion_type,
+        "interaction_family": interaction_family,
         "start_eef_xyz": _round_vector(start_xyz),
         "path": frozen_path,
     }
@@ -417,7 +443,8 @@ def prepare_attachment_probe(
         "compiled_grasp_id": compiled_grasp_id,
         "scene_epoch": scene_epoch,
         "robot_motion_epoch": robot_motion_epoch,
-        "interaction_family": "articulated_handle",
+        "interaction_family": interaction_family,
+        "target_geometry_family": target_geometry_family or None,
         "motion_type": motion_type,
         "distance_m": ARTICULATED_ATTACHMENT_PROBE_DISTANCE_M,
         "start_eef_xyz": _round_vector(start_xyz),
@@ -465,6 +492,17 @@ def _require_probe_gripper_evidence(
             f"{operation} requires the latest acknowledged gripper command to be "
             "closed; execute a valid contact close before preparing or assessing a probe"
         )
+    if "latched" in commanded and commanded["latched"] is not True:
+        raise AttachmentProbeError(
+            f"{operation} requires an acknowledged close latch; measured aperture "
+            "or an inconsistent actuation receipt cannot establish it"
+        )
+    if "gripper_actuation_receipt" in commanded:
+        receipt_error = gripper_actuation_receipt_error(
+            commanded["gripper_actuation_receipt"], position=0,
+        )
+        if receipt_error:
+            raise AttachmentProbeError(f"{operation}: {receipt_error}")
 
     proxy_value = commanded.get("attachment_proxy_receipt")
     proxy = dict(proxy_value) if isinstance(proxy_value, Mapping) else {}
@@ -494,23 +532,22 @@ def _require_probe_gripper_evidence(
     measured = dict(measured_value) if isinstance(measured_value, Mapping) else {}
     is_open = measured.get("open")
     openness = measured.get("openness")
-    has_numeric_openness = (
-        isinstance(openness, (int, float))
-        and not isinstance(openness, bool)
-        and math.isfinite(float(openness))
-    )
     # Continuous aperture is the more informative signal. Some simulator
     # adapters label a partially obstructed grasp as ``open=True`` even when
     # the measured aperture is far below fully open. Fall back to the coarse
-    # boolean only when no finite aperture measurement is available.
-    definitely_open = (
-        float(openness) >= 0.8 if has_numeric_openness else is_open is True
-    )
-    if definitely_open:
+    # boolean only when aperture telemetry is absent. Invalid numeric telemetry
+    # cannot establish either open or closed evidence.
+    definitely_open = measured_gripper_open(measured)
+    if definitely_open is True:
         raise AttachmentProbeError(
             f"{operation} contradicts the current measured gripper state: "
             f"open={is_open!r}, openness={openness!r}. Re-establish contact and close "
             "the gripper before using attachment evidence"
+        )
+    if openness is not None and definitely_open is None:
+        raise AttachmentProbeError(
+            f"{operation} received invalid measured gripper openness; require a "
+            "finite normalized aperture before reusing attachment evidence"
         )
     return {
         "commanded_position": 0,
@@ -668,13 +705,14 @@ def _world_pose(
     candidate_id: str,
     compiled_grasp_id: str,
     scene_epoch: int,
+    probe_type: str,
     waypoint_index: int | None = None,
 ) -> JsonDict:
     pose: JsonDict = {
         "frame": "world",
         "xyz": _round_vector(xyz),
         **dict(rotation),
-        "probe_type": "articulated_attachment",
+        "probe_type": probe_type,
         "source_grasp_id": candidate_id,
         "compiled_grasp_id": compiled_grasp_id,
         "scene_epoch": scene_epoch,

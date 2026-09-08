@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse, asyncio, base64, copy, io, json, math, os, queue, sys, threading, uuid, warnings
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import contextlib
+from weakref import WeakValueDictionary
 
 warnings.filterwarnings("ignore")
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -94,7 +95,7 @@ _env_errors: dict[str, str] = {}  # handle → last error message
 # (1) is serialising, producing the "handle matches but scene doesn't"
 # garbling.  ``_gl_lock`` only guards the GPU call, not this shared dict, so
 # we need a separate per-handle lock that spans "mutate/read obs + serialise".
-_obs_locks: dict[str, threading.Lock] = {}
+_obs_locks: WeakValueDictionary = WeakValueDictionary()
 _obs_locks_guard = threading.Lock()
 
 # Handles whose episode has already terminated/truncated.  robosuite raises
@@ -797,15 +798,17 @@ async def create_env(request):
 
 async def close_env(request):
     h = request.path_params.get("handle", "")
+    result = await _run_sim_call(_close_environment, h, bench=request.app.state.bench)
+    return _json_response(result)
+
+
+def _close_environment(h: str, *, bench: str) -> dict:
     # Serialise close against any in-flight step/observe on this handle so we
     # don't yank the env / cache out from under an active serialisation.
     with _obs_lock_for(h):
-        env = _envs.pop(h, None)
-        _last_obs.pop(h, None)
-        _done_handles.discard(h)
-        _terminal_step_results.pop(h, None)
-        if env:
-            if request.app.state.bench == "behavior":
+        env = _envs.get(h)
+        if env is not None:
+            if bench == "behavior":
                 # Sending og.shutdown() from inside this HTTP handler closes Kit's
                 # process resources before uvicorn can flush the response. The
                 # manager treats BEHAVIOR workers as single-use and terminates the
@@ -813,16 +816,18 @@ async def close_env(request):
                 result = {"ok": True, "worker_retire_required": True}
             else:
                 try:
-                    await _run_sim_call(env.close)
-                except Exception:
-                    pass
+                    env.close()
+                except Exception as exc:
+                    return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                            "close_state": "close_failed", "retryable": True}
                 result = {"ok": True, "worker_retire_required": False}
         else:
-            result = {"ok": False, "worker_retire_required": False}
-    # Drop the now-unused lock (a late concurrent caller just gets a fresh one).
-    with _obs_locks_guard:
-        _obs_locks.pop(h, None)
-    return _json_response(result)
+            result = {"ok": True, "already_closed": True, "worker_retire_required": False}
+        _envs.pop(h, None)
+        _last_obs.pop(h, None)
+        _done_handles.discard(h)
+        _terminal_step_results.pop(h, None)
+        return result
 
 
 def _safe_json_body(body: bytes) -> dict:
@@ -943,6 +948,9 @@ async def reachability_env(request):
 
     def _check():
         from sim.reachability import check_endpoint_reachability
+        from sim.ik_search_policy import (
+            DEFAULT_IK_MAX_ATTEMPTS, DEFAULT_IK_MAX_NFEV_PER_ATTEMPT, DEFAULT_IK_TIMEOUT_S,
+        )
 
         # Capture current qpos consistently with reset/step/close.  The solver
         # uses an independent MjData and therefore never mutates the live env.
@@ -956,9 +964,9 @@ async def reachability_env(request):
                 ),
                 position_tolerance_m=body.get("position_tolerance_m", 0.002),
                 orientation_tolerance_rad=body.get("orientation_tolerance_rad", 0.05),
-                max_attempts=body.get("max_attempts", 24),
-                max_nfev_per_attempt=body.get("max_nfev_per_attempt", 300),
-                timeout_s=body.get("timeout_s", 10.0),
+                max_attempts=body.get("max_attempts", DEFAULT_IK_MAX_ATTEMPTS),
+                max_nfev_per_attempt=body.get("max_nfev_per_attempt", DEFAULT_IK_MAX_NFEV_PER_ATTEMPT),
+                timeout_s=body.get("timeout_s", DEFAULT_IK_TIMEOUT_S),
             )
 
     return _json_response(await _run_sim_call(_check))

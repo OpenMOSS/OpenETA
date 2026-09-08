@@ -45,11 +45,14 @@ function textHtml(raw, key) {
 function renderQueue() {
   const groups = [];
   state.requests.forEach(request => {
-    let group = groups.find(item => item.id === request.session_id);
-    if (!group) { group = {id: request.session_id, source: request.session_source, requests: []}; groups.push(group); }
+    const groupId = request.parent_session_id || request.session_id;
+    let group = groups.find(item => item.id === groupId);
+    if (!group) { group = {id: groupId, requests: []}; groups.push(group); }
     group.requests.push(request);
   });
-  qs("#queue").innerHTML = groups.map(group => `<details class="session" open><summary title="${esc(group.id)}">${esc(group.id)} · ${group.requests.length} turns · ${esc(group.source)}</summary><div class="session-items">${group.requests.map(request => `<button class="request ${state.selected === request.id ? "selected" : ""}" data-id="${esc(request.id)}"><div class="request-top"><b>Turn ${request.session_turn}</b><span class="status-${esc(request.status)}">${esc(request.status)}</span></div><div class="request-task">${esc(request.task || request.request_label)}</div><div class="request-meta">${esc(request.request_label)} · ${request.message_count} msg · ${request.image_count} img${request.attempt > 1 ? ` · retry ${request.attempt}` : ""}</div></button>`).join("")}</div></details>`).join("") || '<div class="empty">No requests yet</div>';
+  const pending = state.requests.filter(request => request.status === "pending");
+  const waiting = pending.length ? `<div class="alert">待人工响应：${pending.length} 个请求（含 ${pending.filter(request => request.parent_session_id).length} 个关联子请求）</div>` : "";
+  qs("#queue").innerHTML = waiting + (groups.map(group => `<details class="session" open><summary title="${esc(group.id)}">${esc(group.id)} · ${group.requests.length} requests</summary><div class="session-items">${group.requests.map(request => `<button class="request ${state.selected === request.id ? "selected" : ""}" data-id="${esc(request.id)}" title="${esc(request.session_id)}"><div class="request-top"><b>${request.parent_session_id ? "↳ 子请求" : "Turn"} ${request.session_turn}</b><span class="status-${esc(request.status)}">${esc(request.wait_reason || request.status)}</span></div><div class="request-task">${esc(request.task || request.request_label)}</div><div class="request-meta">${esc(request.request_label)} · ${request.message_count} msg · ${request.image_count} img${request.attempt > 1 ? ` · retry ${request.attempt}` : ""}</div></button>`).join("")}</div></details>`).join("") || '<div class="empty">No requests yet</div>');
   document.querySelectorAll(".request").forEach(node => node.onclick = () => selectRequest(node.dataset.id));
 }
 function renderSection(section, index) {

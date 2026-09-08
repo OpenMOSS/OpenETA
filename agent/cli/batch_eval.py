@@ -52,6 +52,7 @@ from agent.runtime.supervision import (
 )
 from agent.runtime.visual_history import VisualHistoryConfig
 from agent.tools.mcp_registry import load_mcp_server_url
+from agent.tools.mcp_timeouts import DEFAULT_SIM_MCP_TIMEOUT_S, validate_simulator_timeout_s
 from agent.tools.sim_mcp import (
     SimulatorMcpEpisodeConfig,
     SimulatorMcpEpisodeEnvironment,
@@ -65,7 +66,6 @@ from agent.tools.web_access import (
 
 DEFAULT_PROVIDER_CONCURRENCY = 2
 DEFAULT_PROVIDER_QUEUE_TIMEOUT_S = 180.0
-DEFAULT_SIM_MCP_TIMEOUT_S = 300.0
 
 
 def load_parallel_episode_manifest(path: str | Path) -> list[ParallelEpisodeSpec]:
@@ -82,6 +82,8 @@ def load_parallel_episode_manifest(path: str | Path) -> list[ParallelEpisodeSpec
         if not isinstance(row, dict):
             raise ValueError(f"episodes[{index}] must be an object")
         spec = ParallelEpisodeSpec.from_dict(row, index=index)
+        from agent.runtime.interface_profiles import validate_interface_profile
+        validate_interface_profile(spec.metadata.get("agent_interface_profile", "legacy_compatible"))
         if spec.episode_id in seen_ids:
             raise ValueError(f"duplicate episode_id: {spec.episode_id}")
         seen_ids.add(spec.episode_id)
@@ -127,9 +129,11 @@ def build_mcp_episode_worker_factory(
     supervision_profile: SupervisionProfile | str = SupervisionProfile.STANDARD,
     provider_concurrency: int = DEFAULT_PROVIDER_CONCURRENCY,
     provider_queue_timeout_s: float = DEFAULT_PROVIDER_QUEUE_TIMEOUT_S,
+    simulator_timeout_s: float = DEFAULT_SIM_MCP_TIMEOUT_S,
 ):
     """Build isolated model/runtime/MCP workers for a parallel batch."""
 
+    simulator_timeout_s = validate_simulator_timeout_s(simulator_timeout_s)
     provider = load_planner_provider_config()
     if model_override:
         provider.model = model_override
@@ -172,6 +176,10 @@ def build_mcp_episode_worker_factory(
         )
 
     def factory(spec: ParallelEpisodeSpec, batch_id: str) -> ParallelEpisodeWorker:
+        required_model = spec.metadata.get("required_model")
+        if required_model and (provider.model != required_model or
+                               (provider.fallback is not None and provider.fallback.model != required_model)):
+            raise ValueError("Manifest required_model must match both primary and fallback models")
         requested_session_id = str(spec.metadata.get("agent_session_id") or "").strip()
         agent_session_id = requested_session_id or str(uuid4())
         requested_workspace_root = str(spec.metadata.get("workspace_root") or "").strip()
@@ -252,7 +260,7 @@ def build_mcp_episode_worker_factory(
         memory_root = workspace.memory_root
         transport = SseSimulatorMcpTransport(resolved_sim_url)
         proxy_config = SimulatorMcpToolProxyConfig(
-            timeout_s=max(DEFAULT_SIM_MCP_TIMEOUT_S, provider.timeout_s),
+            timeout_s=simulator_timeout_s,
             image_output_root=artifact_root / "images",
             text_output_root=artifact_root / "text",
             response_output_root=artifact_root / "responses",
@@ -262,13 +270,14 @@ def build_mcp_episode_worker_factory(
             config=SimulatorMcpEpisodeConfig(
                 env_id=spec.env_id,
                 seed=spec.seed,
-                timeout_s=max(DEFAULT_SIM_MCP_TIMEOUT_S, provider.timeout_s),
+                timeout_s=simulator_timeout_s,
                 image_output_root=artifact_root / "images",
             ),
             tool_proxy_config=proxy_config,
         )
         assembly = assemble_runtime(
             RuntimeAssemblyConfig(
+                agent_interface_profile=spec.metadata.get("agent_interface_profile", "legacy_compatible"),
                 workspace=workspace,
                 provider=provider,
                 backend_factory=new_backend,
@@ -356,6 +365,7 @@ def build_mcp_episode_worker_factory(
             close=environment.close,
             pause=pause,
             run_metadata={
+                "agent_interface_profile": runtime.planner.context_config.agent_interface_profile,
                 "workspace": workspace.to_dict(),
                 "supervision": policy.to_dict(),
                 "planner_prompt": dict(runtime.planner.prompt_metadata),
@@ -412,9 +422,11 @@ def resume_paused_episode(
     graspgenx_url: str = "",
     molmopoint_url: str = "",
     supervision_profile: SupervisionProfile | str | None = None,
+    simulator_timeout_s: float = DEFAULT_SIM_MCP_TIMEOUT_S,
 ) -> JsonDict:
     """Record one answer, rebuild the same task environment, and retry it."""
 
+    simulator_timeout_s = validate_simulator_timeout_s(simulator_timeout_s)
     store = PausedEpisodeStore()
     record = store.load(session_id)
     if record.interaction_id != interaction_id:
@@ -459,6 +471,7 @@ def resume_paused_episode(
         graspgenx_url=graspgenx_url,
         molmopoint_url=molmopoint_url,
         supervision_profile=(supervision_profile or record.supervision_profile),
+        simulator_timeout_s=simulator_timeout_s,
     )(spec, record.batch_id)
     environment = worker.runner.environment
     if not isinstance(environment, SimulatorMcpEpisodeEnvironment):
@@ -626,6 +639,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--model", default="", help="Override configured planner model.")
     parser.add_argument("--sim-url", default="", help="Override simulator MCP SSE URL.")
+    parser.add_argument(
+        "--simulator-timeout-s", type=validate_simulator_timeout_s,
+        default=DEFAULT_SIM_MCP_TIMEOUT_S,
+        help="Per simulator RPC timeout, independent of provider/episode budgets (default 300 s).",
+    )
     parser.add_argument("--sam3-url", default="", help="Override SAM3 MCP SSE URL.")
     parser.add_argument(
         "--depth-prior-url",
@@ -679,6 +697,7 @@ def main(argv: list[str] | None = None) -> int:
                 graspgenx_url=args.graspgenx_url,
                 molmopoint_url=args.molmopoint_url,
                 supervision_profile=args.approvement or None,
+                simulator_timeout_s=args.simulator_timeout_s,
             )
             if args.output:
                 _write_output(args.output, payload)
@@ -709,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
             supervision_profile=(args.approvement or SupervisionProfile.STANDARD.value),
             provider_concurrency=args.provider_concurrency,
             provider_queue_timeout_s=args.provider_queue_timeout_s,
+            simulator_timeout_s=args.simulator_timeout_s,
         )
         harness = ParallelEpisodeHarness(
             worker_factory,

@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,10 +28,18 @@ from agent.runtime.structured_artifacts import (
     load_structured_tool_output,
     materialize_structured_tool_output,
 )
+from agent.runtime.tool_bundles import (
+    BUNDLE_CONSUMERS, BUNDLE_INDEX_KEY, bundle_reference_conflicts, load_bundle, write_bundle,
+)
 from agent.runtime.depth_contract import target_depth_cutoff_factor
 from agent.runtime.memory_migrations import (
     is_removed_task_policy_key,
     purge_removed_task_policy_facts,
+)
+from agent.runtime.memory_ownership import (
+    agent_entry,
+    is_agent_entry,
+    separate_legacy_agent_entries,
 )
 from agent.runtime.observation_packets import (
     ObservationPacketResolutionError,
@@ -45,7 +54,16 @@ from agent.tools.grasp_geometry import (
     assess_target_mask_quality,
     rebase_camera_direction,
     rebase_camera_grasp_candidate,
+    propose_wrist_viewpoints,
     world_up_direction_camera,
+)
+from agent.tools.grasp_types import (
+    GRASP_GEOMETRY_FAMILIES as GRASP_GEOMETRY_FAMILIES,
+    normalize_selection_geometry_family,
+)
+from agent.tools.gripper_evidence import (
+    gripper_actuation_receipt_error,
+    measured_gripper_open,
 )
 
 
@@ -80,6 +98,14 @@ TOOL_HEALTH_KEY = "tool_health"
 ACTIVE_ENVIRONMENT_TASK_KEY = "active_environment_task"
 LATEST_COMPILED_CONTACT_EXECUTION_KEY = "latest_compiled_contact_execution"
 LATEST_COMPILED_CLEARANCE_EXECUTION_KEY = "latest_compiled_clearance_execution"
+# A rigid object that was visibly attached leaves a non-zero measured aperture.
+# If the closed fingers later collapse almost to their empty-close value, the
+# old visual PASS is no longer current evidence of attachment.  This uses only
+# deployable gripper telemetry and deliberately records UNKNOWN rather than
+# claiming a visually unobserved drop.
+ATTACHMENT_APERTURE_COLLAPSE_MAX_OPEN_FRACTION = 0.05
+ATTACHMENT_APERTURE_COLLAPSE_MAX_BASELINE_RATIO = 0.40
+ATTACHMENT_APERTURE_COLLAPSE_MIN_ABSOLUTE_DROP = 0.05
 # Closing is a finger-only action and the Agent receives fresh dual-view evidence
 # after contact motion.  Keep an independent residual envelope, but do not make
 # it tighter than the centimetre-scale execution accuracy of the supported
@@ -108,18 +134,6 @@ GRASP_REFERENCE_ORIENTATION_TOLERANCE_DEG = 20.0
 GRASP_ADJUSTMENT_STEP_LIMIT_M = 0.02
 GRASP_ADJUSTMENT_CUMULATIVE_LIMIT_M = 0.10
 GRASP_ADJUSTMENT_EPSILON_M = 1e-6
-GRASP_GEOMETRY_FAMILIES = {
-    "upright_can",
-    "upright_bottle",
-    "lying_bottle",
-    "boxed_item",
-    "bowl",
-    "apple",
-    "articulated_handle",
-    "drawer_handle",
-    "other",
-    "unknown",
-}
 DEFAULT_SAM3_EVIDENCE_ROLE = "target_object"
 SAM3_EVIDENCE_ROLES = frozenset({DEFAULT_SAM3_EVIDENCE_ROLE, "placement_region"})
 INFRASTRUCTURE_FAILURE_CODES = frozenset(
@@ -204,8 +218,10 @@ class AgentMemory:
         *,
         store: MemoryStore | None = None,
         artifact_root: str | Path | None = None,
+        agent_interface_profile: str = "legacy_compatible",
     ) -> None:
         self.store = store
+        self.agent_interface_profile = agent_interface_profile
         self.artifact_root = Path(artifact_root).resolve() if artifact_root else None
         self.session_id: str | None = None
         self.task: str | None = None
@@ -215,6 +231,7 @@ class AgentMemory:
         self.conversation = ConversationHistory()
         self.facts: dict[str, JsonDict] = {}
         self.agent_working_state: dict[str, JsonDict] = {}
+        self.agent_artifacts: dict[str, JsonDict] = {}
         self.artifacts: dict[str, JsonDict] = {}
         self._observation_packets: dict[str, JsonDict] = {}
         self.skill_notes: dict[str, list[JsonDict]] = {}
@@ -230,6 +247,7 @@ class AgentMemory:
         boot_facts = dict(self.facts) if self.session_id is None else {}
         boot_agent_state = dict(self.agent_working_state) if self.session_id is None else {}
         boot_artifacts = dict(self.artifacts) if self.session_id is None else {}
+        boot_agent_artifacts = dict(self.agent_artifacts) if self.session_id is None else {}
         self.session_id = session_id or str(uuid4())
         self.task = task
         self.current_user_request = ""
@@ -240,6 +258,7 @@ class AgentMemory:
         purge_removed_task_policy_facts(self.facts)
         self.agent_working_state = boot_agent_state
         purge_removed_task_policy_facts(self.agent_working_state)
+        separate_legacy_agent_entries(self.facts, self.agent_working_state)
         self.facts.setdefault(
             SCENE_EPOCH_KEY,
             _memory_fact_entry({"epoch": 0}, source="runtime"),
@@ -253,6 +272,8 @@ class AgentMemory:
             _memory_fact_entry({"epoch": 0}, source="runtime"),
         )
         self.artifacts = boot_artifacts
+        self.agent_artifacts = boot_agent_artifacts
+        separate_legacy_agent_entries(self.artifacts, self.agent_artifacts)
         self._observation_packets.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
@@ -298,18 +319,25 @@ class AgentMemory:
         self.conversation.clear()
         self.facts.clear()
         self.agent_working_state.clear()
+        self.agent_artifacts.clear()
         self.artifacts.clear()
         self._observation_packets.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
+        recovery_reports = []
         if self.store is not None:
             self.store.start_session(
                 session_id=session_id,
                 task=self.task or "(resumed)",
                 metadata=self.metadata,
             )
+            rows = self.store.load_events(session_id, limit=max_events)
+            records = self.store.load_conversation_records(session_id)
             self._load_working_memory()
-            for row in self.store.load_events(session_id, limit=max_events):
+            recover = getattr(self.store, "recover_session_journals", None)
+            if callable(recover):
+                recovery_reports = recover(session_id)
+            for row in rows:
                 event_type = str(row.get("event_type") or "event")
                 payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
                 timestamp = row.get("timestamp_s")
@@ -325,7 +353,6 @@ class AgentMemory:
                     )
                 )
                 self._index_observation_packets_from_payload(payload)
-            records = self.store.load_conversation_records(session_id)
             if records:
                 self.conversation.replay(records)
             else:
@@ -343,6 +370,24 @@ class AgentMemory:
             ROBOT_MOTION_EPOCH_KEY,
             _memory_fact_entry({"epoch": legacy_scene_epoch}, source="session_migration"),
         )
+        if recovery_reports:
+            # A torn record may have described an unacknowledged mutation. Keep
+            # historical evidence, but do not let its old epochs authorize motion.
+            source = "journal_recovery_invalidates_evidence"
+            object_epoch = self.object_scene_epoch() + 1
+            robot_epoch = self.robot_motion_epoch() + 1
+            for key, epoch in ((ROBOT_MOTION_EPOCH_KEY, robot_epoch),
+                               (OBJECT_SCENE_EPOCH_KEY, object_epoch),
+                               (SCENE_EPOCH_KEY, object_epoch)):
+                self.facts[key] = _memory_fact_entry({"epoch": epoch}, source=source)
+            self._invalidate_anyplace_bundle_for_object_scene_change(
+                tool="session_recovery", object_scene_epoch=object_epoch, source=source,
+            )
+            self.record("session_journal_recovery", {
+                "reports": recovery_reports, "requires_fresh_environment_evidence": True,
+                "robot_motion_epoch": robot_epoch, "object_scene_epoch": object_epoch,
+            })
+            self._save_working_memory()
         self.current_user_request = self.conversation.current_user_request or (self.task or "")
         self.record(
             "session_resumed",
@@ -379,6 +424,9 @@ class AgentMemory:
     def add_observation(self, observation: EnvObservation) -> None:
         object_scene_updated = self._capture_observed_object_scene_change(observation)
         controller_capabilities_updated = self._capture_controller_capabilities(
+            observation
+        )
+        attachment_aperture_updated = self._capture_attachment_telemetry_invalidation(
             observation
         )
         summary = summarize_observation(observation)
@@ -485,6 +533,7 @@ class AgentMemory:
             reconciliation_updated
             or object_scene_updated
             or controller_capabilities_updated
+            or attachment_aperture_updated
         ):
             self._save_working_memory()
 
@@ -784,9 +833,12 @@ class AgentMemory:
         articulated_probe_updated = self._capture_articulated_attachment_probe_result(action)
         articulated_assessment_updated = self._capture_articulated_attachment_assessment(action)
         reconciliation_updated = self._capture_motion_reconciliation(action)
+        handoffs_updated = self._capture_tool_handoffs(action)
+        handoffs_updated = self._refresh_manifest_input_handoffs() or handoffs_updated
         self._append_transition_ledger(action)
         if (
             captured_artifacts
+            or handoffs_updated
             or world_mutated
             or articulated_probe_prepared
             or articulated_probe_updated
@@ -836,14 +888,11 @@ class AgentMemory:
                 f"{key!r} is a reserved tombstone for deleted host task policy; "
                 "store an Agent-owned plan or hypothesis under a different key"
             )
-        entry = {"value": dict(value), "source": source, "timestamp_s": time.time()}
-        self.facts[key] = entry
+        entry = {"value": deepcopy(value), "source": source, "timestamp_s": time.time()}
         if source == "save_memory":
-            self.agent_working_state[key] = {
-                **entry,
-                "ownership": "agent",
-                "freshness": "agent_managed",
-            }
+            self.agent_working_state[key] = agent_entry(entry)
+        else:
+            self.facts[key] = entry
         self.record("memory_fact_saved", {"key": key, "source": source})
         self._save_working_memory()
 
@@ -927,8 +976,246 @@ class AgentMemory:
             if isinstance(artifacts, list):
                 artifacts.append(dict(reference))
 
+    def register_tool_bundle(
+        self, *, kind: str, reference_parameters: JsonDict, summary: JsonDict,
+        producer: str, robot_bound: bool = False, parents: list[str] | None = None,
+    ) -> JsonDict:
+        """Host-only registration; Agent save_memory and Python cannot call this."""
+        if self.artifact_root is None or not self.session_id:
+            raise ValueError("durable bundles require an active session artifact root")
+        reference = write_bundle(
+            root=self.artifact_root, session_id=self.session_id, kind=kind,
+            reference_parameters=reference_parameters, summary=deepcopy(summary),
+            object_scene_epoch=self.object_scene_epoch(),
+            robot_motion_epoch=self.robot_motion_epoch() if robot_bound else None,
+            producer=producer, parents=parents,
+        )
+        index = deepcopy(_memory_fact_value(self.facts.get(BUNDLE_INDEX_KEY)) or {})
+        index[reference["bundle_id"]] = reference
+        self.facts[BUNDLE_INDEX_KEY] = _memory_fact_entry(index, source="host_bundle_registry")
+        return deepcopy(reference)
+
+    def resolve_tool_bundle(self, tool_name: str, parameters: JsonDict) -> JsonDict:
+        """Resolve one typed handoff, then let the ordinary pipeline revalidate it."""
+        kind = BUNDLE_CONSUMERS.get(tool_name)
+        if kind is None or self.artifact_root is None or not self.session_id:
+            raise ValueError("tool bundle resolution is unavailable")
+        bundle_id = parameters.get("bundle_id")
+        if not isinstance(bundle_id, str):
+            raise ValueError("bundle_id must be a registered string ID, not a file path")
+        index = _memory_fact_value(self.facts.get(BUNDLE_INDEX_KEY)) or {}
+        reference = index.get(bundle_id)
+        if not isinstance(reference, dict):
+            raise ValueError("unknown host bundle; inspect tool_handoffs for exact IDs")
+        payload = load_bundle(reference, root=self.artifact_root,
+                              session_id=self.session_id, expected_kind=kind)
+        if payload.get("object_scene_epoch") != self.object_scene_epoch():
+            raise ValueError("bundle object-scene evidence is stale; obtain current evidence")
+        robot_epoch = payload.get("robot_motion_epoch")
+        if robot_epoch is not None and robot_epoch != self.robot_motion_epoch():
+            raise ValueError("bundle robot-state evidence is stale; obtain a fresh preview")
+        bindings = payload.get("reference_parameters")
+        if not isinstance(bindings, dict):
+            raise ValueError("bundle contains no typed reference parameters")
+        if "bundle_id" in bindings:
+            raise ValueError("bundle must resolve directly to a native reference, not another bundle")
+        # A bundle supplies the entire reference branch. Partial reference
+        # fields must not override it, even if they coincidentally agree.
+        if bundle_reference_conflicts(tool_name, parameters):
+            raise ValueError("bundle_id cannot be mixed with another reference branch")
+        resolved = {**deepcopy(bindings), **{k: v for k, v in parameters.items() if k != "bundle_id"}}
+        if tool_name in {"grasp_pose_estimate", "anyplace"}:
+            native_id = resolved.pop("native_bundle_id", None)
+            prefix = "grasp:" if tool_name == "grasp_pose_estimate" else "anyplace:"
+            if not isinstance(native_id, str) or not native_id.startswith(prefix):
+                raise ValueError("invalid native evidence binding in manifest")
+            resolved["bundle_id"] = native_id
+        # Also protect direct pipeline callers, which may bypass the planner.
+        from agent.runtime.planner import _validate_tool_parameters
+        errors = _validate_tool_parameters(tool_name, resolved)
+        if errors:
+            raise ValueError("; ".join(errors))
+        return resolved
+
+    def tool_handoffs(self, *, limit: int = 12) -> list[JsonDict]:
+        index = _memory_fact_value(self.facts.get(BUNDLE_INDEX_KEY)) or {}
+        items = list(index.values())
+        capacity = max(1, min(limit, 32))
+        # A recency-only window lets repeated pose/IK outputs hide the still-live
+        # candidate or perception input needed for recovery. Reserve one current
+        # source per kind, then spend the remaining slots on recent history.
+        # This is discovery only: epochs and all native gates still apply.
+        latest_by_kind = {}
+        for position, item in enumerate(items):
+            if (item.get("object_scene_epoch") == self.object_scene_epoch()
+                    and item.get("robot_motion_epoch") in (None, self.robot_motion_epoch())):
+                latest_by_kind[item.get("kind")] = position
+        selected = set(sorted(latest_by_kind.values())[-capacity:])
+        for position in range(len(items) - 1, -1, -1):
+            if len(selected) >= capacity:
+                break
+            selected.add(position)
+        result = []
+        for position in sorted(selected):
+            item = items[position]
+            current = (item.get("object_scene_epoch") == self.object_scene_epoch()
+                       and item.get("robot_motion_epoch") in (None, self.robot_motion_epoch()))
+            result.append({**deepcopy(item), "current_epoch": current,
+                           "execution_requires_live_gates": True})
+        return result
+
+    def _capture_tool_handoffs(self, action: EnvAction) -> bool:
+        if self.artifact_root is None or not self.session_id:
+            return False  # Existing in-memory-only runtimes keep their legacy references.
+        changed = False
+        for tool_name in ("grasp_pose_estimate", "compile_grasp_seed", "ik_preview_check", "propose_wrist_viewpoints",
+                          "prepare_attachment_probe", "camera_pose_to_world", "compute_wrist_alignment",
+                          "propose_motion_target", "compose_ik_trajectory", "sam3"):
+            call = _pipeline_call(action, tool_name)
+            if not isinstance(call, dict):
+                continue
+            result = call.get("result")
+            details = result.get("details") if isinstance(result, dict) else None
+            outputs = details.get("outputs") if isinstance(details, dict) else None
+            if not isinstance(outputs, dict) or "handoff_bundles" in outputs:
+                continue
+            specs: list[tuple[str, JsonDict, JsonDict, bool]] = []
+            if tool_name in {"propose_motion_target", "compose_ik_trajectory"} and _call_result_success(call):
+                proposal = outputs.get("bundle_proposal") or {}
+                kind = "target_pose" if tool_name == "propose_motion_target" else "ik_trajectory"
+                if proposal.get("kind") == kind and isinstance(proposal.get("reference_parameters"), dict):
+                    specs.append((kind, proposal["reference_parameters"], proposal.get("summary") or {}, True))
+            elif tool_name == "sam3" and _call_result_success(call) and self.agent_interface_profile == "bundle_stage3":
+                if outputs.get("result_id"):
+                    specs.append(("sam3_detections", {"sam3_result_id": outputs["result_id"]}, {
+                        "consumer_tool": "select_sam3_detection", "also_consumed_by": "reject_sam3_detections",
+                        "result_id": outputs["result_id"], "source_packet_id": outputs.get("source_packet_id"),
+                        "candidate_count": outputs.get("detection_count"),
+                        "instruction": "Choose detection_id visually, or reject this bundle with a reason; identity is an explicit choice.",
+                    }, False))
+            elif tool_name == "prepare_attachment_probe" and _call_result_success(call):
+                for index, pose in enumerate(outputs.get("frozen_path", [])[:5]):
+                    if outputs.get("probe_id") and isinstance(pose, dict):
+                        specs.append(("target_pose", {"probe_id": outputs["probe_id"], "waypoint_index": index}, {
+                            "consumer_tool": "ik_preview_check", "purpose": "attachment_probe", "waypoint_index": index,
+                            "pose": pose, "instruction": "Preview the frozen waypoint; bundle does not authorize motion.",
+                        }, False))
+            elif tool_name in {"camera_pose_to_world", "compute_wrist_alignment"} and _call_result_success(call):
+                raw = outputs.get("world_pose" if tool_name == "camera_pose_to_world" else "adjusted_contact_pose")
+                if isinstance(raw, dict):
+                    pose = deepcopy(raw)
+                    if "xyz" not in pose and "translation_xyz" in pose:
+                        pose["xyz"] = pose["translation_xyz"]
+                    if isinstance(pose.get("xyz"), list):
+                        pose.setdefault("frame", "world")
+                        specs.append(("target_pose", {"target_pose": pose}, {"consumer_tool": "ik_preview_check",
+                            "purpose": "placement" if tool_name == "camera_pose_to_world" else "grasp_refinement",
+                            "pose": pose, "motion_authorized": False}, True))
+            elif tool_name == "grasp_pose_estimate" and _call_result_success(call):
+                result_id = outputs.get("result_id")
+                if isinstance(result_id, str) and result_id:
+                    specs.append(("grasp_candidates", {"grasp_result_id": result_id}, {
+                        "consumer_tool": "compile_grasp_seed",
+                        "candidate_ids": [c.get("candidate_id") or c.get("id") for c in outputs.get("grasp_candidates", [])
+                                          if isinstance(c, dict)],
+                        "structured_artifact": details.get("structured_artifact"),
+                        "instruction": "Choose candidate_id; pass it with this bundle_id. No RGB-D copying.",
+                    }, False))
+            elif tool_name == "compile_grasp_seed" and _call_result_success(call):
+                compiled_id = outputs.get("compiled_grasp_id")
+                if isinstance(compiled_id, str) and compiled_id:
+                    for role, key in (("grasp_clearance", "hover_pose"),
+                                      ("grasp_precontact", "precontact_pose"),
+                                      ("grasp_contact", "contact_pose")):
+                        if isinstance(outputs.get(key), dict):
+                            specs.append(("target_pose", {
+                                "compiled_grasp_id": compiled_id, "waypoint_role": role,
+                            }, {"consumer_tool": "ik_preview_check", "waypoint_role": role,
+                                "candidate_id": outputs.get("candidate_id"),
+                                "pose": deepcopy(outputs[key]),
+                                "instruction": "Preview this exact waypoint using bundle_id; not a move authorization.",
+                            }, False))
+            elif tool_name == "propose_wrist_viewpoints" and _call_result_success(call):
+                proposal_id = outputs.get("proposal_id")
+                if isinstance(proposal_id, str) and proposal_id:
+                    for candidate in outputs.get("candidates", [])[:8]:
+                        if not isinstance(candidate, dict) or not candidate.get("candidate_id"):
+                            continue
+                        specs.append(("target_pose", {
+                            "viewpoint_proposal_id": proposal_id,
+                            "candidate_id": candidate["candidate_id"],
+                        }, {"consumer_tool": "ik_preview_check", "purpose": "active_perception",
+                            "candidate_id": candidate["candidate_id"],
+                            "pose": candidate.get("target_pose"),
+                            "view_quality_estimates": candidate.get("view_quality_estimates"),
+                            "instruction": "Optional observation viewpoint, not a contact correction or motion authorization.",
+                        }, True))
+            elif tool_name == "ik_preview_check":
+                receipt = (self.ik_preview_receipts() or {}).get("latest")
+                raw_receipt = outputs.get("ik_preview_receipt")
+                if (isinstance(receipt, dict) and isinstance(raw_receipt, dict)
+                        and receipt.get("receipt_id") == raw_receipt.get("receipt_id")):
+                    specs.append(("ik_result", {"ik_receipt_id": receipt["receipt_id"]}, {
+                        "receipt_id": receipt["receipt_id"],
+                        "consumer_tool": "move_to", "classification": receipt.get("classification"),
+                        "reason_code": receipt.get("reason_code"),
+                        "target_pose": deepcopy(receipt.get("target_pose")),
+                        "target_signature": receipt.get("target_signature"),
+                        "best_candidate": receipt.get("best_candidate"),
+                        "retry_history": receipt.get("retry_history"),
+                        "instruction": "Only an authorized, current IK result can move. Rejected results are diagnostic evidence only.",
+                    }, True))
+            handoffs = []
+            command = action.command if isinstance(action.command, dict) else {}
+            original = (command.get("metadata") or {}).get("bundle_request") or {}
+            parent = (original.get("parameters") or {}).get("bundle_id")
+            for kind, binding, summary, robot_bound in specs:
+                if kind == "ik_result" and isinstance(parent, str):
+                    summary["target_bundle_id"] = parent
+                if kind == "target_pose":
+                    summary.setdefault("request_reference", deepcopy(binding))
+                try:
+                    handoffs.append(self.register_tool_bundle(
+                        kind=kind, reference_parameters=binding, summary=summary,
+                        producer=tool_name, robot_bound=robot_bound,
+                        parents=([parent] if isinstance(parent, str) else
+                                 (outputs.get("bundle_proposal") or {}).get("parents", [])),
+                    ))
+                    changed = True
+                except (OSError, TypeError, ValueError) as exc:
+                    details.setdefault("diagnostics", []).append({
+                        "code": "tool_bundle_persistence_failed", "message": str(exc),
+                    })
+            if handoffs:
+                outputs["handoff_bundles"] = handoffs
+        return changed
+
+    def _refresh_manifest_input_handoffs(self) -> bool:
+        """Wrap ready native inputs without changing their existing live resolver."""
+        if self.agent_interface_profile != "bundle_stage3" or self.artifact_root is None:
+            return False
+        changed = False
+        refs = self.tool_handoffs(limit=32)
+        for kind, consumer, public in (("grasp_input", "grasp_pose_estimate", self.grasp_input_bundle()),
+                                       ("placement_input", "anyplace", self.anyplace_input_bundle())):
+            if not isinstance(public, dict) or public.get("status") != "ready" or not public.get("bundle_id"):
+                continue
+            if any(r.get("kind") == kind and r.get("current_epoch") and
+                   r.get("summary", {}).get("native_reference") == public["bundle_id"] for r in refs):
+                continue
+            self.register_tool_bundle(kind=kind, producer="host_input_assembly",
+                reference_parameters={"native_bundle_id": public["bundle_id"]},
+                summary={"consumer_tool": consumer, "native_reference": public["bundle_id"],
+                         "status": "ready", "instruction": "Use this manifest ID; Host still validates native input provenance."})
+            changed = True
+        return changed
+
     def save_artifact(self, key: str, value: JsonDict, *, source: str = "") -> None:
-        self.artifacts[key] = {"value": dict(value), "source": source, "timestamp_s": time.time()}
+        entry = {"value": deepcopy(value), "source": source, "timestamp_s": time.time()}
+        if source == "save_memory":
+            self.agent_artifacts[key] = agent_entry(entry)
+        else:
+            self.artifacts[key] = entry
         self.record("memory_artifact_saved", {"key": key, "source": source})
         self._save_working_memory()
 
@@ -944,19 +1231,24 @@ class AgentMemory:
         *,
         namespace: str = "all",
     ) -> JsonDict:
+        # A read-only compatibility view: host evidence wins a name collision.
+        # Resolvers consume self.facts/self.artifacts, never these merged views.
+        facts = deepcopy({**self.agent_working_state, **self.facts})
+        artifacts = deepcopy({**self.agent_artifacts, **self.artifacts})
         if namespace == "facts":
-            return {"facts": _select_memory(self.facts, key)}
+            return {"facts": _select_memory(facts, key)}
         if namespace == "artifacts":
-            return {"artifacts": _select_memory(self.artifacts, key)}
+            return {"artifacts": _select_memory(artifacts, key)}
         if namespace == "skill_notes":
             if key is None:
-                return {"skill_notes": self.skill_notes}
-            return {"skill_notes": {key: self.skill_notes.get(key, [])}}
+                return {"skill_notes": deepcopy(self.skill_notes)}
+            return {"skill_notes": {key: deepcopy(self.skill_notes.get(key, []))}}
         return {
-            "facts": _select_memory(self.facts, key),
-            "artifacts": _select_memory(self.artifacts, key),
+            "facts": _select_memory(facts, key),
+            "artifacts": _select_memory(artifacts, key),
             "skill_notes": (
-                self.skill_notes if key is None else {key: self.skill_notes.get(key, [])}
+                deepcopy(self.skill_notes)
+                if key is None else {key: deepcopy(self.skill_notes.get(key, []))}
             ),
             "compact_summary": self.compact_summary,
         }
@@ -1451,6 +1743,7 @@ class AgentMemory:
                 "compiled_grasp_id is unknown in the active provenance graph; compile "
                 "one current target candidate first"
             )
+        self._validate_wrist_viewpoint_target(compiled_id, compiled)
         source = self.resolve_observation_packet(source_packet_id, camera_frame_id)
         frame_id = str(source.get("frame_id") or "")
         role = str(source.get("role") or "")
@@ -1483,7 +1776,7 @@ class AgentMemory:
             "source_packet_id": source.get("packet_id"),
             "camera_frame_id": frame_id,
             "parameters": {
-                "compiled_grasp": compiled,
+                "compiled_grasp": deepcopy(compiled),
                 "source_packet_id": source.get("packet_id"),
                 "camera_frame_id": frame_id,
                 "camera_extrinsics": source.get("extrinsics"),
@@ -1644,30 +1937,33 @@ class AgentMemory:
                 outputs = _tool_call_outputs(call)
                 if str(outputs.get("proposal_id") or "") != requested_proposal:
                     continue
-                if _fact_epoch_value(outputs.get("object_scene_epoch")) != self.object_scene_epoch():
+                result = call.get("result")
+                details = result.get("details") if isinstance(result, dict) else None
+                if (
+                    not isinstance(result, dict) or result.get("success") is not True
+                    or (isinstance(details, dict) and details.get("operational_success") is False)
+                    or call.get("status") in {"failed", "blocked", "pending", "planned"}
+                ):
+                    raise ValueError("viewpoint proposal was not successfully produced")
+                if type(outputs.get("object_scene_epoch")) is not int or outputs["object_scene_epoch"] != self.object_scene_epoch():
                     raise ValueError(
                         "viewpoint proposal is stale because object_scene_epoch changed"
                     )
-                if _fact_epoch_value(outputs.get("robot_motion_epoch")) != self.robot_motion_epoch():
+                if type(outputs.get("robot_motion_epoch")) is not int or outputs["robot_motion_epoch"] != self.robot_motion_epoch():
                     raise ValueError(
                         "viewpoint proposal is stale because robot_motion_epoch changed"
                     )
+                self._validate_wrist_viewpoint_geometry(outputs)
                 candidates = outputs.get("candidates")
                 candidates = candidates if isinstance(candidates, list) else []
-                candidate = next(
-                    (
-                        item
-                        for item in candidates
-                        if isinstance(item, dict)
-                        and str(item.get("candidate_id") or "") == requested_candidate
-                    ),
-                    None,
-                )
-                if not isinstance(candidate, dict):
+                matches = [item for item in candidates if isinstance(item, dict)
+                           and str(item.get("candidate_id") or "") == requested_candidate]
+                if len(matches) != 1:
                     raise ValueError(
-                        f"candidate_id {requested_candidate!r} is not present in "
+                        f"candidate_id {requested_candidate!r} must occur exactly once in "
                         f"viewpoint proposal {requested_proposal!r}"
                     )
+                candidate = matches[0]
                 target_pose = candidate.get("target_pose")
                 if not isinstance(target_pose, dict):
                     raise ValueError("viewpoint candidate does not contain target_pose")
@@ -1675,11 +1971,64 @@ class AgentMemory:
                     "schema_version": "openeta.wrist_viewpoint_candidate_resolution.v1",
                     "proposal_id": requested_proposal,
                     "candidate_id": requested_candidate,
-                    "parameters": {"target_pose": dict(target_pose)},
+                    "parameters": {"target_pose": deepcopy(target_pose)},
                 }
         raise ValueError(
             f"unknown viewpoint_proposal_id {requested_proposal!r} in the active session"
         )
+
+    def _validate_wrist_viewpoint_target(self, compiled_id: str, compiled: JsonDict) -> None:
+        if type(compiled.get("scene_epoch")) is not int or compiled["scene_epoch"] != self.object_scene_epoch():
+            raise ValueError("viewpoint compiled target has stale or missing object-scene evidence")
+        provenance = _memory_fact_value(self.facts.get(GRASP_PROVENANCE_KEY))
+        if isinstance(provenance, dict) and provenance.get("compiled_grasp_id"):
+            if provenance["compiled_grasp_id"] != compiled_id:
+                raise ValueError("viewpoint compiled target was superseded by another compiled grasp")
+        for node in self.provenance_evidence_graph()["nodes"]:
+            if node.get("compiled_grasp_id") == compiled_id and node.get("freshness") in {
+                "superseded_target_evidence", "invalidated_contact_geometry", "stale_object_scene",
+            }:
+                raise ValueError("viewpoint compiled target evidence is no longer current")
+
+    def _validate_wrist_viewpoint_geometry(self, proposal: JsonDict) -> None:
+        """Recheck stored target and mount against session-owned current packets.
+
+        Regeneration is a bounded, pure geometry check, not a new tool call or
+        scan. It does not replace the selected pose or grant execution authority.
+        """
+        if proposal.get("schema_version") != "openeta.wrist_viewpoint_proposal.v1":
+            raise ValueError("viewpoint proposal lacks a supported geometry schema")
+        refs = [proposal.get(key) for key in (
+            "compiled_grasp_id", "source_packet_id", "camera_frame_id",
+        )]
+        if any(not isinstance(value, str) or not value.strip() for value in refs):
+            raise ValueError("viewpoint proposal lacks its compiled target or source-camera binding")
+        compiled_id, source_id, frame_id = refs
+        original = self.resolve_wrist_viewpoint_input(
+            compiled_grasp_id=compiled_id, source_packet_id=source_id, camera_frame_id=frame_id,
+        )
+        # Select by observation index, not insertion order or lexical packet IDs.
+        camera_packets = [entry for entry in self._observation_packets.values()
+                          if any(isinstance(row, dict) and row.get("frame_id") == frame_id
+                                 for row in entry.get("cameras", []))]
+        if not camera_packets:
+            raise ValueError("viewpoint camera has no current session packet")
+        latest = max(camera_packets, key=lambda row: _fact_epoch_value(row.get("observation_index")))
+        current = self.resolve_wrist_viewpoint_input(
+            compiled_grasp_id=compiled_id, source_packet_id=latest["packet_id"], camera_frame_id=frame_id,
+        )
+        for inputs in (original, current):
+            geometry = propose_wrist_viewpoints(inputs["parameters"])
+            if not _viewpoint_geometry_equal(
+                proposal.get("target_anchor_world_xyz"), geometry["target_anchor_world_xyz"],
+            ):
+                raise ValueError("viewpoint target geometry changed; generate a current proposal")
+            mount = proposal.get("camera_mount")
+            if not isinstance(mount, dict) or any(
+                not _viewpoint_geometry_equal(mount.get(key), geometry["camera_mount"][key])
+                for key in ("eef_to_camera_translation_xyz", "eef_to_camera_rotation_matrix")
+            ):
+                raise ValueError("viewpoint camera mount changed or lacks evidence; generate a current proposal")
 
     def resolve_anyplace_input_bundle(self, bundle_id: str) -> JsonDict:
         """Resolve an Agent-supplied bundle id to immutable host-owned parameters."""
@@ -2326,6 +2675,12 @@ class AgentMemory:
             parameters["tolerance"] = tolerances["position_tolerance_m"]
         if tolerances.get("orientation_tolerance_rad") is not None:
             parameters["ori_tolerance"] = tolerances["orientation_tolerance_rad"]
+        # A probe endpoint was frozen by the host with collision checking
+        # mandatory.  The Agent should only need to copy the short IK receipt
+        # id; omitting the redundant boolean must not silently weaken the
+        # frozen execution contract on the following move_to call.
+        if target_pose.get("probe_path_sha256"):
+            parameters["enable_collision_check"] = True
         return {
             "schema_version": "openeta.ik_motion_reference_resolution.v1",
             "ik_receipt_id": requested_id,
@@ -2543,9 +2898,17 @@ class AgentMemory:
         if preserve_current is not True and not orientation_fields:
             return None
 
+        # The selected receipt owns the seed. A newer equivalent endpoint may
+        # veto execution, but must not silently substitute another IK branch.
+        if self.ik_execution_gate_error(tool_name="move_to", parameters=parameters):
+            return None
+        selected_id = parameters.get("ik_receipt_id")
+
         state = self.ik_preview_receipts() or {}
         for receipt in reversed(state.get("receipts", []) or []):
             if not isinstance(receipt, dict):
+                continue
+            if selected_id is not None and receipt.get("receipt_id") != selected_id:
                 continue
             if (
                 receipt.get("pose_policy_signature") != signature
@@ -3652,20 +4015,20 @@ class AgentMemory:
         return {}
 
     def motion_reconciliation_gate_error(self, *, tool_name: str) -> str | None:
-        """Block new actions until an unknown mutation is observed and reconciled."""
+        """Fence unknown remote operations; position observations cannot unlock them."""
 
         reconciliation = self.motion_reconciliation()
-        if not isinstance(reconciliation, dict) or reconciliation.get("status") not in {
-            "required",
-            "unresolved",
-        }:
+        if not isinstance(reconciliation, dict):
             return None
         if tool_name == "observe":
             return None
         return (
-            "A simulator action has transport-unknown outcome. Observe the same "
-            "environment handle before issuing another action. Do not resend a "
-            "partial move because the original controller may still be running."
+            "A simulator action has transport-unknown outcome. Same-handle observation "
+            "can update position evidence but cannot prove the remote operation ended. "
+            "Do not resend or issue another action. Stop this episode and require "
+            "Host-confirmed environment retirement before starting a new environment "
+            "and session. In-place operation-completion recovery is not implemented; "
+            "position-only reconciliation does not release this gate."
         )
 
     def ik_execution_gate_error(
@@ -3686,6 +4049,11 @@ class AgentMemory:
                     "ik_preview_required: follow_eef_trajectory requires one to five "
                     "host-resolved IK receipt targets."
                 )
+            receipt_ids = parameters.get("ik_receipt_ids")
+            if receipt_ids is not None and (
+                not isinstance(receipt_ids, list) or len(receipt_ids) != len(trajectory)
+            ):
+                return "ik_preview_required: trajectory receipt IDs must align with every waypoint."
             for index, pose in enumerate(trajectory):
                 if not isinstance(pose, dict):
                     return (
@@ -3696,6 +4064,7 @@ class AgentMemory:
                     tool_name="move_to",
                     parameters={
                         "target_pose": pose,
+                        **({"ik_receipt_id": receipt_ids[index]} if receipt_ids is not None else {}),
                         "enable_collision_check": parameters.get(
                             "enable_collision_check"
                         ),
@@ -3710,6 +4079,41 @@ class AgentMemory:
         if not pose_signature:
             return None
         state = self.ik_preview_receipts() or {}
+        selected_id = parameters.get("ik_receipt_id")
+        if selected_id is not None:
+            selected = next((
+                item for item in reversed(state.get("receipts", []) or [])
+                if isinstance(item, dict) and item.get("receipt_id") == selected_id
+            ), None)
+            if (
+                not isinstance(selected_id, str) or not selected_id.strip()
+                or not isinstance(selected, dict)
+                or _fact_epoch_value(selected.get("object_scene_epoch")) != self.object_scene_epoch()
+                or _fact_epoch_value(selected.get("robot_motion_epoch")) != self.robot_motion_epoch()
+                or (
+                    selected.get("pose_policy_signature") != pose_signature
+                    and not ik_pose_policy_numerically_equivalent(selected, parameters)
+                )
+            ):
+                return (
+                    "ik_preview_required: the selected IK receipt must itself authorize "
+                    "this current-epoch target and orientation policy; another preview "
+                    "cannot supply its authorization or execution seed."
+                )
+            if not self._ik_receipt_authorizes_motion(selected, parameters):
+                classification = str(selected.get("classification") or "unknown")
+                code = {
+                    "hard_infeasible": "ik_target_hard_infeasible",
+                    "kinematically_feasible_collision_deferred": "ik_collision_delegation_not_authorized",
+                }.get(classification, "ik_preview_not_feasible")
+                return (
+                    f"{code}: selected IK receipt {selected_id!r} is {classification!r} "
+                    f"({selected.get('reason_code') or 'no reason code'}); another "
+                    "preview cannot supply its authorization or execution seed."
+                )
+        # Retain the latest equivalent evidence veto even when an older receipt
+        # was explicitly selected. Exact reference binding cannot revive a pose
+        # subsequently rejected by the checker in the same epoch.
         latest_matching: JsonDict | None = None
         for receipt in reversed(state.get("receipts", []) or []):
             if not isinstance(receipt, dict):
@@ -3891,13 +4295,7 @@ class AgentMemory:
         )
         if selected is None:
             raise ValueError("detection_id does not belong to the pending SAM3 result.")
-        geometry_family = target_geometry_family.strip().lower()
-        if geometry_family and geometry_family not in GRASP_GEOMETRY_FAMILIES:
-            raise ValueError(
-                "target_geometry_family must be one of "
-                + ", ".join(sorted(GRASP_GEOMETRY_FAMILIES))
-                + "."
-            )
+        geometry_family = normalize_selection_geometry_family(target_geometry_family)
         selected.update(
             {
                 "result_id": result_id,
@@ -5464,6 +5862,8 @@ class AgentMemory:
                     "comes from different detection evidence. Copy the exact active "
                     f"identity_anchor_id={existing_id!r} and set identity_relation to "
                     "'same_instance' after cross-view visual comparison, or to "
+                    "'new_task_target' when intentionally advancing to another "
+                    "task-required object, or to "
                     "'replace_misidentified_anchor' when the earlier selection was "
                     "wrong. The host will not silently bind a new mask to the old instance."
                 )
@@ -5481,12 +5881,34 @@ class AgentMemory:
                     },
                 )
                 return False
-            if relation != "replace_misidentified_anchor":
+            if relation not in {
+                "replace_misidentified_anchor",
+                "new_task_target",
+            }:
                 raise ValueError(
                     "target_identity_confirmation_required: identity_relation must be "
-                    "'same_instance' or 'replace_misidentified_anchor' for new target "
-                    "detection evidence."
+                    "'same_instance', 'new_task_target', or "
+                    "'replace_misidentified_anchor' for new target detection evidence."
                 )
+            if relation == "new_task_target":
+                if len(str(reason or "").strip()) < 8:
+                    raise ValueError(
+                        "new_task_target_requires_reason: explain which distinct "
+                        "task-required target is being selected next."
+                    )
+                self.facts.pop(TARGET_IDENTITY_ANCHOR_KEY, None)
+                created = self._capture_target_identity_anchor(selected)
+                selected["identity_continuity"] = "intentional_next_task_target"
+                selected["previous_task_target_anchor_id"] = existing_id
+                self.record(
+                    "task_target_anchor_advanced",
+                    {
+                        "previous_anchor_id": existing_id,
+                        "new_anchor_id": selected.get("identity_anchor_id"),
+                        "reason": reason,
+                    },
+                )
+                return created
             verification = existing.get("exact_instance_verification")
             if isinstance(verification, dict) and str(
                 verification.get("decision") or ""
@@ -6464,6 +6886,33 @@ class AgentMemory:
             for item in state.get("receipts", [])
             if isinstance(item, dict)
         ]
+        reachability = receipt.get("reachability") or {}
+        solver = reachability.get("solver") or {}
+        search_context = {
+            "pose_policy_signature": receipt.get("pose_policy_signature"),
+            "tolerances": receipt.get("tolerances"),
+            "search_budget": solver.get("search_budget"),
+            "object_scene_epoch": self.object_scene_epoch(),
+            "robot_motion_epoch": self.robot_motion_epoch(),
+            "controller_capabilities": self.controller_capabilities(),
+        }
+        fingerprint = hashlib.sha256(json.dumps(
+            search_context, sort_keys=True, default=str,
+        ).encode()).hexdigest()
+        matches = [item for item in receipts
+                   if (item.get("retry_history") or {}).get("search_fingerprint") == fingerprint]
+        previous_count = max(((item.get("retry_history") or {}).get("attempt_count", 1)
+                              for item in matches), default=0)
+        receipt["retry_history"] = {
+            "search_fingerprint": fingerprint, "attempt_count": previous_count + 1,
+            "previous_receipt_id": matches[-1].get("receipt_id") if matches else None,
+            "same_search_previously_failed": any(item.get("classification") not in {
+                "feasible", "kinematically_feasible_collision_deferred",
+            } for item in matches),
+            "instruction": "Repeated identical search is allowed but adds no new deterministic seed coverage. Change candidate, evidence or host search configuration; do not bypass execution gates.",
+        }
+        if isinstance(outputs.get("ik_preview_receipt"), dict):
+            outputs["ik_preview_receipt"]["retry_history"] = deepcopy(receipt["retry_history"])
         receipts.append(receipt)
         state.update({"receipts": receipts[-16:], "latest": receipt})
         self.facts[IK_PREVIEW_RECEIPTS_KEY] = _memory_fact_entry(
@@ -6909,16 +7358,22 @@ class AgentMemory:
         outputs = _tool_call_outputs(call)
         proxy_value = outputs.get("attachment_proxy_receipt")
         proxy = dict(proxy_value) if isinstance(proxy_value, dict) else None
-        previous = self.gripper_command_state() or {}
-        if position == 1 and previous.get("position") == 0:
-            self._invalidate_active_contact_geometry(
-                reason="gripper_reopened_after_close",
-            )
-            self.facts.pop(ATTACHMENT_EVIDENCE_KEY, None)
+        receipt = outputs.get("gripper_actuation_receipt")
+        receipt_error = (
+            gripper_actuation_receipt_error(receipt, position=position)
+            if "gripper_actuation_receipt" in outputs
+            else None
+        )
         self._set_gripper_command_state(
             position,
-            source="acknowledged_gripper_command",
-            attachment_proxy_receipt=proxy,
+            source=(
+                "acknowledged_gripper_command" if receipt_error is None
+                else "unconfirmed_gripper_command_receipt"
+            ),
+            attachment_proxy_receipt=proxy if receipt_error is None else None,
+            gripper_actuation_receipt=receipt if isinstance(receipt, dict) else None,
+            command_latched=receipt_error is None,
+            receipt_error=receipt_error,
         )
         return True
 
@@ -6928,17 +7383,36 @@ class AgentMemory:
         *,
         source: str,
         attachment_proxy_receipt: JsonDict | None = None,
+        gripper_actuation_receipt: JsonDict | None = None,
+        command_latched: bool = True,
+        receipt_error: str | None = None,
     ) -> None:
+        # Acknowledgement and observation reconciliation must retire the same
+        # contact/attachment evidence. Reconciliation cannot prove a command latch.
+        previous = self.gripper_command_state() or {}
+        if position == 1 or not command_latched:
+            if (position == 1 and previous.get("position") == 0) or receipt_error:
+                self._invalidate_active_contact_geometry(
+                    reason=(
+                        "gripper_reopened_after_close" if position == 1
+                        else "gripper_command_latch_unconfirmed"
+                    ),
+                )
+            self.facts.pop(ATTACHMENT_EVIDENCE_KEY, None)
         state = {
             "schema_version": "openeta.gripper_command_state.v1",
             "position": position,
             "state": "open" if position == 1 else "closed",
-            "latched": True,
+            "latched": command_latched,
             "scene_epoch": self.scene_epoch(),
             "updated_at_s": time.time(),
         }
-        if position == 0 and isinstance(attachment_proxy_receipt, dict):
+        if position == 0 and command_latched and isinstance(attachment_proxy_receipt, dict):
             state["attachment_proxy_receipt"] = dict(attachment_proxy_receipt)
+        if isinstance(gripper_actuation_receipt, dict):
+            state["gripper_actuation_receipt"] = deepcopy(gripper_actuation_receipt)
+        if receipt_error:
+            state["receipt_error"] = receipt_error
         self.facts[GRIPPER_COMMAND_STATE_KEY] = _memory_fact_entry(state, source=source)
         self.record("gripper_command_state_changed", dict(state))
 
@@ -7006,6 +7480,66 @@ class AgentMemory:
         self.record("articulated_attachment_probe_verdict", dict(gate))
         return True
 
+    def _capture_attachment_telemetry_invalidation(
+        self,
+        observation: EnvObservation,
+    ) -> bool:
+        """Invalidate a stale attachment PASS when closed-finger support vanishes.
+
+        This is not a task-state transition and does not assert where the object
+        went. It only prevents a frozen probe verdict from remaining authoritative
+        after fresh, non-privileged gripper telemetry becomes inconsistent with
+        the aperture measured at grasp confirmation.
+        """
+
+        attachment = self.attachment_evidence() or {}
+        if attachment.get("verdict") != "PASS":
+            return False
+        probe = self.articulated_attachment_probe() or {}
+        gripper_evidence = probe.get("gripper_evidence")
+        gripper_evidence = (
+            gripper_evidence if isinstance(gripper_evidence, dict) else {}
+        )
+        baseline = gripper_evidence.get("measured_openness")
+        state = observation.robot.gripper_state
+        current = state.get("openness") if isinstance(state, dict) else None
+        measured_open = measured_gripper_open(state) if isinstance(state, dict) else None
+        if measured_open is True:
+            reason = "measured_gripper_open"
+        elif _attachment_aperture_has_collapsed(baseline, current):
+            reason = "measured_aperture_collapse"
+        else:
+            return False
+        baseline_fraction = float(baseline) if _finite_number(baseline) else None
+        current_fraction = float(current) if _finite_number(current) else None
+        invalidated = dict(attachment)
+        invalidated.update(
+            {
+                "verdict": "UNKNOWN",
+                "previous_verdict": "PASS",
+                "evidence_source": "fresh_gripper_telemetry",
+                "invalidation_reason": reason,
+                "confirmed_open_fraction": baseline_fraction,
+                "current_open_fraction": current_fraction,
+                "updated_at_s": time.time(),
+            }
+        )
+        self.facts[ATTACHMENT_EVIDENCE_KEY] = _memory_fact_entry(
+            invalidated,
+            source="fresh_gripper_telemetry",
+        )
+        self.record(
+            "attachment_evidence_invalidated",
+            {
+                "reason": reason,
+                "compiled_grasp_id": invalidated.get("compiled_grasp_id"),
+                "confirmed_open_fraction": baseline_fraction,
+                "current_open_fraction": current_fraction,
+                "verdict": "UNKNOWN",
+            },
+        )
+        return True
+
     def _capture_motion_reconciliation(self, action: EnvAction) -> bool:
         command = action.command if isinstance(action.command, dict) else {}
         request = command.get("request")
@@ -7036,10 +7570,7 @@ class AgentMemory:
 
     def _reconcile_unknown_motion(self, observation: EnvObservation) -> bool:
         reconciliation = self.motion_reconciliation()
-        if not isinstance(reconciliation, dict) or reconciliation.get("status") not in {
-            "required",
-            "unresolved",
-        }:
+        if not isinstance(reconciliation, dict):
             return False
         parameters = reconciliation.get("intended_parameters")
         parameters = parameters if isinstance(parameters, dict) else {}
@@ -7052,7 +7583,10 @@ class AgentMemory:
             verdict = _reconcile_gripper_position(
                 requested_position, observation.robot.gripper_state
             )
-            if verdict == "completed":
+            if (
+                verdict == "completed"
+                and reconciliation.get("position_evidence_epoch_advanced") is not True
+            ):
                 self._advance_runtime_epochs(
                     tool="gripper_control",
                     object_scene_changed=False,
@@ -7063,7 +7597,9 @@ class AgentMemory:
                     self._set_gripper_command_state(
                         position,
                         source="reconciled_gripper_command",
+                        command_latched=False,
                     )
+                reconciliation["position_evidence_epoch_advanced"] = True
             reconciliation.update(
                 {
                     "status": verdict,
@@ -7083,11 +7619,13 @@ class AgentMemory:
             observation_count = int(reconciliation.get("observation_count") or 0) + 1
             if distance <= max(0.005, tolerance):
                 verdict = "completed"
-                self._advance_runtime_epochs(
-                    tool=tool_name or "move_to",
-                    object_scene_changed=False,
-                    source="reconciled_world_mutation",
-                )
+                if reconciliation.get("position_evidence_epoch_advanced") is not True:
+                    self._advance_runtime_epochs(
+                        tool=tool_name or "move_to",
+                        object_scene_changed=False,
+                        source="reconciled_world_mutation",
+                    )
+                    reconciliation["position_evidence_epoch_advanced"] = True
             elif (
                 observation_count >= 3
                 and _finite_xyz(previous_measured_xyz)
@@ -7115,6 +7653,13 @@ class AgentMemory:
             )
         else:
             reconciliation.update({"status": "unresolved", "resolved_at_s": time.time()})
+        # Position agreement (or several stable misses) is not an operation
+        # completion receipt. In particular it cannot fence delayed dispatch.
+        # Retain the operational gate, including for older position-only
+        # completed/failed records loaded from a session snapshot.
+        reconciliation["position_reconciliation_status"] = reconciliation["status"]
+        reconciliation["status"] = "unresolved"
+        reconciliation["remote_completion_verified"] = False
         self.facts[MOTION_RECONCILIATION_KEY] = _memory_fact_entry(
             reconciliation,
             source="same_handle_observation",
@@ -7154,14 +7699,13 @@ class AgentMemory:
         truncated: bool,
         info: JsonDict | None = None,
     ) -> None:
-        try:
-            reward_value = float(reward)
-        except (TypeError, ValueError):
-            reward_value = 0.0
+        from agent.runtime.success_evidence import assess_episode_success, finite_number
+
+        reward_value = float(reward) if finite_number(reward) else 0.0
         receipt = {
             "reward": reward_value,
-            "terminated": bool(terminated),
-            "truncated": bool(truncated),
+            "terminated": terminated,
+            "truncated": truncated,
             "info": dict(info or {}),
             "scene_epoch": self.scene_epoch(),
             "timestamp_s": time.time(),
@@ -7171,6 +7715,10 @@ class AgentMemory:
             source="environment_step",
         )
         self.record("environment_receipt", receipt)
+        outcome = assess_episode_success({
+            "session_id": self.session_id, "metadata": self.metadata,
+            "steps": [{"step_result": receipt}],
+        })
         rows = self.transition_ledger()
         rows.append(
             {
@@ -7181,7 +7729,9 @@ class AgentMemory:
                 "reward": reward_value,
                 "terminated": bool(terminated),
                 "truncated": bool(truncated),
-                "verdict": "PASS" if reward_value > 0 else "UNKNOWN",
+                "verdict": ("PASS" if outcome["evidence"] else
+                            "FAIL" if outcome["explicit_failure"] and (terminated or truncated)
+                            else "UNKNOWN"),
             }
         )
         self.facts[TRANSITION_LEDGER_KEY] = _memory_fact_entry(
@@ -7190,15 +7740,31 @@ class AgentMemory:
         )
         self._save_working_memory()
 
-    def delete_memory(self, key: str, *, namespace: str = "all") -> JsonDict:
+    def delete_memory(
+        self, key: str, *, namespace: str = "all", agent_only: bool = False
+    ) -> JsonDict:
         deleted: JsonDict = {}
         if namespace in {"all", "facts"}:
-            deleted["facts"] = self.facts.pop(key, None) is not None
-            self.agent_working_state.pop(key, None)
+            deleted["facts"] = self.agent_working_state.pop(key, None) is not None
+            if not agent_only:
+                deleted["facts"] = (self.facts.pop(key, None) is not None) or deleted["facts"]
         if namespace in {"all", "artifacts"}:
-            deleted["artifacts"] = self.artifacts.pop(key, None) is not None
+            deleted["artifacts"] = self.agent_artifacts.pop(key, None) is not None
+            if not agent_only:
+                deleted["artifacts"] = (
+                    self.artifacts.pop(key, None) is not None
+                ) or deleted["artifacts"]
         if namespace in {"all", "skill_notes"}:
-            deleted["skill_notes"] = self.skill_notes.pop(key, None) is not None
+            if agent_only:
+                notes = self.skill_notes.get(key, [])
+                retained = [note for note in notes if not is_agent_entry(note)]
+                deleted["skill_notes"] = len(retained) != len(notes)
+                if retained:
+                    self.skill_notes[key] = retained
+                else:
+                    self.skill_notes.pop(key, None)
+            else:
+                deleted["skill_notes"] = self.skill_notes.pop(key, None) is not None
         self.record("memory_deleted", {"key": key, "namespace": namespace, "deleted": deleted})
         self._save_working_memory()
         return deleted
@@ -7208,6 +7774,7 @@ class AgentMemory:
 
         self.facts.clear()
         self.agent_working_state.clear()
+        self.agent_artifacts.clear()
         self.artifacts.clear()
         self.skill_notes.clear()
         self.compact_summary = ""
@@ -7223,7 +7790,7 @@ class AgentMemory:
             f"current_user_request={self.current_user_request}",
             f"facts={list(self.facts)}",
             f"agent_working_state={list(self.agent_working_state)}",
-            f"artifacts={list(self.artifacts)}",
+            f"artifacts={list({**self.agent_artifacts, **self.artifacts})}",
             f"skill_notes={list(self.skill_notes)}",
             "recent_events=" + ",".join(event.event_type for event in recent),
             "conversation="
@@ -7320,6 +7887,7 @@ class AgentMemory:
             "placement_world_reference": self.placement_world_reference(),
             "motion_reconciliation": self.motion_reconciliation(),
             "ik_preview_receipts": self.ik_preview_receipts(),
+            "tool_handoffs": self.tool_handoffs(),
             "controller_capabilities": self.controller_capabilities(),
             "scene_epoch": self.scene_epoch(),
             "object_scene_epoch": self.object_scene_epoch(),
@@ -7340,6 +7908,7 @@ class AgentMemory:
                     for key, value in self.facts.items()
                     if key
                     not in {
+                        BUNDLE_INDEX_KEY,
                         PENDING_SAM3_SELECTION_KEY,
                         SELECTED_SAM3_DETECTION_KEY,
                         SELECTED_SAM3_DETECTIONS_KEY,
@@ -7371,7 +7940,8 @@ class AgentMemory:
                     }
                 },
                 "artifacts": {
-                    key: summarize_memory_artifact(value) for key, value in self.artifacts.items()
+                    key: summarize_memory_artifact(value)
+                    for key, value in {**self.agent_artifacts, **self.artifacts}.items()
                 },
                 "skill_notes": self.skill_notes,
                 "compact_summary": self.compact_summary,
@@ -7391,7 +7961,23 @@ class AgentMemory:
             return
         memory = self.store.load_working_memory()
         facts = memory.get("facts", {})
+        if isinstance(facts, dict):
+            untrusted_epochs = [
+                key for key in (SCENE_EPOCH_KEY, OBJECT_SCENE_EPOCH_KEY, ROBOT_MOTION_EPOCH_KEY)
+                if is_agent_entry(facts.get(key))
+            ]
+            if untrusted_epochs:
+                # Resetting a corrupted counter to zero could reauthorize old
+                # epoch-zero receipts. Preserve the snapshot for inspection and
+                # require a new session rather than inventing trusted history.
+                raise ValueError(
+                    "Cannot resume a session with Agent-overwritten host epochs: "
+                    + ", ".join(untrusted_epochs)
+                    + ". Start a new session and reacquire environment evidence; "
+                    "the original snapshot has not been changed."
+                )
         agent_working_state = memory.get("agent_working_state", {})
+        agent_artifacts = memory.get("agent_artifacts", {})
         artifacts = memory.get("artifacts", {})
         skill_notes = memory.get("skill_notes", {})
         removed_task_policy_entries: list[str] = []
@@ -7415,13 +8001,21 @@ class AgentMemory:
             }
         if isinstance(artifacts, dict):
             self.artifacts = dict(artifacts)
+        if isinstance(agent_artifacts, dict):
+            self.agent_artifacts = dict(agent_artifacts)
+        migrated_agent_entries = separate_legacy_agent_entries(
+            self.facts, self.agent_working_state
+        )
+        migrated_agent_entries += separate_legacy_agent_entries(
+            self.artifacts, self.agent_artifacts
+        )
         if isinstance(skill_notes, dict):
             self.skill_notes = {
                 str(skill): list(notes) if isinstance(notes, list) else []
                 for skill, notes in skill_notes.items()
             }
         self.compact_summary = str(memory.get("compact_summary", ""))
-        if removed_task_policy_entries:
+        if removed_task_policy_entries or migrated_agent_entries:
             self._save_working_memory()
 
     def model_conversation_messages(
@@ -8251,17 +8845,11 @@ def _reconcile_gripper_position(position: object, state: JsonDict) -> str:
     requested = _binary_gripper_position(position)
     if requested is None:
         return "unresolved"
-    is_open = state.get("open")
-    openness = state.get("openness")
-    if requested == 1:
-        if is_open is True or isinstance(openness, (int, float)) and openness >= 0.8:
-            return "completed"
-    else:
-        # A grasped object can stop the fingers well above the empty-close value.
-        # Any observed departure from fully open reconciles the binary close
-        # transition; attachment is adjudicated only after the lift probe.
-        if is_open is False or isinstance(openness, (int, float)) and openness < 0.8:
-            return "completed"
+    is_open = measured_gripper_open(state)
+    # This resolves only the observed position condition, not execution completion,
+    # a persistent latch, non-empty contact, or attachment.
+    if is_open is not None and is_open == bool(requested):
+        return "completed"
     return "unresolved"
 
 
@@ -8423,6 +9011,20 @@ def _fact_epoch(entry: JsonDict | None) -> int:
         return max(0, int(value.get("epoch") or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _viewpoint_geometry_equal(left: object, right: object) -> bool:
+    """Compare finite vector/matrix geometry at the proposal's decimal precision."""
+    if isinstance(right, list):
+        return isinstance(left, list) and len(left) == len(right) and all(
+            _viewpoint_geometry_equal(a, b) for a, b in zip(left, right)
+        )
+    if not isinstance(left, (int, float)) or isinstance(left, bool):
+        return False
+    try:
+        return math.isfinite(left) and math.isclose(left, right, rel_tol=0.0, abs_tol=1e-6)
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 def _fact_epoch_value(value: object) -> int:
@@ -9335,6 +9937,22 @@ def _compact_step_result(step_result: JsonDict) -> JsonDict:
         if isinstance(step_result.get("info"), dict)
         else {},
     }
+
+
+def _attachment_aperture_has_collapsed(baseline: object, current: object) -> bool:
+    if not _finite_number(baseline) or not _finite_number(current):
+        return False
+    baseline_value = float(baseline)
+    current_value = float(current)
+    if baseline_value <= 0.0 or current_value < 0.0:
+        return False
+    return (
+        current_value <= ATTACHMENT_APERTURE_COLLAPSE_MAX_OPEN_FRACTION
+        and current_value
+        <= baseline_value * ATTACHMENT_APERTURE_COLLAPSE_MAX_BASELINE_RATIO
+        and baseline_value - current_value
+        >= ATTACHMENT_APERTURE_COLLAPSE_MIN_ABSOLUTE_DROP
+    )
 
 
 def _compact_observation_payload(observation: JsonDict) -> JsonDict:

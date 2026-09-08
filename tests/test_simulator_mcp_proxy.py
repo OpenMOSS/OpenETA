@@ -237,11 +237,15 @@ def test_episode_environment_close_claims_handle_once_across_threads() -> None:
     assert started.wait(timeout=0.5)
 
     second_result = environment.close()
+    assert environment.config.handle == "handle-close"
     release.set()
     first.join(timeout=0.5)
 
     assert first_result == {"ok": True}
-    assert second_result == {"ok": True, "skipped": True}
+    assert second_result["ok"] is False
+    assert second_result["pending"] is True
+    assert environment.config.handle == ""
+    assert environment.close() == {"ok": True, "skipped": True}
     assert len(transport.calls) == 1
 
 
@@ -258,7 +262,7 @@ def test_close_simulator_mcp_env_returns_structured_cleanup_error() -> None:
     assert result["session_id"] == "session-close"
 
 
-def test_sse_transport_temporarily_bypasses_proxy_for_mcp_host(monkeypatch) -> None:
+def test_sse_transport_does_not_modify_process_proxy_environment(monkeypatch) -> None:
     observed: dict[str, JsonDict] = {}
 
     async def fake_list_tools(*, url: str, timeout_s: float | None) -> JsonDict:
@@ -298,10 +302,8 @@ def test_sse_transport_temporarily_bypasses_proxy_for_mcp_host(monkeypatch) -> N
     assert transport.call_tool("segment", {"prompt": "cube"}, timeout_s=4.0)["success"] is True
 
     for record in observed.values():
-        assert "localhost" in record["NO_PROXY"]
-        assert "127.0.0.1" in record["NO_PROXY"]
-        assert "127.0.0.1:8773" in record["NO_PROXY"]
-        assert record["NO_PROXY"] == record["no_proxy"]
+        assert record["NO_PROXY"] == "localhost"
+        assert record["no_proxy"] == ""
     assert os.environ["NO_PROXY"] == "localhost"
     assert "no_proxy" not in os.environ
 
@@ -876,7 +878,7 @@ def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
     assert "motion_execution_ref" not in result.details["outputs"]
     assert "motion_execution_ref" not in result.details["outputs"]["response"]
     assert "motion_execution_ref" not in result.details["outputs"]["mcp"]
-    assert "Do not pass ik_receipt_id=" in result.content
+    assert "Do not execute this result with move_to" in result.content
     assert "Execution reference:" not in result.content
     assert any(
         option["action"] == "preview_modified_pose"
@@ -887,7 +889,20 @@ def test_ik_preview_proxy_preserves_actionable_reachability_summary() -> None:
     assert check_tool_result_conformance(contract, result.details) == ()
 
 
-def test_ik_preview_proxy_preserves_execution_seed_quality_for_agent() -> None:
+@pytest.mark.parametrize("capabilities,expected_caveat", [
+    ({}, "seed-consumption behavior is not established"),
+    ({"controller_id": "robosuite.osc_pose",
+      "goal_executor": "openeta.outer_closed_loop_cartesian.v1"},
+     "does not consume the preview's joint seed"),
+    ({"controller_id": "mink.robosuite_joint_velocity",
+      "goal_executor": "openeta.worker_mink_goal.v1"},
+     "does not establish that it was consumed or will converge"),
+    ({"controller_id": "mink.robosuite_joint_velocity", "goal_executor": "unknown"},
+     "seed-consumption behavior is not established"),
+])
+def test_ik_preview_proxy_preserves_execution_seed_quality_for_agent(
+    capabilities, expected_caveat,
+) -> None:
     quality = {
         "risk_level": "critical",
         "selected_joint_margin_rad": 0.0017,
@@ -925,9 +940,16 @@ def test_ik_preview_proxy_preserves_execution_seed_quality_for_agent() -> None:
     result = tools.call(
         "ik_preview_check",
         {"target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.3]}},
+        metadata={"_controller_capabilities_resolver": lambda: capabilities},
     )
 
     assert result.success is True
+    assert expected_caveat in result.content
+    caveat = next(item for item in result.details["diagnostics"]
+                  if item["code"] == "ik_controller_execution_unverified")
+    assert caveat["severity"] == "warning"
+    assert caveat["candidate_rejection"] is False
+    assert expected_caveat in caveat["message"]
     assert result.details["outputs"]["reachability"][
         "execution_seed_quality"
     ] == quality
@@ -1077,7 +1099,7 @@ def test_ik_preview_collision_backend_gap_does_not_invent_controller_coverage() 
         "authorized_for_move_to"
     ] is False
     assert "motion_execution_ref" not in result.details["outputs"]
-    assert "Do not pass ik_receipt_id=" in result.content
+    assert "Do not execute this result with move_to" in result.content
     assert "does not declare the required" in result.content
 
 
@@ -1626,7 +1648,7 @@ def test_move_to_target_not_reached_is_not_operational_success() -> None:
     assert result.details["recovery_options"]
 
 
-def test_move_to_zero_step_target_hit_reports_unchanged_physical_view() -> None:
+def test_move_to_zero_step_target_hit_does_not_claim_world_state_unchanged() -> None:
     pose = {"xyz": [0.1, 0.0, 0.3]}
     transport = FakeSimulatorMcpTransport(
         {
@@ -1674,14 +1696,43 @@ def test_move_to_zero_step_target_hit_reports_unchanged_physical_view() -> None:
     assert result.success is True
     assert result.details["operational_success"] is True
     assert result.details["semantic_outcome"] == "target_already_within_tolerance"
-    assert result.details["outputs"]["motion_outcome"] == "no_state_change"
-    assert "physical camera viewpoint did NOT change" in result.content
+    assert "motion_outcome" not in result.details["outputs"]
+    assert "zero controller steps" in result.content
+    assert "does not prove" in result.content
     assert {
         item["action"] for item in result.details["recovery_options"]
     } == {
         "consume_existing_visual_evidence",
         "propose_materially_distinct_checked_endpoint",
     }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"steps_executed": False},
+        {"steps_executed": 0.0},
+        {"steps_executed": -1},
+        {"stop_reason": "collision"},
+        {"stop_reason": None},
+        {"controller_receipt": {"steps_executed": 2}},
+        {"controller_receipt": {"steps_executed": False}},
+        {"controller_receipt": {"reached_target": False}},
+        {"controller_receipt": {"stop_reason": "iteration_budget"}},
+    ],
+)
+def test_zero_step_tolerance_hint_rejects_invalid_or_conflicting_receipts(overrides) -> None:
+    payload = {
+        "steps_executed": 0,
+        "reached_target": True,
+        "stop_reason": "target_reached",
+        "start": {"xyz": [0.1, 0.0, 0.3]},
+        "end": {"xyz": [0.1, 0.0, 0.3]},
+        **overrides,
+    }
+    assert sim_mcp._motion_already_within_tolerance(payload) is False
+    projected = sim_mcp.build_motion_summary(payload)
+    assert sim_mcp._motion_already_within_tolerance({"motion_summary": projected}) is False
 
 
 def test_zero_step_attached_collision_is_promoted_to_top_level_content(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ if not torch.cuda.is_available():
     pytest.skip("cuRobo requires CUDA", allow_module_level=True)
 
 from curobo.geom.types import Cuboid, WorldConfig
+from curobo.geom.sdf.world import CollisionCheckerType
 from curobo.wrap.model.robot_world import RobotWorld, RobotWorldConfig
 
 from sim.mcp_server.collision import CollisionChecker
@@ -32,10 +33,17 @@ _FAR_BOX = {"name": "far_1", "position": [8.0, 8.0, 8.0], "dims": [0.1, 0.1, 0.1
 _ENGULFING = {"name": "wall_1", "position": [0.0, 0.0, 0.4], "dims": [3.0, 3.0, 3.0]}
 
 
-@pytest.fixture(scope="module")
-def robot_world():
+@pytest.fixture(scope="module", params=["primitive", "mesh"])
+def robot_world(request):
+    # Production uses PRIMITIVE explicitly. Keep the original default-MESH
+    # coverage as a separate case: success in one is not proof of the other,
+    # and missing optional mesh dependencies must not hide production coverage.
     config = RobotWorldConfig.load_from_config(
-        "franka.yml", WorldConfig(), collision_activation_distance=0.0
+        "franka.yml", WorldConfig(), collision_activation_distance=0.0,
+        collision_checker_type={
+            "primitive": CollisionCheckerType.PRIMITIVE,
+            "mesh": CollisionCheckerType.MESH,
+        }[request.param],
     )
     return RobotWorld(config)
 

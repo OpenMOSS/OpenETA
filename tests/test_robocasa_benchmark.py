@@ -172,6 +172,9 @@ def _parallel_outcome(scenario, *, status: str, trusted_success: bool = False):
             "environment_receipt": {
                 "schema_version": "openeta.environment_receipt.v1",
                 "execution_id": execution_id,
+                "agent_session_id": "agent-1",
+                "reward_present": True, "reward": reward,
+                "terminated": trusted_success, "truncated": False,
             },
         }
     return {
@@ -179,6 +182,7 @@ def _parallel_outcome(scenario, *, status: str, trusted_success: bool = False):
         "status": status,
         "episode": {
             "task": scenario.task,
+            "session_id": "agent-1",
             "num_steps": 3,
             "metadata": {"execution_id": execution_id},
             "steps": [
@@ -242,7 +246,8 @@ def test_parallel_success_without_trusted_official_receipt_is_rejected() -> None
         aggregate_parallel_batch_results(manifest, payload)
 
 
-def test_parallel_summary_accepts_live_validated_compacted_episode_receipt() -> None:
+@pytest.mark.parametrize("legacy_compaction", [False, True])
+def test_parallel_summary_requires_preserved_success_receipt_fields(legacy_compaction) -> None:
     manifest = _manifest(scenarios_per_task=1)
     scenario = manifest.scenarios[0]
     execution_id = "execution-from-real-episode"
@@ -295,7 +300,23 @@ def test_parallel_summary_accepts_live_validated_compacted_episode_receipt() -> 
     serialized_receipt = serialized_episode["steps"][0]["step_result"]["info"][
         "environment_receipt"
     ]
-    assert "schema_version" not in serialized_receipt
+    assert serialized_receipt["schema_version"] == "openeta.environment_receipt.v1"
+    assert serialized_receipt["reward"] == 1.0
+    assert serialized_receipt["terminated"] is True
+    if legacy_compaction:
+        # Old logs are not upgraded into trusted proof merely because their
+        # outer status says success. Retained identities cannot replace reward
+        # semantics, terminal flags, and schema binding.
+        for key in ("schema_version", "reward_present", "reward", "terminated", "truncated"):
+            serialized_receipt.pop(key)
+        serialized_receipt.update(backend="simulator_mcp", agent_tool="observe", remote_tool="render_env")
+        with pytest.raises(ValueError, match="no trusted official reward receipt"):
+            aggregate_parallel_batch_results(manifest, {
+                "schema_version": "openeta.parallel_episode_batch.v2",
+                "outcomes": [{"episode_id": scenario.scenario_id, "status": "success",
+                              "episode": serialized_episode}],
+            })
+        return
 
     summary = aggregate_parallel_batch_results(
         manifest,

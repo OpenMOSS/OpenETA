@@ -264,8 +264,8 @@
     {
       "tool": "compile_grasp_seed",
       "maturity": "verified",
-      "case_count": 6,
-      "invalid_class_count": 5,
+      "case_count": 5,
+      "invalid_class_count": 4,
       "valid_fixture_accepted_by_both": true,
       "acceptance_mismatch_count": 0,
       "deterministic_request_parity": true,
@@ -319,8 +319,8 @@
     {
       "tool": "move_to",
       "maturity": "verified",
-      "case_count": 4,
-      "invalid_class_count": 3,
+      "case_count": 3,
+      "invalid_class_count": 2,
       "valid_fixture_accepted_by_both": true,
       "acceptance_mismatch_count": 0,
       "deterministic_request_parity": true,
@@ -1612,12 +1612,7 @@
       "contract_accepted": false,
       "acceptance_match": true,
       "legacy_errors": [
-        "grasp_pose_estimate requires `parameters.rgb` as a concrete local path.",
-        "grasp_pose_estimate requires `parameters.depth` as a concrete local path.",
-        "grasp_pose_estimate targeted mode requires `parameters.object_mask` as a complete SAM3 artifact with mask_ref and source_image.",
-        "grasp_pose_estimate `parameters.intrinsics` must contain fx, fy, cx, cy, and scale.",
-        "grasp_pose_estimate requires a concrete camera_frame_id.",
-        "grasp_pose_estimate requires the current non-negative scene_epoch."
+        "grasp_pose_estimate requires a non-empty Host-issued `parameters.bundle_id`; inspect host_resolved_inputs.grasp_pose_estimate for a ready bundle. If none is ready, inspect current perception evidence; do not invent a bundle reference or construct raw RGB-D inputs."
       ],
       "contract_violations": [
         {
@@ -1638,12 +1633,7 @@
       "contract_accepted": false,
       "acceptance_match": true,
       "legacy_errors": [
-        "grasp_pose_estimate requires `parameters.rgb` as a concrete local path.",
-        "grasp_pose_estimate requires `parameters.depth` as a concrete local path.",
-        "grasp_pose_estimate targeted mode requires `parameters.object_mask` as a complete SAM3 artifact with mask_ref and source_image.",
-        "grasp_pose_estimate `parameters.intrinsics` must contain fx, fy, cx, cy, and scale.",
-        "grasp_pose_estimate requires a concrete camera_frame_id.",
-        "grasp_pose_estimate requires the current non-negative scene_epoch."
+        "grasp_pose_estimate requires a non-empty Host-issued `parameters.bundle_id`; inspect host_resolved_inputs.grasp_pose_estimate for a ready bundle. If none is ready, inspect current perception evidence; do not invent a bundle reference or construct raw RGB-D inputs."
       ],
       "contract_violations": [
         {
@@ -1665,7 +1655,7 @@
       "contract_accepted": false,
       "acceptance_match": true,
       "legacy_errors": [
-        "grasp_pose_estimate bundle references cannot be overridden with model-supplied fields: __unexpected__."
+        "grasp_pose_estimate bundle references cannot be overridden with model-supplied fields: __unexpected__. Allowed parameters are bundle_id and optional backend_preference."
       ],
       "contract_violations": [
         {
@@ -2604,35 +2594,14 @@
       "tool": "compile_grasp_seed",
       "case": "valid_minimal",
       "parameters": {
-        "grasp_result_id": "x",
-        "candidate_id": "x"
+        "candidate_id": "x",
+        "grasp_result_id": "x"
       },
       "legacy_accepted": true,
       "contract_accepted": true,
       "acceptance_match": true,
       "legacy_errors": [],
       "contract_violations": []
-    },
-    {
-      "tool": "compile_grasp_seed",
-      "case": "missing_required:grasp_result_id",
-      "parameters": {
-        "candidate_id": "x"
-      },
-      "legacy_accepted": false,
-      "contract_accepted": false,
-      "acceptance_match": true,
-      "legacy_errors": [
-        "compile_grasp_seed requires `parameters.grasp_result_id`."
-      ],
-      "contract_violations": [
-        {
-          "tool": "compile_grasp_seed",
-          "code": "request_required_field_missing",
-          "path": "parameters.grasp_result_id",
-          "message": "parameters requires field 'grasp_result_id'."
-        }
-      ]
     },
     {
       "tool": "compile_grasp_seed",
@@ -2659,8 +2628,8 @@
       "tool": "compile_grasp_seed",
       "case": "wrong_type:grasp_result_id",
       "parameters": {
-        "grasp_result_id": 7,
-        "candidate_id": "x"
+        "candidate_id": "x",
+        "grasp_result_id": 7
       },
       "legacy_accepted": false,
       "contract_accepted": false,
@@ -2681,8 +2650,8 @@
       "tool": "compile_grasp_seed",
       "case": "wrong_type:candidate_id",
       "parameters": {
-        "grasp_result_id": "x",
-        "candidate_id": 7
+        "candidate_id": 7,
+        "grasp_result_id": "x"
       },
       "legacy_accepted": false,
       "contract_accepted": false,
@@ -2703,8 +2672,8 @@
       "tool": "compile_grasp_seed",
       "case": "unexpected_property",
       "parameters": {
-        "grasp_result_id": "x",
         "candidate_id": "x",
+        "grasp_result_id": "x",
         "__unexpected__": true
       },
       "legacy_accepted": false,
@@ -3274,25 +3243,6 @@
     },
     {
       "tool": "move_to",
-      "case": "missing_required:ik_receipt_id",
-      "parameters": {},
-      "legacy_accepted": false,
-      "contract_accepted": false,
-      "acceptance_match": true,
-      "legacy_errors": [
-        "move_to requires `parameters.ik_receipt_id`."
-      ],
-      "contract_violations": [
-        {
-          "tool": "move_to",
-          "code": "request_required_field_missing",
-          "path": "parameters.ik_receipt_id",
-          "message": "parameters requires field 'ik_receipt_id'."
-        }
-      ]
-    },
-    {
-      "tool": "move_to",
       "case": "wrong_type:ik_receipt_id",
       "parameters": {
         "ik_receipt_id": 7
@@ -3513,7 +3463,7 @@
       "tool": "ik_preview_check",
       "case": "valid_minimal",
       "parameters": {
-        "target_pose": {}
+        "bundle_id": "x"
       },
       "legacy_accepted": true,
       "contract_accepted": true,
@@ -3523,25 +3473,28 @@
     },
     {
       "tool": "ik_preview_check",
-      "case": "wrong_type:target_pose",
+      "case": "wrong_type:bundle_id",
       "parameters": {
-        "target_pose": [
-          "not",
-          "an-object"
-        ]
+        "bundle_id": 7
       },
       "legacy_accepted": false,
       "contract_accepted": false,
       "acceptance_match": true,
       "legacy_errors": [
-        "ik_preview_check `parameters.target_pose` must be object."
+        "ik_preview_check `parameters.bundle_id` must be string."
       ],
       "contract_violations": [
         {
           "tool": "ik_preview_check",
           "code": "request_type_mismatch",
-          "path": "parameters.target_pose",
-          "message": "parameters.target_pose must be JSON type object; got array."
+          "path": "parameters.bundle_id",
+          "message": "parameters.bundle_id must be JSON type string; got integer."
+        },
+        {
+          "tool": "ik_preview_check",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
         }
       ]
     },
@@ -3549,7 +3502,7 @@
       "tool": "ik_preview_check",
       "case": "unexpected_property",
       "parameters": {
-        "target_pose": {},
+        "bundle_id": "x",
         "__unexpected__": true
       },
       "legacy_accepted": false,
@@ -3564,6 +3517,12 @@
           "code": "request_additional_field",
           "path": "parameters.__unexpected__",
           "message": "parameters does not allow field '__unexpected__'."
+        },
+        {
+          "tool": "ik_preview_check",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
         }
       ]
     },

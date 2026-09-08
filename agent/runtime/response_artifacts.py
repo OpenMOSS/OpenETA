@@ -138,6 +138,7 @@ def build_reachability_summary(payload: JsonDict) -> JsonDict:
     }
     for key in (
         "kinematic_status",
+        "constraint_diagnosis",
         "orientation_mode",
         "feasible",
         "message",
@@ -386,7 +387,7 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
         if isinstance(value, dict):
             summary[key] = _compact_pose(value)
     steps = payload.get("steps_executed")
-    if isinstance(steps, int):
+    if isinstance(steps, int) and not isinstance(steps, bool) and steps >= 0:
         summary["steps_executed"] = steps
     for key in (
         "position_error_m",

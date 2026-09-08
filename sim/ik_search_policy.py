@@ -1,0 +1,8 @@
+"""Host-owned endpoint search budget, shared by direct and MCP entry points."""
+
+DEFAULT_IK_MAX_ATTEMPTS = 64
+DEFAULT_IK_MAX_NFEV_PER_ATTEMPT = 1000
+DEFAULT_IK_TIMEOUT_S = 30.0
+MAX_IK_ATTEMPTS = 64
+MAX_IK_NFEV_PER_ATTEMPT = 2000
+MAX_IK_TIMEOUT_S = 30.0

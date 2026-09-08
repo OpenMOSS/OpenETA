@@ -137,6 +137,10 @@ def test_main_view_vdm_and_bounded_camera_window(tmp_path: Path) -> None:
     memory, backend, observations = _record_trajectory(tmp_path)
 
     assert len(backend.requests) == 5
+    lineages = [request.tool_context["request_lineage"] for request in backend.requests]
+    assert all(item["parent_session_id"] == "episode" for item in lineages)
+    assert len({item["child_session_id"] for item in lineages}) == 5
+    assert all(request.tool_context["role"] == "visual_differencing" for request in backend.requests)
     first_observation_record = observation_history(memory)[0]
     persisted_artifacts = [
         (item["kind"], item["frame_id"])

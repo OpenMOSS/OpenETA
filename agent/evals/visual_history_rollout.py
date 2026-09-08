@@ -126,7 +126,7 @@ def extract_visual_history_rollouts(store: EvaluationRunStore) -> JsonDict:
         episode_total_tokens = _nonnegative_int(usage.get("total_tokens"))
         if record_kind == "partial" and episode_total_tokens == 0:
             episode_total_tokens = sum(_usage_tokens(row) for row in model_calls)
-        objective_success = _objective_success(episode)
+        objective_success = _objective_success(episode, env_id=str(job.get("env_id") or ""))
         false_completion = (
             metadata.get("stop_reason") == "task_complete" and not objective_success
         )
@@ -650,26 +650,10 @@ def _nonnegative_float(value: object) -> float:
     return 0.0
 
 
-def _objective_success(episode: JsonDict) -> bool:
-    for step in episode.get("steps") or []:
-        result = step.get("step_result") if isinstance(step, dict) else None
-        if not isinstance(result, dict):
-            continue
-        reward = result.get("reward")
-        if isinstance(reward, (int, float)) and not isinstance(reward, bool) and reward > 0:
-            return True
-        info = result.get("info")
-        if isinstance(info, dict) and any(
-            info.get(key) is True
-            for key in (
-                "task_success",
-                "environment_success",
-                "checker_success",
-                "benchmark_success",
-            )
-        ):
-            return True
-    return False
+def _objective_success(episode: JsonDict, *, env_id: str = "") -> bool:
+    from agent.runtime.success_evidence import episode_success_evidence
+
+    return bool(episode_success_evidence(episode, env_id=env_id))
 
 
 def _jsonl(path: Path) -> list[JsonDict]:

@@ -183,7 +183,7 @@ def extract_task_playbook_candidate(
     task = str(episode.get("task") or "").strip()
     session_id = str(outcome.get("session_id") or episode.get("session_id") or "").strip()
     episode_id = str(outcome.get("episode_id") or "").strip()
-    rewards = _positive_rewards(episode)
+    rewards = _positive_rewards(episode, env_id=str(outcome.get("env_id") or ""))
     if outcome.get("status") != "success" or not rewards:
         raise TaskPlaybookError("candidate extraction requires objective episode success")
     metadata = _episode_scope_metadata(episode)
@@ -271,7 +271,8 @@ def review_task_playbook_candidate(
     except (TaskPlaybookError, TypeError, ValueError) as exc:
         return {"approved": False, "reason": str(exc), "reviewer": "objective_evidence"}
     episode = outcome.get("episode")
-    if not isinstance(episode, dict) or not _positive_rewards(episode):
+    if (outcome.get("status") != "success" or not isinstance(episode, dict)
+            or not _positive_rewards(episode, env_id=str(outcome.get("env_id") or ""))):
         return {
             "approved": False,
             "reason": "no same-episode objective reward evidence",
@@ -347,21 +348,10 @@ def _jsonl_records(path: Path) -> list[JsonDict]:
     return records
 
 
-def _positive_rewards(episode: Mapping[str, Any]) -> list[float]:
-    rewards: list[float] = []
-    for step in episode.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        result = step.get("step_result")
-        reward = result.get("reward") if isinstance(result, dict) else None
-        if (
-            isinstance(reward, int | float)
-            and not isinstance(reward, bool)
-            and math.isfinite(float(reward))
-            and float(reward) > 0
-        ):
-            rewards.append(float(reward))
-    return rewards
+def _positive_rewards(episode: Mapping[str, Any], *, env_id: str = "") -> list[float]:
+    from agent.runtime.success_evidence import objective_reward_values
+
+    return objective_reward_values(dict(episode), env_id=env_id)
 
 
 def _episode_scope_metadata(episode: Mapping[str, Any]) -> JsonDict:

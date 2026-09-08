@@ -15,6 +15,7 @@ from agent.runtime.episode import (
 from agent.runtime.checkers import CheckerSubagentConfig
 from agent.runtime.memory import AgentMemory
 from agent.runtime.parallel import classify_episode_result
+from agent.runtime.success_evidence import episode_success_evidence
 from agent.runtime.pipeline import ActionPipeline
 from agent.runtime.planner import PlannerDecision, ToolCallingPlanner
 from agent.runtime.runtime import OpenEtaAgentRuntime
@@ -288,6 +289,112 @@ def test_refresh_attempts_are_bounded() -> None:
     assert step.info["truncation_reason"] == "fresh_observation_unavailable"
 
 
+def test_close_clears_environment_identity_before_recreate() -> None:
+    environment = ToolFeedbackEpisodeEnvironment()
+    environment.reset(
+        task="pick cube",
+        metadata={"execution_id": "episode-1", "agent_session_id": "agent-1"},
+    )
+
+    def trusted_action(
+        name: str,
+        *,
+        simulator_session_id: str,
+        handle: str,
+        observation_fresh: bool = False,
+        environment_closed: bool = False,
+        requires_observation_after_call: bool = False,
+    ) -> EnvAction:
+        receipt: JsonDict = {
+            "schema_version": "openeta.environment_receipt.v1",
+            "execution_id": "episode-1",
+            "agent_session_id": "agent-1",
+            "simulator_session_id": simulator_session_id,
+            "handle": handle,
+            "reward_present": False,
+            "observation_fresh": observation_fresh,
+            "environment_closed": environment_closed,
+        }
+        if observation_fresh:
+            receipt["observation_snapshot"] = {
+                "schema_version": "openeta.observation_snapshot.v1",
+                "observation": {
+                    "task": "pick cube",
+                    "cameras": [],
+                    "robot": {},
+                    "objects": [],
+                    "metadata": {},
+                },
+            }
+        return EnvAction(
+            action_type="tool_call",
+            command={
+                "request": {"kind": "tool_call", "name": name, "parameters": {}},
+                "tool_calls": [
+                    {
+                        "name": name,
+                        "result": {
+                            "success": True,
+                            "details": {
+                                "host_provenance": {"authority": "environment"},
+                                "environment_receipt": receipt,
+                                "requires_observation_after_call": (
+                                    requires_observation_after_call
+                                ),
+                            },
+                        },
+                    }
+                ],
+            },
+        )
+
+    environment.step(
+        trusted_action(
+            "observe",
+            simulator_session_id="sim-old",
+            handle="env-old",
+            observation_fresh=True,
+        )
+    )
+    closed = environment.step(
+        trusted_action(
+            "close_simulator_env",
+            simulator_session_id="sim-old",
+            handle="env-old",
+            environment_closed=True,
+        )
+    )
+
+    assert closed.info["environment_receipt_trusted"] is True
+    assert environment.simulator_session_id == ""
+    assert environment.handle == ""
+
+    created = environment.step(
+        trusted_action(
+            "create_simulator_env",
+            simulator_session_id="sim-new",
+            handle="env-new",
+            requires_observation_after_call=True,
+        )
+    )
+    assert created.info["environment_receipt_trusted"] is True
+    assert created.observation.metadata["fresh_observation_required"] is True
+    assert environment.simulator_session_id == "sim-new"
+    assert environment.handle == "env-new"
+
+    refreshed = environment.step(
+        trusted_action(
+            "observe",
+            simulator_session_id="sim-new",
+            handle="env-new",
+            observation_fresh=True,
+        )
+    )
+    assert refreshed.info["environment_receipt_trusted"] is True
+    assert "rejected_environment_receipts" not in refreshed.info
+    assert refreshed.observation.metadata["observation_fresh"] is True
+
+
 def test_libero_success_requires_same_execution_trusted_receipt(
     tmp_path: Path,
 ) -> None:
@@ -543,7 +650,10 @@ def test_runner_auto_observes_after_world_mutation_without_snapshot(
         environment=ToolFeedbackEpisodeEnvironment(),
     )
 
-    episode = runner.run(task="pick cube", max_turns=3)
+    episode = runner.run(
+        task="pick cube", max_turns=3,
+        metadata={"env_id": "openeta/libero_libero_10_task0-v0", "require_official_reward": True},
+    )
 
     assert [call["name"] for call in transport.calls] == ["move_to", "render_env"]
     assert len(episode.steps) == 2
@@ -556,3 +666,7 @@ def test_runner_auto_observes_after_world_mutation_without_snapshot(
     )
     assert episode.steps[1].step_result.reward == 1.0
     assert episode.terminated is True
+    assert classify_episode_result(episode) == "success"
+    assert episode_success_evidence(episode.to_dict())
+    assert runtime.memory.metadata["execution_id"] == episode.metadata["execution_id"]
+    assert episode.metadata["require_official_reward"] is True

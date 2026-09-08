@@ -387,6 +387,23 @@ def test_move_to_resolves_exact_pose_from_ik_receipt_id() -> None:
     assert resolved["enable_collision_check"] is True
 
 
+def test_probe_ik_receipt_restores_mandatory_collision_check() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="lift the held object")
+    pose = {
+        "frame": "world",
+        "xyz": [0.10, 0.20, 0.35],
+        "quat_xyzw": [0.0, 0.0, 0.0, 1.0],
+        "probe_path_sha256": "host-frozen-probe",
+    }
+    _record_ik_receipt(memory, receipt_id="ik-probe-ref", target_pose=pose)
+
+    resolved = memory.resolve_ik_motion_reference("ik-probe-ref")
+
+    assert resolved["parameters"]["target_pose"] == pose
+    assert resolved["parameters"]["enable_collision_check"] is True
+
+
 def test_move_to_rejects_copied_pose_and_unknown_receipt_with_actionable_ids() -> None:
     memory = AgentMemory()
     memory.start_session(task="move safely")
@@ -1714,8 +1731,9 @@ def test_pipeline_resolves_fresh_wrist_viewpoint_inputs(tmp_path: Path) -> None:
     assert captured[0]["camera_frame_id"] == "wrist"
 
 
+@pytest.mark.parametrize("use_bundle", [False, True])
 def test_compile_grasp_seed_resolves_candidate_and_calibration_from_short_ids(
-    tmp_path: Path,
+    tmp_path: Path, use_bundle: bool,
 ) -> None:
     rgb = tmp_path / "rgb.png"
     depth = tmp_path / "depth.png"
@@ -1770,7 +1788,7 @@ def test_compile_grasp_seed_resolves_candidate_and_calibration_from_short_ids(
         "rotation_matrix": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         "width": 0.05,
     }
-    memory = AgentMemory()
+    memory = AgentMemory(artifact_root=tmp_path / "artifacts" if use_bundle else None)
     memory.start_session(task="pick the cube")
     memory.add_observation(observation)
     memory.add_action(
@@ -1849,7 +1867,8 @@ def test_compile_grasp_seed_resolves_candidate_and_calibration_from_short_ids(
             action_type="tool_call",
             action="compile_grasp_seed",
             parameters={
-                "grasp_result_id": "grasp-result-1",
+                **({"bundle_id": memory.tool_handoffs()[0]["bundle_id"]} if use_bundle
+                   else {"grasp_result_id": "grasp-result-1"}),
                 "candidate_id": "candidate-7",
                 "target_geometry_family": "boxed_item",
             },
@@ -1894,18 +1913,40 @@ def test_compile_grasp_seed_resolves_candidate_and_calibration_from_short_ids(
     assert authorization["compiled_grasp_id"] == "compiled-short-ref-1"
 
 
-def test_ik_resolves_exact_full_viewpoint_pose_from_short_ids() -> None:
+def test_ik_resolves_exact_full_viewpoint_pose_from_short_ids(tmp_path: Path) -> None:
+    from agent.tools.grasp_geometry import propose_wrist_viewpoints
+
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
-    target_pose = {
-        "frame": "world",
-        "xyz": [0.1, 0.2, 0.3],
-        "rotation_matrix": [
-            [1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, 0.0, -1.0],
-        ],
-    }
+    rgb = tmp_path / "viewpoint-wrist.png"
+    Image.new("RGB", (8, 8)).save(rgb)
+    observation = EnvObservation(
+        task="pick the cube", cameras=[CameraFrame(
+            frame_id="wrist", role="wrist", rgb=[], extrinsics={
+                "camera_frame": "opencv", "frame_transform": "camera_to_world",
+                "camera_to_world": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+            },
+        )],
+        robot=RobotState(end_effector_pose={
+            "xyz": [0, 0, 0], "rotation_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        }),
+        metadata={"image_artifacts": [{
+            "kind": "rgb", "frame_id": "wrist", "role": "wrist",
+            "path": str(rgb), "packet_id": "packet-wrist",
+        }]},
+    )
+    memory.add_observation(observation)
+    memory.artifacts["compiled"] = {"value": {
+        "type": "compiled_grasp", "schema_version": "openeta.compiled_grasp_seed.v1",
+        "compiled_grasp_id": "compiled-1", "scene_epoch": 0,
+        "target_anchor_world_xyz": [0.1, 0.2, 0.1],
+    }}
+    inputs = memory.resolve_wrist_viewpoint_input(
+        compiled_grasp_id="compiled-1", source_packet_id="packet-wrist", camera_frame_id="wrist",
+    )
+    outputs = propose_wrist_viewpoints(inputs["parameters"])
+    proposal_id = outputs["proposal_id"]
+    target_pose = outputs["candidates"][0]["target_pose"]
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -1919,17 +1960,7 @@ def test_ik_resolves_exact_full_viewpoint_pose_from_short_ids() -> None:
                         "result": {
                             "success": True,
                             "details": {
-                                "outputs": {
-                                    "proposal_id": "wrist_viewpoint:one",
-                                    "object_scene_epoch": 0,
-                                    "robot_motion_epoch": 0,
-                                    "candidates": [
-                                        {
-                                            "candidate_id": "wrist_view_00",
-                                            "target_pose": target_pose,
-                                        }
-                                    ],
-                                }
+                                "outputs": outputs
                             },
                         },
                     }
@@ -1949,11 +1980,11 @@ def test_ik_resolves_exact_full_viewpoint_pose_from_short_ids() -> None:
             action_type="tool_call",
             action="ik_preview_check",
             parameters={
-                "viewpoint_proposal_id": "wrist_viewpoint:one",
+                "viewpoint_proposal_id": proposal_id,
                 "candidate_id": "wrist_view_00",
             },
         ),
-        observation=_observation(),
+        observation=observation,
         tools=tools,
         skills=build_default_skill_registry(),
         memory=memory,
@@ -1961,7 +1992,7 @@ def test_ik_resolves_exact_full_viewpoint_pose_from_short_ids() -> None:
 
     assert plan.status == PipelineStatus.EXECUTED
     assert captured[0]["target_pose"] == target_pose
-    assert captured[0]["viewpoint_proposal_id"] == "wrist_viewpoint:one"
+    assert captured[0]["viewpoint_proposal_id"] == proposal_id
 
 
 def test_tool_result_separates_operational_success_from_semantic_outcome() -> None:
@@ -2178,7 +2209,7 @@ def test_superseded_target_blocks_old_contact_but_allows_clearance_waypoint() ->
     assert graph["inconsistencies"][0]["code"] == "compiled_grasp_target_superseded"
     assert "sam3:sam3-old:detection_001" in contact_errors[0]
     assert "sam3:sam3-current:detection_002" in contact_errors[0]
-    assert "grasp:new-target" in contact_errors[0]
+    assert "current bundle_id shown in host_resolved_inputs" in contact_errors[0]
     assert clearance_errors == []
     assert close_errors
 
@@ -2526,6 +2557,15 @@ def test_release_is_blocked_after_failed_attached_motion_with_actionable_evidenc
         {"verdict": "PASS", "compiled_grasp_id": "compiled-milk"},
         source="test",
     )
+    memory.save_fact(
+        ARTICULATED_ATTACHMENT_PROBE_KEY,
+        {
+            "status": "completed",
+            "compiled_grasp_id": "compiled-milk",
+            "gripper_evidence": {"measured_openness": 0.19},
+        },
+        source="test",
+    )
     memory.add_action(
         EnvAction(
             action_type="tool_call",
@@ -2587,6 +2627,34 @@ def test_release_is_blocked_after_failed_attached_motion_with_actionable_evidenc
     assert "actual_eef_xyz=[-0.05, 0.26, 0.25]" in reason
     assert "milk_1_g1" in reason and "basket_1_g4" in reason
     assert "successful subsequent carrying motion clears this check" in reason
+
+    # A later, fresh near-empty closed aperture invalidates the old PASS rather
+    # than trapping the Agent between a phantom carried-object collision and a
+    # release gate that can never be satisfied.
+    slipped_observation = _observation()
+    slipped_observation.robot.gripper_state = {
+        "open": False,
+        "openness": 0.02,
+    }
+    memory.add_observation(slipped_observation)
+    assert memory.attachment_evidence()["verdict"] == "UNKNOWN"
+    assert memory.attachment_evidence()["previous_verdict"] == "PASS"
+    assert memory.attachment_evidence()["invalidation_reason"] == (
+        "measured_aperture_collapse"
+    )
+
+    allowed_after_slip = ActionPipeline().compile(
+        PlannerDecision(
+            action_type="tool_call",
+            action="gripper_control",
+            parameters={"position": 1},
+        ),
+        observation=slipped_observation,
+        tools=tools,
+        skills=build_default_skill_registry(),
+        memory=memory,
+    )
+    assert allowed_after_slip.status is not PipelineStatus.BLOCKED
 
 
 def test_camera_pose_to_world_reference_remains_in_world_evidence() -> None:
@@ -3307,6 +3375,129 @@ def test_gripper_close_state_retains_tentative_proxy_receipt_for_probe_gate() ->
     )
 
     assert memory.gripper_command_state()["attachment_proxy_receipt"] == receipt
+
+
+@pytest.mark.parametrize("selected", ["first", "second"])
+def test_seed_resolution_honors_exact_receipt_for_same_pose(selected) -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reach a selected IK branch")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    for receipt_id, joint in [("first", 0.1), ("second", 0.2)]:
+        _record_ik_receipt(memory, receipt_id=receipt_id, target_pose=pose,
+                           captured_quat_xyzw=[0, 0, 0, 1], joint_positions=[joint] * 7)
+    parameters = memory.resolve_ik_motion_reference(selected)["parameters"]
+    seed = memory.resolve_ik_execution_seed(parameters)
+    assert seed is not None
+    assert seed["receipt_id"] == selected
+    assert seed["joint_positions"] == [0.1 if selected == "first" else 0.2] * 7
+
+
+def test_selected_infeasible_receipt_cannot_borrow_newer_feasible_evidence() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reject an unapproved receipt")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    for receipt_id, classification in [("rejected", "hard_infeasible"), ("good", "feasible")]:
+        _record_ik_receipt(memory, receipt_id=receipt_id, target_pose=pose,
+                           classification=classification,
+                           captured_quat_xyzw=[0, 0, 0, 1], joint_positions=[0.1] * 7)
+    parameters = memory.resolve_ik_motion_reference("rejected")["parameters"]
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters=parameters)
+    assert memory.resolve_ik_execution_seed(parameters) is None
+
+
+@pytest.mark.parametrize("newer_classification", ["hard_infeasible", "inconclusive"])
+def test_exact_seed_reference_retains_newer_rejection_veto(newer_classification) -> None:
+    memory = AgentMemory()
+    memory.start_session(task="do not revive rejected geometry")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    for receipt_id, classification in [("old", "feasible"), ("new", newer_classification)]:
+        _record_ik_receipt(memory, receipt_id=receipt_id, target_pose=pose,
+                           classification=classification,
+                           captured_quat_xyzw=[0, 0, 0, 1], joint_positions=[0.1] * 7)
+    parameters = memory.resolve_ik_motion_reference("old")["parameters"]
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters=parameters)
+    assert memory.resolve_ik_execution_seed(parameters) is None
+
+
+@pytest.mark.parametrize("bad_reference", ["missing", "", False])
+def test_seed_cannot_fall_back_from_invalid_explicit_reference(bad_reference) -> None:
+    memory = AgentMemory()
+    memory.start_session(task="bind exact preview")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    _record_ik_receipt(memory, receipt_id="good", target_pose=pose,
+                       captured_quat_xyzw=[0, 0, 0, 1], joint_positions=[0.1] * 7)
+    parameters = memory.resolve_ik_motion_reference("good")["parameters"]
+    parameters["ik_receipt_id"] = bad_reference
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters=parameters)
+    assert memory.resolve_ik_execution_seed(parameters) is None
+
+
+@pytest.mark.parametrize("selected_classification", ["feasible", "hard_infeasible"])
+def test_runtime_receipt_to_simulator_seed_chain(selected_classification) -> None:
+    from agent.backends.planner import StaticPlannerBackend
+    from agent.runtime.planner import ToolCallingPlanner
+    from agent.runtime.runtime import OpenEtaAgentRuntime
+
+    calls = []
+
+    class MotionTransport:
+        def call_tool(self, name, arguments, *, timeout_s=None):
+            calls.append((name, arguments))
+            return {"success": True, "reached_target": True, "steps_executed": 2,
+                    "stop_reason": "target_reached", "end": {"xyz": [0.1, 0.2, 0.3]}}
+
+    tools = bind_simulator_mcp_tool_handlers(
+        build_default_tool_registry(), transport=MotionTransport(),
+        config=SimulatorMcpToolProxyConfig(session_id="seed-chain", handle="fixture"),
+        tool_names=("move_to",),
+    )
+    request = {"ik_receipt_id": "selected", "num_steps": 40}
+    runtime = OpenEtaAgentRuntime(
+        tools=tools, rollout_enabled=False,
+        planner=ToolCallingPlanner(StaticPlannerBackend({
+            "kind": "tool_call", "name": "move_to", "parameters": request,
+        })),
+    )
+    runtime.start_session(task="reach checked target")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    for receipt_id, joint, classification in [
+        ("selected", 0.1, selected_classification), ("newer", 0.2, "feasible"),
+    ]:
+        _record_ik_receipt(runtime.memory, receipt_id=receipt_id, target_pose=pose,
+                           classification=classification,
+                           captured_quat_xyzw=[0, 0, 0, 1], joint_positions=[joint] * 7)
+    action = runtime.act(_observation())
+    if selected_classification != "feasible":
+        assert not calls
+        assert action.command["status"] != "executed"
+        return
+    assert action.command["status"] == "executed"
+    assert len(calls) == 1
+    name, wire = calls[0]
+    assert name == "move_to"
+    assert wire["ik_execution_seed"]["receipt_id"] == "selected"
+    assert wire["ik_execution_seed"]["joint_positions"] == [0.1] * 7
+    assert [wire[key] for key in ("x", "y", "z")] == pose["xyz"]
+    assert wire["tolerance"] == 0.01
+    assert wire["ori_tolerance"] == 0.1
+    assert wire["num_steps"] == 40
+    assert wire["handle"] == "fixture"
+    assert "ik_receipt_id" not in wire
+    assert action.command["request"]["parameters"] == request
+    assert "ik_execution_seed" not in action.command["tool_calls"][0]["parameters"]
+
+
+def test_trajectory_cannot_borrow_authorization_for_selected_rejected_receipt() -> None:
+    memory = AgentMemory()
+    memory.start_session(task="reject unchecked trajectory")
+    pose = {"frame": "world", "xyz": [0.1, 0.2, 0.3]}
+    for receipt_id, classification in [("bad", "hard_infeasible"), ("good", "feasible")]:
+        _record_ik_receipt(memory, receipt_id=receipt_id, target_pose=pose,
+                           classification=classification)
+    parameters = memory.resolve_ik_trajectory_reference(["bad"])["parameters"]
+    error = memory.ik_execution_gate_error(tool_name="follow_eef_trajectory", parameters=parameters)
+    assert "trajectory_waypoint_0" in error
+    assert "hard_infeasible" in error
 
 
 def test_feasible_full_pose_ik_receipt_resolves_private_execution_seed() -> None:

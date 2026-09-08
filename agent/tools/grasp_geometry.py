@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from adapter.protocol import JsonDict
 from agent.runtime.calibration_registry import DEFAULT_GRASP_CALIBRATION_PROFILE
+from agent.tools.geometry_intents import geometry_intent
 from agent.tools.grasp_strategies import (
     DEFAULT_GRASP_STRATEGY_ROOT,
     GraspStrategyError,
@@ -1043,17 +1044,37 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
     if not standoffs:
         raise GraspGeometryError("standoff_m must contain at least one value")
 
-    # Candidate offsets are observation choices, not a hidden motion sequence.
-    lateral_offsets = [0.0, -0.04, 0.04]
+    # Two elevation rings, each covering four azimuths. Standoff retains its
+    # existing meaning: height above the target, not camera-to-target distance.
+    # These are independent observation choices, never a prescribed scan order.
     current_camera_x = [r_world_camera[row][0] for row in range(3)]
+    current_offset = [p_world_camera[i] - p_world_target[i] for i in range(3)]
+    current_distance = math.sqrt(sum(value * value for value in current_offset))
+    horizontal = current_offset[:2]
+    if math.hypot(*horizontal) < 1e-8:
+        horizontal = current_camera_x[:2]
+    base_azimuth = math.atan2(horizontal[1], horizontal[0])
     candidates: list[JsonDict] = []
-    for standoff in standoffs:
-        for lateral in lateral_offsets:
-            p_world_camera_goal = [
-                p_world_target[0] + lateral,
-                p_world_target[1],
-                p_world_target[2] + standoff,
+    for elevation_deg in (40.0, 65.0):
+        for azimuth_offset_deg in (0.0, 90.0, 180.0, -90.0):
+            standoff = standoffs[len(candidates) % len(standoffs)]
+            azimuth = base_azimuth + math.radians(azimuth_offset_deg)
+            horizontal_distance = standoff / math.tan(math.radians(elevation_deg))
+            offset = [
+                horizontal_distance * math.cos(azimuth),
+                horizontal_distance * math.sin(azimuth),
+                standoff,
             ]
+            p_world_camera_goal = [
+                p_world_target[i] + offset[i] for i in range(3)
+            ]
+            target_distance = math.sqrt(sum(value * value for value in offset))
+            view_change_deg = None
+            if current_distance > 1e-8:
+                cosine = sum(current_offset[i] * offset[i] for i in range(3)) / (
+                    current_distance * target_distance
+                )
+                view_change_deg = math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
             optical_forward = _normalise(
                 [
                     p_world_target[index] - p_world_camera_goal[index]
@@ -1071,9 +1092,9 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
                 r_world_camera_goal,
                 _transpose3(r_eef_camera),
             )
+            camera_mount_world_offset = _matvec3(r_world_eef_goal, p_eef_camera)
             p_world_eef_goal = [
-                p_world_camera_goal[index]
-                - _matvec3(r_world_eef_goal, p_eef_camera)[index]
+                p_world_camera_goal[index] - camera_mount_world_offset[index]
                 for index in range(3)
             ]
             candidate_id = f"wrist_view_{len(candidates):02d}"
@@ -1095,8 +1116,26 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
                         "optical_forward_world_xyz": _round_vector(optical_forward),
                         "target_anchor_world_xyz": _round_vector(p_world_target),
                         "standoff_m": round(standoff, 6),
-                        "lateral_offset_m": round(lateral, 6),
+                        "lateral_offset_m": round(offset[0], 6),
+                        "offset_world_xyz": _round_vector(offset),
+                        "target_distance_m": round(target_distance, 6),
+                        "azimuth_world_deg": round(
+                            (math.degrees(azimuth) + 180.0) % 360.0 - 180.0, 6,
+                        ),
+                        "elevation_deg": elevation_deg,
                     },
+                    "view_quality_estimates": {
+                        "view_angle_change_deg": (
+                            round(view_change_deg, 6) if view_change_deg is not None else None
+                        ),
+                        "target_anchor_on_optical_axis": True,
+                        "target_visibility": "unverified",
+                        "occlusion_quality": "unknown",
+                        "projected_target_size_px": None,
+                        "interpretation": "Geometric ranking hints only; not safety authorization.",
+                    },
+                    "requires_workspace_check": True,
+                    "requires_collision_check": True,
                     "requires_ik_preview": True,
                 }
             )
@@ -1110,8 +1149,12 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
                 "camera_frame_id": parameters.get("camera_frame_id"),
                 "target_anchor_world_xyz": _round_vector(p_world_target),
                 "current_eef_xyz": _round_vector(p_world_eef),
+                "current_eef_rotation": _round_matrix(r_world_eef),
                 "camera_mount_translation": _round_vector(p_eef_camera),
+                "camera_mount_rotation": _round_matrix(r_eef_camera),
                 "standoffs": standoffs,
+                "sampling_policy": "target_relative_azimuth_elevation.v1",
+                "candidates": candidates,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -1120,6 +1163,7 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
 
     return {
         "schema_version": WRIST_VIEWPOINT_PROPOSAL_SCHEMA,
+        "geometry_intent": geometry_intent("active_perception"),
         "proposal_id": proposal_id,
         "compiled_grasp_id": compiled.get("compiled_grasp_id"),
         "source_packet_id": parameters.get("source_packet_id"),
@@ -1134,6 +1178,15 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
             "eef_to_camera_rotation_matrix": _round_matrix(r_eef_camera),
         },
         "candidates": candidates,
+        "sampling_policy": {
+            "version": "target_relative_azimuth_elevation.v1",
+            "host_max_candidates": 8,
+            "world_up_axis": "+z",
+            "azimuth_reference": "current_target_to_camera_bearing_or_camera_x_or_world_x",
+            "standoff_definition": "height_above_target_world_z",
+            "workspace_prefilter": "not_available",
+            "safety_authorization": False,
+        },
         "selection_policy": (
             "Agent chooses one candidate using workspace/collision evidence, runs an "
             "exact full-pose ik_preview_check, then moves only if that preview supports it"
@@ -1154,9 +1207,11 @@ def propose_wrist_viewpoints(parameters: Mapping[str, Any]) -> JsonDict:
         "next_action_contract": {
             "consume_existing_proposal": True,
             "recommended_tool": "ik_preview_check",
-            "parameter": "target_pose",
+            "parameter": "viewpoint_proposal_id",
+            "candidate_parameter": "candidate_id",
             "instruction": (
-                "Copy one candidate.target_pose exactly into ik_preview_check. Do not "
+                "Call ik_preview_check with this proposal_id as viewpoint_proposal_id "
+                "and the selected candidate_id; the host resolves the exact pose. Do not "
                 "call propose_wrist_viewpoints again only because a read-only turn "
                 "created a newer observation packet."
             ),
@@ -1484,6 +1539,7 @@ def compute_wrist_alignment(
     }
     return {
         "schema_version": WRIST_ALIGNMENT_SCHEMA,
+        "geometry_intent": geometry_intent("grasp_refinement"),
         "status": (
             "aligned_reference_ready"
             if executable_reference

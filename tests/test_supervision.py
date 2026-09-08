@@ -170,8 +170,11 @@ def test_action_reviewer_prioritizes_current_observation_rgb() -> None:
     )
     assert reviewer_contract["description"] != tools.get("move_to").description
     assert "world_mutating" in reviewer_contract["semantic_limits"]
-    assert reviewer_contract["parameters"]["required"] == ["ik_receipt_id"]
+    assert reviewer_contract["parameters"]["oneOf"] == [
+        {"required": ["ik_receipt_id"]}, {"required": ["bundle_id"]},
+    ]
     assert set(reviewer_contract["parameters"]["properties"]) == {
+        "bundle_id",
         "enable_collision_check",
         "ik_receipt_id",
         "num_steps",

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import re
+import stat
+import tempfile
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 from adapter.protocol import JsonDict
@@ -45,6 +50,17 @@ class SelfImprovementConfig:
     skill_dir: Path | str = BUILTIN_SKILL_DIR
     task_playbook_candidate_root: Path | str | None = None
     rollout_root: Path | str | None = None
+    preparation_timeout_s: float = 120.0
+
+    def __post_init__(self) -> None:
+        value = self.preparation_timeout_s
+        try:
+            valid = (not isinstance(value, bool) and isinstance(value, (int, float))
+                     and math.isfinite(value) and value > 0)
+        except OverflowError:
+            valid = False
+        if not valid:
+            raise ValueError("review preparation_timeout_s must be positive and finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +122,13 @@ class SkillAutoApplier(Protocol):
         """Author, independently review, and apply one session-local SkillSpec."""
 
 
+@dataclass(slots=True)
+class PreparedSkillApplication:
+    current_skill: SkillSpec
+    candidate: SkillSpec | None
+    report: JsonDict
+
+
 class BackendReviewedSkillAutoApplier:
     """Use separate clean clients to author and review a session-local skill."""
 
@@ -128,7 +151,15 @@ class BackendReviewedSkillAutoApplier:
         skills: SkillRegistry,
         skill_dir: Path,
     ) -> JsonDict:
-        current = skills.get(proposal.skill_name)
+        prepared = self.prepare(context, proposal, skills=deepcopy(skills))
+        return self.commit(prepared, skills=skills, skill_dir=skill_dir)
+
+    def prepare(
+        self, context: SkillReviewContext, proposal: SkillReviewProposal, *,
+        skills: SkillRegistry, check_active: Callable[[], None] = lambda: None,
+    ) -> PreparedSkillApplication:
+        check_active()
+        current = deepcopy(skills.get(proposal.skill_name))
         request = SkillAuthoringRequest(
             operation="update",
             parameters={
@@ -141,24 +172,33 @@ class BackendReviewedSkillAutoApplier:
             executable_tools=self.executable_tools,
         )
         authored = self.author.author(request)
+        check_active()
         review = self.reviewer.review(request=request, skill=authored.skill)
+        check_active()
         if not review.approved:
-            return {
+            return PreparedSkillApplication(current, None, deepcopy({
                 "applied": False,
                 "decision": review.decision,
                 "reason": review.reason,
                 "review": review.details,
-            }
-        application = write_session_skill(authored.skill, skill_dir=skill_dir)
-        skills.update(authored.skill)
-        return {
-            "applied": True,
+            }))
+        return PreparedSkillApplication(current, deepcopy(authored.skill), deepcopy({
             "decision": review.decision,
             "reason": review.reason,
             "authoring": authored.details,
             "review": review.details,
-            "application": application,
-        }
+        }))
+
+    def commit(self, prepared: PreparedSkillApplication, *, skills: SkillRegistry, skill_dir: Path) -> JsonDict:
+        if prepared.candidate is None:
+            return deepcopy(prepared.report)
+        current = skills.get(prepared.current_skill.name)
+        if (current != prepared.current_skill or not current.editable
+                or prepared.candidate.name != current.name):
+            return {"applied": False, "reason": "skill changed or is not editable since preparation"}
+        application = write_session_skill(prepared.candidate, skill_dir=skill_dir)
+        skills.update(deepcopy(prepared.candidate))
+        return {**deepcopy(prepared.report), "applied": True, "application": application}
 
 
 class HeuristicSkillReviewSubagent:
@@ -194,9 +234,11 @@ class SkillReviewProposalStore:
         self.root = Path(root)
 
     def save(self, proposal: SkillReviewProposal) -> Path:
+        path = self._proposal_path(proposal.proposal_id)
+        if proposal.proposal_id != path.stem:
+            raise ValueError("New proposal ids must be canonical, without whitespace or a .json suffix")
         self.root.mkdir(parents=True, exist_ok=True)
-        path = self.root / f"{proposal.proposal_id}.json"
-        _atomic_write_json(path, proposal.to_dict())
+        _atomic_write_json(path, proposal.to_dict(), create_only=True)
         return path
 
     def list(self, *, status: str | None = "pending") -> list[JsonDict]:
@@ -216,15 +258,24 @@ class SkillReviewProposalStore:
 
     def load(self, proposal_id: str) -> JsonDict:
         path = self._proposal_path(proposal_id)
-        if not path.exists():
-            raise FileNotFoundError(f"Unknown skill review proposal: {proposal_id}")
+        original = path.lstat()
+        if not stat.S_ISREG(original.st_mode):
+            raise ValueError("Skill review proposal must be a regular file, not a link or device")
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            with os.fdopen(os.open(path, flags), "r", encoding="utf-8") as stream:
+                opened = os.fstat(stream.fileno())
+                if (not stat.S_ISREG(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino) != (original.st_dev, original.st_ino)):
+                    raise ValueError("Skill review proposal changed while opening")
+                payload = json.load(stream)
+        except (json.JSONDecodeError, UnicodeError) as exc:
             raise ValueError(f"Invalid skill review proposal JSON: {path}") from exc
         if not isinstance(payload, dict):
             raise ValueError(f"Invalid skill review proposal payload: {path}")
-        payload.setdefault("path", str(path))
+        if payload.get("proposal_id") != path.stem:
+            raise ValueError("Skill review proposal identity does not match its filename")
+        payload["path"] = str(path)
         return payload
 
     def approve(
@@ -301,12 +352,30 @@ class SkillReviewProposalStore:
         return updated
 
     def _proposal_path(self, proposal_id: str) -> Path:
+        if not isinstance(proposal_id, str):
+            raise ValueError("Invalid skill review proposal id")
         normalized = proposal_id.strip()
         if normalized.endswith(".json"):
             normalized = normalized[:-5]
-        if not normalized or "/" in normalized or "\\" in normalized:
+        if (not normalized or normalized in {".", ".."} or len(normalized) > 200
+                or "/" in normalized or "\\" in normalized
+                or any(ord(char) < 32 or ord(char) == 127 for char in normalized)):
             raise ValueError(f"Invalid skill review proposal id: {proposal_id}")
         return self.root / f"{normalized}.json"
+
+
+@dataclass(slots=True)
+class PreparedEpisodeReview:
+    result: Any
+    summary: JsonDict
+    trigger: JsonDict
+    context: SkillReviewContext | None
+    proposals: list[SkillReviewProposal]
+    applications: list[PreparedSkillApplication | JsonDict | None]
+    config: SelfImprovementConfig
+    applier: SkillAutoApplier | None
+    store: SkillReviewProposalStore
+    subagent_name: str
 
 
 class SelfImprovementReviewer:
@@ -331,12 +400,35 @@ class SelfImprovementReviewer:
         *,
         skills: SkillRegistry,
     ) -> JsonDict:
-        """Run a bounded review if the episode has useful learning signal."""
+        """Synchronous compatibility entry; runner may bound preparation separately."""
+
+        prepared = self.prepare_review(deepcopy(result), skills=deepcopy(skills))
+        return self.commit_review(prepared, skills=skills)
+
+    @property
+    def supports_bounded_preparation(self) -> bool:
+        # Opaque legacy callbacks may combine model calls and writes. Do not
+        # abandon them in a daemon and claim they cannot publish late changes.
+        return type(self) is SelfImprovementReviewer and (
+            not self.config.auto_apply_reviewed or self.auto_applier is None
+            or type(self.auto_applier) is BackendReviewedSkillAutoApplier
+        )
+
+    def prepare_review(
+        self, result: Any, *, skills: SkillRegistry,
+        check_active: Callable[[], None] = lambda: None,
+    ) -> PreparedEpisodeReview:
+        check_active()
+        config, applier, store = self.config, self.auto_applier, self.store
 
         summary = summarize_episode_for_review(result)
-        trigger = should_review_episode(summary, config=self.config)
+        trigger = should_review_episode(summary, config=config)
+        prepared = PreparedEpisodeReview(
+            deepcopy(result), summary, trigger, None, [], [], config, applier,
+            store, type(self.subagent).__name__,
+        )
         if not trigger["should_review"]:
-            return {"reviewed": False, "trigger": trigger, "proposals": []}
+            return prepared
 
         context = SkillReviewContext(
             task=result.task,
@@ -345,9 +437,41 @@ class SelfImprovementReviewer:
             available_skills=tuple(skill.name for skill in skills.list()),
             loaded_skills=tuple(summary.get("loaded_skills", ())),
         )
-        proposals = self.subagent.review(context)
-        saved: list[JsonDict] = []
+        check_active()
+        proposals = deepcopy(self.subagent.review(deepcopy(context)))
+        check_active()
+        if not isinstance(proposals, list) or any(not isinstance(p, SkillReviewProposal) for p in proposals):
+            raise TypeError("skill reviewer must return SkillReviewProposal items")
+        prepared.context, prepared.proposals = context, proposals
+        virtual_skills = deepcopy(skills)
         for proposal in proposals:
+            check_active()
+            application = None
+            if config.auto_apply_reviewed and type(applier) is BackendReviewedSkillAutoApplier:
+                try:
+                    application = applier.prepare(
+                        deepcopy(context), deepcopy(proposal), skills=virtual_skills,
+                        check_active=check_active,
+                    )
+                    if application.candidate is not None:
+                        virtual_skills.update(deepcopy(application.candidate))
+                except Exception as exc:
+                    check_active()  # Expiration must stop preparation, not become a proposal.
+                    application = {"applied": False, "reason": str(exc), "error_type": type(exc).__name__}
+            prepared.applications.append(application)
+        check_active()
+        return prepared
+
+    def commit_review(self, prepared: PreparedEpisodeReview, *, skills: SkillRegistry) -> JsonDict:
+        if (self.config is not prepared.config or self.auto_applier is not prepared.applier
+                or self.store is not prepared.store):
+            raise RuntimeError("Review configuration changed before commit")
+        trigger, context = prepared.trigger, prepared.context
+        if not trigger["should_review"]:
+            return {"reviewed": False, "trigger": deepcopy(trigger), "proposals": []}
+        assert context is not None
+        saved: list[JsonDict] = []
+        for proposal, planned_application in zip(prepared.proposals, prepared.applications, strict=True):
             path = self.store.save(proposal)
             saved_proposal: JsonDict = {"path": str(path), **proposal.to_dict()}
             if self.config.auto_apply_reviewed:
@@ -358,12 +482,17 @@ class SelfImprovementReviewer:
                     }
                 else:
                     try:
-                        application = self.auto_applier.apply(
-                            context,
-                            proposal,
-                            skills=skills,
-                            skill_dir=Path(self.config.skill_dir),
-                        )
+                        if isinstance(planned_application, PreparedSkillApplication):
+                            application = self.auto_applier.commit(
+                                planned_application, skills=skills, skill_dir=Path(self.config.skill_dir),
+                            )
+                        elif isinstance(planned_application, dict):
+                            application = deepcopy(planned_application)
+                        else:
+                            # Legacy custom applier: synchronous compatibility only.
+                            application = self.auto_applier.apply(
+                                context, proposal, skills=skills, skill_dir=Path(self.config.skill_dir),
+                            )
                         if application.get("applied") is True:
                             applied = self.store.resolve_reviewed(
                                 proposal.proposal_id,
@@ -381,12 +510,12 @@ class SelfImprovementReviewer:
                             "error_type": type(exc).__name__,
                         }
             saved.append(saved_proposal)
-        task_playbook_candidate = self._maybe_extract_task_playbook(result, summary=summary)
+        task_playbook_candidate = self._maybe_extract_task_playbook(prepared.result, summary=prepared.summary)
         return {
             "reviewed": True,
             "trigger": trigger,
             "schema_version": SELF_IMPROVEMENT_SCHEMA_VERSION,
-            "subagent": type(self.subagent).__name__,
+            "subagent": prepared.subagent_name,
             "proposals": saved,
             "task_playbook_candidate": task_playbook_candidate,
         }
@@ -730,7 +859,22 @@ def _int_signal(value: object) -> int:
         return 0
 
 
-def _atomic_write_json(path: Path, payload: JsonDict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+def _atomic_write_json(path: Path, payload: JsonDict, *, create_only: bool = False) -> None:
+    # Prepare a complete file under an exclusive, unpredictable name. A fixed
+    # .json.tmp could collide with another writer or follow an existing symlink.
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if create_only:
+            # Hard-link publication is atomic and fails if the destination exists;
+            # never replace an earlier pending/approved/rejected proposal.
+            os.link(temporary, path)
+        else:
+            os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)

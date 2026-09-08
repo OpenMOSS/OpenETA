@@ -2646,6 +2646,7 @@ def _motion_response(
         },
         "reached_target": reached_target,
         "steps_executed": steps_executed,
+        "stop_reason": "target_reached" if reached_target else "iteration_budget",
         "collision": {
             "trajectory_checked": True,
             "world_checked": True,

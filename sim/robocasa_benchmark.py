@@ -14,7 +14,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -551,62 +550,13 @@ def aggregate_results(
     }
 
 
-def _parallel_outcome_has_trusted_success(outcome: Mapping[str, Any]) -> bool:
+def _parallel_outcome_has_trusted_success(outcome: Mapping[str, Any], *, env_id: str) -> bool:
+    from agent.runtime.success_evidence import episode_success_evidence
+
     episode = outcome.get("episode")
     if not isinstance(episode, Mapping):
         return False
-    episode_metadata = episode.get("metadata")
-    execution_id = (
-        str(episode_metadata.get("execution_id") or "")
-        if isinstance(episode_metadata, Mapping)
-        else ""
-    )
-    steps = episode.get("steps")
-    if not isinstance(steps, list):
-        return False
-    for step in steps:
-        if not isinstance(step, Mapping):
-            continue
-        step_result = step.get("step_result")
-        if not isinstance(step_result, Mapping):
-            continue
-        reward = step_result.get("reward")
-        if (
-            not isinstance(reward, (int, float))
-            or isinstance(reward, bool)
-            or not math.isfinite(float(reward))
-            or float(reward) <= 0.0
-        ):
-            continue
-        info = step_result.get("info")
-        if not isinstance(info, Mapping):
-            continue
-        receipt = info.get("environment_receipt")
-        if not (
-            info.get("environment_receipt_trusted") is True
-            and info.get("official_reward") is True
-            and isinstance(receipt, Mapping)
-            and (
-                not execution_id
-                or str(receipt.get("execution_id") or "") == execution_id
-            )
-        ):
-            continue
-        receipt_schema = str(receipt.get("schema_version") or "")
-        if receipt_schema:
-            if receipt_schema == "openeta.environment_receipt.v1":
-                return True
-            continue
-        # EpisodeResult.to_dict intentionally compacts nested metadata and can
-        # omit schema_version after the live harness has already validated the
-        # full receipt. Require the stable receipt identity fields retained by
-        # that serializer before accepting the already-classified success.
-        if all(
-            isinstance(receipt.get(key), str) and bool(receipt.get(key))
-            for key in ("receipt_id", "backend", "agent_tool", "remote_tool")
-        ):
-            return True
-    return False
+    return bool(episode_success_evidence(dict(episode), env_id=env_id, require_official_reward=True))
 
 
 def _parallel_outcome_step_count(outcome: Mapping[str, Any]) -> int:
@@ -697,7 +647,9 @@ def aggregate_parallel_batch_results(
                 f"Unsupported parallel outcome status for {episode_id}: {status!r}"
             )
         success = status == "success"
-        if success and not _parallel_outcome_has_trusted_success(outcome):
+        if success and not _parallel_outcome_has_trusted_success(
+            outcome, env_id=scenario_by_id[episode_id].env_id,
+        ):
             raise ValueError(
                 f"Parallel success for {episode_id} has no trusted official reward receipt"
             )

@@ -611,6 +611,10 @@ class BenchWorkerManager:
                             # re-created after og.shutdown(). A BEHAVIOR worker
                             # is deliberately single-environment / single-use.
                             w.stop(wait=True)
+                            if w.process is None or w.process.poll() is None:
+                                raise RuntimeError(
+                                    "BEHAVIOR worker exit is unconfirmed; retaining cleanup ownership"
+                                )
                             pool.remove(w)
                             return
                         w.env_count = max(0, w.env_count - 1)

@@ -448,30 +448,9 @@ def inspect_evaluation_run(store: EvaluationRunStore) -> JsonDict:
 
 
 def _has_objective_success(outcome: JsonDict) -> bool:
-    episode = outcome.get("episode")
-    if not isinstance(episode, dict):
-        return False
-    for step in episode.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        result = step.get("step_result")
-        if not isinstance(result, dict):
-            continue
-        reward = result.get("reward")
-        if _finite_number(reward) and float(reward) > 0:
-            return True
-        info = result.get("info")
-        if isinstance(info, dict) and any(
-            info.get(key) is True
-            for key in (
-                "task_success",
-                "environment_success",
-                "checker_success",
-                "benchmark_success",
-            )
-        ):
-            return True
-    return False
+    from agent.runtime.experiments import objective_success_evidence
+
+    return bool(objective_success_evidence(outcome))
 
 
 def _finite_number(value: object) -> bool:

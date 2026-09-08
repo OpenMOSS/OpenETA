@@ -6,6 +6,7 @@ import queue
 import math
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 from uuid import uuid4
@@ -19,8 +20,10 @@ from adapter.protocol import (
     StepResult,
 )
 from agent.runtime.memory import summarize_event_payload, summarize_observation
-from agent.runtime.runtime import OpenEtaAgentRuntime
-from agent.runtime.supervision import InteractionResolver
+from agent.runtime.runtime import OpenEtaAgentRuntime, RuntimeExecutionCancelled
+from agent.runtime.supervision import InteractionResolution, InteractionResolver
+from agent.tools.call_budget import ToolCallBudget
+from agent.backends.provider_interaction import manual_provider_interaction
 
 
 DEFAULT_MAX_TURNS = 100
@@ -35,6 +38,10 @@ OBSERVATION_SNAPSHOT_SCHEMA_VERSION = "openeta.observation_snapshot.v1"
 
 class EpisodeTimeoutError(TimeoutError):
     """Raised when the runner abandons a turn at the episode deadline."""
+
+
+class ReviewPreparationTimeout(TimeoutError):
+    """Write-free review preparation did not complete within its own budget."""
 
 
 class EpisodeEnvironment(Protocol):
@@ -122,10 +129,13 @@ class OpenEtaEpisodeRunner:
         self.timeout_s = DEFAULT_EPISODE_TIMEOUT_S
         self.max_total_tokens = DEFAULT_MAX_TOTAL_TOKENS
         self.tool_call_count = 0
+        self._tool_call_budget = ToolCallBudget(DEFAULT_MAX_TOOL_CALLS)
         self.total_tokens = 0
         self.token_usage_sources: JsonDict = {}
         self.started_at_s = 0.0
         self.human_wait_s = 0.0
+        self._manual_provider_request_ids: set[str] = set()
+        self.manual_provider_wait_s = 0.0
         self._human_wait_started_at_s: float | None = None
         self.failure_reason: JsonDict = {}
         self.interrupt_cleanup: JsonDict = {}
@@ -157,6 +167,8 @@ class OpenEtaEpisodeRunner:
         initial_token_usage_sources: JsonDict | None = None,
         metadata: JsonDict | None = None,
     ) -> EnvObservation:
+        if not self.wait_for_idle(timeout_s=0.0):
+            raise RuntimeError("Previous episode worker is still running; cannot reuse this runner.")
         self.task = task
         self.turn_index = 0
         self.terminated = False
@@ -173,6 +185,9 @@ class OpenEtaEpisodeRunner:
         self.timeout_s = max(0.001, timeout_s)
         self.max_total_tokens = max(1, max_total_tokens)
         self.tool_call_count = max(0, initial_tool_call_count)
+        self._tool_call_budget = ToolCallBudget(
+            self.max_tool_calls, carried_usage=self.tool_call_count,
+        )
         self.total_tokens = max(0, initial_total_tokens)
         self.token_usage_sources = {
             str(key): max(0, int(value))
@@ -181,6 +196,8 @@ class OpenEtaEpisodeRunner:
         }
         self.started_at_s = self._clock()
         self.human_wait_s = 0.0
+        self._manual_provider_request_ids.clear()
+        self.manual_provider_wait_s = 0.0
         self.guidance_intervention_count = 0
         self._resolved_question_fingerprints.clear()
         self._human_wait_started_at_s = None
@@ -200,6 +217,7 @@ class OpenEtaEpisodeRunner:
             "timeout_s": self.timeout_s,
             "max_total_tokens": self.max_total_tokens,
             **dict(metadata or {}),
+            "execution_id": self.execution_id,
         }
         if self.runtime.memory.session_id is None:
             self.runtime.start_session(
@@ -209,6 +227,9 @@ class OpenEtaEpisodeRunner:
             )
         else:
             self.runtime.memory.begin_user_turn(task, source="episode_start")
+            for key in ("env_id", "require_official_reward", "execution_id"):
+                if key in episode_metadata:
+                    self.runtime.memory.metadata[key] = episode_metadata[key]
         reset_metadata = {
             **episode_metadata,
             "agent_session_id": self.runtime.memory.session_id or "",
@@ -366,7 +387,22 @@ class OpenEtaEpisodeRunner:
                 info=step_result.info,
             )
         self.tool_call_count += count_tool_calls(action)
+        admission = self._tool_call_budget.snapshot()
+        # Keep legacy attempt accounting, but never persist a lower count than
+        # the quota already consumed by nested executable calls.
+        self.tool_call_count = max(
+            self.tool_call_count,
+            admission["carried_usage"] + admission["admitted_this_run"],
+        )
         action_tokens, action_sources = action_token_usage(action)
+        command_metadata = action.command.get("metadata", {}) if isinstance(action.command, dict) else {}
+        planner_metadata = command_metadata.get("planner_metadata", {}) if isinstance(command_metadata, dict) else {}
+        interactions = planner_metadata.get("provider_interactions", []) if isinstance(planner_metadata, dict) else []
+        for raw_interaction in interactions if isinstance(interactions, list) else []:
+            interaction = manual_provider_interaction(raw_interaction)
+            if interaction and interaction["request_id"] not in self._manual_provider_request_ids:
+                self._manual_provider_request_ids.add(interaction["request_id"])
+                self.manual_provider_wait_s += interaction["wait_s"]
         self.total_tokens += action_tokens
         for source, count in action_sources.items():
             self.token_usage_sources[source] = (
@@ -374,15 +410,77 @@ class OpenEtaEpisodeRunner:
             )
         self.terminated = step_result.terminated
         self.truncated = step_result.truncated
-        interaction_resolution = self._resolve_interaction(action)
-        self.waiting_for_human = is_agent_waiting_for_human(action) and not bool(
-            interaction_resolution and interaction_resolution.get("resolved")
+        self._enforce_resource_budgets()
+        # Backend failure and validation exhaustion are Host fallbacks, not
+        # ordinary model questions/status reports. Require the planner's own
+        # failure metadata; model-controlled response parameters are not proof.
+        request = action.command.get("request", {}) if isinstance(action.command, dict) else {}
+        parameters = request.get("parameters", {}) if isinstance(request, dict) else {}
+        validation_errors = planner_metadata.get("validation_errors") if isinstance(planner_metadata, dict) else None
+        if (
+            not self.failure_reason
+            and isinstance(request, dict)
+            and request.get("kind") == "response"
+            and isinstance(planner_metadata, dict)
+            and planner_metadata.get("backend_status") == "failed"
+        ):
+            details = planner_metadata.get("backend_details")
+            details = details if isinstance(details, dict) else {}
+            self._set_failure({
+                "code": "planner_provider_failed",
+                "provider_error_code": details.get("provider_error_code") or "backend_failure",
+                "error_type": details.get("error_type") or (
+                    "ProviderConfigurationError" if details.get("missing_fields") else "PlannerBackendError"
+                ),
+                "provider_attempts": details.get("provider_attempts"),
+                "retryable": details.get("retryable"),
+            })
+            step_result.terminated = False
+            step_result.truncated = True
+            step_result.info.pop("pause_source", None)
+            step_result.info.pop("pause_reason", None)
+            step_result.info.update({
+                "termination_source": "planner",
+                "termination_reason": "planner_provider_failed",
+            })
+        if (
+            not self.failure_reason
+            and isinstance(request, dict)
+            and request.get("kind") == "response"
+            and request.get("name") == "talk"
+            and isinstance(parameters, dict)
+            and parameters.get("code") == "planner_validation_failed"
+            and isinstance(validation_errors, list)
+            and validation_errors
+        ):
+            self._set_failure({
+                "code": "planner_validation_failed",
+                "validation_errors": list(validation_errors),
+                "validation_attempts": planner_metadata.get("validation_attempts"),
+            })
+            step_result.terminated = False
+            step_result.truncated = True
+            step_result.info.update({
+                "termination_source": "planner",
+                "termination_reason": "planner_validation_failed",
+            })
+        interaction_resolution = (
+            self._resolve_interaction(action) if not self.failure_reason else None
+        )
+        self.waiting_for_human = (
+            not (self.terminated or self.truncated)
+            and is_agent_waiting_for_human(action)
+            and not bool(interaction_resolution and interaction_resolution.get("resolved"))
         )
         if self.waiting_for_human and self._human_wait_started_at_s is None:
             self._human_wait_started_at_s = self._clock()
-        self.stop_reason = (
-            "ask_human" if self.waiting_for_human else _stop_reason_from_step_result(step_result)
-        )
+        if self.failure_reason:
+            self.stop_reason = str(self.failure_reason["code"])
+        else:
+            self.stop_reason = (
+                "ask_human" if self.waiting_for_human
+                else _stop_reason_from_step_result(step_result)
+            )
         self._apply_recovery_turn_extension()
         self._enforce_resource_budgets()
         self.current_observation = step_result.observation
@@ -410,6 +508,7 @@ class OpenEtaEpisodeRunner:
             observation,
             execution_id=self.execution_id,
             cancel_event=self._cancel_event,
+            tool_call_budget=self._tool_call_budget,
         )
         if is_agent_task_complete(action):
             step_result = StepResult(
@@ -526,6 +625,8 @@ class OpenEtaEpisodeRunner:
             metadata={
                 "environment": type(self.environment).__name__,
                 "execution_id": self.execution_id,
+                "env_id": self.runtime.memory.metadata.get("env_id", ""),
+                "require_official_reward": self.runtime.memory.metadata.get("require_official_reward"),
                 "turn_index": self.turn_index,
                 "max_turns": self.max_turns,
                 "base_max_turns": self.base_max_turns,
@@ -539,16 +640,24 @@ class OpenEtaEpisodeRunner:
                 },
                 "usage": {
                     "tool_call_count": self.tool_call_count,
+                    "tool_admission": self._tool_call_budget.snapshot(),
                     "total_tokens": self.total_tokens,
                     "token_usage_sources": dict(self.token_usage_sources),
                     "elapsed_s": round(self.elapsed_s, 3),
                     "human_wait_s": round(self.current_human_wait_s, 3),
+                    "manual_provider": {
+                        "scope": "recorded_main_planner_responses_this_run",
+                        "response_count": len(self._manual_provider_request_ids),
+                        "wait_s": round(self.manual_provider_wait_s, 3),
+                        "source": "provider_reported",
+                    },
                     "guidance_intervention_count": self.guidance_intervention_count,
                 },
                 "assistance": {
                     "guidance_intervention_count": self.guidance_intervention_count,
                     "agent_assisted": self.guidance_intervention_count > 0,
-                    "human_assisted": self.current_human_wait_s > 0,
+                    "manual_provider_assisted": bool(self._manual_provider_request_ids),
+                    "human_assisted": self._received_human_answer() or bool(self._manual_provider_request_ids),
                 },
                 "failure_reason": dict(self.failure_reason),
                 "interrupt_cleanup": dict(self.interrupt_cleanup),
@@ -572,29 +681,133 @@ class OpenEtaEpisodeRunner:
                 episode_id=self.execution_id,
                 result=result.to_dict(),
             )
-        review = self.runtime.self_improvement_reviewer.maybe_review(
-            result,
-            skills=self.runtime.skills,
-        )
+        with self.runtime._memory_commit_lock:
+            review_generation = self.runtime._session_generation
+            review_memory = self.runtime.memory
+            review_execution_id = self.execution_id
+        try:
+            if self._cancel_event.is_set() or self.failure_reason:
+                review = {
+                    "reviewed": False, "proposals": [],
+                    "trigger": {"should_review": False, "reason": "episode_budget_or_interrupt_stop"},
+                }
+            else:
+                reviewer = self.runtime.self_improvement_reviewer
+                review_input = deepcopy(result)
+                if getattr(reviewer, "supports_bounded_preparation", False) is True:
+                    review = self._prepare_and_commit_review(
+                        reviewer, review_input, generation=review_generation,
+                        memory=review_memory, execution_id=review_execution_id,
+                    )
+                else:
+                    # Opaque legacy reviewers still use the synchronous path.
+                    review = reviewer.maybe_review(review_input, skills=self.runtime.skills)
+            if not isinstance(review, dict) or not isinstance(review.get("proposals", []), list):
+                raise TypeError("Post-episode review did not return a valid report")
+            # Detach reports too: a reviewer retaining its return value must not
+            # be able to change already published episode metadata or events.
+            review = deepcopy(review)
+        except Exception as exc:  # noqa: BLE001 - review cannot erase the episode result.
+            review = {
+                "reviewed": False,
+                "proposals": [],
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+                # Review may already have persisted proposals or applied an
+                # approved change. This boundary is not a rollback transaction.
+                "partial_effects_possible": True,
+            }
+            if isinstance(exc, ReviewPreparationTimeout):
+                with self._worker_lock:
+                    pending = self._active_worker is not None and self._active_worker.is_alive()
+                review["preparation_budget"] = {
+                    "timeout_s": reviewer.config.preparation_timeout_s,
+                    "completed_in_time": False, "worker_pending": pending,
+                    "commit_started": False,
+                }
         result.metadata["self_improvement_review"] = review
-        self.runtime.memory.record(
-            "self_improvement_review",
-            {
-                "reviewed": review.get("reviewed"),
-                "trigger": review.get("trigger"),
-                "proposal_count": len(review.get("proposals", [])),
-                "proposals": [
-                    {
-                        "proposal_id": proposal.get("proposal_id"),
-                        "skill_name": proposal.get("skill_name"),
-                        "path": proposal.get("path"),
-                    }
-                    for proposal in review.get("proposals", [])
-                    if isinstance(proposal, dict)
-                ],
-            },
-        )
+        review_event = {
+            "reviewed": review.get("reviewed"),
+            "trigger": review.get("trigger"),
+            **({"error": review["error"], "partial_effects_possible": True}
+               if "error" in review else {}),
+            "proposal_count": len(review.get("proposals", [])),
+            "proposals": [
+                {
+                    "proposal_id": proposal.get("proposal_id"),
+                    "skill_name": proposal.get("skill_name"),
+                    "path": proposal.get("path"),
+                }
+                for proposal in review.get("proposals", [])
+                if isinstance(proposal, dict)
+            ],
+        }
+        with self.runtime._memory_commit_lock:
+            if (review_generation == self.runtime._session_generation
+                    and review_memory is self.runtime.memory
+                    and review_execution_id == self.execution_id):
+                review_memory.record("self_improvement_review", review_event)
+            else:
+                # The old report remains attached to its own returned result,
+                # but must not be inserted into a replacement session's trace.
+                review["memory_publication"] = {
+                    "recorded": False, "reason": "session_or_episode_changed_during_review",
+                }
         return result
+
+    def _prepare_and_commit_review(self, reviewer, result, *, generation, memory, execution_id) -> JsonDict:
+        """Bound write-free preparation; only this caller can publish its plan."""
+        timeout_s = float(reviewer.config.preparation_timeout_s)
+        deadline = time.monotonic() + timeout_s
+        cancel_event = self._cancel_event
+
+        def check_active() -> None:
+            if (cancel_event.is_set() or generation != self.runtime._session_generation
+                    or memory is not self.runtime.memory or execution_id != self.execution_id):
+                raise RuntimeExecutionCancelled("Review belongs to an interrupted/replaced episode")
+            if time.monotonic() >= deadline:
+                raise ReviewPreparationTimeout("Post-review preparation deadline exceeded")
+
+        with self.runtime._memory_commit_lock:
+            check_active()
+            skills = deepcopy(self.runtime.skills)
+        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+
+        def prepare() -> None:
+            try:
+                check_active()
+                plan = reviewer.prepare_review(result, skills=skills, check_active=check_active)
+                check_active()
+                result_queue.put(("result", plan))
+            except BaseException as exc:
+                result_queue.put(("error", exc))
+
+        worker = threading.Thread(target=prepare, name="openeta-review-preparation", daemon=True)
+        with self._worker_lock:
+            if self._active_worker is not None and self._active_worker.is_alive():
+                raise RuntimeError("Cannot start review while a previous worker is active")
+            self._active_worker = worker
+        worker.start()
+        while worker.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or cancel_event.is_set() or generation != self.runtime._session_generation:
+                break
+            worker.join(timeout=min(remaining, 0.05))
+        if not worker.is_alive():
+            with self._worker_lock:
+                if self._active_worker is worker:
+                    self._active_worker = None
+        # An unfinished worker stays tracked; it has no commit callback. Late
+        # output is discarded, and the runner cannot be reused until it exits.
+        check_active()
+        kind, payload = result_queue.get_nowait()
+        if kind == "error":
+            assert isinstance(payload, BaseException)
+            raise payload
+        with self.runtime._memory_commit_lock:
+            check_active()
+            report = reviewer.commit_review(payload, skills=self.runtime.skills)
+        report["preparation_budget"] = {"timeout_s": timeout_s, "completed_in_time": True}
+        return report
 
     def _apply_recovery_turn_extension(self) -> None:
         """Grant bounded turns for explicit post-close grasp branch switches."""
@@ -646,45 +859,164 @@ class OpenEtaEpisodeRunner:
             or fingerprint in self._resolved_question_fingerprints
         ):
             return None
+        generation = self.runtime._session_generation
+        execution_id = self.execution_id
         try:
-            resolution = self.interaction_resolver.resolve(
-                question=question,
-                context={
-                    "task": self.task,
-                    "turn_index": self.turn_index + 1,
-                    "memory": self.runtime.memory.planning_context(max_events=6),
-                    "observation": summarize_observation(self.current_observation),
-                },
-            )
+            resolution = self._await_guidance_resolution(question)
         except Exception as exc:  # noqa: BLE001 - resolver failure falls back to human.
-            if getattr(exc, "code", None) == "provider_queue_timeout":
+            if (
+                isinstance(exc, RuntimeExecutionCancelled)
+                or getattr(exc, "code", None) == "provider_queue_timeout"
+            ):
                 raise
-            self.runtime.memory.record(
-                "guidance_resolution_failed",
-                {
-                    "question": question,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                },
-            )
+            with self.runtime._memory_commit_lock:
+                if generation != self.runtime._session_generation or execution_id != self.execution_id:
+                    raise RuntimeExecutionCancelled(
+                        "Guidance failure belongs to a replaced episode/session"
+                    ) from exc
+                if not self._cancel_event.is_set():
+                    self.runtime.memory.record(
+                        "guidance_resolution_failed",
+                        {
+                            "question": question,
+                            "error_type": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    )
             return None
-        payload = resolution.to_dict()
-        self.runtime.memory.record("guidance_resolution", payload)
-        if not resolution.resolved:
+        if resolution is None:
+            return None
+        with self.runtime._memory_commit_lock:
+            if generation != self.runtime._session_generation or execution_id != self.execution_id:
+                raise RuntimeExecutionCancelled("Guidance result belongs to a replaced episode/session")
+            if self._cancel_event.is_set():
+                return None
+            if self.elapsed_s >= self.timeout_s:
+                self._enforce_resource_budgets()
+                return None
+            payload = resolution.to_dict()
+            self._charge_guidance_usage(resolution.details)
+            self.runtime.memory.record("guidance_resolution", payload)
+            if not resolution.resolved:
+                return payload
+            self.guidance_intervention_count += 1
+            self._resolved_question_fingerprints.add(fingerprint)
+            self.runtime.update_memory(
+                {
+                    "type": "guidance_answer",
+                    "question": question,
+                    "answer": resolution.answer,
+                    "source": "guidance_agent",
+                    "intervention_index": self.guidance_intervention_count,
+                    "details": dict(resolution.details),
+                }
+            )
             return payload
-        self.guidance_intervention_count += 1
-        self._resolved_question_fingerprints.add(fingerprint)
-        self.runtime.update_memory(
-            {
-                "type": "guidance_answer",
-                "question": question,
-                "answer": resolution.answer,
-                "source": "guidance_agent",
-                "intervention_index": self.guidance_intervention_count,
-                "details": dict(resolution.details),
-            }
-        )
+
+    def _await_guidance_resolution(self, question: str) -> InteractionResolution | None:
+        """Bound waiting, isolate inputs, and never commit from a resolver thread.
+
+        Synchronous providers cannot be forcibly stopped here. A timed-out worker
+        stays tracked by wait_for_idle; its eventual result has no commit path.
+        """
+
+        resolver = self.interaction_resolver
+        if resolver is None:
+            return None
+        remaining_s = self.timeout_s - self.elapsed_s
+        if remaining_s <= 0 or self._cancel_event.is_set():
+            self._enforce_resource_budgets()
+            return None
+        # No memory/observation aliases are handed to the background resolver.
+        with self.runtime._memory_commit_lock:
+            generation = self.runtime._session_generation
+            context = deepcopy({
+                "_host_parent_session_id": self.runtime.memory.session_id,
+                "task": self.task,
+                "turn_index": self.turn_index,
+                "memory": self.runtime.memory.planning_context(max_events=6),
+                "observation": summarize_observation(self.current_observation),
+            })
+        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+        cancel_event = self._cancel_event
+        execution_id = self.execution_id
+        wait_deadline = time.monotonic() + max(0.0, self.timeout_s - self.elapsed_s)
+        if self.elapsed_s >= self.timeout_s or cancel_event.is_set():
+            self._enforce_resource_budgets()
+            return None
+
+        def resolve() -> None:
+            try:
+                if cancel_event.is_set() or time.monotonic() >= wait_deadline:
+                    return
+                resolution = resolver.resolve(question=question, context=context)
+                result_queue.put(("result", deepcopy(resolution)))
+            except BaseException as exc:  # noqa: BLE001 - delivered to runner only.
+                result_queue.put(("error", exc))
+
+        worker = threading.Thread(target=resolve, name="openeta-episode-guidance", daemon=True)
+        with self._worker_lock:
+            self._active_worker = worker
+        worker.start()
+        try:
+            while worker.is_alive() and not cancel_event.is_set():
+                remaining_s = min(
+                    self.timeout_s - self.elapsed_s, wait_deadline - time.monotonic(),
+                )
+                if remaining_s <= 0:
+                    break
+                worker.join(timeout=min(remaining_s, 0.05))
+        except BaseException:
+            cancel_event.set()
+            raise
+        if not worker.is_alive():
+            with self._worker_lock:
+                if self._active_worker is worker:
+                    self._active_worker = None
+        if generation != self.runtime._session_generation or execution_id != self.execution_id:
+            raise RuntimeExecutionCancelled("Guidance result belongs to a replaced episode/session")
+        if cancel_event.is_set():
+            return None
+        if (
+            worker.is_alive() or self.elapsed_s >= self.timeout_s
+            or time.monotonic() >= wait_deadline
+        ):
+            self.interrupt(
+                code="episode_timeout", limit=self.timeout_s,
+                observed=max(self.timeout_s, self.elapsed_s), unit="seconds",
+            )
+            self.runtime.memory.record("guidance_resolution_timed_out", {
+                "question": question, "worker_pending": worker.is_alive(),
+                "usage_known": False,
+            })
+            return None
+        kind, payload = result_queue.get_nowait()
+        if kind == "error":
+            assert isinstance(payload, BaseException)
+            raise payload
+        if not isinstance(payload, InteractionResolution):
+            raise TypeError("Guidance resolver did not return an InteractionResolution")
         return payload
+
+    def _charge_guidance_usage(self, details: JsonDict) -> None:
+        usage = details.get("usage")
+        if not isinstance(usage, dict):
+            return
+        # Provider counts must be non-negative integers; bool/NaN/inf/string are
+        # not receipts. Missing totals may be derived from explicit components.
+        def count(key: str) -> int | None:
+            value = usage.get(key)
+            return value if type(value) is int and value >= 0 else None
+
+        total = count("total_tokens")
+        if total is None:
+            prompt, completion = count("prompt_tokens"), count("completion_tokens")
+            if prompt is None or completion is None:
+                return
+            total = prompt + completion
+        self.total_tokens += total
+        source = f"guidance:{details.get('usage_source') or 'unknown'}"
+        self.token_usage_sources[source] = int(self.token_usage_sources.get(source) or 0) + 1
 
     @property
     def remaining_turns(self) -> int:
@@ -789,6 +1121,7 @@ class OpenEtaEpisodeRunner:
         if self.failure_reason:
             return
         reason: JsonDict = {}
+        admission = self._tool_call_budget.snapshot()
         if self.elapsed_s >= self.timeout_s:
             reason = {
                 "code": "episode_timeout",
@@ -803,12 +1136,19 @@ class OpenEtaEpisodeRunner:
                 "observed": self.total_tokens,
                 "unit": "tokens",
             }
-        elif self.tool_call_count > self.max_tool_calls:
+        elif (
+            self.tool_call_count > self.max_tool_calls
+            or admission["denied_this_run"] > 0
+        ):
             reason = {
                 "code": "tool_call_limit_exceeded",
                 "limit": self.max_tool_calls,
-                "observed": self.tool_call_count,
+                "observed": max(
+                    self.tool_call_count,
+                    admission["carried_usage"] + admission["admitted_this_run"] + admission["denied_this_run"],
+                ),
                 "unit": "tool_calls",
+                "admission": admission,
             }
         if not reason:
             return
@@ -828,6 +1168,21 @@ class OpenEtaEpisodeRunner:
         self.terminated = False
         self.truncated = True
         self.waiting_for_human = False
+
+    def _received_human_answer(self) -> bool:
+        """Current episode Host answer evidence, not a pause or resume signal.
+
+        A later empty submission must not erase earlier assistance. Previous
+        episodes and guidance-agent answers do not establish human assistance.
+        """
+        for event in reversed(self.runtime.memory.events):
+            if event.event_type == "episode_start":
+                break
+            if event.event_type == "human_answer":
+                answer = event.payload.get("answer")
+                if isinstance(answer, str) and answer.strip():
+                    return True
+        return False
 
     def resume_after_human(self) -> None:
         """Allow the next turn after the CLI records a human answer."""
@@ -894,10 +1249,18 @@ class ToolFeedbackEpisodeEnvironment:
             handle=self.handle,
         )
         if receipt:
-            self.simulator_session_id = str(
-                receipt.get("simulator_session_id") or self.simulator_session_id
-            )
-            self.handle = str(receipt.get("handle") or self.handle)
+            if receipt.get("environment_closed") is True:
+                # A close receipt terminates the identity binding as well as the
+                # remote environment.  Retaining the old identity here makes a
+                # subsequent create receipt look cross-session, so its fresh
+                # observation and every following observe receipt are rejected.
+                self.simulator_session_id = ""
+                self.handle = ""
+            else:
+                self.simulator_session_id = str(
+                    receipt.get("simulator_session_id") or self.simulator_session_id
+                )
+                self.handle = str(receipt.get("handle") or self.handle)
 
         snapshot = receipt.get("observation_snapshot") if receipt else None
         observation_fresh = (
@@ -1296,7 +1659,13 @@ def action_token_usage(action: EnvAction) -> tuple[int, dict[str, int]]:
         backend_details = planner_metadata.get("backend_details")
         usage = backend_details.get("usage") if isinstance(backend_details, dict) else {}
     if not isinstance(usage, dict):
-        return 0, {}
+        # A failed provider response can have an explicit unknown source but
+        # no usage payload. Preserve that incompleteness instead of silently
+        # dropping the call from accounting. Host-only actions have no sources.
+        if (planner_metadata.get("backend_status") != "failed"
+                or not isinstance(planner_metadata.get("backend_usage_sources"), dict)):
+            return 0, {}
+        usage = {}
     sources = planner_metadata.get("backend_usage_sources")
     if not isinstance(sources, dict):
         backend_details = planner_metadata.get("backend_details")
@@ -1493,11 +1862,28 @@ def is_agent_terminal_response(action: EnvAction) -> bool:
 
 
 def summarize_step_result(step_result: StepResult) -> JsonDict:
+    from agent.runtime.success_evidence import SUCCESS_FLAGS
+
+    info = summarize_event_payload({"metadata": step_result.info}).get("metadata", {})
+    # This serialized result is consumed by offline evaluators, not just shown
+    # in prompts. Generic eight-key compaction used to remove reward/terminal
+    # fields from real receipts, making live and saved verdicts disagree.
+    for key in (*SUCCESS_FLAGS, "environment_receipt_trusted", "official_reward"):
+        if key in step_result.info:
+            info[key] = step_result.info[key]
+    receipt = step_result.info.get("environment_receipt")
+    if isinstance(receipt, dict):
+        info["environment_receipt"] = {
+            key: receipt[key] for key in (
+                "schema_version", "receipt_id", "execution_id", "agent_session_id",
+                "reward_present", "reward", "terminated", "truncated",
+            ) if key in receipt
+        }
     return {
         "reward": step_result.reward,
         "terminated": step_result.terminated,
         "truncated": step_result.truncated,
-        "info": summarize_event_payload({"metadata": step_result.info}).get("metadata", {}),
+        "info": info,
         "observation": summarize_observation(step_result.observation),
     }
 

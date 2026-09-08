@@ -209,6 +209,7 @@ class RuntimeAssemblyConfig:
     molmopoint_tool_timeout_s: float = DEFAULT_MOLMOPOINT_TOOL_TIMEOUT_S
     anygrasp_capability_query: AnyGraspCapabilityQuery | None = None
     grasp_pose_advisor_enabled: bool = True
+    agent_interface_profile: str = "legacy_compatible"
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +254,8 @@ def resolve_runtime_mcp_endpoints(
 
 def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
     """Build one fail-closed runtime from shared host configuration."""
+    from agent.runtime.interface_profiles import validate_interface_profile
+    validate_interface_profile(config.agent_interface_profile)
 
     workspace = config.workspace
     tools = bind_dummy_tool_handlers(
@@ -396,6 +399,12 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         grasp_calibration_id=str(staged_profile.get("calibration_id") or ""),
     )
     tool_contract_catalog = build_default_tool_contract_catalog(tools.list())
+    from agent.tools.bundle_proposals import bind_profile_proposals, proposal_contract
+    from agent.runtime.interface_profiles import PROPOSAL_TOOLS
+    bind_profile_proposals(tools, config.agent_interface_profile, lambda: runtime.memory)
+    for name in PROPOSAL_TOOLS:
+        if tools.can_execute(name):
+            tool_contract_catalog.register(proposal_contract(name))
     config.tool_contract_policy.ensure_valid(tool_contract_catalog)
 
     planner = ToolCallingPlanner(
@@ -410,6 +419,7 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         ),
         max_validation_retries=config.max_validation_retries,
         context_config=PlannerContextConfig(
+            agent_interface_profile=config.agent_interface_profile,
             context_window_tokens=config.provider.context_window_tokens,
             token_estimator_model=config.provider.model,
             reserved_output_tokens=MAIN_PLANNER_MAX_OUTPUT_TOKENS,
@@ -453,11 +463,13 @@ def assemble_runtime(config: RuntimeAssemblyConfig) -> RuntimeAssembly:
         planner=planner,
         tools=tools,
         memory=AgentMemory(
+            agent_interface_profile=config.agent_interface_profile,
             store=JsonMemoryStore(root=workspace.memory_root),
             artifact_root=workspace.artifacts_dir,
         ),
         skills=skill_registry,
         pipeline=ActionPipeline(
+            agent_interface_profile=config.agent_interface_profile,
             checker_subagents=checker_config,
             tool_contract_catalog=tool_contract_catalog,
             tool_contract_policy=config.tool_contract_policy,

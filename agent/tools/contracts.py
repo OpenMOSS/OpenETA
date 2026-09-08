@@ -1290,6 +1290,12 @@ def _check_json_schema_subset(
                 )
 
     if isinstance(value, str):
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            import re
+            if re.search(pattern, value) is None:
+                violations.append(("request_string_pattern_mismatch", path,
+                                   f"{path} must match {pattern!r}."))
         minimum = schema.get("minLength")
         maximum = schema.get("maxLength")
         if isinstance(minimum, int) and len(value) < minimum:

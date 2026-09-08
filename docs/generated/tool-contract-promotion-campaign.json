@@ -25,7 +25,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 1,
+      "gate_binding_count": 2,
       "host_resolution": {
         "mode": "post_call_observation",
         "layer": "post_environment",
@@ -72,7 +72,7 @@
         "depth_enhanced",
         "requires_depth_alignment_repair"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_observation_packet_plus_optional_prior",
         "layer": "pipeline",
@@ -118,7 +118,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_observation_packet",
         "layer": "pipeline",
@@ -166,7 +166,7 @@
       "successful_semantic_outcomes": [
         "mutation_acknowledged"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "environment_lifecycle",
         "layer": "handler",
@@ -212,7 +212,7 @@
       "successful_semantic_outcomes": [
         "mutation_acknowledged"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "host_active_handle",
         "layer": "handler",
@@ -256,7 +256,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "sandbox_capability_injection",
         "layer": "handler",
@@ -298,7 +298,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "configured_provider_capability",
         "layer": "handler",
@@ -342,7 +342,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "public_https_fetch",
         "layer": "handler",
@@ -387,7 +387,7 @@
         "detections_available",
         "no_detection"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_reference",
         "layer": "pipeline",
@@ -433,7 +433,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "object_memory_plus_packet",
         "layer": "pipeline",
@@ -479,7 +479,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "ordered_packet_references",
         "layer": "pipeline",
@@ -525,7 +525,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "evidence_graph_lookup",
         "layer": "memory",
@@ -571,7 +571,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "pending_result_lookup",
         "layer": "memory",
@@ -617,7 +617,7 @@
       "successful_semantic_outcomes": [
         "candidates_available"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_bundle",
         "layer": "memory",
@@ -663,7 +663,7 @@
       "successful_semantic_outcomes": [
         "candidates_available"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_bundle",
         "layer": "memory",
@@ -709,7 +709,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "exclusive_placement_reference_or_explicit_geometry",
         "layer": "memory",
@@ -753,7 +753,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "session_proposal_workspace",
         "layer": "handler",
@@ -795,7 +795,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "reviewed_proposal_plus_host_evidence",
         "layer": "handler",
@@ -837,7 +837,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "session_proposal_workspace",
         "layer": "handler",
@@ -879,7 +879,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "reviewed_proposal_plus_host_evidence",
         "layer": "handler",
@@ -921,7 +921,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "evidence_graph_lookup",
         "layer": "memory",
@@ -966,7 +966,7 @@
         "completed",
         "requires_better_view"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "opaque_bundle",
         "layer": "memory",
@@ -1010,7 +1010,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "multi_reference",
         "layer": "memory",
@@ -1054,7 +1054,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "compiled_grasp_plus_current_observation",
         "layer": "handler",
@@ -1098,7 +1098,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "completed_probe_lookup",
         "layer": "handler",
@@ -1146,7 +1146,7 @@
         "requires_attachment_confirmation",
         "no_attachment_evidence"
       ],
-      "gate_binding_count": 7,
+      "gate_binding_count": 8,
       "host_resolution": {
         "mode": "execution_receipt_lookup",
         "layer": "memory",
@@ -1196,7 +1196,7 @@
         "requires_attachment_confirmation",
         "no_attachment_evidence"
       ],
-      "gate_binding_count": 7,
+      "gate_binding_count": 8,
       "host_resolution": {
         "mode": "execution_receipt_lookup",
         "layer": "memory",
@@ -1245,7 +1245,7 @@
         "no_attachment_evidence",
         "attachment_contract_unavailable"
       ],
-      "gate_binding_count": 3,
+      "gate_binding_count": 4,
       "host_resolution": {
         "mode": "none",
         "layer": "",
@@ -1293,7 +1293,7 @@
         "ik_inconclusive",
         "ik_hard_infeasible"
       ],
-      "gate_binding_count": 4,
+      "gate_binding_count": 5,
       "host_resolution": {
         "mode": "exclusive_reference_or_agent_pose",
         "layer": "pipeline",
@@ -1337,7 +1337,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "none",
         "layer": "",
@@ -1379,7 +1379,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "none",
         "layer": "",
@@ -1421,7 +1421,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "none",
         "layer": "",
@@ -1463,7 +1463,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "none",
         "layer": "",
@@ -1505,7 +1505,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "isolated_authoring_and_review",
         "layer": "handler",
@@ -1547,7 +1547,7 @@
       "successful_semantic_outcomes": [
         "completed"
       ],
-      "gate_binding_count": 2,
+      "gate_binding_count": 3,
       "host_resolution": {
         "mode": "isolated_authoring_and_review",
         "layer": "handler",

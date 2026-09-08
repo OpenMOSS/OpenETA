@@ -20,7 +20,7 @@ from sim.mcp_server.action_codecs import (
     make_gripper_action,
     require_controller_capability,
 )
-from sim.env_registry import _LibEnvWrapper
+from sim.env_registry import _LibEnvWrapper, _make_libero_direct
 from sim.controllers import mink_goal
 from sim.controllers.collision_recovery import (
     project_velocity_to_joint_limits,
@@ -229,6 +229,71 @@ def test_libero_mink_wrapper_declares_actual_eight_dimensional_action_space() ->
     )
 
     assert wrapper.action_space.shape == (8,)
+
+
+@pytest.mark.parametrize(
+    ("reward", "raw_done", "expected_terminated", "expected_truncated"),
+    [
+        (1.0, False, True, False),
+        (1.0, True, True, False),
+        (0.0, True, False, True),
+        (0.0, False, False, False),
+    ],
+)
+def test_libero_wrapper_separates_task_success_from_raw_control_horizon(
+    reward: float,
+    raw_done: bool,
+    expected_terminated: bool,
+    expected_truncated: bool,
+) -> None:
+    class _RawEnv:
+        observation_space = SimpleNamespace()
+
+        def step(self, _action):
+            return {"agentview_image": np.zeros((2, 2, 3), dtype=np.uint8)}, reward, raw_done, {}
+
+    wrapper = _LibEnvWrapper(_RawEnv())
+
+    _, actual_reward, terminated, truncated, info = wrapper.step(np.zeros(7))
+
+    assert actual_reward == reward
+    assert terminated is expected_terminated
+    assert truncated is expected_truncated
+    assert info["openeta_task_success"] is (reward > 0.0)
+    assert info["raw_backend_done"] is raw_done
+    assert info["termination_semantics"] == "positive_reward_is_task_success"
+
+
+def test_libero_direct_environment_disables_raw_low_level_horizon(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawEnv:
+        observation_space = SimpleNamespace()
+
+    def _fake_offscreen_render_env(**kwargs):
+        captured.update(kwargs)
+        return _RawEnv()
+
+    import sys
+    import types
+
+    libero_core = types.ModuleType("libero.libero")
+    libero_core.get_libero_path = lambda _name: str(tmp_path)
+    libero_envs = types.ModuleType("libero.libero.envs")
+    libero_envs.OffScreenRenderEnv = _fake_offscreen_render_env
+    monkeypatch.setitem(sys.modules, "libero", types.ModuleType("libero"))
+    monkeypatch.setitem(sys.modules, "libero.libero", libero_core)
+    monkeypatch.setitem(sys.modules, "libero.libero.envs", libero_envs)
+
+    _make_libero_direct(
+        SimpleNamespace(problem_folder="suite", bddl_file="task.bddl"),
+        image_width=64,
+        image_height=64,
+    )
+
+    assert captured["ignore_done"] is True
+    assert captured["camera_widths"] == 64
+    assert captured["camera_heights"] == 64
 
 
 def test_libero_controller_contract_fails_closed_without_silent_osc_fallback() -> None:
@@ -1105,6 +1170,26 @@ def test_ik_preview_reports_fragile_joint_limit_margin_without_rejecting(
     assert "compare_alternative_grasp_candidate_before_motion" in result["suggestions"]
 
 
+@pytest.mark.parametrize("reason_code", ["ik_search_no_solution", "ik_search_timeout"])
+def test_failed_ik_best_iterate_is_not_described_as_feasible_seed(monkeypatch, reason_code):
+    monkeypatch.setattr(server, "_session_envs", {"sid": {"handle": {"backend": "libero", "remote_handle": "remote"}}})
+    monkeypatch.setattr(server, "_touch_session", lambda *_args, **_kwargs: None)
+    best = {"joint_margin_min_rad": 1e-8, "position_error_m": 0.029,
+            "orientation_error_rad": 1.83, "joint_positions": [0.0] * 7}
+    monkeypatch.setattr(server, "_proxy_reachability", lambda *_args, **_kwargs: {
+        "status": "unknown", "kinematic_status": "unknown", "feasible": None,
+        "reason_code": reason_code, "message": "No feasible solution found in this search.",
+        "best_candidate": best,
+    })
+    result = server.ik_preview_check.__wrapped__("handle", 0.1, 0.2, 0.3, session_id="sid")
+    assert result["best_candidate"] == best
+    assert result["status"] == "unknown" and result["feasible"] is None
+    assert result["reason_code"] == reason_code
+    assert "execution_seed_quality" not in result
+    assert "joint_limit_proximity" not in result
+    assert result["content"] == "No feasible solution found in this search."
+
+
 def test_ik_preview_marks_elevated_execution_seed_without_rejecting(
     monkeypatch,
 ) -> None:
@@ -1277,12 +1362,15 @@ def test_ttl_cleanup_closes_releases_and_removes_every_handle(monkeypatch) -> No
     assert "sid" not in session._session_last_obs
 
 
-def test_close_env_is_idempotent_and_releases_after_remote_error(monkeypatch) -> None:
+def test_close_env_retries_remote_error_before_releasing_handle(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
     class Manager:
         def proxy_handle_op(self, meta, path, method="GET"):
-            raise RuntimeError("transport down")
+            calls.append(("close", meta["remote_handle"]))
+            if len([call for call in calls if call[0] == "close"]) == 1:
+                raise RuntimeError("transport down")
+            return {"ok": True}
 
         def release_worker(self, worker_url):
             calls.append(("release", worker_url))
@@ -1298,9 +1386,15 @@ def test_close_env_is_idempotent_and_releases_after_remote_error(monkeypatch) ->
     monkeypatch.setattr(server, "_session_last_obs", {"sid": {"local": {}}})
 
     first = server.close_env.__wrapped__("local", session_id="sid")
+    assert ("release", "worker") not in calls
+    assert "local" in server._session_envs["sid"]
     second = server.close_env.__wrapped__("local", session_id="sid")
 
     assert first["ok"] is False
     assert first["cleanup_errors"][0].startswith("remote_close:")
     assert ("release", "worker") in calls
-    assert second == {"ok": True, "already_closed": True, "cleanup_errors": []}
+    assert second["ok"] is True
+    assert calls.count(("release", "worker")) == 1
+    assert server.close_env.__wrapped__("local", session_id="sid") == {
+        "ok": True, "already_closed": True, "cleanup_errors": [],
+    }

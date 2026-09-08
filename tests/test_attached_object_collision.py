@@ -33,7 +33,8 @@ def test_attachment_proxy_stays_tentative_until_independent_visual_verdict() -> 
     assert meta["_attachment_proxy"]["status"] == "tentative"
 
     # The reset-time object catalogue is deliberately stale.  Even a large EEF
-    # lift must not let the host invent either co-motion or a drop verdict.
+    # lift must not let the host invent either co-motion or a drop verdict while
+    # the measured closed aperture remains compatible with the original grasp.
     receipt = _refresh_attachment_proxy(meta, _observation([0.0, 0.0, 0.25], 0.63))
     assert meta["_attachment_proxy"]["status"] == "tentative"
     assert receipt["status"] == "tentative"
@@ -41,15 +42,45 @@ def test_attachment_proxy_stays_tentative_until_independent_visual_verdict() -> 
     assert abs(receipt["eef_displacement_since_close_m"] - 0.08) < 1e-9
     assert receipt["attachment_proven"] is False
 
+    moderate_aperture = _refresh_attachment_proxy(
+        meta,
+        _observation([0.0, 0.08, 0.25], 0.30),
+    )
+    assert meta["_attachment_proxy"]["status"] == "tentative"
+    assert moderate_aperture["status"] == "tentative"
+
     low_aperture = _refresh_attachment_proxy(
         meta,
         _observation([0.0, 0.08, 0.25], 0.01),
     )
-    assert meta["_attachment_proxy"]["status"] == "tentative"
-    assert low_aperture["status"] == "tentative"
-    assert low_aperture["reason"] == "awaiting_independent_co_motion_evidence"
+    assert "_attachment_proxy" not in meta
+    assert low_aperture["status"] == "retired"
+    assert low_aperture["reason"] == "measured_aperture_collapse"
+    assert low_aperture["close_measured_open_fraction"] == 0.63
     assert low_aperture["measured_open_fraction"] == 0.01
     assert low_aperture["attachment_proven"] is False
+
+
+def test_thin_object_proxy_is_not_retired_from_small_absolute_aperture_change() -> None:
+    meta = {
+        "_collision_objects": [
+            {
+                "name": "thin_item_1",
+                "category": "thin_item",
+                "position": [0.0, 0.0, 0.10],
+                "dims": [0.06, 0.01, 0.10],
+            }
+        ]
+    }
+    _arm_attachment_proxy(meta, _observation([0.0, 0.0, 0.17], 0.04))
+
+    receipt = _refresh_attachment_proxy(
+        meta,
+        _observation([0.0, 0.08, 0.25], 0.01),
+    )
+
+    assert meta["_attachment_proxy"]["status"] == "tentative"
+    assert receipt["status"] == "tentative"
 
 
 def test_attachment_proxy_uses_host_bound_target_instead_of_nearest_object() -> None:

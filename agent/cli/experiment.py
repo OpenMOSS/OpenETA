@@ -19,6 +19,7 @@ from agent.cli.batch_eval import (
     build_mcp_episode_worker_factory,
     load_parallel_episode_manifest,
 )
+from agent.tools.mcp_timeouts import DEFAULT_SIM_MCP_TIMEOUT_S, validate_simulator_timeout_s
 from agent.runtime.experiments import (
     DEFAULT_EXPERIMENT_ROOT,
     ExperimentWorkspace,
@@ -905,6 +906,7 @@ def _run_batch(
     worker_factory = build_mcp_episode_worker_factory(
         model_override=args.model,
         sim_url=args.sim_url,
+        simulator_timeout_s=getattr(args, "simulator_timeout_s", DEFAULT_SIM_MCP_TIMEOUT_S),
         sam3_url=args.sam3_url,
         anygrasp_url=args.anygrasp_url,
         anyplace_url=args.anyplace_url,
@@ -1137,6 +1139,11 @@ def _add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--print-full-result", action="store_true")
     parser.add_argument("--model", default="")
     parser.add_argument("--sim-url", default="")
+    parser.add_argument(
+        "--simulator-timeout-s", type=validate_simulator_timeout_s,
+        default=DEFAULT_SIM_MCP_TIMEOUT_S,
+        help="Per simulator execution RPC timeout; separate from preflight --mcp-timeout-s.",
+    )
     parser.add_argument("--sam3-url", default="")
     parser.add_argument("--anygrasp-url", default="")
     parser.add_argument("--graspgenx-url", default="")

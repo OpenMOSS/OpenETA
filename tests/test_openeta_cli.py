@@ -124,6 +124,56 @@ def test_main_preserves_exit_code_when_cleanup_raises(monkeypatch, capsys) -> No
     assert "unexpected MCP cleanup failure" in capsys.readouterr().out
 
 
+def test_main_once_forwards_episode_budgets(monkeypatch) -> None:
+    calls: list[tuple[str, int, int, float, int, bool]] = []
+
+    class FakeCli:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_task(
+            self,
+            task: str,
+            *,
+            max_turns: int,
+            max_tool_calls: int,
+            timeout_s: float,
+            max_total_tokens: int,
+            raise_on_interrupt: bool,
+        ) -> None:
+            calls.append(
+                (
+                    task,
+                    max_turns,
+                    max_tool_calls,
+                    timeout_s,
+                    max_total_tokens,
+                    raise_on_interrupt,
+                )
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli_module, "OpenEtaCli", FakeCli)
+
+    assert cli_module.main(
+        [
+            "--once",
+            "pick the bowl",
+            "--max-turns",
+            "200",
+            "--max-tool-calls",
+            "400",
+            "--episode-timeout-s",
+            "10800",
+            "--max-total-tokens",
+            "20000000",
+        ]
+    ) == 0
+    assert calls == [("pick the bowl", 200, 400, 10800.0, 20_000_000, True)]
+
+
 def test_cli_checker_config_keeps_pre_safety_gates_opt_in(monkeypatch) -> None:
     monkeypatch.delenv("OPENETA_PRE_SAFETY_CHECKS", raising=False)
     tools = bind_dummy_tool_handlers(build_default_tool_registry())

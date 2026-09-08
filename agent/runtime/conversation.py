@@ -113,6 +113,14 @@ class ConversationHistory:
         parameters = request.get("parameters")
         if not isinstance(parameters, dict):
             parameters = {}
+        # The command/trace retains Host-normalized references. Chat history
+        # should repeat what the Agent actually authored, not teach it private
+        # native-reference calls produced by bundle resolution.
+        metadata = command.get("metadata")
+        bundle_request = metadata.get("bundle_request") if isinstance(metadata, dict) else None
+        if (isinstance(bundle_request, dict) and bundle_request.get("tool") == name
+                and isinstance(bundle_request.get("parameters"), dict)):
+            parameters = bundle_request["parameters"]
         request_data = {
             "kind": kind,
             "name": name,

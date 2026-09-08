@@ -42,6 +42,7 @@ async def session_envs(request):
             "remote_handle": meta.get("remote_handle", ""),
             "env_id": meta.get("env_id", "unknown"),
             "backend": meta.get("backend", "unknown"),
+            "lifecycle_state": meta.get("close_lifecycle", {}).get("state", "active"),
         })
     return JSONResponse({"session_id": sid, "count": len(entries), "envs": entries})
 

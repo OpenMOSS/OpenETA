@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
+import os
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -103,26 +108,143 @@ def grep_text_artifact(
     *,
     max_matches: int = 20,
     ignore_case: bool = True,
+    cursor: JsonDict | None = None,
 ) -> JsonDict:
-    """Search one materialized text artifact and return bounded matches."""
+    """Page matching lines, with match-centred snippets and an N+1 lookahead."""
 
+    _positive_limit(max_matches, "max_matches", 200)
     text_path = Path(path)
     flags = re.IGNORECASE if ignore_case else 0
     regex = re.compile(pattern, flags)
+    query = hashlib.sha256(json.dumps([pattern, ignore_case]).encode()).hexdigest()
     matches: list[JsonDict] = []
-    lines = text_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    for lineno, line in enumerate(lines, 1):
-        if regex.search(line):
-            matches.append({"line": lineno, "text": line[:500]})
-            if len(matches) >= max_matches:
-                break
+    next_cursor = None
+    with _text_snapshot(text_path) as (handle, version):
+        offset = _cursor_offset(cursor, version)
+        if cursor is not None and cursor.get("query") != query:
+            raise ValueError("Grep cursor belongs to a different query")
+        lineno, column = _skip_text(handle, offset)
+        if column:
+            raise ValueError("Grep cursor must point to the start of a line")
+        for raw_line in handle:
+            line = raw_line.removesuffix("\n")
+            match = regex.search(line)
+            if match is not None:
+                if len(matches) == max_matches:
+                    next_cursor = {"version": version, "char_offset": offset, "query": query}
+                    break
+                left = max(0, match.start() - 160)
+                right = min(len(line), max(match.end(), match.start() + 1) + 160, left + 500)
+                matches.append({
+                    "line": lineno,
+                    "text": line[left:right],
+                    "snippet_start_column": left,
+                    "snippet_clipped": left > 0 or right < len(line),
+                    "match_start_column": match.start(),
+                    "match_end_column": match.end(),
+                    "match_clipped": match.end() > right,
+                    "read_cursor": {"version": version, "char_offset": offset + match.start()},
+                })
+            offset += len(raw_line)
+            lineno += 1
     return {
+        "schema_version": "openeta.text_artifact_search.v1",
         "path": str(text_path),
         "pattern": pattern,
         "match_count": len(matches),
-        "truncated": len(matches) >= max_matches,
+        "match_unit": "matching_line",
+        "total_match_count": len(matches) if cursor is None and next_cursor is None else None,
+        "truncated": next_cursor is not None,
+        "next_cursor": next_cursor,
+        "offset_unit": "unicode_codepoint_after_universal_newline_decoding",
         "matches": matches,
     }
+
+
+def read_text_artifact(
+    path: str | Path, *, max_chars: int = 1500, cursor: JsonDict | None = None,
+) -> JsonDict:
+    """Read a bounded page, including the interior of a single long JSONL line."""
+    _positive_limit(max_chars, "max_chars", 1_000_000)
+    text_path = Path(path)
+    with _text_snapshot(text_path) as (handle, version):
+        offset = _cursor_offset(cursor, version)
+        line, column = _skip_text(handle, offset)
+        page = handle.read(max_chars + 1)
+        content = page[:max_chars]
+        truncated = len(page) > max_chars
+    return {
+        "schema_version": "openeta.text_artifact_page.v1",
+        "path": str(text_path),
+        "text": content,
+        "char_offset": offset,
+        "line": line,
+        "column": column,
+        "chars_returned": len(content),
+        "offset_unit": "unicode_codepoint_after_universal_newline_decoding",
+        "truncated": truncated,
+        "next_cursor": {"version": version, "char_offset": offset + len(content)} if truncated else None,
+    }
+
+
+def _positive_limit(value: int, name: str, maximum: int) -> None:
+    if type(value) is not int or not 1 <= value <= maximum:
+        raise ValueError(f"{name} must be an integer in [1, {maximum}]")
+
+
+def _cursor_offset(cursor: JsonDict | None, version: str) -> int:
+    if cursor is None:
+        return 0
+    if not isinstance(cursor, dict) or cursor.get("version") != version:
+        raise ValueError("Artifact changed or cursor belongs to a different file; restart reading")
+    offset = cursor.get("char_offset")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("Cursor char_offset must be a non-negative integer")
+    return offset
+
+
+def _skip_text(handle, offset: int) -> tuple[int, int]:
+    remaining, line, column = offset, 1, 0
+    while remaining:
+        chunk = handle.read(min(remaining, 65536))
+        if not chunk:
+            raise ValueError("Cursor exceeds the current file")
+        remaining -= len(chunk)
+        line += chunk.count("\n")
+        column = len(chunk.rsplit("\n", 1)[-1]) if "\n" in chunk else column + len(chunk)
+    return line, column
+
+
+def _text_version(path: Path, snapshot: os.stat_result, digest: str) -> str:
+    fields = [str(path.resolve()), snapshot.st_dev, snapshot.st_ino, snapshot.st_size,
+              snapshot.st_mtime_ns, snapshot.st_ctime_ns, digest]
+    return hashlib.sha256(json.dumps(fields).encode()).hexdigest()
+
+
+def _text_digest(handle) -> str:
+    # Metadata timestamps can have coarse resolution (including same-size writes).
+    handle.seek(0)
+    digest = hashlib.sha256()
+    while chunk := handle.buffer.read(65536):
+        digest.update(chunk)
+    handle.seek(0)
+    return digest.hexdigest()
+
+
+@contextmanager
+def _text_snapshot(path: Path):
+    # Nonblocking open also lets us reject FIFOs without waiting for a writer.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(fd, "r", encoding="utf-8", errors="replace", newline=None) as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("Artifact text reader requires a regular file")
+        version = _text_version(path, before, _text_digest(handle))
+        yield handle, version
+        after_digest = _text_digest(handle)
+        if (version != _text_version(path, os.fstat(handle.fileno()), after_digest)
+                or version != _text_version(path, path.stat(), after_digest)):
+            raise ValueError("Artifact changed during reading; restart reading")
 
 
 def _materialize_value(

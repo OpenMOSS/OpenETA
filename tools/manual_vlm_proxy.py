@@ -48,6 +48,17 @@ CONSOLE_JS_PATH = Path(__file__).with_name("manual_vlm_console.js")
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("manual_vlm_config.json")
 
 
+def _provider_interaction(request: PendingRequest) -> JsonObject:
+    # This is server-generated envelope metadata, not adapter/operator content.
+    if request.response is None or request.response_wait_s is None:
+        return {}
+    return {
+        "schema_version": "manual_vlm.provider_interaction.v1",
+        "mode": "manual_console", "request_id": request.request_id,
+        "wait_s": request.response_wait_s,
+    }
+
+
 @dataclass(slots=True)
 class PendingRequest:
     request_id: str
@@ -56,6 +67,8 @@ class PendingRequest:
     session_source: str = "inferred"
     session_turn: int = 1
     received_at: float = field(default_factory=time.time)
+    received_monotonic_s: float = field(default_factory=time.monotonic, repr=False)
+    response_wait_s: float | None = None
     response: EncodedResponse | None = None
     response_error: str | None = None
     completed_at: float | None = None
@@ -193,6 +206,11 @@ class RequestStore:
             "session_id": request.session_id,
             "session_source": request.session_source,
             "session_turn": request.session_turn,
+            "parent_session_id": str(classification.get("parent_session_id") or ""),
+            "wait_reason": (
+                str(classification.get("pending_wait_reason") or "")
+                if request.status == "pending" else ""
+            ),
             "message_count": len(messages),
             "image_count": len(extract_images(request.body)),
             "request_type": str(classification.get("type") or "request"),
@@ -223,11 +241,13 @@ class RequestStore:
                 raise ValueError("adapter must return an assistant message")
             request.response = encoded
             request.completed_at = time.time()
+            request.response_wait_s = max(0.0, time.monotonic() - request.received_monotonic_s)
             request.event.set()
         self._record(
             request,
             "response",
-            {"message": encoded.message, "finish_reason": encoded.finish_reason},
+            {"message": encoded.message, "finish_reason": encoded.finish_reason,
+             "provider_interaction": _provider_interaction(request)},
         )
         return request
 
@@ -611,6 +631,7 @@ class ManualVLMHandler(BaseHTTPRequestHandler):
             "object": "chat.completion",
             "created": int(time.time()),
             "model": str(body.get("model") or "human-vlm"),
+            "provider_interaction": _provider_interaction(request),
             "choices": [
                 {
                     "index": 0,

@@ -215,14 +215,18 @@ def test_target_support_3d_exposes_contact_beyond_visible_target() -> None:
     ]
 
 
+@pytest.mark.parametrize("parent_session_id", ["", "parent-one", "parent-two"])
 def test_backend_advisor_is_isolated_and_returns_audited_recommendation(
     tmp_path: Path,
+    parent_session_id: str,
 ) -> None:
     bundle, _artifacts = build_grasp_selection_bundle(
         _details(tmp_path, backend="anygrasp"),
         output_root=tmp_path / "selection",
     )
     requests = []
+    if parent_session_id:
+        bundle["_host_parent_session_id"] = parent_session_id
 
     def decide(request):
         requests.append(request)
@@ -246,6 +250,17 @@ def test_backend_advisor_is_isolated_and_returns_audited_recommendation(
     assert advice["provider"] == "test-provider"
     assert advice["model"] == "test-vlm"
     assert requests[0].metadata == {"isolated_context": True}
+    assert requests[0].conversation_messages == []
+    assert requests[0].conversation_summary == ""
+    assert "_host_parent_session_id" not in requests[0].tool_context
+    assert "_host_parent_session_id" not in advice
+    lineage = requests[0].tool_context.get("request_lineage", {})
+    if parent_session_id:
+        assert lineage["parent_session_id"] == parent_session_id
+        assert lineage["child_session_id"].startswith("advisor-")
+        assert lineage["parent_tool"] == "grasp_pose_estimate"
+    else:
+        assert not lineage
     assert requests[0].tool_context["role"] == "read_only_grasp_pose_advisor"
     assert requests[0].tool_context["vision_image_paths"] == [
         bundle["overview_ref"],

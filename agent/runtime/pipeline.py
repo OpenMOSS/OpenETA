@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from dataclasses import replace
 
 from adapter.protocol import EnvObservation, JsonDict
 from agent.runtime.actions import (
@@ -19,6 +20,7 @@ from agent.runtime.checkers import (
 )
 from agent.runtime.interfaces import ActionInterfaceRegistry, build_default_action_interfaces
 from agent.runtime.memory import AgentMemory
+from agent.runtime.tool_bundles import BUNDLE_CONSUMERS
 from agent.runtime.planner import PlannerDecision
 from agent.runtime.skills import SkillRegistry
 from agent.tools.runtime_contract_bindings import (
@@ -40,7 +42,10 @@ class ActionPipeline:
         interfaces: ActionInterfaceRegistry | None = None,
         tool_contract_catalog: ToolContractCatalog | None = None,
         tool_contract_policy: ToolContractRuntimePolicy | None = None,
+        agent_interface_profile: str = "legacy_compatible",
     ) -> None:
+        from agent.runtime.interface_profiles import validate_interface_profile
+        self.agent_interface_profile = validate_interface_profile(agent_interface_profile)
         self.execute_safe_checks = execute_safe_checks
         self.checker_subagents = checker_subagents or CheckerSubagentConfig()
         self.interfaces = interfaces or build_default_action_interfaces()
@@ -78,7 +83,54 @@ class ActionPipeline:
         skills: SkillRegistry,
         memory: AgentMemory | None = None,
     ) -> CommandPipelinePlan:
+        from agent.runtime.interface_profiles import profile_parameter_errors
+        errors = profile_parameter_errors(self.agent_interface_profile, decision.action, decision.parameters)
+        if errors:
+            request = _decision_to_request(decision)
+            reason = "; ".join(errors)
+            return CommandPipelinePlan(
+                request=request, status=PipelineStatus.BLOCKED,
+                tool_calls=[_skipped_tool_call(request.name, request.parameters, reason=reason)],
+                metadata={"interface_profile_gate": {"blocked": True, "reason": reason}},
+            )
+        return self._compile_resolved(decision, observation=observation, tools=tools,
+                                      skills=skills, memory=memory)
+
+    def _compile_resolved(
+        self,
+        decision: PlannerDecision,
+        *,
+        observation: EnvObservation,
+        tools: ToolRegistry,
+        skills: SkillRegistry,
+        memory: AgentMemory | None = None,
+    ) -> CommandPipelinePlan:
         request = _decision_to_request(decision)
+
+        if (request.kind == CommandKind.TOOL_CALL and request.name in BUNDLE_CONSUMERS
+                and "bundle_id" in request.parameters
+                and (request.name in {"compile_grasp_seed", "ik_preview_check", "move_to"}
+                     or str(request.parameters["bundle_id"]).startswith("bnd-"))):
+            try:
+                if memory is None:
+                    raise ValueError("runtime memory is unavailable")
+                resolved = memory.resolve_tool_bundle(request.name, request.parameters)
+            except (OSError, ValueError, TypeError) as exc:
+                return CommandPipelinePlan(
+                    request=request, status=PipelineStatus.BLOCKED,
+                    tool_calls=[_skipped_tool_call(request.name, request.parameters, reason=str(exc))],
+                    metadata={"bundle_resolution_gate": {"blocked": True, "reason": str(exc)}},
+                )
+            # Re-enter the ordinary compiler with existing typed references,
+            # never with an unchecked low-level pose or a private execution seed.
+            plan = self._compile_resolved(
+                replace(decision, parameters=resolved), observation=observation,
+                tools=tools, skills=skills, memory=memory,
+            )
+            plan.metadata["bundle_request"] = {
+                "tool": request.name, "parameters": dict(request.parameters),
+            }
+            return plan
 
         if request.kind == CommandKind.TOOL_CALL:
             if _is_skill_call_request(request):
@@ -138,8 +190,8 @@ class ActionPipeline:
             bundle_kind = ""
             host_resolution_receipt: JsonDict | None = None
             # Unknown mutation outcome outranks every parameter/reference check:
-            # no pose evidence can be interpreted until the same handle is
-            # observed and reconciled.
+            # position-only observations cannot prove remote completion or
+            # authorize another dispatch.
             execution_gate_error = (
                 memory.motion_reconciliation_gate_error(tool_name=request.name)
                 if memory is not None
@@ -364,10 +416,11 @@ class ActionPipeline:
                     if request.parameters.get("preserve_current_orientation") is True:
                         # A compiled waypoint carries its grasp orientation as part of
                         # the immutable anchor.  The Agent may deliberately request a
-                        # position-only preview of the same xyz for a non-contact
+                        # preserve-current-orientation preview of the same xyz for a non-contact
                         # observation or retreat.  Preserve the anchor provenance, but
                         # do not let its embedded rotation silently override that
-                        # explicitly selected orientation policy downstream.
+                        # explicitly selected orientation policy downstream. This
+                        # still constrains all six DoF; it is not position-only IK.
                         target_pose = resolved_parameters.get("target_pose")
                         if isinstance(target_pose, dict):
                             resolved_parameters["target_pose"] = {
@@ -1237,6 +1290,13 @@ class ActionPipeline:
             parameters = call.get("parameters", {})
             if not isinstance(parameters, dict):
                 parameters = {"value": parameters}
+            from agent.runtime.interface_profiles import migrated_tools, PROPOSAL_TOOLS
+            if name in migrated_tools(self.agent_interface_profile) | PROPOSAL_TOOLS:
+                compiled_calls.append(_skipped_tool_call(
+                    name, parameters, reason="Bundle-profile tools require a direct atomic call for host resolution.",
+                ))
+                blocked = True
+                continue
             reason = "Batched planner-requested tool call."
             try:
                 spec = tools.get(name)

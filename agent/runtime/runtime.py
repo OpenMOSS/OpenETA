@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,6 +28,7 @@ from agent.runtime.self_improvement import SelfImprovementReviewer
 from agent.runtime.skills import SkillRegistry, build_default_skill_registry
 from agent.runtime.visual_history import VisualHistoryManager
 from agent.tools.coding import PythonExecRuntime
+from agent.tools.call_budget import ToolCallBudget
 from agent.tools.registry import (
     ToolExecutionContext,
     ToolRegistry,
@@ -45,8 +47,59 @@ def _raise_if_execution_cancelled(cancel_event: threading.Event | None) -> None:
         raise RuntimeExecutionCancelled("episode execution was cancelled")
 
 
+def _session_transition(method):
+    """Serialize session replacement with act and local memory commits."""
+
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._act_lock, self._memory_commit_lock:
+            # Advance even when reopening the same session ID. Old contexts must
+            # not regain authority by an ABA transition or a failed resume.
+            self._session_generation += 1
+            self._session_transition_failed = True
+            result = method(self, *args, **kwargs)
+            self._session_transition_failed = False
+            return result
+
+    return wrapped
+
+
+def _session_memory_tool(method):
+    """Check ownership at the actual local read/commit, not before dispatch.
+
+    The lock is shared with session transitions. It does not cover remote tools
+    or terminate abandoned threads; those need their own execution isolation.
+    """
+
+    @wraps(method)
+    def wrapped(self, context):
+        with self._memory_commit_lock:
+            metadata = context.metadata
+            cancel = metadata.get("_cancel_event")
+            generation = metadata.get("_session_generation")
+            session_id = metadata.get("session_id")
+            if (
+                self._session_transition_failed
+                or (cancel is not None and cancel.is_set())
+                or (generation is not None and generation != self._session_generation)
+                or (session_id is not None and session_id != (self.memory.session_id or ""))
+            ):
+                return make_tool_result(
+                    context,
+                    success=False,
+                    content="Memory operation rejected: execution no longer owns this session.",
+                    diagnostics=[{"code": "stale_memory_execution"}],
+                )
+            return method(self, context)
+
+    return wrapped
+
+
 def _assert_tool_contract_runtime_alignment(planner: object, pipeline: object) -> None:
     """Fail before execution if Planner and Gate use different contract truth."""
+    context_config = getattr(planner, "context_config", None)
+    if context_config is not None and getattr(context_config, "agent_interface_profile", "legacy_compatible") != getattr(pipeline, "agent_interface_profile", "legacy_compatible"):
+        raise ValueError("Planner and pipeline agent_interface_profile differ; refusing split interface authority")
 
     planner_catalog = getattr(planner, "tool_contract_catalog", None)
     pipeline_catalog = getattr(pipeline, "tool_contract_catalog", None)
@@ -112,8 +165,12 @@ class OpenEtaAgentRuntime:
         if self.rollout_recorder is not None:
             self.tools.add_listener(self.rollout_recorder.record_tool_event)
         self._act_lock = threading.Lock()
+        self._memory_commit_lock = threading.RLock()
+        self._session_generation = 0
+        self._session_transition_failed = False
         self._bind_memory_tool_handlers()
 
+    @_session_transition
     def start_session(
         self,
         *,
@@ -151,6 +208,7 @@ class OpenEtaAgentRuntime:
             },
         )
 
+    @_session_transition
     def resume_session(self, session_id: str, *, max_events: int | None = None) -> None:
         self.memory.resume_session(session_id, max_events=max_events)
         if self.rollout_recorder is not None:
@@ -176,15 +234,22 @@ class OpenEtaAgentRuntime:
         *,
         execution_id: str = "",
         cancel_event: threading.Event | None = None,
+        tool_call_budget: ToolCallBudget | None = None,
     ) -> EnvAction:
         with self._act_lock:
+            if self._session_transition_failed:
+                raise RuntimeError("Session initialization/resume failed; start a new valid session.")
             _raise_if_execution_cancelled(cancel_event)
+            # Host-owned current execution binding; never reuse a resumed run's
+            # completion receipt merely because it has the same session ID.
+            self.memory.metadata["execution_id"] = execution_id
             self.memory.add_observation(observation)
             visual_delta: JsonDict | None = None
             if self.visual_history is not None:
                 visual_delta = self.visual_history.observe(observation, memory=self.memory)
             execution_metadata: JsonDict = {
                 "execution_id": execution_id,
+                "_session_generation": self._session_generation,
                 "session_id": self.memory.session_id or "",
                 "task": self.memory.current_user_request or observation.task,
                 "_observation_packet_resolver": self.memory.resolve_observation_packet,
@@ -205,6 +270,8 @@ class OpenEtaAgentRuntime:
             }
             if cancel_event is not None:
                 execution_metadata["_cancel_event"] = cancel_event
+            if tool_call_budget is not None:
+                execution_metadata["_tool_call_budget"] = tool_call_budget
             with self.tools.execution_scope(execution_metadata):
                 decision = self.planner.plan(
                     observation,
@@ -269,6 +336,7 @@ class OpenEtaAgentRuntime:
             if not self.tools.can_execute(name):
                 self.tools.bind_handler(name, handler)
 
+    @_session_memory_tool
     def _save_memory_tool(self, context: ToolExecutionContext) -> ToolResult:
         namespace = str(context.parameters.get("namespace", "facts")).strip() or "facts"
         key = str(context.parameters.get("key", "")).strip()
@@ -292,6 +360,7 @@ class OpenEtaAgentRuntime:
             details={"namespace": namespace, "key": key},
         )
 
+    @_session_memory_tool
     def _get_memory_tool(self, context: ToolExecutionContext) -> ToolResult:
         namespace = str(context.parameters.get("namespace", "all")).strip() or "all"
         key = context.parameters.get("key")
@@ -302,14 +371,16 @@ class OpenEtaAgentRuntime:
             details=self.memory.get_memory(key_str or None, namespace=namespace),
         )
 
+    @_session_memory_tool
     def _delete_memory_tool(self, context: ToolExecutionContext) -> ToolResult:
         key = str(context.parameters.get("key", "")).strip()
         if not key:
             return ToolResult(False, content="delete_memory requires a key.")
         namespace = str(context.parameters.get("namespace", "all")).strip() or "all"
-        deleted = self.memory.delete_memory(key, namespace=namespace)
+        deleted = self.memory.delete_memory(key, namespace=namespace, agent_only=True)
         return ToolResult(True, content="memory deleted", details=deleted)
 
+    @_session_memory_tool
     def _compact_memory_tool(self, context: ToolExecutionContext) -> ToolResult:
         raw_max_events = context.parameters.get("max_events", 8)
         try:
@@ -488,6 +559,7 @@ class OpenEtaAgentRuntime:
             )
         )
 
+    @_session_memory_tool
     def _select_sam3_detection_tool(self, context: ToolExecutionContext) -> ToolResult:
         result_id = str(context.parameters.get("sam3_result_id") or "").strip()
         detection_id = str(context.parameters.get("detection_id") or "").strip()
@@ -549,6 +621,7 @@ class OpenEtaAgentRuntime:
                     "pending_detection_id": detection_id,
                     "identity_relation_choices": [
                         "same_instance",
+                        "new_task_target",
                         "replace_misidentified_anchor",
                     ],
                 }
@@ -564,7 +637,8 @@ class OpenEtaAgentRuntime:
                         "required_choice": "identity_relation",
                         "reason": (
                             "compare the old and new visual evidence, then declare "
-                            "same_instance or an explicit misidentification correction"
+                            "same_instance, an intentional next task target, or an "
+                            "explicit misidentification correction"
                         ),
                     },
                     {
@@ -669,6 +743,7 @@ class OpenEtaAgentRuntime:
             artifacts=artifacts,
         )
 
+    @_session_memory_tool
     def _reject_sam3_detections_tool(self, context: ToolExecutionContext) -> ToolResult:
         result_id = str(context.parameters.get("sam3_result_id") or "").strip()
         reason = str(context.parameters.get("reason") or "").strip()

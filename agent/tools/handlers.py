@@ -12,6 +12,7 @@ import time
 from io import BytesIO
 import re
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -1311,6 +1312,7 @@ def build_grasp_pose_estimate_handler(
                             selection_output_root,
                             artifact_session_id(context.metadata),
                         ),
+                        parent_session_id=artifact_session_id(context.metadata),
                     )
                     return _attach_explicit_grasp_strategy_options(
                         advised,
@@ -1493,6 +1495,7 @@ def _attach_grasp_selection_advice(
     advisor: GraspPoseAdvisor | None,
     task: str,
     output_root: str | Path,
+    parent_session_id: str = "",
 ) -> ToolResult:
     """Add visual advisory evidence without changing grasp activation semantics."""
 
@@ -1542,7 +1545,12 @@ def _attach_grasp_selection_advice(
         details["artifacts"] = existing_artifacts
     existing_artifacts.extend(artifacts)
     try:
-        advice = advisor.advise(bundle, task=task)
+        # Correlation is private call context, not persisted geometry or authority.
+        # Keep the existing advisor protocol and immutable published bundle intact.
+        advisor_bundle = deepcopy(bundle)
+        if parent_session_id:
+            advisor_bundle["_host_parent_session_id"] = parent_session_id
+        advice = advisor.advise(advisor_bundle, task=task)
     except Exception as exc:  # noqa: BLE001 - advisor cannot block perception.
         advice = {
             "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,

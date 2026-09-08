@@ -9,6 +9,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -139,6 +140,14 @@ class BackendGraspPoseAdvisor:
             else []
         )
         vision_paths = [value for value in [overview_ref, *sheet_refs] if value]
+        parent_session_id = selection_bundle.get("_host_parent_session_id")
+        request_lineage = {}
+        if isinstance(parent_session_id, str) and parent_session_id.strip():
+            request_lineage = {
+                "parent_session_id": parent_session_id.strip(),
+                "child_session_id": f"advisor-{uuid4().hex}",
+                "parent_tool": "grasp_pose_estimate",
+            }
         started = time.monotonic()
         result = self.backend.decide(
             PlannerBackendRequest(
@@ -146,6 +155,7 @@ class BackendGraspPoseAdvisor:
                 tool_context={
                     "schema_version": GRASP_SELECTION_ADVICE_SCHEMA,
                     "role": "read_only_grasp_pose_advisor",
+                    **({"request_lineage": request_lineage} if request_lineage else {}),
                     "task": task,
                     "selection_bundle_id": selection_bundle.get("bundle_id"),
                     "source_backend": selection_bundle.get("source_backend"),

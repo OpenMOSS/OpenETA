@@ -14,6 +14,12 @@ from typing import Any
 
 import numpy as np
 
+from sim.ik_search_policy import (
+    DEFAULT_IK_MAX_ATTEMPTS, DEFAULT_IK_MAX_NFEV_PER_ATTEMPT,
+    DEFAULT_IK_TIMEOUT_S, MAX_IK_ATTEMPTS, MAX_IK_NFEV_PER_ATTEMPT,
+    MAX_IK_TIMEOUT_S,
+)
+
 
 # A solution below this margin is still kinematically valid, but it is a poor
 # default seed for a local joint-velocity controller.  In that case we spend a
@@ -37,16 +43,15 @@ def check_endpoint_reachability(
     preserve_current_orientation: bool = True,
     position_tolerance_m: float = 0.002,
     orientation_tolerance_rad: float = 0.05,
-    max_attempts: int = 24,
-    max_nfev_per_attempt: int = 300,
-    timeout_s: float = 10.0,
+    max_attempts: int = DEFAULT_IK_MAX_ATTEMPTS,
+    max_nfev_per_attempt: int = DEFAULT_IK_MAX_NFEV_PER_ATTEMPT,
+    timeout_s: float = DEFAULT_IK_TIMEOUT_S,
 ) -> dict[str, Any]:
     """Check endpoint IK without stepping or mutating the live environment.
 
-    A completed multi-start numerical search returns ``reachable`` or
-    ``unreachable``.  Missing backend support, solver errors, and exhausted
-    wall-clock budgets return ``unknown`` so callers do not confuse solver
-    uncertainty with a proved geometric rejection.
+    Finding a solution returns ``reachable``. A completed numerical search
+    without a solution is still ``unknown``, not a proof of infeasibility.
+    Missing backends, solver errors and wall-clock exhaustion also fail closed.
     """
 
     backend = str(getattr(env, "_backend", "") or "")
@@ -180,9 +185,14 @@ def _solve_problem(
         raise ValueError("position_tolerance_m must be positive and finite")
     if not math.isfinite(orientation_tolerance_rad) or orientation_tolerance_rad <= 0:
         raise ValueError("orientation_tolerance_rad must be positive and finite")
-    max_attempts = max(1, min(int(max_attempts), 64))
-    max_nfev_per_attempt = max(20, min(int(max_nfev_per_attempt), 2000))
-    timeout_s = max(0.1, min(float(timeout_s), 30.0))
+    max_attempts = max(1, min(int(max_attempts), MAX_IK_ATTEMPTS))
+    max_nfev_per_attempt = max(20, min(int(max_nfev_per_attempt), MAX_IK_NFEV_PER_ATTEMPT))
+    timeout_s = max(0.1, min(float(timeout_s), MAX_IK_TIMEOUT_S))
+    search_budget = {
+        "max_attempts": max_attempts,
+        "max_nfev_per_attempt": max_nfev_per_attempt,
+        "timeout_s": timeout_s,
+    }
 
     model = problem["model"]
     data = problem["data"]
@@ -245,9 +255,15 @@ def _solve_problem(
             },
         }
 
+    progress: dict[str, Any] = {
+        "attempts_completed": 0, "function_evaluations": 0,
+        "residual_evaluations": 0, "best_full_candidate": None,
+    }
+
     def residual(q: np.ndarray, mode: str) -> np.ndarray:
         if time.monotonic() - start_time > timeout_s:
             raise _SearchTimeout
+        progress["residual_evaluations"] += 1
         position, rotation = fk(q)
         pieces: list[np.ndarray] = []
         if mode in {"full", "position"}:
@@ -287,6 +303,8 @@ def _solve_problem(
                 break
             completed += 1
             evaluations += int(solved.nfev)
+            progress["attempts_completed"] += 1
+            progress["function_evaluations"] += int(solved.nfev)
             candidate = metrics(np.asarray(solved.x, dtype=np.float64))
             if mode == "position":
                 candidate_score = candidate["max_axis_position_error_m"] / position_tolerance_m
@@ -300,6 +318,8 @@ def _solve_problem(
                 passed = candidate_score <= 1.0
             if best is None or candidate_score < best["_mode_score"]:
                 best = {**candidate, "_mode_score": float(candidate_score)}
+                if mode == "full":
+                    progress["best_full_candidate"] = dict(candidate)
             if passed:
                 if mode != "full":
                     return True, best, completed, evaluations, {}
@@ -381,21 +401,24 @@ def _solve_problem(
             ),
             "target": _target_payload(target, target_quat),
             "orientation_mode": orientation_mode,
+            "best_candidate": progress["best_full_candidate"],
             "tolerances": _tolerance_payload(
                 position_tolerance_m, orientation_tolerance_rad
             ),
             "solver": {
                 "method": "bounded_multistart_least_squares",
-                "attempts_completed": locals().get("completed", 0),
-                "function_evaluations": locals().get("evaluations", 0),
+                "attempts_completed": progress["attempts_completed"],
+                "function_evaluations": progress["function_evaluations"],
+                "residual_evaluations": progress["residual_evaluations"],
                 "elapsed_s": elapsed,
                 "timed_out": True,
+                "search_budget": search_budget,
             },
         }
 
     best.pop("_mode_score", None)
     elapsed = time.monotonic() - start_time
-    status = "reachable" if full_ok else "unreachable"
+    status = "reachable" if full_ok else "unknown"
     if full_ok:
         reason_code = "ik_solution_found"
         message = "A joint-limit-respecting IK solution was found."
@@ -409,17 +432,18 @@ def _solve_problem(
         suggestions = ["relax_target_orientation", "select_another_grasp_candidate"]
     elif not position_ok:
         reason_code = "position_unreachable"
-        message = "The requested EEF position was not reachable within joint limits."
+        message = "No position solution was found within this joint-limited numerical search."
         suggestions = ["move_target_toward_workspace", "select_another_grasp_candidate"]
     else:
         reason_code = "orientation_unreachable"
-        message = "The requested EEF orientation was not reachable within joint limits."
+        message = "No orientation solution was found within this joint-limited numerical search."
         suggestions = ["relax_target_orientation", "select_another_grasp_candidate"]
     return {
         "status": status,
         "kinematic_status": status,
-        "feasible": full_ok,
-        "reason_code": reason_code,
+        "feasible": True if full_ok else None,
+        "reason_code": reason_code if full_ok else "ik_search_no_solution",
+        "constraint_diagnosis": reason_code,
         "message": message,
         "backend": problem["backend"],
         "target": _target_payload(target, target_quat),
@@ -432,8 +456,10 @@ def _solve_problem(
             "method": "bounded_multistart_least_squares",
             "attempts_completed": completed,
             "function_evaluations": evaluations,
+            "residual_evaluations": progress["residual_evaluations"],
             "elapsed_s": elapsed,
             "timed_out": False,
+            "search_budget": search_budget,
             "infeasibility_evidence": (
                 None if full_ok else "completed_multistart_search_no_feasible_solution"
             ),

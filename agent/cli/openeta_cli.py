@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from prompt_toolkit import PromptSession
@@ -40,6 +41,9 @@ from agent.backends.provider_config import (
 )
 from agent.runtime.checkers import CheckerSubagentConfig
 from agent.runtime.episode import (
+    DEFAULT_EPISODE_TIMEOUT_S,
+    DEFAULT_MAX_TOOL_CALLS,
+    DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MAX_TURNS,
     EpisodeResult,
     EpisodeStep,
@@ -72,13 +76,13 @@ from agent.runtime.supervision import (
 )
 from agent.tools.mcp_registry import (
     compact_mcp_registry,
-    load_mcp_server_configs,
     load_mcp_server_url,
 )
 from agent.tools.registry import (
     ToolExecutionContext,
     ToolRegistry,
 )
+from agent.tools.mcp_timeouts import DEFAULT_SIM_MCP_TIMEOUT_S, validate_simulator_timeout_s
 from agent.tools.sim_mcp import (
     SimulatorMcpToolProxyConfig,
     SseSimulatorMcpTransport,
@@ -90,7 +94,6 @@ from agent.tools.sim_mcp import (
 
 TOOL_RESULT_MAX_LINES = 5
 TOOL_RESULT_FALLBACK_WIDTH = 120
-DEFAULT_SIM_MCP_TIMEOUT_S = 300.0
 
 
 class Theme:
@@ -278,6 +281,8 @@ class ConsoleState:
     step_idx: int = 0
     continue_after_human: bool = False
     simulator_mcp_url: str = ""
+    simulator_mcp_url_override: str = ""
+    simulator_timeout_s: float = DEFAULT_SIM_MCP_TIMEOUT_S
     simulator_mcp_transport: SseSimulatorMcpTransport | None = None
     simulator_mcp_config: SimulatorMcpToolProxyConfig = field(
         default_factory=SimulatorMcpToolProxyConfig
@@ -300,8 +305,15 @@ class OpenEtaCli:
         *,
         model_override: str = "",
         calibration_profile: str = "",
+        simulator_mcp_url: str = "",
+        simulator_timeout_s: float = DEFAULT_SIM_MCP_TIMEOUT_S,
     ) -> None:
+        simulator_timeout_s = validate_simulator_timeout_s(simulator_timeout_s)
+        if simulator_mcp_url:
+            simulator_mcp_url = _validate_simulator_mcp_url(simulator_mcp_url)
         self.state = ConsoleState()
+        self.state.simulator_mcp_url_override = simulator_mcp_url
+        self.state.simulator_timeout_s = simulator_timeout_s
         self.commands = SLASH_COMMANDS
         self.command_lookup = _command_lookup(self.commands)
         self.session: PromptSession[str] | None = None
@@ -371,19 +383,45 @@ class OpenEtaCli:
     def close(self) -> JsonDict:
         """Close the active MCP environment once before the console exits."""
 
-        if self._shutdown_result is not None:
-            return dict(self._shutdown_result)
+        config = self.state.simulator_mcp_config
+        with config.lifecycle_lock:
+            if config.startup_in_progress or config.close_in_progress:
+                return {"ok": False, "closed": False, "pending": True,
+                        "error": "environment startup or close is still in progress"}
+            if (not config.handle and self._shutdown_result is not None
+                    and self._shutdown_result.get("ok") is True):
+                return dict(self._shutdown_result)
+            self._shutdown_result = None
+            config.close_in_progress = True
+            config.close_state = "closing"
+        try:
+            return self._close_active_environment()
+        finally:
+            with config.lifecycle_lock:
+                config.close_in_progress = False
+                config.close_state = (
+                    "closed" if self._shutdown_result is not None
+                    and self._shutdown_result.get("ok") is True else "close_failed"
+                )
+
+    def _close_active_environment(self) -> JsonDict:
         config = self.state.simulator_mcp_config
         with config.lifecycle_lock:
             transport = self.state.simulator_mcp_transport
             handle = config.handle
             session_id = config.session_id
             timeout_s = min(config.timeout_s, 30.0)
-        if transport is None or not handle:
+        if not handle:
             self._shutdown_result = {
                 "ok": True,
                 "closed": False,
                 "skipped": True,
+            }
+            return dict(self._shutdown_result)
+        if transport is None:
+            self._shutdown_result = {
+                "ok": False, "closed": False, "handle": handle, "session_id": session_id,
+                "error": "Active simulator environment has no cleanup transport.",
             }
             return dict(self._shutdown_result)
 
@@ -478,6 +516,9 @@ class OpenEtaCli:
         task: str,
         *,
         max_turns: int = 1,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+        timeout_s: float = DEFAULT_EPISODE_TIMEOUT_S,
+        max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
         raise_on_interrupt: bool = False,
     ) -> None:
         missing = self.state.config.missing_fields()
@@ -506,6 +547,9 @@ class OpenEtaCli:
                     else None
                 ),
                 max_turns=max_turns,
+                max_tool_calls=max(1, int(max_tool_calls)),
+                timeout_s=max(0.001, float(timeout_s)),
+                max_total_tokens=max(1, int(max_total_tokens)),
                 metadata={
                     "source": "OpenEtaCli",
                     "environment_mode": "tool_feedback",
@@ -1259,15 +1303,12 @@ class OpenEtaCli:
             )
         workspace = self.state.workspace
         proxy_config = self.state.simulator_mcp_config
-        proxy_config.timeout_s = max(
-            DEFAULT_SIM_MCP_TIMEOUT_S,
-            self.state.config.timeout_s,
-        )
+        proxy_config.timeout_s = validate_simulator_timeout_s(self.state.simulator_timeout_s)
         proxy_config.image_output_root = workspace.artifacts_dir / "images"
         proxy_config.text_output_root = workspace.artifacts_dir / "text"
         proxy_config.response_output_root = workspace.artifacts_dir / "responses"
-        self._refresh_mcp_registry()
         transport = _ensure_simulator_mcp_transport(self)
+        self._refresh_mcp_registry()
         policy = SupervisionPolicy.for_profile(self.state.supervision_profile)
         assembly = assemble_runtime(
             RuntimeAssemblyConfig(
@@ -1442,6 +1483,21 @@ class OpenEtaCli:
 
     def _refresh_mcp_registry(self) -> None:
         self.state.mcp_registry = compact_mcp_registry()
+        if self.state.simulator_mcp_url_override:
+            # This is the effective run registry, not a rewrite of .mcp.json.
+            servers = [
+                server for server in self.state.mcp_registry["servers"]
+                if server["name"] not in {"openeta-sim", "openeta"}
+            ]
+            servers.insert(0, {
+                "name": "openeta-sim",
+                "url": self.state.simulator_mcp_url,
+                "transport": "sse",
+            })
+            self.state.mcp_registry.update(
+                servers=servers, server_count=len(servers),
+                source=".mcp.json + --simulator-mcp-url",
+            )
 
     def _save_mcp_registry_to_memory(self) -> None:
         if self.state.runtime is None or not self.state.mcp_registry:
@@ -1449,7 +1505,7 @@ class OpenEtaCli:
         self.state.runtime.memory.save_fact(
             "mcp_registry",
             self.state.mcp_registry,
-            source=".mcp.json",
+            source=str(self.state.mcp_registry.get("source") or ".mcp.json"),
         )
 
     def _print_episode_result(self, result: EpisodeResult) -> None:
@@ -1826,14 +1882,39 @@ def _configured_pre_safety_checks() -> dict[str, str]:
 
 
 def _ensure_simulator_mcp_transport(cli: OpenEtaCli) -> SseSimulatorMcpTransport | None:
-    url = _load_sim_mcp_url()
-    if not url:
-        return None
-    if cli.state.simulator_mcp_transport is None or cli.state.simulator_mcp_url != url:
-        cli.state.simulator_mcp_url = url
-        cli.state.simulator_mcp_transport = SseSimulatorMcpTransport(url)
-        _refresh_simulator_mcp_tool_catalog(cli)
-    elif not cli.state.simulator_mcp_tool_catalog:
+    url = cli.state.simulator_mcp_url_override or _load_sim_mcp_url()
+    if url:
+        url = _validate_simulator_mcp_url(url)
+    config = cli.state.simulator_mcp_config
+    with config.lifecycle_lock:
+        changed = cli.state.simulator_mcp_url != url
+        replacing = changed or cli.state.simulator_mcp_transport is None
+        if replacing and cli.state.episode_runner is not None and not (
+            cli.state.episode_runner.wait_for_idle(timeout_s=0)
+        ):
+            raise RuntimeError(
+                "Cannot replace simulator endpoint while an episode worker is still active."
+            )
+        if replacing and (
+            config.handle or config.close_in_progress or config.startup_in_progress
+            or config.close_state in {"closing", "close_failed"}
+        ):
+            raise RuntimeError(
+                "Cannot replace simulator endpoint while environment cleanup is unconfirmed; "
+                "close the existing environment using its original transport first."
+            )
+        if not url:
+            cli.state.simulator_mcp_url = ""
+            cli.state.simulator_mcp_transport = None
+            cli.state.simulator_mcp_tool_catalog = {}
+            return None
+        if changed or cli.state.simulator_mcp_transport is None:
+            # Construct first so a failed constructor cannot repoint old cleanup.
+            transport = SseSimulatorMcpTransport(url)
+            cli.state.simulator_mcp_url = url
+            cli.state.simulator_mcp_transport = transport
+            cli.state.simulator_mcp_tool_catalog = {}
+    if not cli.state.simulator_mcp_tool_catalog:
         _refresh_simulator_mcp_tool_catalog(cli)
     return cli.state.simulator_mcp_transport
 
@@ -1876,14 +1957,36 @@ def _python_exec_approval_summary(context: ToolExecutionContext) -> JsonDict:
 
 
 def _load_sim_mcp_url(path: str | Path = ".mcp.json") -> str:
-    url = _load_mcp_url("openeta-sim", aliases=("openeta",), path=path)
-    if url:
-        return url
-    configs = load_mcp_server_configs(path)
-    for config in configs.values():
-        if config.url:
-            return config.url
-    return ""
+    # A perception service is never an implicit simulator fallback.
+    return _load_mcp_url("openeta-sim", aliases=("openeta",), path=path)
+
+
+def _validate_simulator_mcp_url(value: str) -> str:
+    message = "Simulator MCP URL must be an HTTP(S) endpoint without credentials, query or fragment."
+    if not isinstance(value, str) or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError(message)
+    try:
+        parsed = urlsplit(value)
+        valid = (
+            parsed.scheme in {"http", "https"} and parsed.hostname
+            and parsed.username is None and parsed.password is None
+            and not parsed.query and not parsed.fragment
+            and (parsed.port is None or 0 < parsed.port <= 65535)
+        )
+    except ValueError:
+        raise ValueError(message) from None
+    if not valid:
+        raise ValueError(message)
+    return value
+
+
+def _simulator_mcp_url_argument(value: str) -> str:
+    try:
+        return _validate_simulator_mcp_url(value)
+    except ValueError as exc:
+        # argparse's generic ValueError handling echoes the raw argument, which
+        # could contain credentials. Keep this validation error value-free.
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _load_mcp_url(
@@ -2465,6 +2568,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="", help="Override configured model for this run.")
     parser.add_argument(
+        "--simulator-mcp-url", default=None, type=_simulator_mcp_url_argument,
+        help="Pin this run to an HTTP(S) simulator MCP endpoint instead of .mcp.json.",
+    )
+    parser.add_argument(
+        "--simulator-timeout-s", type=validate_simulator_timeout_s,
+        default=DEFAULT_SIM_MCP_TIMEOUT_S,
+        help="Per simulator RPC timeout, independent of planner and episode budgets (default 300 s).",
+    )
+    parser.add_argument(
         "--calibration-profile",
         default="",
         help="Stage this grasp calibration profile in the TUI session workspace.",
@@ -2476,17 +2588,40 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_MAX_TURNS,
         help="Safety limit for one episode run.",
     )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=DEFAULT_MAX_TOOL_CALLS,
+        help="Cumulative executable-tool safety limit for one episode run.",
+    )
+    parser.add_argument(
+        "--episode-timeout-s",
+        type=float,
+        default=DEFAULT_EPISODE_TIMEOUT_S,
+        help="Wall-clock safety limit for one episode run in seconds.",
+    )
+    parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_TOKENS,
+        help="Cumulative model-token safety limit for one episode run.",
+    )
     args = parser.parse_args(argv)
 
     cli = OpenEtaCli(
         model_override=args.model,
         calibration_profile=args.calibration_profile,
+        simulator_mcp_url=args.simulator_mcp_url or "",
+        simulator_timeout_s=args.simulator_timeout_s,
     )
     try:
         if args.once:
             cli.run_task(
                 args.once,
                 max_turns=max(1, args.max_turns),
+                max_tool_calls=max(1, args.max_tool_calls),
+                timeout_s=max(0.001, args.episode_timeout_s),
+                max_total_tokens=max(1, args.max_total_tokens),
                 raise_on_interrupt=True,
             )
             return 0

@@ -307,7 +307,13 @@ def find_packet_reference_for_path(
     entries: Iterable[JsonDict],
     path: object,
 ) -> JsonDict:
-    """Return the exact packet and frame owning one local artifact path."""
+    """Return the newest packet and frame owning one local artifact path.
+
+    A read-only render may reuse the simulator's immutable artifact path while
+    the Agent assigns a new compact observation-packet ID. Prefer the newest
+    observation in that case, but continue to fail closed if one path is
+    attributed to different camera frames or has conflicting newest owners.
+    """
 
     if not isinstance(path, str) or not path:
         return {}
@@ -331,8 +337,28 @@ def find_packet_reference_for_path(
                     matches[(packet_id, frame_id)] = {
                         "source_packet_id": packet_id,
                         "camera_frame_id": frame_id,
+                        "observation_index": entry.get("observation_index"),
                     }
-    return next(iter(matches.values())) if len(matches) == 1 else {}
+    if not matches:
+        return {}
+    frame_ids = {str(match.get("camera_frame_id") or "") for match in matches.values()}
+    if len(frame_ids) != 1:
+        return {}
+
+    def _observation_index(match: JsonDict) -> int:
+        value = match.get("observation_index")
+        return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+    newest_index = max(_observation_index(match) for match in matches.values())
+    newest = [
+        match for match in matches.values() if _observation_index(match) == newest_index
+    ]
+    if len(newest) != 1:
+        return {}
+    return {
+        "source_packet_id": newest[0]["source_packet_id"],
+        "camera_frame_id": newest[0]["camera_frame_id"],
+    }
 
 
 def _validate_unique_artifact_keys(packet_id: str, artifacts: list[JsonDict]) -> None:

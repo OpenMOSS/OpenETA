@@ -116,6 +116,7 @@ def _runtime(backend: PlannerBackend, *, handler=None) -> OpenEtaAgentRuntime:
 
 
 def test_episode_fails_when_tool_calls_exceed_budget() -> None:
+    dispatched = []
     runtime = _runtime(
         StaticPlannerBackend(
             {
@@ -123,7 +124,8 @@ def test_episode_fails_when_tool_calls_exceed_budget() -> None:
                 "name": "get_memory",
                 "parameters": {},
             }
-        )
+        ),
+        handler=lambda context: dispatched.append(context.name) or ToolResult(True),
     )
     runner = OpenEtaEpisodeRunner(runtime=runtime, environment=DummyEpisodeEnvironment())
 
@@ -131,11 +133,17 @@ def test_episode_fails_when_tool_calls_exceed_budget() -> None:
 
     assert len(result.steps) == 3
     assert result.metadata["usage"]["tool_call_count"] == 3
+    assert dispatched == ["get_memory", "get_memory"]
+    assert result.metadata["usage"]["tool_admission"] == {
+        "limit": 2, "carried_usage": 0, "admitted_this_run": 2,
+        "denied_this_run": 1, "remaining": 0,
+    }
     assert result.metadata["failure_reason"] == {
         "code": "tool_call_limit_exceeded",
         "limit": 2,
         "observed": 3,
         "unit": "tool_calls",
+        "admission": result.metadata["usage"]["tool_admission"],
     }
     assert classify_episode_result(result) == "fail"
     assert episode_failure_error(result)["code"] == "tool_call_limit_exceeded"

@@ -6,12 +6,10 @@ import asyncio
 import hashlib
 import json
 import math
-import os
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -19,6 +17,7 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from adapter.environment_lifecycle import close_response_error
 from adapter.motion_profiles import motion_control_profile
 from adapter.protocol import EnvAction, EnvObservation, JsonDict, RobotState, StepResult
 from agent.runtime.artifact_paths import artifact_session_id
@@ -169,6 +168,10 @@ class SimulatorMcpToolProxyConfig:
     max_inline_text_chars: int = DEFAULT_MAX_INLINE_TEXT_CHARS
     forward_grasp_candidate_orientation: bool = False
     lifecycle_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    close_in_progress: bool = False
+    close_state: str = "active"
+    # Host-local admission only; this does not establish remote completion.
+    startup_in_progress: bool = False
 
 
 @dataclass(slots=True)
@@ -218,11 +221,28 @@ class SimulatorMcpEpisodeEnvironment:
         self.startup_attempt_count = 0
         self.execution_id = ""
         self.agent_session_id = ""
-        self._close_lock = threading.Lock()
         self._artifact_sequence = 0
         self._artifact_instance_id = uuid4().hex[:10]
 
     def reset(self, *, task: str, metadata: JsonDict | None = None) -> EnvObservation:
+        with self.tool_proxy_config.lifecycle_lock:
+            if self.tool_proxy_config.startup_in_progress:
+                raise RuntimeError("Environment startup is already in progress.")
+            if (self.tool_proxy_config.close_in_progress
+                    or self.tool_proxy_config.close_state in {"closing", "close_failed"}):
+                raise RuntimeError("Environment cleanup is unconfirmed; retry close before reset.")
+            if (self.tool_proxy_config.handle and
+                    (self.tool_proxy_config.handle, self.tool_proxy_config.session_id)
+                    != (self.config.handle, self.config.session_id)):
+                raise RuntimeError("A different simulator environment is already active.")
+            self.tool_proxy_config.startup_in_progress = True
+        try:
+            return self._reset(task=task, metadata=metadata)
+        finally:
+            with self.tool_proxy_config.lifecycle_lock:
+                self.tool_proxy_config.startup_in_progress = False
+
+    def _reset(self, *, task: str, metadata: JsonDict | None = None) -> EnvObservation:
         self.task = task
         if isinstance(metadata, dict):
             self.execution_id = str(metadata.get("execution_id") or "")
@@ -243,14 +263,12 @@ class SimulatorMcpEpisodeEnvironment:
                 if attempt >= attempts or not _is_transient_startup_error(exc):
                     raise
                 if self.config.handle:
-                    close_simulator_mcp_env(
-                        self.transport,
-                        handle=self.config.handle,
-                        session_id=self.config.session_id,
-                        timeout_s=min(self.config.timeout_s, 30.0),
-                    )
-                self.config.handle = ""
-                self.tool_proxy_config.handle = ""
+                    cleanup = self._close(owned_startup=True)
+                    if cleanup.get("ok") is not True:
+                        raise RuntimeError(
+                            "Startup retry cannot replace an environment with unconfirmed cleanup: "
+                            + str(cleanup.get("error") or cleanup)
+                        ) from exc
                 if self.config.startup_retry_delay_s > 0:
                     time.sleep(self.config.startup_retry_delay_s)
         else:  # pragma: no cover - loop either returns payload or raises.
@@ -276,6 +294,7 @@ class SimulatorMcpEpisodeEnvironment:
         _raise_if_mcp_error(self.create_result, tool_name="create_env")
         self.config.session_id = str(self.create_result.get("session_id") or self.config.session_id)
         self.config.handle = str(self.create_result.get("handle") or "")
+        self.tool_proxy_config.close_state = "active"
         if not self.config.handle:
             raise RuntimeError("create_env did not return a simulator handle")
         self._sync_tool_proxy_config()
@@ -367,19 +386,40 @@ class SimulatorMcpEpisodeEnvironment:
         )
 
     def close(self) -> JsonDict:
-        with self._close_lock:
+        return self._close()
+
+    def _close(self, *, owned_startup: bool = False) -> JsonDict:
+        with self.tool_proxy_config.lifecycle_lock:
             handle = self.config.handle
             session_id = self.config.session_id
+            if self.tool_proxy_config.startup_in_progress and not owned_startup:
+                return {"ok": False, "pending": True, "error": "environment startup in progress",
+                        "handle": handle, "session_id": session_id}
+            if self.tool_proxy_config.close_in_progress:
+                return {"ok": False, "pending": True, "error": "environment close already in progress",
+                        "handle": handle, "session_id": session_id}
             if not handle:
                 return {"ok": True, "skipped": True}
-            self.config.handle = ""
-            self.tool_proxy_config.handle = ""
-        return close_simulator_mcp_env(
-            self.transport,
-            handle=handle,
-            session_id=session_id,
-            timeout_s=min(self.config.timeout_s, 30.0),
-        )
+            self.tool_proxy_config.close_in_progress = True
+            self.tool_proxy_config.close_state = "closing"
+        result = None
+        try:
+            result = close_simulator_mcp_env(
+                self.transport, handle=handle, session_id=session_id,
+                timeout_s=min(self.config.timeout_s, 30.0),
+            )
+            return result
+        finally:
+            with self.tool_proxy_config.lifecycle_lock:
+                if result is not None and result.get("ok") is True:
+                    if (self.config.handle, self.config.session_id) == (handle, session_id):
+                        self.config.handle = ""
+                    if (self.tool_proxy_config.handle, self.tool_proxy_config.session_id) == (handle, session_id):
+                        self.tool_proxy_config.handle = ""
+                self.tool_proxy_config.close_in_progress = False
+                self.tool_proxy_config.close_state = (
+                    "closed" if result is not None and result.get("ok") is True else "close_failed"
+                )
 
     def _sync_tool_proxy_config(self) -> None:
         self.tool_proxy_config.session_id = self.config.session_id
@@ -465,6 +505,21 @@ class SimulatorMcpToolProxy:
 
     def call(self, context: ToolExecutionContext, *, tool_name: str | None = None) -> ToolResult:
         agent_tool = tool_name or context.name
+        with self.config.lifecycle_lock:
+            close_state = self.config.close_state
+            startup_in_progress = self.config.startup_in_progress
+        if startup_in_progress:
+            return make_tool_result(
+                context, success=False, content="Environment startup is still in progress.",
+                diagnostics=[{"code": "environment_startup_pending"}],
+            )
+        if close_state in {"closing", "close_failed"}:
+            return make_tool_result(
+                context, success=False,
+                content="Environment cleanup is unconfirmed; retry close_simulator_env before reuse.",
+                outputs={"lifecycle_state": close_state},
+                diagnostics=[{"code": "environment_closing"}],
+            )
         try:
             mcp_tool, arguments = self._mcp_call(context, agent_tool=agent_tool)
         except Exception as exc:  # noqa: BLE001 - validation must stay structured.
@@ -641,6 +696,7 @@ class SimulatorMcpToolProxy:
                 normalized["outputs"]["response"][
                     "post_motion_evidence_handoff"
                 ] = evidence_handoff
+        ik_execution_caveat = ""
         if agent_tool == "ik_preview_check":
             # Execution authorization is host-owned. A backend may return a
             # legacy or stale execution reference, but it cannot authorize a
@@ -672,6 +728,13 @@ class SimulatorMcpToolProxy:
                 controller_capabilities = (
                     capability_resolver() if callable(capability_resolver) else None
                 )
+                if ik_receipt.get("classification") in {
+                    "feasible", "kinematically_feasible_collision_deferred",
+                }:
+                    ik_execution_caveat = _ik_controller_execution_caveat(
+                        controller_capabilities
+                        if isinstance(controller_capabilities, dict) else {}
+                    )
                 collision_delegation = _ik_motion_collision_delegation(
                     ik_receipt,
                     controller_capabilities=(
@@ -715,7 +778,7 @@ class SimulatorMcpToolProxy:
                         "ik_receipt_id": ik_receipt.get("receipt_id"),
                         "instruction": (
                             "This preview did not move the robot. Pass this ik_receipt_id "
-                            "to move_to to physically reach the checked endpoint, or "
+                            "to move_to to attempt the checked endpoint, or "
                             "include it in ordered ik_receipt_ids for "
                             "follow_eef_trajectory; do not copy target_pose."
                         ),
@@ -753,8 +816,6 @@ class SimulatorMcpToolProxy:
             and not response_unknown
             and _motion_already_within_tolerance(raw_response)
         )
-        if motion_already_within_tolerance:
-            normalized["outputs"]["motion_outcome"] = "no_state_change"
         if response_unknown:
             normalized["outputs"].update(
                 {
@@ -780,6 +841,13 @@ class SimulatorMcpToolProxy:
                 if not success or motion_target_not_reached
                 else []
             )
+        if ik_execution_caveat:
+            diagnostics.append({
+                "code": "ik_controller_execution_unverified",
+                "severity": "warning",
+                "candidate_rejection": False,
+                "message": ik_execution_caveat,
+            })
         if (
             collision_coverage
             and collision_coverage.get("coverage_complete") is not True
@@ -872,6 +940,8 @@ class SimulatorMcpToolProxy:
             mcp_tool=mcp_tool,
             success=success,
         )
+        if ik_execution_caveat:
+            result_content = f"{ik_execution_caveat} {result_content}"
         # Recovery options are structured in details for auditing, but the
         # planner's compact tool-result projection is content-first. Surface
         # the primary executable repair inline so a large response artifact is
@@ -1183,6 +1253,26 @@ class SimulatorEnvironmentCreator:
         self.proxy = SimulatorMcpToolProxy(transport=transport, config=self.config)
 
     def handler(self, context: ToolExecutionContext) -> ToolResult:
+        with self.config.lifecycle_lock:
+            if self.config.startup_in_progress:
+                return self._failure(
+                    context, content="Environment startup is still in progress.",
+                    diagnostics=[{"code": "environment_startup_pending"}],
+                )
+            if (self.config.close_in_progress
+                    or self.config.close_state in {"closing", "close_failed"}):
+                return self._failure(
+                    context, content="Environment cleanup is unconfirmed; retry close before creating.",
+                    diagnostics=[{"code": "environment_closing"}],
+                )
+            self.config.startup_in_progress = True
+        try:
+            return self._create_and_reset(context)
+        finally:
+            with self.config.lifecycle_lock:
+                self.config.startup_in_progress = False
+
+    def _create_and_reset(self, context: ToolExecutionContext) -> ToolResult:
         env_id = str(context.parameters.get("env_id") or "").strip()
         if not env_id:
             return self._failure(
@@ -1242,10 +1332,21 @@ class SimulatorEnvironmentCreator:
                 )
             return self._failure(
                 context,
-                content="Simulator environment creation was cancelled and cleaned up.",
+                content="Simulator environment creation was cancelled; cleanup was attempted for any returned handle.",
                 diagnostics=[{"code": "execution_cancelled", "abandoned": True}],
             )
 
+        # Preserve a successfully returned identity before artifact processing or
+        # callbacks can raise. Startup admission remains held through reset.
+        returned_handle = str(create_response.get("handle") or "").strip()
+        if returned_handle and _response_success(create_response):
+            with self.config.lifecycle_lock:
+                self.config.handle = returned_handle
+                self.config.session_id = str(
+                    create_response.get("session_id") or create_args.get("session_id") or ""
+                ).strip()
+                self.config.image_bundle_id = self.config.session_id or returned_handle
+                self.config.close_state = "active"
         create_normalized = self.proxy._normalize_response(  # noqa: SLF001
             create_response,
             agent_tool="create_simulator_env",
@@ -1283,7 +1384,7 @@ class SimulatorEnvironmentCreator:
             self._close_abandoned_environment(handle=handle, session_id=session_id)
             return self._failure(
                 context,
-                content="Simulator environment creation was cancelled and cleaned up.",
+                content="Simulator environment creation was cancelled; cleanup was attempted for the returned handle.",
                 diagnostics=[{"code": "execution_cancelled", "abandoned": True}],
             )
 
@@ -1291,6 +1392,7 @@ class SimulatorEnvironmentCreator:
             self.config.handle = handle
             self.config.session_id = session_id
             self.config.image_bundle_id = session_id or handle
+            self.config.close_state = "active"
         reset_args: JsonDict = {"handle": handle, "seed": create_args["seed"]}
         if session_id:
             reset_args["session_id"] = session_id
@@ -1317,7 +1419,7 @@ class SimulatorEnvironmentCreator:
                 self._close_abandoned_environment(handle=handle, session_id=session_id)
             return self._failure(
                 context,
-                content="Simulator environment reset was cancelled and cleaned up.",
+                content="Simulator environment reset was cancelled; cleanup was attempted for the returned handle.",
                 diagnostics=[{"code": "execution_cancelled", "abandoned": True}],
             )
 
@@ -1442,11 +1544,17 @@ class SimulatorEnvironmentCreator:
             timeout_s=min(self.config.timeout_s, 30.0),
         )
         if _response_success(result):
+            with self.config.lifecycle_lock:
+                if (self.config.handle, self.config.session_id) == (handle, session_id):
+                    self.config.handle = ""
+                    self.config.close_state = "closed"
             return
         with self.config.lifecycle_lock:
-            if not self.config.handle:
+            if (not self.config.handle
+                    or (self.config.handle, self.config.session_id) == (handle, session_id)):
                 self.config.handle = handle
                 self.config.session_id = session_id
+                self.config.close_state = "close_failed"
 
     def _transport_failure(
         self,
@@ -1513,8 +1621,21 @@ class SimulatorEnvironmentCloser:
         with self.config.lifecycle_lock:
             handle = self.config.handle
             session_id = self.config.session_id
+            if self.config.startup_in_progress:
+                return make_tool_result(
+                    context, success=False, content="Environment startup is still in progress.",
+                    outputs={"closed": False, "pending": True, "handle": handle},
+                    diagnostics=[{"code": "environment_startup_pending"}],
+                )
+            if self.config.close_in_progress:
+                return make_tool_result(
+                    context, success=False, content="Environment close is still in progress.",
+                    outputs={"closed": False, "pending": True, "handle": handle},
+                    diagnostics=[{"code": "environment_close_pending"}],
+                )
             if handle:
-                self.config.handle = ""
+                self.config.close_in_progress = True
+                self.config.close_state = "closing"
         if not handle:
             return make_tool_result(
                 context,
@@ -1538,36 +1659,23 @@ class SimulatorEnvironmentCloser:
         arguments: JsonDict = {"handle": handle}
         if session_id:
             arguments["session_id"] = session_id
+        response = None
         try:
-            response = self.transport.call_tool(
-                "close_env",
-                arguments,
+            response = close_environment_mcp_env(
+                self.transport, handle=handle, session_id=session_id,
                 timeout_s=min(self.config.timeout_s, 30.0),
             )
-        except Exception as exc:  # noqa: BLE001 - lifecycle failures stay structured.
+        finally:
             with self.config.lifecycle_lock:
-                if not self.config.handle:
-                    self.config.handle = handle
-            return make_tool_result(
-                context,
-                success=False,
-                content=f"Simulator MCP tool failed: close_env: {exc}",
-                outputs={"handle": handle, "session_id": session_id},
-                diagnostics=[
-                    {
-                        "code": "simulator_mcp_call_failed",
-                        "tool": "close_env",
-                        "error_type": type(exc).__name__,
-                        "message": str(exc),
-                    }
-                ],
-            )
-        success = _response_success(response)
-        if not success:
-            with self.config.lifecycle_lock:
-                if not self.config.handle:
-                    self.config.handle = handle
-        elif self.response_callback is not None:
+                if (response is not None and response.get("ok") is True
+                        and (self.config.handle, self.config.session_id) == (handle, session_id)):
+                    self.config.handle = ""
+                self.config.close_in_progress = False
+                self.config.close_state = (
+                    "closed" if response is not None and response.get("ok") is True else "close_failed"
+                )
+        success = response.get("ok") is True
+        if success and self.response_callback is not None:
             self.response_callback("close_env", arguments, response)
         return make_tool_result(
             context,
@@ -1723,16 +1831,15 @@ class SseSimulatorMcpTransport:
 
     def list_tools(self, *, timeout_s: float | None = None) -> JsonDict:
         try:
-            with _temporary_no_proxy_for_url(self.url):
-                return asyncio.run(
-                    _with_optional_timeout(
-                        _list_sse_mcp_tools(
-                            url=self.url,
-                            timeout_s=timeout_s,
-                        ),
+            return asyncio.run(
+                _with_optional_timeout(
+                    _list_sse_mcp_tools(
+                        url=self.url,
                         timeout_s=timeout_s,
-                    )
+                    ),
+                    timeout_s=timeout_s,
                 )
+            )
         except SimulatorMcpTransportError:
             raise
         except Exception as exc:
@@ -1746,18 +1853,17 @@ class SseSimulatorMcpTransport:
         timeout_s: float | None = None,
     ) -> JsonDict:
         try:
-            with _temporary_no_proxy_for_url(self.url):
-                return asyncio.run(
-                    _with_optional_timeout(
-                        _call_sse_mcp_tool(
-                            url=self.url,
-                            tool_name=name,
-                            arguments=arguments,
-                            timeout_s=timeout_s,
-                        ),
+            return asyncio.run(
+                _with_optional_timeout(
+                    _call_sse_mcp_tool(
+                        url=self.url,
+                        tool_name=name,
+                        arguments=arguments,
                         timeout_s=timeout_s,
-                    )
+                    ),
+                    timeout_s=timeout_s,
                 )
+            )
         except SimulatorMcpTransportError:
             raise
         except Exception as exc:
@@ -1841,6 +1947,11 @@ def close_environment_mcp_env(
             "handle": handle,
             "session_id": session_id,
         }
+    error = close_response_error(result)
+    if error is not None:
+        return {**result, "ok": False, "error": error, "handle": handle, "session_id": session_id}
+    if result.get("ok") is not True:
+        return {**result, "ok": True}
     return result
 
 
@@ -1917,6 +2028,7 @@ async def _call_sse_mcp_tool(
     async with sse_client(
         url,
         sse_read_timeout=_sse_read_timeout_s(timeout_s),
+        httpx_client_factory=_mcp_host_http_client_factory(url),
     ) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -1940,6 +2052,7 @@ async def _list_sse_mcp_tools(
     async with sse_client(
         url,
         sse_read_timeout=_sse_read_timeout_s(timeout_s),
+        httpx_client_factory=_mcp_host_http_client_factory(url),
     ) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -1953,49 +2066,30 @@ async def _with_optional_timeout(coro: Any, *, timeout_s: float | None) -> Any:
     return await asyncio.wait_for(coro, timeout=timeout_s)
 
 
-@contextmanager
-def _temporary_no_proxy_for_url(url: str):
-    """Bypass local HTTP proxies for the target MCP host during one call."""
+def _mcp_host_http_client_factory(url: str):
+    """Keep the MCP host direct in this client, without changing process proxies.
 
-    entries = _no_proxy_entries_for_url(url)
-    if not entries:
-        yield
-        return
-    old_values = {key: os.environ.get(key) for key in ("NO_PROXY", "no_proxy")}
-    try:
-        merged = _merge_no_proxy_entries(old_values["NO_PROXY"], entries)
-        os.environ["NO_PROXY"] = merged
-        os.environ["no_proxy"] = merged
-        yield
-    finally:
-        for key, value in old_values.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    Environment proxy rules still apply to other hosts (including redirects),
+    and trust_env keeps existing CA configuration. The SDK owns client cleanup.
+    """
+    import httpx
 
-
-def _no_proxy_entries_for_url(url: str) -> list[str]:
-    parsed = urlparse(str(url or ""))
-    host = parsed.hostname
+    host = httpx.URL(url).raw_host.decode("ascii")
     if not host:
-        return []
-    entries = [host]
-    if parsed.port is not None:
-        entries.append(f"{host}:{parsed.port}")
-    return entries
+        raise ValueError("MCP endpoint must have a host")
+    authority = f"[{host}]" if ":" in host else host
 
+    def create_client(headers=None, timeout=None, auth=None):
+        return httpx.AsyncClient(
+            headers=headers,
+            timeout=timeout if timeout is not None else httpx.Timeout(30.0, read=300.0),
+            auth=auth,
+            follow_redirects=True,
+            trust_env=True,
+            mounts={f"all://{authority}": None},
+        )
 
-def _merge_no_proxy_entries(existing: str | None, entries: Sequence[str]) -> str:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for value in [*(existing or "").split(","), *entries]:
-        item = value.strip()
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        merged.append(item)
-    return ",".join(merged)
+    return create_client
 
 
 def _parse_mcp_tools_result(result: Any) -> JsonDict:
@@ -2947,8 +3041,9 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
             return (
                 "Simulator MCP tool executed zero controller steps because the current "
                 f"EEF pose was already inside the requested tolerance; {summary}. The "
-                "robot and physical camera viewpoint did NOT change. A newly captured "
-                "packet is not a materially new view. If a different view is required, "
+                "receipt reports no controller-driven motion; it does not prove that "
+                "the entire world or camera state stayed unchanged. A new packet ID "
+                "alone does not establish a materially new view. If a different view is required, "
                 "propose a checked pose outside the current tolerance envelope or use "
                 "a justified tighter tolerance/orientation, then preview that exact pose."
                 f"{attachment_note}{suffix}"
@@ -2966,7 +3061,24 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
 def _motion_already_within_tolerance(response: JsonDict) -> bool:
     nested = response.get("motion_summary")
     motion = dict(nested) if isinstance(nested, dict) else build_motion_summary(response)
-    if motion.get("reached_target") is not True or motion.get("steps_executed") != 0:
+    steps = motion.get("steps_executed")
+    if (
+        motion.get("reached_target") is not True
+        or type(steps) is not int
+        or steps != 0
+        or motion.get("stop_reason") != "target_reached"
+    ):
+        return False
+    receipt = motion.get("controller_receipt")
+    if isinstance(receipt, dict) and any(
+        key in receipt
+        and (type(receipt[key]) is not type(expected) or receipt[key] != expected)
+        for key, expected in (
+            ("steps_executed", 0),
+            ("reached_target", True),
+            ("stop_reason", "target_reached"),
+        )
+    ):
         return False
     start = motion.get("start")
     end = motion.get("end")
@@ -2984,8 +3096,8 @@ def _motion_noop_recovery_options(response: JsonDict) -> list[JsonDict]:
         {
             "action": "consume_existing_visual_evidence",
             "reason": (
-                "zero controller steps means the physical viewpoint did not change; "
-                "do not repeat perception merely because a new packet id was minted"
+                "zero controller steps does not establish a new physical viewpoint; "
+                "reuse existing visual evidence only while it remains valid and fresh"
             ),
         },
         {
@@ -3270,6 +3382,35 @@ def _ik_reachability_classification(reachability: JsonDict) -> str:
     return "hard_infeasible"
 
 
+def _ik_controller_execution_caveat(capabilities: JsonDict) -> str:
+    """Explain endpoint evidence without upgrading it to controller convergence."""
+    controller = capabilities.get("controller_id")
+    executor = capabilities.get("goal_executor")
+    if (
+        controller == "robosuite.osc_pose"
+        and executor == "openeta.outer_closed_loop_cartesian.v1"
+    ):
+        detail = (
+            "The declared OSC executor does not consume the preview's joint seed; "
+            "a good IK branch/joint margin does not prove that OSC can enter that branch."
+        )
+    elif (
+        controller == "mink.robosuite_joint_velocity"
+        and executor == "openeta.worker_mink_goal.v1"
+    ):
+        detail = (
+            "The declared Mink executor can use a host-resolved, validated joint seed, "
+            "but this preview does not establish that it was consumed or will converge."
+        )
+    else:
+        detail = "The current controller's seed-consumption behavior is not established."
+    return (
+        "Endpoint IK feasibility is not verified local controller executability. "
+        f"{detail} Keep the execution gates and collision checks; use the actual "
+        "motion receipt and endpoint residuals to judge whether the target was reached."
+    )
+
+
 def _ik_motion_collision_delegation(
     receipt: JsonDict,
     *,
@@ -3324,13 +3465,14 @@ def _ik_execution_authorization(receipt: JsonDict) -> JsonDict:
     reason_code = str(receipt.get("reason_code") or "unspecified")
     if authorized:
         instruction = (
-            f"Pass ik_receipt_id={receipt_id} to move_to and do not copy target_pose. "
+            "Use this result's execution reference with move_to according to its live "
+            "contract (the ik_result bundle in a bundle-only profile); do not copy target_pose. "
             "The authorization is valid only for the numerically equivalent target "
             "and orientation policy recorded by this receipt."
         )
     else:
         instruction = (
-            f"Do not pass ik_receipt_id={receipt_id} to move_to: this receipt is "
+            "Do not execute this result with move_to: this receipt is "
             f"non-executable ({reason_code}). Change the target pose, orientation "
             "policy, or grasp candidate and run ik_preview_check again. Repeating the "
             "same xyz and explicit orientation while merely omitting a tolerance is "
@@ -3361,6 +3503,21 @@ def _ik_execution_authorization(receipt: JsonDict) -> JsonDict:
 
 def _ik_recovery_options(receipt: JsonDict) -> list[JsonDict]:
     reason_code = str(receipt.get("reason_code") or "").strip().lower()
+    if reason_code == "ik_search_no_solution":
+        return [
+            {
+                "action": "select_another_grasp_candidate",
+                "reason": "Bounded search found no solution, not a proof of impossibility. Select a different candidate and preview its exact compiled pose.",
+            },
+            {
+                "action": "inspect_search_evidence",
+                "reason": "Inspect residuals and search_budget. Identical pose, robot state and solver settings reuse deterministic seeds; an identical retry adds no new search coverage.",
+            },
+            {
+                "action": "inspect_fresh_observation",
+                "reason": "Consider new perception evidence if candidate geometry is doubtful. Do not silently relax contact orientation or execute the nearest numerical candidate.",
+            },
+        ]
     if reason_code == "endpoint_collision_check_unavailable":
         delegation = receipt.get("motion_collision_delegation")
         delegation = delegation if isinstance(delegation, dict) else {}
@@ -3592,6 +3749,15 @@ def _response_diagnostics(response: JsonDict) -> list[JsonDict]:
             }
         ]
     reachability = build_reachability_summary(response)
+    if (reachability.get("status") == "unknown" and reachability.get("reason_code")
+            in {"ik_search_no_solution", "ik_search_timeout"}):
+        return [{
+            "code": reachability["reason_code"],
+            "message": reachability.get("message") or "IK search is inconclusive.",
+            "reachability": reachability,
+            "candidate_rejection": False,
+            "failure_class": "ik_search_inconclusive",
+        }]
     if reachability.get("status") == "unreachable":
         return [
             {

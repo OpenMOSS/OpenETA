@@ -151,6 +151,47 @@ def test_sweep_reports_clear_when_nothing_intersects() -> None:
     assert info["swept_samples"] >= 1
 
 
+def test_sweep_accepts_baseline_for_monotonic_escape() -> None:
+    """The live move_to path may begin with the proxy overlapping a neighbour.
+
+    Passing the measured batch-start EEF pose must reach the endpoint checker
+    instead of failing at the wrapper boundary, and upward egress must remain
+    permitted while a worsening move is rejected.
+    """
+    attachment = {
+        "status": "tentative",
+        "object_name": "bowl_1",
+        "relative_xyz": [0.0, 0.0, -0.05],
+        "dims": [0.06, 0.06, 0.08],
+    }
+    neighbour = {
+        "name": "ramekin_1",
+        "category": "ramekin",
+        "position": [0.0, 0.0, 0.07],
+        "dims": [0.08, 0.08, 0.10],
+    }
+
+    escaped, escape_info = _check_attached_object_sweep(
+        attachment,
+        [neighbour],
+        [0.0, 0.0, 0.15],
+        [0.0, 0.0, 0.18],
+        baseline_eef_xyz=[0.0, 0.0, 0.15],
+    )
+    assert escaped is False
+    assert escape_info["egress_from_initial_overlap"] is True
+
+    worsening, worsening_info = _check_attached_object_sweep(
+        attachment,
+        [neighbour],
+        [0.0, 0.0, 0.15],
+        [0.0, 0.0, 0.13],
+        baseline_eef_xyz=[0.0, 0.0, 0.15],
+    )
+    assert worsening is True
+    assert worsening_info["new_or_worsened"] is True
+
+
 # ── tentative-proxy window ───────────────────────────────────────────
 
 def test_tentative_proxy_is_armed_and_carries_usable_geometry() -> None:

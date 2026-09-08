@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import importlib
 import inspect
 import io
 import math
@@ -591,12 +592,27 @@ def _failure_content(reason: str) -> str:
 
 
 def _register_checkpoint_safe_globals(*, torch: Any, np: Any) -> None:
-    numpy_core = getattr(np, "_core", None)
-    if numpy_core is None:
-        numpy_core = np.core
+    # Other libraries can install a partial numpy._core compatibility module.
+    # Import the leaf explicitly instead of assuming the parent exposes it.
+    scalar = None
+    for module_name in ("numpy._core.multiarray", "numpy.core.multiarray"):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            # A dependency error inside an available module is not evidence that
+            # this NumPy layout is absent; do not hide a broken installation.
+            if exc.name not in {"numpy._core", "numpy.core", module_name}:
+                raise
+            continue
+        scalar = getattr(module, "scalar", None)
+        if callable(scalar):
+            break
+    if not callable(scalar):
+        raise RuntimeError("NumPy multiarray.scalar is unavailable for restricted checkpoint loading")
     torch.serialization.add_safe_globals(
         [
-            (numpy_core.multiarray.scalar, "numpy.core.multiarray.scalar"),
+            (scalar, "numpy.core.multiarray.scalar"),
+            (scalar, "numpy._core.multiarray.scalar"),
             np.dtype,
             type(np.dtype(np.float64)),
         ]

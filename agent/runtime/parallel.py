@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +10,10 @@ from typing import Callable
 from uuid import uuid4
 
 from adapter.protocol import JsonDict
+from agent.runtime.success_evidence import (
+    assess_episode_success, episode_evidence_payload, episode_environment_id, episode_failed,
+    requires_official_reward,
+)
 from agent.runtime.episode import (
     DEFAULT_EPISODE_TIMEOUT_S,
     DEFAULT_MAX_TOOL_CALLS,
@@ -444,14 +447,20 @@ def classify_episode_result(
 ) -> str:
     if episode.metadata.get("waiting_for_human"):
         return "need_human"
+    payload = episode_evidence_payload(episode)
+    if episode_failed(payload):
+        return "fail"
+    env_id = episode_environment_id(payload, env_id)
     official_reward_required = _requires_official_reward(
         env_id=env_id,
-        explicit=require_official_reward,
+        explicit=(require_official_reward if require_official_reward is not None
+                  else episode.metadata.get("require_official_reward")),
     )
-    if _episode_has_objective_success(
-        episode,
-        require_official_reward=official_reward_required,
-    ):
+    verdict = assess_episode_success(payload, env_id=env_id,
+                                     require_official_reward=official_reward_required)
+    if verdict["explicit_failure"]:
+        return "fail"
+    if verdict["evidence"]:
         return "success"
     if episode.terminated and episode.metadata.get("stop_reason") == "task_complete":
         if episode.steps:
@@ -466,61 +475,15 @@ def classify_episode_result(
 
 
 def _requires_official_reward(*, env_id: str, explicit: object) -> bool:
-    if isinstance(explicit, bool):
-        return explicit
-    return "libero" in env_id.lower()
-
-
-def _episode_has_objective_success(
-    episode: EpisodeResult,
-    *,
-    require_official_reward: bool,
-) -> bool:
-    expected_execution_id = str(episode.metadata.get("execution_id") or "")
-    for step in episode.steps:
-        reward = step.step_result.reward
-        reward_positive = (
-            isinstance(reward, int | float)
-            and not isinstance(reward, bool)
-            and math.isfinite(float(reward))
-            and reward > 0
-        )
-        if require_official_reward:
-            info = step.step_result.info
-            receipt = info.get("environment_receipt") if isinstance(info, dict) else None
-            if (
-                reward_positive
-                and info.get("environment_receipt_trusted") is True
-                and info.get("official_reward") is True
-                and isinstance(receipt, dict)
-                and receipt.get("schema_version") == "openeta.environment_receipt.v1"
-                and (
-                    not expected_execution_id
-                    or receipt.get("execution_id") == expected_execution_id
-                )
-            ):
-                return True
-            continue
-        if reward_positive:
-            return True
-        info = step.step_result.info
-        if isinstance(info, dict) and any(
-            info.get(key) is True
-            for key in (
-                "task_success",
-                "environment_success",
-                "checker_success",
-                "benchmark_success",
-            )
-        ):
-            return True
-    return False
+    return requires_official_reward(env_id=env_id, explicit=explicit)
 
 
 def episode_failure_error(episode: EpisodeResult) -> JsonDict:
     reason = episode.metadata.get("failure_reason")
     if not isinstance(reason, dict) or not reason:
         return {}
+    if reason.get("code") in {"planner_validation_failed", "planner_provider_failed"}:
+        return {"type": "EpisodePlannerFailure", **reason}
     return {
         "type": "EpisodeResourceLimit",
         "code": reason.get("code"),

@@ -248,8 +248,14 @@ Agent execution/session, simulator session, environment handle, backend, and
 tool call. `ToolFeedbackEpisodeEnvironment` accepts reward and terminal fields
 only when that host provenance and all identities match the active episode.
 Rewards must be finite numeric values and terminal fields must be booleans.
-LIBERO and other official-reward evaluations accept a positive reward only
-from such a trusted same-execution receipt.
+Environment retirement uses a separate explicit-acknowledgement boundary:
+failed or pending cleanup retains its handle and cannot be treated as a successful
+no-op. See [environment cleanup and retry ownership](environment-cleanup.md).
+Trustworthy reward is not necessarily task success. Known LIBERO and registered
+RoboCasa direct adapters require a same-execution/session binary terminal success
+receipt; generic environments require explicit host checker/adapter evidence.
+Resource failure, truncation, and failed completion cannot be erased by earlier
+reward. Live/offline consumers share the [objective success rules](success-evidence.md).
 
 Fresh simulator state is represented by
 `openeta.observation_snapshot.v1`. The snapshot retains robot/object state,
@@ -406,7 +412,15 @@ computation, and derived artifacts. It can read the full current session tree
 session sandbox. Complete high-cardinality outputs such as grasp or placement
 candidate lists are persisted as immutable JSON; working memory carries a
 bounded preview, count, truncation flag, and queryable artifact reference. A
-request for
+disposable worker enforces the default sandbox with Linux Landlock/seccomp;
+the Python import/path helpers alone are not the security boundary. It requires
+an unprivileged Linux host with Landlock ABI >= 3 and `libseccomp.so.2`, denies
+network/process/thread creation, and fails closed if policy installation fails.
+The host bounds worker time, memory, individual file size, and output streams;
+cancellation kills/reaps the worker before the owning turn becomes idle. Session
+and workspace roots must be explicitly configured; an unconfigured runtime
+does not gain ambient cwd or `/tmp` reads. See
+[execution isolation](python-exec-isolation.md) for limits and open work. A request for
 `sandbox="outside_sandbox"` requires explicit approval for each invocation and
 runs in a disposable host subprocess using the current OpenETA Python
 interpreter and working directory. It has host-level imports, filesystem, and
@@ -609,7 +623,11 @@ Default runtime policy:
 - When attached, `JsonMemoryStore` persists each local session under
   `.openeta_memory/sessions/<session_id>/`: `trace.jsonl` stores the automatic
   event trace, `conversation.jsonl` stores resumable model-visible history,
-  `working/*.json` stores mutable session memory, and `rollout/` stores
+  `working/snapshot.json` atomically stores one checksummed memory generation;
+  other `working/*.json` files are compatibility inspection exports, not new-format
+  restore authority. Trace/conversation use strict sequence and torn-tail recovery;
+  incomplete history invalidates old epoch-bound motion evidence on resume.
+  See [memory recovery boundaries](memory-store-recovery.md). `rollout/` stores
   evaluation evidence. Session-owned skills, tool artifacts, and the Python
   sandbox live under the same UUID root. This directory is local state and is
   ignored by git. The former `.openeta_memory/workspaces/<session_id>/` layout

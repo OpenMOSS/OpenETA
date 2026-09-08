@@ -22,7 +22,7 @@ required fields, output variants, evidence lifetime, or gate behavior are comple
 | `camera_pose_to_world` | geometry | `read_only` | verified | 7 |
 | `close_simulator_env` | environment | `world_mutating` | verified | 0 |
 | `compact_memory` | memory | `bookkeeping` | verified | 1 |
-| `compile_grasp_seed` | geometry | `read_only` | verified | 7 |
+| `compile_grasp_seed` | geometry | `read_only` | verified | 8 |
 | `compute_wrist_alignment` | geometry | `read_only` | verified | 2 |
 | `create_simulator_env` | environment | `world_mutating` | verified | 8 |
 | `delete_memory` | memory | `bookkeeping` | verified | 2 |
@@ -32,9 +32,9 @@ required fields, output variants, evidence lifetime, or gate behavior are comple
 | `get_memory` | memory | `read_only` | verified | 2 |
 | `grasp_pose_estimate` | manipulation | `planning` | verified | 2 |
 | `gripper_control` | control | `world_mutating` | verified | 1 |
-| `ik_preview_check` | safety | `read_only` | verified | 12 |
+| `ik_preview_check` | safety | `read_only` | verified | 13 |
 | `molmopoint` | perception | `read_only` | verified | 2 |
-| `move_to` | control | `world_mutating` | verified | 5 |
+| `move_to` | control | `world_mutating` | verified | 6 |
 | `observe` | perception | `read_only` | verified | 1 |
 | `prepare_attachment_probe` | geometry | `read_only` | verified | 5 |
 | `promote_calibration_profile` | calibration | `bookkeeping` | verified | 3 |
@@ -110,7 +110,8 @@ Predict five camera-frame object placement transforms and the corresponding plac
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -176,7 +177,8 @@ Independently compare the frozen attachment probe's before/after agentview and w
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -249,7 +251,8 @@ Exclusive request branches: `[{"required": ["placement_result_id", "candidate_id
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -313,7 +316,8 @@ No Agent parameters.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -376,7 +380,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -397,24 +402,27 @@ Resolve one session-owned estimator result/candidate id and compile its normaliz
 
 | Parameter | Required | Schema / description |
 |---|:---:|---|
-| `grasp_result_id` | yes | `string` —  — `{"minLength": 1}` |
+| `bundle_id` | no | `string` — Host-owned grasp candidate collection bundle. — `{"minLength": 1}` |
+| `grasp_result_id` | no | `string` —  — `{"minLength": 1}` |
 | `candidate_id` | yes | `string` —  — `{"minLength": 1}` |
-| `target_geometry_family` | no | `string` —  |
+| `target_geometry_family` | no | `string` — Optional geometry hint. Unlike select_sam3_detection, compilation accepts extension strings; unmatched families use the generic calibrated transform, not a validated task-family strategy. — `{"examples": ["apple", "articulated_handle", "bowl", "boxed_item", "drawer_handle", "lying_bottle", "other", "unknown", "upright_bottle", "upright_can"]}` |
 | `target_class` | no | `string` —  |
 | `strategy_id` | no | `string` —  |
 | `articulated_handle_options` | no | `object` —  — `{"additionalProperties": false}` |
 | `pregrasp_distance_m` | no | `number` —  — `{"minimum": 0.04, "maximum": 0.16}` |
+
+Exclusive request branches: `[{"required": ["grasp_result_id"]}, {"required": ["bundle_id"]}]`
 
 ### Host resolution
 
 - Mode/resolver: `evidence_graph_lookup` / `openeta.host_resolver.compile_grasp_seed.v1`
 - Runtime binding: `agent.tools.runtime_contract_bindings._resolve_grasp_candidate_input` (`memory` layer)
 - Contract-driven dispatch: yes
-- Agent-visible references: `grasp_result_id`, `candidate_id`
+- Agent-visible references: `bundle_id or grasp_result_id`, `candidate_id`
 - Private resolved inputs: `camera_pose`, `source observation`, `camera calibration`
 - Resolution freshness: `object_scene_epoch`
 - Resolution invalidated by: `candidate missing from result`, `stale object-scene epoch`
-- Notes: None.
+- Notes: A registered grasp_candidates bundle is first resolved by AgentMemory.resolve_tool_bundle to the legacy result reference; candidate and provenance gates then run unchanged.
 
 ### Consumed typed facts
 
@@ -447,7 +455,8 @@ Resolve one session-owned estimator result/candidate id and compile its normaliz
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -515,7 +524,8 @@ Near a compiled clearance/hover reference, compute one bounded world-frame later
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -586,7 +596,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -652,7 +663,8 @@ Delete a working-memory fact, artifact, or skill note entry by key.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -721,7 +733,8 @@ Fuse aligned RGB-D sensor depth with an optional metric monocular depth-prior ar
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.source_packet_resolution` | the public request contains source packet references | `invalid_source_packet`, `same_view_packet_mismatch` | `agent/tools/runtime_contract_bindings.py:resolve_host_parameters` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -789,7 +802,8 @@ Call a configured remote metric monocular depth-prior service such as UniDepth, 
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.source_packet_resolution` | the public request contains source packet references | `invalid_source_packet`, `same_view_packet_mismatch` | `agent/tools/runtime_contract_bindings.py:resolve_host_parameters` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -864,7 +878,8 @@ Follow 1-5 short, individually IK-checked end-effector waypoints atomically whil
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_trajectory_resolution` | always | `invalid_ik_trajectory_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_trajectory_reference` |
 | `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
@@ -935,7 +950,8 @@ Read working-memory facts, artifacts, skill notes, or compact summary.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1002,7 +1018,8 @@ Generate one normalized score-descending camera-frame grasp candidate queue from
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -1069,7 +1086,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -1091,6 +1109,7 @@ Read-only endpoint reachability preview before execution. Returns reachable, unr
 
 | Parameter | Required | Schema / description |
 |---|:---:|---|
+| `bundle_id` | no | `string` — Host-owned exact target pose bundle. — `{"minLength": 1}` |
 | `target_pose` | no | `object` —  — `{"additionalProperties": true}` |
 | `compiled_grasp_id` | no | `string` —  — `{"minLength": 1}` |
 | `waypoint_role` | no | `string` —  — `{"enum": ["grasp_clearance", "grasp_precontact", "grasp_alignment_reference", "grasp_contact"]}` |
@@ -1104,14 +1123,14 @@ Read-only endpoint reachability preview before execution. Returns reachable, unr
 | `preserve_current_orientation` | no | `boolean` —  |
 | `check_endpoint_collision` | no | `boolean` —  |
 
-Exclusive request branches: `[{"required": ["target_pose"]}, {"required": ["compiled_grasp_id", "waypoint_role"]}, {"required": ["compiled_grasp_id", "path_fraction"]}, {"required": ["viewpoint_proposal_id", "candidate_id"]}, {"required": ["probe_id", "waypoint_index"]}]`
+Exclusive request branches: `[{"required": ["bundle_id"], "properties": {"bundle_id": {"type": "string", "minLength": 1, "description": "Host-owned exact target pose bundle."}, "position_tolerance_m": {"type": "number", "exclusiveMinimum": 0}, "orientation_tolerance_rad": {"type": "number", "exclusiveMinimum": 0}, "preserve_current_orientation": {"type": "boolean"}, "check_endpoint_collision": {"type": "boolean"}}, "additionalProperties": false}, {"required": ["target_pose"]}, {"required": ["compiled_grasp_id", "waypoint_role"]}, {"required": ["compiled_grasp_id", "path_fraction"]}, {"required": ["viewpoint_proposal_id", "candidate_id"]}, {"required": ["probe_id", "waypoint_index"]}]`
 
 ### Host resolution
 
 - Mode/resolver: `exclusive_reference_or_agent_pose` / `openeta.host_resolver.ik_preview_check.v1`
 - Runtime binding: `agent.runtime.pipeline.ActionPipeline.compile` (`pipeline` layer)
 - Contract-driven dispatch: no
-- Agent-visible references: `target_pose`, `compiled_grasp_id + waypoint_role`, `compiled_grasp_id + path_fraction`, `viewpoint_proposal_id + candidate_id`, `probe_id + waypoint_index`
+- Agent-visible references: `bundle_id`, `target_pose`, `compiled_grasp_id + waypoint_role`, `compiled_grasp_id + path_fraction`, `viewpoint_proposal_id + candidate_id`, `probe_id + waypoint_index`
 - Private resolved inputs: `target_pose`, `orientation policy`, `private IK seed`, `provenance`
 - Resolution freshness: `robot_motion_epoch`, `object_scene_epoch`
 - Resolution invalidated by: `unknown reference`, `stale reference`, `reference branch mismatch`
@@ -1155,7 +1174,8 @@ Exclusive request branches: `[{"required": ["target_pose"]}, {"required": ["comp
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.compiled_grasp_reference_resolution` | compiled_grasp_id is supplied | `invalid_compiled_grasp_reference` | `agent/runtime/memory.py:AgentMemory.resolve_compiled_grasp_pose_reference` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
@@ -1223,7 +1243,8 @@ Ground a complete natural-language pointing prompt as zero or more pixel locatio
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.source_packet_resolution` | the public request contains source packet references | `invalid_source_packet`, `same_view_packet_mismatch` | `agent/tools/runtime_contract_bindings.py:resolve_host_parameters` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -1245,18 +1266,21 @@ Move the end effector to the exact pose frozen by one current-epoch ik_preview_c
 
 | Parameter | Required | Schema / description |
 |---|:---:|---|
-| `ik_receipt_id` | yes | `string` —  — `{"minLength": 1}` |
+| `bundle_id` | no | `string` — Host-owned IK result bundle; current authorization gates still apply. — `{"minLength": 1}` |
+| `ik_receipt_id` | no | `string` —  — `{"minLength": 1}` |
 | `num_steps` | no | `integer` —  — `{"minimum": 1}` |
 | `tolerance` | no | `number` —  — `{"exclusiveMinimum": 0}` |
 | `ori_tolerance` | no | `number` —  — `{"exclusiveMinimum": 0}` |
 | `enable_collision_check` | no | `boolean` —  |
+
+Exclusive request branches: `[{"required": ["ik_receipt_id"]}, {"required": ["bundle_id"]}]`
 
 ### Host resolution
 
 - Mode/resolver: `execution_receipt_lookup` / `openeta.host_resolver.move_to.v1`
 - Runtime binding: `agent.runtime.memory.AgentMemory.resolve_ik_motion_reference` (`memory` layer)
 - Contract-driven dispatch: no
-- Agent-visible references: `ik_receipt_id`
+- Agent-visible references: `bundle_id or ik_receipt_id`
 - Private resolved inputs: `target pose(s)`, `orientation policy`, `private IK seed(s)`, `provenance`
 - Resolution freshness: `robot_motion_epoch`, `object_scene_epoch`
 - Resolution invalidated by: `unknown receipt`, `stale receipt`, `non-executable IK classification`
@@ -1298,7 +1322,8 @@ Move the end effector to the exact pose frozen by one current-epoch ik_preview_c
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_receipt_resolution` | always | `invalid_ik_receipt_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_motion_reference` |
 | `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
@@ -1366,6 +1391,7 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1437,7 +1463,8 @@ Exclusive request branches: `[{"required": ["direction_world_xyz"], "properties"
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1504,7 +1531,8 @@ Publish a reviewed session calibration as candidate or validated only after host
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1571,7 +1599,8 @@ Publish a reviewed session strategy as candidate or validated only after host-re
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1638,7 +1667,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1705,7 +1735,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1752,7 +1783,7 @@ Generate several calibrated target-facing wrist-camera observation poses around 
 
 | Outcome | Operational success | Required outputs | Produces | Executable | Recovery |
 |---|:---:|---|---|:---:|:---:|
-| `completed` | True | `schema_version`, `proposal_id`, `candidates` | `openeta.wrist_viewpoint_proposal.v1 @ outputs.proposal_id` | False | no |
+| `completed` | True | `schema_version`, `proposal_id`, `candidates`, `compiled_grasp_id`, `source_packet_id`, `camera_frame_id`, `object_scene_epoch`, `robot_motion_epoch`, `target_anchor_world_xyz`, `camera_mount` | `openeta.wrist_viewpoint_proposal.v1 @ outputs.proposal_id` | False | no |
 | `operational_failure` | False | none | none | n/a | required |
 
 ### Evidence lifetime
@@ -1773,7 +1804,8 @@ Generate several calibrated target-facing wrist-camera observation poses around 
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.provenance_bundle_resolution` | the request selects a host-resolved bundle/reference branch | `invalid_provenance_bundle` | `agent/runtime/pipeline.py:ActionPipeline.compile` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -1839,7 +1871,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1909,7 +1942,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1975,7 +2009,8 @@ Reject every candidate in one pending SAM3 result when visual review shows that 
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -2044,7 +2079,8 @@ Resolve an object-only asset phrase (identity/appearance, not a scene relation) 
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.source_packet_resolution` | the public request contains source packet references | `invalid_source_packet`, `same_view_packet_mismatch` | `agent/tools/runtime_contract_bindings.py:resolve_host_parameters` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -2075,7 +2111,7 @@ Segment objects or regions from RGB observations using text, one to 64 foregroun
 | `roi_bbox_xyxy` | no | `array` —  — `{"minItems": 4, "maxItems": 4}` |
 | `evidence_role` | no | `string` —  — `{"enum": ["target_object", "placement_region"]}` |
 
-Exclusive request branches: `[{"required": ["prompt"], "properties": {"mode": {"enum": ["text"]}}}, {"required": ["points"], "properties": {"mode": {"enum": ["points"]}}}, {"required": ["positive_points"]}]`
+Exclusive request branches: `[{"required": ["prompt"], "properties": {"mode": {"enum": ["text"]}, "points": {"maxItems": 0}, "positive_points": {"maxItems": 0}}}, {"required": ["points"], "properties": {"mode": {"enum": ["points"]}, "prompt": {"maxLength": 0}}}, {"required": ["positive_points"], "properties": {"mode": {"enum": ["points"]}, "prompt": {"maxLength": 0}}}]`
 
 ### Host resolution
 
@@ -2122,7 +2158,8 @@ Exclusive request branches: `[{"required": ["prompt"], "properties": {"mode": {"
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.source_packet_resolution` | the public request contains source packet references | `invalid_source_packet`, `same_view_packet_mismatch` | `agent/tools/runtime_contract_bindings.py:resolve_host_parameters` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
@@ -2189,7 +2226,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -2215,9 +2253,9 @@ Resolve a pending SAM3 semantic-verification obligation by selecting one stable 
 | `selection_confidence` | no | `number` —  — `{"minimum": 0, "maximum": 1}` |
 | `reason` | no | `string` —  |
 | `identity_anchor_id` | no | `string` —  |
-| `identity_relation` | no | `string` —  — `{"enum": ["same_instance", "replace_misidentified_anchor"]}` |
+| `identity_relation` | no | `string` —  — `{"enum": ["same_instance", "new_task_target", "replace_misidentified_anchor"]}` |
 | `evidence_role` | no | `string` —  — `{"enum": ["target_object", "placement_region"]}` |
-| `target_geometry_family` | no | `string` —  |
+| `target_geometry_family` | no | `string` — optional truthful gross-geometry hint: apple, articulated_handle, bowl, boxed_item, drawer_handle, lying_bottle, other, unknown, upright_bottle, upright_can; omit or use an empty string when unspecified. Use canonical lowercase values; this hint is not object identity or graspable-part evidence. — `{"enum": ["", "apple", "articulated_handle", "bowl", "boxed_item", "drawer_handle", "lying_bottle", "other", "unknown", "upright_bottle", "upright_can"]}` |
 
 ### Host resolution
 
@@ -2261,7 +2299,8 @@ Resolve a pending SAM3 semantic-verification obligation by selecting one stable 
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -2330,7 +2369,8 @@ Ask an isolated skill-authoring sub-agent to revise one existing editable SkillS
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -2394,7 +2434,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -2460,7 +2501,8 @@ None declared.
 
 | Gate check id | Applies when | Repair codes | Implementation |
 |---|---|---|---|
-| `runtime.motion_reconciliation` | motion reconciliation status is required or unresolved | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps

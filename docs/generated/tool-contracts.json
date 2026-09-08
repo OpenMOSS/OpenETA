@@ -125,6 +125,15 @@
         "checks": [],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.batch_boundary",
             "description": "Dependent or world-mutating calls cannot bypass observation boundaries.",
             "implementation": "agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch",
@@ -395,13 +404,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.source_packet_resolution",
@@ -590,13 +608,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.source_packet_resolution",
@@ -792,13 +819,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -921,13 +957,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -1102,13 +1147,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -1283,13 +1337,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -1447,13 +1510,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -1604,6 +1676,12 @@
                 "enum": [
                   "text"
                 ]
+              },
+              "points": {
+                "maxItems": 0
+              },
+              "positive_points": {
+                "maxItems": 0
               }
             }
           },
@@ -1616,13 +1694,26 @@
                 "enum": [
                   "points"
                 ]
+              },
+              "prompt": {
+                "maxLength": 0
               }
             }
           },
           {
             "required": [
               "positive_points"
-            ]
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "points"
+                ]
+              },
+              "prompt": {
+                "maxLength": 0
+              }
+            }
           }
         ]
       },
@@ -1797,13 +1888,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.source_packet_resolution",
@@ -2019,13 +2119,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.source_packet_resolution",
@@ -2234,13 +2343,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.source_packet_resolution",
@@ -2314,6 +2432,7 @@
             "type": "string",
             "enum": [
               "same_instance",
+              "new_task_target",
               "replace_misidentified_anchor"
             ]
           },
@@ -2325,7 +2444,21 @@
             ]
           },
           "target_geometry_family": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "",
+              "apple",
+              "articulated_handle",
+              "bowl",
+              "boxed_item",
+              "drawer_handle",
+              "lying_bottle",
+              "other",
+              "unknown",
+              "upright_bottle",
+              "upright_can"
+            ],
+            "description": "optional truthful gross-geometry hint: apple, articulated_handle, bowl, boxed_item, drawer_handle, lying_bottle, other, unknown, upright_bottle, upright_can; omit or use an empty string when unspecified. Use canonical lowercase values; this hint is not object identity or graspable-part evidence."
           }
         },
         "additionalProperties": false,
@@ -2447,13 +2580,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -2604,13 +2746,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -2742,6 +2893,47 @@
                 "type": "object",
                 "properties": {},
                 "additionalProperties": true
+              },
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
               }
             },
             "additionalProperties": true,
@@ -2809,13 +3001,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -2989,13 +3190,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -3194,13 +3404,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -3401,13 +3620,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -3610,13 +3838,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -3801,13 +4038,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -4013,13 +4259,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -4058,6 +4313,11 @@
       "request_schema": {
         "type": "object",
         "properties": {
+          "bundle_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Host-owned grasp candidate collection bundle."
+          },
           "grasp_result_id": {
             "type": "string",
             "minLength": 1
@@ -4067,7 +4327,20 @@
             "minLength": 1
           },
           "target_geometry_family": {
-            "type": "string"
+            "type": "string",
+            "examples": [
+              "apple",
+              "articulated_handle",
+              "bowl",
+              "boxed_item",
+              "drawer_handle",
+              "lying_bottle",
+              "other",
+              "unknown",
+              "upright_bottle",
+              "upright_can"
+            ],
+            "description": "Optional geometry hint. Unlike select_sam3_detection, compilation accepts extension strings; unmatched families use the generic calibrated transform, not a validated task-family strategy."
           },
           "target_class": {
             "type": "string"
@@ -4088,8 +4361,19 @@
         },
         "additionalProperties": false,
         "required": [
-          "grasp_result_id",
           "candidate_id"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "grasp_result_id"
+            ]
+          },
+          {
+            "required": [
+              "bundle_id"
+            ]
+          }
         ]
       },
       "host_resolution": {
@@ -4099,7 +4383,7 @@
         "resolution_layer": "memory",
         "contract_driven_dispatch": true,
         "agent_parameters": [
-          "grasp_result_id",
+          "bundle_id or grasp_result_id",
           "candidate_id"
         ],
         "resolved_parameters": [
@@ -4114,7 +4398,7 @@
           "candidate missing from result",
           "stale object-scene epoch"
         ],
-        "description": ""
+        "description": "A registered grasp_candidates bundle is first resolved by AgentMemory.resolve_tool_bundle to the legacy result reference; candidate and provenance gates then run unchanged."
       },
       "consumes": [
         {
@@ -4137,6 +4421,47 @@
                 "enum": [
                   "openeta.compiled_grasp_seed.v1"
                 ]
+              },
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
               },
               "compiled_grasp_id": {
                 "type": "string"
@@ -4209,13 +4534,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -4328,6 +4662,11 @@
                 "properties": {},
                 "additionalProperties": true
               },
+              "geometry_intent": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+              },
               "aligned_hover_pose": {
                 "type": "object",
                 "properties": {},
@@ -4426,13 +4765,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -4557,8 +4905,113 @@
                   "openeta.wrist_viewpoint_proposal.v1"
                 ]
               },
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
+              "geometry_intent": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+              },
               "proposal_id": {
                 "type": "string"
+              },
+              "compiled_grasp_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_packet_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "camera_frame_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "object_scene_epoch": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "robot_motion_epoch": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "target_anchor_world_xyz": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "camera_mount": {
+                "type": "object",
+                "properties": {
+                  "eef_to_camera_translation_xyz": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "eef_to_camera_rotation_matrix": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 3,
+                      "maxItems": 3
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                },
+                "additionalProperties": true,
+                "required": [
+                  "eef_to_camera_translation_xyz",
+                  "eef_to_camera_rotation_matrix"
+                ]
               },
               "candidates": {
                 "type": "array",
@@ -4567,14 +5020,22 @@
                   "properties": {},
                   "additionalProperties": true
                 },
-                "minItems": 1
+                "minItems": 1,
+                "maxItems": 8
               }
             },
             "additionalProperties": true,
             "required": [
               "schema_version",
               "proposal_id",
-              "candidates"
+              "candidates",
+              "compiled_grasp_id",
+              "source_packet_id",
+              "camera_frame_id",
+              "object_scene_epoch",
+              "robot_motion_epoch",
+              "target_anchor_world_xyz",
+              "camera_mount"
             ]
           },
           "produces": [
@@ -4626,13 +5087,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -4899,13 +5369,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -5070,13 +5549,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -5116,6 +5604,11 @@
       "request_schema": {
         "type": "object",
         "properties": {
+          "bundle_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Host-owned IK result bundle; current authorization gates still apply."
+          },
           "ik_receipt_id": {
             "type": "string",
             "minLength": 1
@@ -5137,8 +5630,17 @@
           }
         },
         "additionalProperties": false,
-        "required": [
-          "ik_receipt_id"
+        "oneOf": [
+          {
+            "required": [
+              "ik_receipt_id"
+            ]
+          },
+          {
+            "required": [
+              "bundle_id"
+            ]
+          }
         ]
       },
       "host_resolution": {
@@ -5148,7 +5650,7 @@
         "resolution_layer": "memory",
         "contract_driven_dispatch": false,
         "agent_parameters": [
-          "ik_receipt_id"
+          "bundle_id or ik_receipt_id"
         ],
         "resolved_parameters": [
           "target pose(s)",
@@ -5384,13 +5886,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.ik_receipt_resolution",
@@ -5768,13 +6279,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.ik_trajectory_resolution",
@@ -6058,13 +6578,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.compiled_grasp_provenance",
@@ -6128,6 +6657,11 @@
       "request_schema": {
         "type": "object",
         "properties": {
+          "bundle_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Host-owned exact target pose bundle."
+          },
           "target_pose": {
             "type": "object",
             "properties": {},
@@ -6187,6 +6721,33 @@
         "oneOf": [
           {
             "required": [
+              "bundle_id"
+            ],
+            "properties": {
+              "bundle_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Host-owned exact target pose bundle."
+              },
+              "position_tolerance_m": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "orientation_tolerance_rad": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "preserve_current_orientation": {
+                "type": "boolean"
+              },
+              "check_endpoint_collision": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "required": [
               "target_pose"
             ]
           },
@@ -6223,6 +6784,7 @@
         "resolution_layer": "pipeline",
         "contract_driven_dispatch": false,
         "agent_parameters": [
+          "bundle_id",
           "target_pose",
           "compiled_grasp_id + waypoint_role",
           "compiled_grasp_id + path_fraction",
@@ -6292,6 +6854,47 @@
                 "properties": {},
                 "additionalProperties": true
               },
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
               "ik_receipt_id": {
                 "type": "string"
               },
@@ -6328,6 +6931,47 @@
           "output_schema": {
             "type": "object",
             "properties": {
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
               "ik_preview_receipt": {
                 "type": "object",
                 "properties": {},
@@ -6377,6 +7021,47 @@
           "output_schema": {
             "type": "object",
             "properties": {
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
               "ik_preview_receipt": {
                 "type": "object",
                 "properties": {},
@@ -6417,6 +7102,47 @@
           "output_schema": {
             "type": "object",
             "properties": {
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
               "ik_preview_receipt": {
                 "type": "object",
                 "properties": {},
@@ -6457,6 +7183,47 @@
           "output_schema": {
             "type": "object",
             "properties": {
+              "handoff_bundles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bundle_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "grasp_candidates",
+                        "target_pose",
+                        "ik_result"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "session_id": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true,
+                  "required": [
+                    "bundle_id",
+                    "kind",
+                    "summary"
+                  ]
+                },
+                "maxItems": 8
+              },
               "ik_preview_receipt": {
                 "type": "object",
                 "properties": {},
@@ -6528,13 +7295,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.provenance_bundle_resolution",
@@ -6697,13 +7473,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -6832,13 +7617,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -6960,13 +7754,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -7082,13 +7885,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -7268,13 +8080,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",
@@ -7443,13 +8264,22 @@
         ],
         "bindings": [
           {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
             "check_id": "runtime.motion_reconciliation",
-            "description": "Unknown mutation outcomes must be observed and reconciled.",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
             "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
             "repair_codes": [
               "motion_reconciliation_required"
             ],
-            "applies_when": "motion reconciliation status is required or unresolved"
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
           },
           {
             "check_id": "runtime.batch_boundary",

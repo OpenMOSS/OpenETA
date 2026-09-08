@@ -53,6 +53,8 @@ def _schema_fixture(schema: dict) -> object:
     if isinstance(enum, list) and enum:
         return enum[0]
     if schema_type == "string":
+        if schema.get("pattern") == "^https://":
+            return "https://example.com/fixture"
         return "x" * max(1, int(schema.get("minLength") or 0))
     if schema_type == "integer":
         value = int(schema.get("minimum") or 0)
@@ -191,7 +193,9 @@ def test_default_catalog_verifies_every_reviewed_public_tool() -> None:
         contract.maturity is ContractMaturity.VERIFIED for contract in explicit
     )
     assert all(not contract.coverage_gaps for contract in explicit)
-    assert catalog.get("move_to").request_schema["required"] == ["ik_receipt_id"]
+    assert catalog.get("move_to").request_schema["oneOf"] == [
+        {"required": ["ik_receipt_id"]}, {"required": ["bundle_id"]},
+    ]
     assert catalog.get("gripper_control").request_schema["additionalProperties"] is False
     assert {
         "scene_detector",

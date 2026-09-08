@@ -187,7 +187,7 @@ def test_success_rollout_extracts_non_executable_candidate(tmp_path: Path) -> No
         "episode": {
             "task": "pick up test can",
             "session_id": "session-1",
-            "metadata": {},
+            "metadata": {"execution_id": "execution-1"},
             "steps": [
                 {
                     "observation": {
@@ -198,7 +198,21 @@ def test_success_rollout_extracts_non_executable_candidate(tmp_path: Path) -> No
                             "calibration_profile_id": "calibration",
                         }
                     },
-                    "step_result": {"reward": 1.0},
+                    "step_result": {
+                        "reward": 1.0, "terminated": True, "truncated": False,
+                        "info": {
+                            "task_success": True,
+                            "environment_receipt_trusted": True,
+                            "official_reward": True,
+                            "environment_receipt": {
+                                "schema_version": "openeta.environment_receipt.v1",
+                                "execution_id": "execution-1",
+                                "agent_session_id": "session-1",
+                                "reward_present": True, "reward": 1.0,
+                                "terminated": True, "truncated": False,
+                            },
+                        },
+                    },
                 }
             ],
         },

@@ -457,6 +457,13 @@ def _make_libero_direct(task: Any, render_mode: str | None = "rgb_array",
         "bddl_file_name": bddl_path,
         "camera_depths": True,
         "controller": controller,
+        # The robosuite ``done`` bit is only its low-level 1000-step horizon;
+        # it is not LIBERO task success.  One OpenETA move_to call may consume
+        # tens of these controller steps, so letting that horizon terminate the
+        # environment cuts off otherwise valid long-horizon tool rollouts.
+        # OpenETA owns the high-level turn budget and _LibEnvWrapper below
+        # converts LIBERO's official positive reward into task termination.
+        "ignore_done": True,
     }
     if image_width is not None:
         kwargs["camera_widths"] = image_width
@@ -585,9 +592,41 @@ class _LibEnvWrapper(gym.Env):
         if len(ret) == 4:
             obs, rew, done, info = ret
             self._last_frame = obs.get("agentview_image") if isinstance(obs, dict) else None
-            return obs, rew, done, done, info
+            # LIBERO inherits robosuite's legacy 4-tuple API.  Its ``done`` is
+            # a controller-step horizon, while task completion is expressed by
+            # the benchmark's binary reward.  Keep those meanings separate:
+            # positive official reward is trusted success termination; an
+            # unexpected raw horizon is truncation, never successful terminal
+            # evidence.  In normal OpenETA construction ignore_done=True keeps
+            # the raw horizon from firing at all.
+            task_success = bool(float(rew) > 0.0)
+            safe_info = dict(info) if isinstance(info, dict) else {"raw_info": str(info)}
+            safe_info.update(
+                {
+                    "openeta_task_success": task_success,
+                    "raw_backend_done": bool(done),
+                    "termination_semantics": "positive_reward_is_task_success",
+                }
+            )
+            return obs, rew, task_success, bool(done and not task_success), safe_info
         self._last_frame = ret[0].get("agentview_image") if isinstance(ret[0], dict) else None
-        return ret
+        obs, rew, terminated, truncated, info = ret
+        task_success = bool(float(rew) > 0.0)
+        safe_info = dict(info) if isinstance(info, dict) else {"raw_info": str(info)}
+        safe_info.update(
+            {
+                "openeta_task_success": task_success,
+                "raw_backend_done": bool(terminated or truncated),
+                "termination_semantics": "positive_reward_is_task_success",
+            }
+        )
+        return (
+            obs,
+            rew,
+            bool(task_success or terminated),
+            bool(truncated and not task_success),
+            safe_info,
+        )
 
     def render(self):
         return self._last_frame

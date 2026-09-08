@@ -112,6 +112,93 @@ role-specific.
 
 ## Views
 
+### Isolated grasp advisor correlation (2026-09-06 candidate)
+
+The host now passes the owning Agent session ID privately into the grasp
+advisor call. The published `grasp_selection_bundle.v1` is unchanged. The
+isolated provider prompt may include this display-only context:
+
+```json
+{
+  "schema_version": "openeta.grasp_selection_advice.v1",
+  "role": "read_only_grasp_pose_advisor",
+  "request_lineage": {
+    "parent_session_id": "main-agent-session",
+    "child_session_id": "advisor-unique-id",
+    "parent_tool": "grasp_pose_estimate"
+  }
+}
+```
+
+This links a child to a **parent session**, not to an exact provider request or
+action ID. Each advisor invocation gets a separate child identity; retries of
+the same provider request retain it. No main-planner conversation history,
+tool permission, or candidate activation authority is inherited. The lineage
+is a UI correlation hint, not trusted execution evidence or authorization.
+
+The OpenETA adapter recognizes the current advice schema, shows “等待人工 advisor
+响应” while pending, and retains the raw JSON composer. `/api/requests` and
+request details expose additive `parent_session_id` and `wait_reason` fields.
+The queue groups linked children under their parent session and shows a global
+pending count. When querying for a main session, match `session_id` **or**
+`parent_session_id`; matching only the former still excludes isolated children.
+Responded/cancelled requests have an empty wait reason. Answering or cancelling
+a child does not answer/cancel another request.
+
+Legacy advisor requests without lineage remain independently visible with a
+waiting label. The console does not guess their parent from task text, images,
+candidate metadata, or timing. Additional linked roles are listed below. Generic
+adapters do not acquire OpenETA-specific parsing dependencies.
+
+These are personal-branch implementation candidates; the additive prompt/queue
+fields and compatibility behavior require three-person review before shared
+main integration. The running console service must load the new Python code
+and the browser must reload the JS to show the new behavior. Do not restart a
+service with pending requests without coordinating their completion/cancellation.
+This patch does not implement nested cancellation propagation or split total
+latency into inference versus human waiting time.
+
+### Additional isolated roles (2026-09-07 candidate)
+
+Guidance, independent action review and visual differencing now use the same
+display-only parent/child convention. Only recognized schema/role pairs can
+supply lineage to the OpenETA console adapter:
+
+| Schema | Role | Pending label |
+| --- | --- | --- |
+| `openeta.supervision.v1` | `guidance_agent` | 等待人工 guidance 响应 |
+| `openeta.supervision.v1` | `independent_action_reviewer` | 等待人工 action reviewer 响应 |
+| `openeta.visual_delta_request.v1` | `visual_differencing` | 等待人工 visual-delta 响应 |
+
+For example, the isolated guidance context adds:
+
+```json
+{"schema_version":"openeta.supervision.v1","role":"guidance_agent","request_lineage":{"parent_session_id":"main-agent-session","child_session_id":"isolated-unique-id"}}
+```
+
+The episode runner supplies its current memory session ID through private
+guidance context; the action reviewer uses runtime execution metadata; visual
+differencing uses the owning memory session directly. These producers do not
+search nested history for a parent. Missing/invalid Host parent IDs omit lineage
+rather than inventing a parent; older no-lineage console identity fallback is
+unchanged. Each isolated invocation receives a fresh child ID, while retries
+within the same backend request retain it. Explicit session headers continue
+to take precedence in the console's session identity logic.
+
+The existing grouped queue supports these roles without new UI controls.
+Local tests cover producer inputs, distinct child histories and clearing the
+wait label at completion; a real loopback guidance/backend/console fixture
+confirms discovery and response-unblock using fixed text only. This is not a
+live task experiment or a deployment to the existing service.
+
+These additive contexts/labels remain pending three-person review. Skill
+author/reviewer and other isolated roles are not all covered. Parent session
+correlation does not identify an owning active request or execution lifetime:
+the planner's request may already be answered when its tool starts an advisor.
+Do not infer cascade cancellation from that answered status. Parent/child
+cancellation ownership and non-main-provider wait accounting remain open;
+this patch neither cancels siblings nor changes their permissions or budgets.
+
 ### 操作台
 
 The selected adapter provides a bounded projection made of generic sections.

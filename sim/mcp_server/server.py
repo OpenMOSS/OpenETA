@@ -15,10 +15,13 @@ import hashlib
 import math
 import os
 import sys
-import threading
 import uuid
 
 import anyio.to_thread
+
+from sim.ik_search_policy import (
+    DEFAULT_IK_MAX_ATTEMPTS, DEFAULT_IK_MAX_NFEV_PER_ATTEMPT, DEFAULT_IK_TIMEOUT_S,
+)
 
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -72,24 +75,23 @@ from sim.mcp_server.rest_api import (
 )
 from sim.reachability import ROBUST_EXECUTION_JOINT_MARGIN_RAD
 from adapter.motion_profiles import motion_control_profile
+from sim.mcp_server.env_lifecycle import (
+    close_managed_environment,
+    environment_lock as _env_control_lock,
+)
 
 # ── FastMCP server ────────────────────────────────────────────────────
 
 from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("OpenETA", log_level="WARNING")
 
-_env_control_locks: dict[tuple[str, str], threading.RLock] = {}
-_env_control_locks_guard = threading.Lock()
-
-
-def _env_control_lock(session_id: str, handle: str) -> threading.RLock:
-    key = (session_id, handle)
-    with _env_control_locks_guard:
-        lock = _env_control_locks.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _env_control_locks[key] = lock
-        return lock
+# Retire a conservative carried-object proxy only when fresh closed-gripper
+# telemetry is strongly inconsistent with the aperture measured when the proxy
+# was armed.  Absolute + relative guards preserve thin-object grasps while
+# allowing a slipped rigid object to stop poisoning collision recovery.
+_ATTACHMENT_APERTURE_COLLAPSE_MAX_OPEN_FRACTION = 0.05
+_ATTACHMENT_APERTURE_COLLAPSE_MAX_BASELINE_RATIO = 0.40
+_ATTACHMENT_APERTURE_COLLAPSE_MIN_ABSOLUTE_DROP = 0.05
 
 
 def _serialized_env_control(fn):
@@ -101,11 +103,13 @@ def _serialized_env_control(fn):
         sid = str(kwargs.get("session_id") or _current_session.get() or "")
         lock = _env_control_lock(sid, handle)
         with lock:
+            meta = _session_envs.get(sid, {}).get(handle, {})
+            if fn.__name__ != "close_env" and meta.get("close_lifecycle", {}).get("state") in {
+                "closing", "close_failed", "closed",
+            }:
+                return {"error": "Environment cleanup is pending; retry close_env before reuse.",
+                        "code": "environment_closing", "handle": handle}
             result = fn(*args, **kwargs)
-        if fn.__name__ == "close_env":
-            with _env_control_locks_guard:
-                if _env_control_locks.get((sid, handle)) is lock:
-                    _env_control_locks.pop((sid, handle), None)
         return result
 
     return _wrapper
@@ -651,6 +655,7 @@ def _arm_attachment_proxy(
         # Aperture is evidence for the independent attachment reviewer, not a
         # proxy-arming gate: thin objects may legitimately close near zero.
         "measured_open_fraction": float(openness),
+        "close_measured_open_fraction": float(openness),
         "binding_source": (
             "host_compiled_target_provenance"
             if isinstance(authorized_object, dict)
@@ -689,6 +694,29 @@ def _refresh_attachment_proxy(meta: dict, result: dict) -> dict | None:
         return None
     state = _extract_gripper_state_from_result(result)
     openness = state.get("openness")
+    baseline = proxy.get(
+        "close_measured_open_fraction",
+        proxy.get("measured_open_fraction"),
+    )
+    if _attachment_aperture_has_collapsed(baseline, openness):
+        retired = dict(proxy)
+        meta.pop("_attachment_proxy", None)
+        return {
+            "schema_version": "openeta.attachment_proxy_receipt.v1",
+            "status": "retired",
+            "reason": "measured_aperture_collapse",
+            "target_object_name": str(retired.get("object_name") or ""),
+            "binding_source": retired.get("binding_source"),
+            "close_measured_open_fraction": float(baseline),
+            "measured_open_fraction": float(openness),
+            "attachment_proven": False,
+            "interpretation": (
+                "Fresh closed-gripper telemetry collapsed far below the aperture "
+                "measured when the proxy was armed. The conservative carried-object "
+                "collision proxy was retired; attachment is now unknown and requires "
+                "fresh visual evidence before further carrying assumptions."
+            ),
+        }
     if isinstance(openness, (int, float)) and not isinstance(openness, bool):
         proxy["measured_open_fraction"] = float(openness)
     eef = _extract_ee_xyz_from_result(result)
@@ -718,6 +746,27 @@ def _refresh_attachment_proxy(meta: dict, result: dict) -> dict | None:
             "attachment from fresh dual-view co-motion and source-vacancy evidence."
         ),
     }
+
+
+def _attachment_aperture_has_collapsed(baseline: object, current: object) -> bool:
+    if (
+        not isinstance(baseline, (int, float))
+        or isinstance(baseline, bool)
+        or not isinstance(current, (int, float))
+        or isinstance(current, bool)
+    ):
+        return False
+    baseline_value = float(baseline)
+    current_value = float(current)
+    if baseline_value <= 0.0 or current_value < 0.0:
+        return False
+    return (
+        current_value <= _ATTACHMENT_APERTURE_COLLAPSE_MAX_OPEN_FRACTION
+        and current_value
+        <= baseline_value * _ATTACHMENT_APERTURE_COLLAPSE_MAX_BASELINE_RATIO
+        and baseline_value - current_value
+        >= _ATTACHMENT_APERTURE_COLLAPSE_MIN_ABSOLUTE_DROP
+    )
 
 
 def _collision_objects_without_attached(meta: dict) -> list[dict]:
@@ -791,6 +840,8 @@ def _check_attached_object_sweep(
     obstacles: list[dict],
     start_xyz: list[float],
     end_xyz: list[float],
+    *,
+    baseline_eef_xyz: list[float] | None = None,
 ) -> tuple[bool, dict]:
     """Sample the carry segment instead of testing only its endpoint.
 
@@ -814,7 +865,12 @@ def _check_attached_object_sweep(
     report it rather than letting a weaker check pass as an equal one.
     """
     if len(start_xyz) < 3 or len(end_xyz) < 3:
-        return check_attached_object_collision(attachment, obstacles, end_xyz)
+        return check_attached_object_collision(
+            attachment,
+            obstacles,
+            end_xyz,
+            baseline_eef_xyz=baseline_eef_xyz,
+        )
 
     dims = attachment.get("dims")
     smallest = 0.06
@@ -828,7 +884,12 @@ def _check_attached_object_sweep(
             [float(v) for v in start_xyz[:3]], [float(v) for v in end_xyz[:3]]
         )
     except (TypeError, ValueError):
-        return check_attached_object_collision(attachment, obstacles, end_xyz)
+        return check_attached_object_collision(
+            attachment,
+            obstacles,
+            end_xyz,
+            baseline_eef_xyz=baseline_eef_xyz,
+        )
 
     step_limit = max(0.01, smallest / 2.0)
     wanted = int(span / step_limit) + 1
@@ -842,7 +903,12 @@ def _check_attached_object_sweep(
             float(start_xyz[axis]) + (float(end_xyz[axis]) - float(start_xyz[axis])) * ratio
             for axis in range(3)
         ]
-        detected, info = check_attached_object_collision(attachment, obstacles, sample)
+        detected, info = check_attached_object_collision(
+            attachment,
+            obstacles,
+            sample,
+            baseline_eef_xyz=baseline_eef_xyz,
+        )
         last_info = info
         if detected:
             info["swept_samples"] = samples
@@ -927,9 +993,9 @@ def ik_preview_check(
     yaw: float | None = None,
     position_tolerance_m: float = 0.002,
     orientation_tolerance_rad: float = 0.05,
-    max_attempts: int = 24,
-    max_nfev_per_attempt: int = 300,
-    timeout_s: float = 10.0,
+    max_attempts: int = DEFAULT_IK_MAX_ATTEMPTS,
+    max_nfev_per_attempt: int = DEFAULT_IK_MAX_NFEV_PER_ATTEMPT,
+    timeout_s: float = DEFAULT_IK_TIMEOUT_S,
     preserve_current_orientation: bool = True,
     check_endpoint_collision: bool = False,
     include_scene_objects: bool = False,
@@ -1055,8 +1121,13 @@ def ik_preview_check(
 
     candidate = result.get("best_candidate")
     margin = candidate.get("joint_margin_min_rad") if isinstance(candidate, dict) else None
+    # A failed/expired numerical search also returns its best iterate. That
+    # iterate is diagnostic evidence, NOT a feasible execution seed. Preserve
+    # its raw margin/residuals without adding positive feasibility prose.
+    kinematic_solution_found = result.get("kinematic_status") == "reachable"
     if (
-        isinstance(margin, int | float)
+        kinematic_solution_found
+        and isinstance(margin, int | float)
         and float(margin) < ROBUST_EXECUTION_JOINT_MARGIN_RAD
     ):
         margin_value = float(margin)
@@ -1097,10 +1168,10 @@ def ik_preview_check(
         result["message"] = (
             str(result.get("message") or "IK solution found.").rstrip()
             + f" Execution seed margin is only {margin_value:.6f} rad; "
-            "the endpoint is feasible but execution-fragile."
+            "the kinematic solution is execution-fragile; this does not authorize motion."
         )
 
-    if isinstance(margin, int | float) and float(margin) < 0.05:
+    if kinematic_solution_found and isinstance(margin, int | float) and float(margin) < 0.05:
         proximity = {
             "near_limit": True,
             "margin_rad": float(margin),
@@ -1108,8 +1179,8 @@ def ik_preview_check(
             "nearest_joint_limit": candidate.get("nearest_joint_limit"),
             "interpretation": (
                 "The endpoint has a joint-limit-respecting IK solution, but its "
-                "minimum hard-limit margin is small. Bind this exact preview receipt "
-                "to execution; if local motion cannot converge, change the waypoint "
+                "minimum hard-limit margin is small. Execution still requires positive "
+                "authorization under the current gates; if motion cannot converge, change the waypoint "
                 "or wrist orientation instead of replaying the same target."
             ),
         }
@@ -2615,8 +2686,13 @@ def _settle_env(meta: dict, backend: str) -> dict:
 
 
 @_blocking_tool
+@_serialized_env_control
 def observe_env(handle: str, *, session_id: str = "") -> dict:
-    """Return the current observation without stepping.
+    """Return a non-stepping snapshot after current same-handle control exits.
+
+    This uses the complete-control lock, not just the worker's per-step render
+    lock: otherwise an outer OSC loop can resume moving after this snapshot.
+    It is not an operation-ID receipt and cannot fence a not-yet-arrived request.
 
     Args:
         handle: Environment handle from create_env.
@@ -2672,37 +2748,18 @@ def render_env(handle: str, *, session_id: str = "") -> dict:
 def close_env(handle: str, *, session_id: str = "") -> dict:
     sid = session_id or _current_session.get() or ""
     _touch_session(sid)
-    meta = _session_envs.get(sid, {}).pop(handle, None)
-    if meta:
-        remote_result: dict = {}
-        cleanup_errors: list[str] = []
+    def retire(meta):
         # Evict the cache by the SAME composite key used to write it — the old
         # code popped by bare ``handle`` and so never actually cleared the
         # entry, leaking stale frames for a since-closed env.
         with _session_last_obs_lock:
             _session_last_obs.get(sid, {}).pop(_obs_key(meta), None)
         _forget_obs_dirty(_obs_key(meta))
-        try:
-            remote_result = _get_mgr().proxy_handle_op(
-                meta, f"/env/{meta['remote_handle']}", method="DELETE"
-            )
-        except Exception as exc:
-            cleanup_errors.append(f"remote_close: {type(exc).__name__}: {exc}")
-        finally:
-            # Always release the worker reference, including transport errors.
-            try:
-                _get_mgr().release_worker(meta.get("worker_url", ""))
-            except Exception as exc:
-                cleanup_errors.append(f"release_worker: {type(exc).__name__}: {exc}")
-            remove_checker(handle)
-        return {
-            "ok": not cleanup_errors,
-            "already_closed": False,
-            "remote": remote_result,
-            "cleanup_errors": cleanup_errors,
-        }
-    # Closing is deliberately idempotent so finally-block retries are safe.
-    return {"ok": True, "already_closed": True, "cleanup_errors": []}
+        remove_checker(handle)
+
+    return close_managed_environment(
+        session_id=sid, handle=handle, envs=_session_envs, manager=_get_mgr(), retire=retire,
+    )
 
 
 @_blocking_tool
@@ -2715,7 +2772,7 @@ def list_active_envs(*, session_id: str = "") -> dict:
 
     Returns:
         dict with keys: **session_id**, **count**, **envs** (list of
-        ``{index, handle, env_id, backend}``).
+        ``{index, handle, env_id, backend, lifecycle_state}``).
     """
     sid = session_id or _current_session.get() or ""
     _touch_session(sid)
@@ -2727,6 +2784,7 @@ def list_active_envs(*, session_id: str = "") -> dict:
             "handle": h,
             "env_id": meta.get("env_id", "unknown"),
             "backend": meta.get("backend", "unknown"),
+            "lifecycle_state": meta.get("close_lifecycle", {}).get("state", "active"),
         })
     return {
         "session_id": sid,

@@ -66,7 +66,7 @@ class OutsidePythonExecution:
 
 @dataclass(slots=True)
 class OutsidePythonExecutor:
-    """Run approved code outside the restricted in-process globals."""
+    """Run explicitly approved code without the default worker's kernel policy."""
 
     executable: str = sys.executable
     cwd: str | Path | None = None

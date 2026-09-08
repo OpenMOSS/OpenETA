@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from adapter.protocol import EnvObservation, JsonDict
-from agent.runtime.actions import CommandKind
+from agent.runtime.actions import CommandKind, PipelineStatus
 from agent.backends.code_policy import (
     CodePolicyBackend,
     CodePolicyGenerationRequest,
@@ -27,6 +27,7 @@ from agent.runtime.memory import (
 )
 from agent.runtime.planner_prompts import compose_main_planner_prompt
 from agent.runtime.rollout import RolloutRecorder, public_backend_details
+from agent.backends.provider_interaction import manual_provider_interaction
 from agent.backends.planner import (
     PlaceholderPlannerBackend,
     PlannerBackend,
@@ -117,6 +118,7 @@ class PlannerContextConfig:
     # projection. Normal Planner requests read the durable event stream and then
     # apply the semantic high-fidelity window below.
     max_memory_events: int | None = None
+    agent_interface_profile: str = "legacy_compatible"
     recent_conversation_action_groups: int = DEFAULT_RECENT_CONVERSATION_ACTION_GROUPS
     recent_transition_observations: int = DEFAULT_RECENT_TRANSITION_OBSERVATIONS
     max_selected_skills: int = 3
@@ -232,7 +234,10 @@ class ToolCallingPlanner(BasePlanner):
         last_result: PlannerBackendResult | None = None
         backend_usage: JsonDict = {}
         backend_usage_sources: JsonDict = {}
+        provider_interactions: list[JsonDict] = []
         validation_attempt_history: list[JsonDict] = []
+        previous_candidate: JsonDict | None = None
+        previous_unparsed_response: str | None = None
         for attempt in range(1, self.max_validation_retries + 2):
             agent_context = tool_context.get("agent_context")
             request = PlannerBackendRequest(
@@ -244,12 +249,18 @@ class ToolCallingPlanner(BasePlanner):
                 conversation_summary=memory.conversation_checkpoint_summary(),
                 attempt=attempt,
                 validation_errors=validation_errors,
-                metadata={"schema_version": "openeta.planner_decision.v1"},
+                metadata={"schema_version": "openeta.planner_decision.v1",
+                          **({"previous_candidate": previous_candidate} if previous_candidate is not None else {}),
+                          **({"previous_unparsed_response": previous_unparsed_response}
+                             if previous_unparsed_response is not None else {})},
             )
             model_started_at_s = time.time()
             last_result = self.backend.decide(request)
             model_completed_at_s = time.time()
             backend_usage = _merge_backend_usage(backend_usage, last_result.details)
+            interaction = manual_provider_interaction(last_result.details.get("provider_interaction"))
+            if interaction:
+                provider_interactions.append(interaction)
             usage_source = str(last_result.details.get("usage_source") or "unknown")
             backend_usage_sources[usage_source] = (
                 int(backend_usage_sources.get(usage_source) or 0) + 1
@@ -261,6 +272,7 @@ class ToolCallingPlanner(BasePlanner):
                 tool_contract_catalog=self.tool_contract_catalog,
                 tool_contract_policy=self.tool_contract_policy,
                 tool_context=tool_context,
+                agent_interface_profile=self.context_config.agent_interface_profile,
             )
             required_skill = ""
             if not validation_errors:
@@ -317,6 +329,19 @@ class ToolCallingPlanner(BasePlanner):
                     validation_errors=validation_errors,
                 )
             )
+            previous_candidate = _rejected_candidate_snapshot(decision) if validation_errors else None
+            # Preserve malformed output for the model to correct its syntax.
+            # It is not a parsed candidate, cannot execute, and is never repaired
+            # by the Host. Do not echo oversized payloads or provider fallbacks.
+            previous_unparsed_response = (
+                last_result.payload
+                if validation_errors
+                and "raw_backend_payload" not in decision.metadata
+                and isinstance(last_result.payload, str)
+                and 0 < len(last_result.payload) <= 16384
+                and last_result.status != PipelineStatus.FAILED
+                else None
+            )
             if required_skill:
                 redirected = PlannerDecision(
                     action_type="tool_call",
@@ -335,6 +360,7 @@ class ToolCallingPlanner(BasePlanner):
                         backend_result=last_result,
                         backend_usage=backend_usage,
                         backend_usage_sources=backend_usage_sources,
+                        provider_interactions=provider_interactions,
                         validation_attempts=attempt,
                         validation_attempt_history=validation_attempt_history,
                         validation_errors=validation_errors,
@@ -358,6 +384,7 @@ class ToolCallingPlanner(BasePlanner):
                         backend_result=last_result,
                         backend_usage=backend_usage,
                         backend_usage_sources=backend_usage_sources,
+                        provider_interactions=provider_interactions,
                         validation_attempts=attempt,
                         validation_attempt_history=validation_attempt_history,
                     )
@@ -381,6 +408,7 @@ class ToolCallingPlanner(BasePlanner):
                 backend_result=last_result,
                 backend_usage=backend_usage,
                 backend_usage_sources=backend_usage_sources,
+                provider_interactions=provider_interactions,
                 validation_attempts=len(validation_attempt_history),
                 validation_attempt_history=validation_attempt_history,
                 validation_errors=validation_errors,
@@ -388,12 +416,57 @@ class ToolCallingPlanner(BasePlanner):
         )
 
 
+def _rejected_candidate_snapshot(decision: PlannerDecision) -> JsonDict | None:
+    """Bounded, detached echo of parsed model input, never a repaired action.
+
+    Invalid XML has no parsed candidate: do not pretend the Host fallback was
+    the model's rejected proposal. Oversized candidates remain in the rollout.
+    """
+    raw = decision.metadata.get("raw_backend_payload")
+    if not isinstance(raw, dict):
+        return None
+    candidate = {key: raw[key] for key in ("kind", "name", "parameters", "code") if key in raw}
+    try:
+        encoded = json.dumps(candidate, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return json.loads(encoded) if len(encoded) <= 16384 else None
+
+
 def _invariant_obligation_decision(
     tool_context: JsonDict,
     *,
     tools: ToolRegistry,
 ) -> PlannerDecision | None:
-    """Dispatch only host-owned observation and transport safety obligations."""
+    """Dispatch host-owned observation obligations or stop an unsafe episode."""
+
+    reconciliation = tool_context.get("motion_reconciliation")
+    if isinstance(reconciliation, dict):
+        # No operation-terminal protocol exists yet. Repeated forced observations
+        # cannot discharge this fence, including legacy completed/failed records.
+        # A terminal response also avoids treating model/operator reassurance as
+        # permission to resume the same unknown operation.
+        return PlannerDecision(
+            action_type="response",
+            action="talk",
+            parameters={
+                "message": (
+                    "Stopped this episode: a simulator action has transport-unknown "
+                    "outcome. Observed position cannot prove remote completion. "
+                    "Do not resend the action or clear the memory gate. Host-confirmed "
+                    "environment retirement is required before starting a new "
+                    "environment and session; in-place recovery is not implemented. "
+                    "Task success has not been established by this stop."
+                ),
+            },
+            reasoning="Unknown remote operation requires a stop, not observation polling.",
+            metadata={
+                "host_invariant": {
+                    "schema_version": "openeta.motion_reconciliation.v1",
+                    "unknown_tool": reconciliation.get("tool"),
+                }
+            },
+        )
 
     refresh = tool_context.get("fresh_observation_obligation")
     if (
@@ -418,28 +491,6 @@ def _invariant_obligation_decision(
             },
         )
 
-    reconciliation = tool_context.get("motion_reconciliation")
-    if (
-        isinstance(reconciliation, dict)
-        and reconciliation.get("status") in {"required", "unresolved"}
-        and tools.can_execute("observe")
-    ):
-        return PlannerDecision(
-            action_type="tool_call",
-            action="observe",
-            parameters={},
-            reasoning=(
-                "The previous simulator action has transport-unknown outcome; observe "
-                "the same handle before dispatching another world mutation."
-            ),
-            metadata={
-                "host_invariant": {
-                    "schema_version": "openeta.motion_reconciliation.v1",
-                    "tool": "observe",
-                    "unknown_tool": reconciliation.get("tool"),
-                }
-            },
-        )
     return None
 
 class CodePolicyPlanner(BasePlanner):
@@ -577,12 +628,19 @@ def _decision_from_backend_result(
     tool_contract_catalog: ToolContractCatalog | None = None,
     tool_contract_policy: ToolContractRuntimePolicy | None = None,
     tool_context: JsonDict | None = None,
+    agent_interface_profile: str = "legacy_compatible",
 ) -> tuple[PlannerDecision, list[str]]:
     payload, parse_errors = _parse_backend_payload(result.payload)
     if parse_errors:
         return _invalid_decision(parse_errors), parse_errors
 
     decision, build_errors = _build_planner_decision(payload)
+    from agent.runtime.interface_profiles import profile_parameter_errors
+    profile_errors = profile_parameter_errors(
+        agent_interface_profile, decision.action, decision.parameters,
+    )
+    if profile_errors:
+        return decision, [*build_errors, *profile_errors]
     canonicalizations = _canonicalize_host_parameters(
         decision,
         tool_context=tool_context or {},
@@ -997,7 +1055,10 @@ def _validate_planner_decision(
         "talk",
         "task_complete",
     }:
-        errors.append(f"Unsupported response name: {decision.action!r}.")
+        errors.append(
+            f"Unsupported response name: {decision.action!r}. "
+            "Allowed response names: ask_human, talk, task_complete."
+        )
 
     return errors
 
@@ -1065,7 +1126,11 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
             "target_geometry_family": "string",
         },
         "enums": {
-            "identity_relation": {"same_instance", "replace_misidentified_anchor"},
+            "identity_relation": {
+                "same_instance",
+                "new_task_target",
+                "replace_misidentified_anchor",
+            },
             "evidence_role": {"target_object", "placement_region"},
         },
     },
@@ -1074,8 +1139,10 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
         "types": {"sam3_result_id": "string", "reason": "string"},
     },
     "compile_grasp_seed": {
-        "required": ("grasp_result_id", "candidate_id"),
+        "required": ("candidate_id",),
+        "one_of_required": (("grasp_result_id",), ("bundle_id",)),
         "types": {
+            "bundle_id": "string",
             "grasp_result_id": "string",
             "candidate_id": "string",
             "target_geometry_family": "string",
@@ -1113,8 +1180,9 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
         "types": {"probe_id": "string"},
     },
     "move_to": {
-        "required": ("ik_receipt_id",),
+        "one_of_required": (("ik_receipt_id",), ("bundle_id",)),
         "types": {
+            "bundle_id": "string",
             "ik_receipt_id": "string",
             "num_steps": "integer",
             "tolerance": "number",
@@ -1134,6 +1202,7 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
     },
     "ik_preview_check": {
         "types": {
+            "bundle_id": "string",
             "target_pose": "object",
             "compiled_grasp_id": "string",
             "waypoint_role": "string",
@@ -1156,6 +1225,7 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
             }
         },
         "one_of_required": (
+            ("bundle_id",),
             ("target_pose",),
             ("compiled_grasp_id", "waypoint_role"),
             ("compiled_grasp_id", "path_fraction"),
@@ -1174,6 +1244,9 @@ def _validate_static_tool_parameters(
     types = rules.get("types")
     types = types if isinstance(types, dict) else {}
     errors = _unsupported_parameter_errors(tool_name, parameters, set(types))
+    from agent.runtime.tool_bundles import BUNDLE_CONSUMERS, bundle_reference_conflicts
+    if tool_name in BUNDLE_CONSUMERS and bundle_reference_conflicts(tool_name, parameters):
+        errors.append(f"{tool_name} bundle_id cannot be mixed with another reference branch.")
     for name in rules.get("required", ()):
         if name not in parameters:
             errors.append(f"{tool_name} requires `parameters.{name}`.")
@@ -1212,6 +1285,12 @@ def _validate_static_tool_parameters(
 
 
 def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]:
+    from agent.runtime.tool_bundles import BUNDLE_CONSUMERS
+    if (tool_name in BUNDLE_CONSUMERS
+            and tool_name not in {"compile_grasp_seed", "ik_preview_check", "move_to"}
+            and str(parameters.get("bundle_id", "")).startswith("bnd-")):
+        from agent.runtime.interface_profiles import profile_parameter_errors
+        return profile_parameter_errors("bundle_stage3", tool_name, parameters)
     if tool_name in _STATIC_TOOL_PARAMETER_RULES:
         return _validate_static_tool_parameters(tool_name, parameters)
     if tool_name == "python_exec":
@@ -1882,65 +1961,25 @@ def _validate_depth_packet_parameters(
 
 
 def _validate_grasp_pose_estimate_parameters(parameters: JsonDict) -> list[str]:
-    bundle_id = parameters.get("bundle_id")
-    if isinstance(bundle_id, str) and bundle_id.strip():
-        extra = sorted(
-            str(key)
-            for key in parameters
-            if key not in {"bundle_id", "backend_preference"}
-        )
-        if extra:
-            return [
-                "grasp_pose_estimate bundle references cannot be overridden with "
-                "model-supplied fields: "
-                + ", ".join(extra)
-                + "."
-            ]
-        return _validate_grasp_backend_preference(parameters.get("backend_preference"))
+    # This validates the Agent-facing request, not the RGB-D inputs that the
+    # runtime resolves from a Host-issued bundle. Never direct a missing-bundle
+    # repair into the legacy raw-input interface hidden from available_tools.
     errors: list[str] = []
-    mode = str(parameters.get("mode") or "targeted").strip().lower()
-    if mode not in {"targeted", "scene"}:
-        errors.append("grasp_pose_estimate mode must be targeted or scene.")
-    for key in ("rgb", "depth"):
-        value = parameters.get(key)
-        if not isinstance(value, str) or not value.strip() or _looks_like_placeholder_path(value):
-            errors.append(
-                f"grasp_pose_estimate requires `parameters.{key}` as a concrete local path."
-            )
-    object_mask = parameters.get("object_mask")
-    if mode == "targeted":
-        if not isinstance(object_mask, dict):
-            errors.append(
-                "grasp_pose_estimate targeted mode requires `parameters.object_mask` "
-                "as a complete SAM3 artifact with mask_ref and source_image."
-            )
-        else:
-            for key in ("mask_ref", "source_image"):
-                value = object_mask.get(key)
-                if (
-                    not isinstance(value, str)
-                    or not value.strip()
-                    or _looks_like_placeholder_path(value)
-                ):
-                    errors.append(
-                        f"grasp_pose_estimate object_mask requires a concrete `{key}` local path."
-                    )
-    elif object_mask is not None:
-        errors.append("grasp_pose_estimate scene mode does not accept object_mask.")
-    _validate_required_intrinsics(
-        parameters.get("intrinsics"),
-        label="grasp_pose_estimate `parameters.intrinsics`",
-        errors=errors,
-    )
-    frame_id = parameters.get("camera_frame_id")
-    if not isinstance(frame_id, str) or not frame_id.strip():
-        errors.append("grasp_pose_estimate requires a concrete camera_frame_id.")
-    scene_epoch = parameters.get("scene_epoch")
-    if isinstance(scene_epoch, bool) or not isinstance(scene_epoch, int) or scene_epoch < 0:
-        errors.append("grasp_pose_estimate requires the current non-negative scene_epoch.")
-    hints = parameters.get("hints")
-    if hints is not None and not isinstance(hints, dict):
-        errors.append("grasp_pose_estimate hints must be an object when provided.")
+    bundle_id = parameters.get("bundle_id")
+    if not isinstance(bundle_id, str) or not bundle_id.strip():
+        errors.append(
+            "grasp_pose_estimate requires a non-empty Host-issued `parameters.bundle_id`; "
+            "inspect host_resolved_inputs.grasp_pose_estimate for a ready bundle. "
+            "If none is ready, inspect current perception evidence; do not invent a "
+            "bundle reference or construct raw RGB-D inputs."
+        )
+    extra = sorted(str(key) for key in parameters if key not in {"bundle_id", "backend_preference"})
+    if extra:
+        errors.append(
+            "grasp_pose_estimate bundle references cannot be overridden with "
+            "model-supplied fields: " + ", ".join(extra) + ". "
+            "Allowed parameters are bundle_id and optional backend_preference."
+        )
     errors.extend(_validate_grasp_backend_preference(parameters.get("backend_preference")))
     return errors
 
@@ -2272,28 +2311,29 @@ def _validate_official_reward_completion(
 ) -> list[str]:
     if decision.action_type.lower().strip() != "response" or decision.action != "task_complete":
         return []
+    if decision.parameters.get("success") is False:
+        # Reporting failure is not a request to certify task success.
+        return []
     memory = tool_context.get("memory")
     metadata = memory.get("metadata") if isinstance(memory, dict) else None
     if not isinstance(metadata, dict) or metadata.get("source") != "ParallelEpisodeHarness":
         return []
-    if metadata.get("require_official_reward") is False:
+    from agent.runtime.success_evidence import episode_success_evidence, requires_official_reward
+
+    env_id = str(metadata.get("env_id") or "")
+    if not requires_official_reward(env_id=env_id, explicit=metadata.get("require_official_reward")):
         return []
     receipt = tool_context.get("latest_environment_receipt")
-    info = receipt.get("info") if isinstance(receipt, dict) else None
-    try:
-        reward = float(receipt.get("reward")) if isinstance(receipt, dict) else 0.0
-    except (TypeError, ValueError):
-        reward = 0.0
-    if (
-        reward > 0
-        and isinstance(info, dict)
-        and info.get("environment_receipt_trusted") is True
-        and info.get("official_reward") is True
-    ):
+    if episode_success_evidence({
+        "session_id": memory.get("session_id"),
+        "metadata": metadata,
+        "steps": [{"step_result": receipt if isinstance(receipt, dict) else {}}],
+    }, env_id=env_id):
         return []
     return [
-        "LIBERO batch completion requires an official positive reward from the same "
-        "episode. Continue with settle/retreat/observe instead of declaring task_complete."
+        "Batch completion requires verified task-success evidence from the current "
+        "execution and session, according to the environment's success contract. "
+        "Positive reward alone is insufficient; inspect current evidence before declaring task_complete."
     ]
 
 
@@ -2570,7 +2610,7 @@ def _validate_compiled_grasp_target_freshness(
     bundle = tool_context.get("grasp_input_bundle")
     bundle_id = bundle.get("bundle_id") if isinstance(bundle, dict) else None
     recovery = (
-        f" Call grasp_pose_estimate with bundle_id={bundle_id!r}, choose a current "
+        " Call grasp_pose_estimate with the current bundle_id shown in host_resolved_inputs, choose a current "
         "candidate, and compile it before contact or gripper close."
         if isinstance(bundle_id, str) and bundle_id
         else " Re-segment the current target, estimate a new grasp, and compile it before contact."
@@ -2786,6 +2826,16 @@ def _build_budgeted_tool_context(
     conversation_messages = memory.model_conversation_messages(
         max_action_groups=max(0, context_config.recent_conversation_action_groups)
     )
+    from agent.runtime.interface_profiles import project_profile_evidence
+    for message in (conversation_messages if context_config.agent_interface_profile in {"bundle_stage2", "bundle_stage3"} else []):
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith("{"):
+            try:
+                payload = json.loads(content)
+            except ValueError:
+                continue
+            message["content"] = json.dumps(project_profile_evidence(
+                payload, context_config.agent_interface_profile, memory.tool_handoffs(limit=32)), ensure_ascii=False)
     conversation_messages, budget = _project_planner_input_to_budget(
         context,
         config=context_config,
@@ -2809,7 +2859,7 @@ def _build_tool_context_payload(
 ) -> JsonDict:
     executable_tools = [tool for tool in tools.list() if tools.can_execute(tool.name)]
     tool_references, tool_contract_projection_audit = (
-        _contract_driven_tool_references(executable_tools)
+        _contract_driven_tool_references(executable_tools, profile=config.agent_interface_profile)
     )
     executable_tool_names = {tool.name for tool in executable_tools}
     selected_skill_guidance = _selected_skill_guidance(
@@ -2825,7 +2875,7 @@ def _build_tool_context_payload(
         )
     skill_usage = _skill_usage_guidance(selected_skill_guidance, memory)
     memory_context = memory.planning_context(max_events=config.max_memory_events)
-    pending_ik_execution_index = _pending_ik_execution_index(memory)
+    pending_ik_execution_index = _pending_ik_execution_index(memory, profile=config.agent_interface_profile)
     tool_loop_warning = _motion_failure_attractor_warning(
         memory
     ) or _conversation_no_progress_warning(memory)
@@ -2900,6 +2950,7 @@ def _build_tool_context_payload(
         "attachment_evidence": memory_context.get("attachment_evidence"),
         "motion_reconciliation": memory_context.get("motion_reconciliation"),
         "ik_preview_receipts": memory_context.get("ik_preview_receipts"),
+        "tool_handoffs": memory_context.get("tool_handoffs"),
         "pending_ik_execution_index": pending_ik_execution_index,
         "fresh_observation_obligation": {
             "schema_version": "openeta.fresh_observation_obligation.v1",
@@ -2933,6 +2984,13 @@ def _build_tool_context_payload(
         "tool_loop_warning": tool_loop_warning,
     }
     context["agent_context"] = _build_agent_decision_context(context, config=config)
+    from agent.runtime.interface_profiles import profile_guidance
+    guidance = profile_guidance(config.agent_interface_profile)
+    if guidance:
+        context["agent_context"]["interface_profile"] = guidance
+        from agent.runtime.interface_profiles import project_profile_evidence
+        context["agent_context"] = project_profile_evidence(
+            context["agent_context"], config.agent_interface_profile, memory.tool_handoffs(limit=32))
     return context
 
 
@@ -3026,9 +3084,7 @@ def _build_agent_decision_context(
             "fresh_observation_obligation"
         )
     motion_reconciliation = runtime_evidence.get("motion_reconciliation")
-    if isinstance(motion_reconciliation, dict) and motion_reconciliation.get(
-        "status"
-    ) in {"required", "unresolved"}:
+    if isinstance(motion_reconciliation, dict):
         unresolved_obligations["motion_reconciliation"] = motion_reconciliation
     evidence_graph = memory.get("provenance_evidence_graph")
     evidence_graph = evidence_graph if isinstance(evidence_graph, dict) else {}
@@ -3077,6 +3133,21 @@ def _build_agent_decision_context(
             ),
         },
         "active_bundles": active_bundles,
+        "tool_handoffs": memory.get("tool_handoffs", []),
+        "bundle_usage": (
+            "Handoff bundle_id replaces data copying, not Agent choice or safety checks. "
+            "Use summary.consumer_tool to identify the consumer; compile still requires "
+            "your candidate_id. Do not mix bundle_id with legacy reference fields. "
+            "Inspect full manifests with Python artifacts.read_bundle(bundle_id). "
+            "An IK result bundle may be rejected or stale and is not automatically executable."
+        ),
+        "ik_search_history": [
+            {key: receipt.get(key) for key in (
+                "receipt_id", "classification", "reason_code", "request_reference", "retry_history",
+            )}
+            for receipt in (memory.get("ik_preview_receipts") or {}).get("receipts", [])[-8:]
+            if isinstance(receipt, dict)
+        ],
         "grasp_adjustment_budget": memory.get("grasp_adjustment_budget"),
         # Execution receipt only: an Agent-chosen clearance is optional, but an
         # explicit miss cannot be silently treated as a successful contact premise.
@@ -3164,7 +3235,7 @@ def _build_agent_decision_context(
     }
 
 
-def _pending_ik_execution_index(memory: AgentMemory) -> JsonDict | None:
+def _pending_ik_execution_index(memory: AgentMemory, *, profile: str = "legacy_compatible") -> JsonDict | None:
     """Project current executable IK receipts that have not been dispatched.
 
     The index is deliberately capability-oriented: it does not choose a target,
@@ -3247,6 +3318,13 @@ def _pending_ik_execution_index(memory: AgentMemory) -> JsonDict | None:
         if classification != "feasible" and not delegated:
             continue
         execution_parameters: JsonDict = {"ik_receipt_id": receipt_id}
+        if profile in {"bundle_stage1", "bundle_stage2", "bundle_stage3"}:
+            matching = [ref for ref in memory.tool_handoffs(limit=32)
+                        if ref.get("kind") == "ik_result" and ref.get("current_epoch")
+                        and ref.get("summary", {}).get("receipt_id") == receipt_id]
+            if not matching:
+                continue
+            execution_parameters = {"bundle_id": matching[-1]["bundle_id"]}
         if delegated:
             execution_parameters["enable_collision_check"] = True
         item: JsonDict = {
@@ -4047,6 +4125,16 @@ def _project_latest_tool_outputs(tool: str, outputs: JsonDict) -> object:
     if len(serialized) <= 8_000:
         return projected
     priority = {
+        "result",
+        "result_artifact",
+        "result_inline_complete",
+        "path",
+        "text",
+        "matches",
+        "match_count",
+        "truncated",
+        "next_cursor",
+        "offset_unit",
         "schema_version",
         "result_id",
         "candidate_count",
@@ -4091,6 +4179,8 @@ def _project_latest_tool_outputs(tool: str, outputs: JsonDict) -> object:
         compact["projection"] = {
             "tool": tool,
             "full_output_omitted": True,
+            "original_field_count": len(outputs),
+            "selected_field_count": len(selected),
             "available_via": "artifact path or durable tool receipt",
         }
     return compact
@@ -4360,41 +4450,79 @@ def _bounded_decision_value(
     max_items: int = 16,
     max_string_chars: int = 1_500,
 ) -> object:
-    """Keep the latest tool result actionable without embedding large artifacts."""
+    """Bound context and disclose omissions separately from source result flags.
 
-    if depth <= 0:
-        return "<omitted>"
-    if isinstance(value, str):
-        if value.startswith("data:image/") or value.startswith("data:application/"):
-            return "<inline_artifact_omitted>"
-        return (
-            value
-            if len(value) <= max_string_chars
-            else value[:max_string_chars] + "...[truncated]"
-        )
-    if isinstance(value, dict):
-        return {
-            str(key): _bounded_decision_value(
-                item,
-                depth=depth - 1,
-                max_items=max_items,
-                max_string_chars=max_string_chars,
-            )
-            for key, item in list(value.items())[:max_items]
+    Dictionary roots carry projection metadata. List/scalar roots retain their
+    existing shape; callers needing completeness metadata must wrap them in a
+    dictionary. No source ``truncated`` field (including episode termination)
+    is rewritten by a display-only projection.
+    """
+    omissions: list[JsonDict] = []
+    omission_count = 0
+
+    def omitted(path: str, kind: str, original: int, visible: int) -> None:
+        nonlocal omission_count
+        omission_count += 1
+        if len(omissions) < 16:
+            omissions.append({"json_pointer": path[:240], "kind": kind,
+                              "original_count": original, "visible_count": visible})
+
+    def bound(item: object, remaining: int, path: str) -> object:
+        # Leaf IDs, cursor offsets and booleans need no further structural depth.
+        if item is None or isinstance(item, (bool, int, float)):
+            return item
+        if isinstance(item, str):
+            if item.startswith("data:image/") or item.startswith("data:application/"):
+                omitted(path, "inline_artifact_chars", len(item), 0)
+                return "<inline_artifact_omitted>"
+            if len(item) > max_string_chars:
+                omitted(path, "string_chars", len(item), max_string_chars)
+                return item[:max_string_chars] + "...[truncated]"
+            return item
+        if (
+            isinstance(item, dict)
+            and set(item).issubset({"version", "char_offset", "query"})
+            and isinstance(item.get("version"), str) and len(item["version"]) == 64
+            and type(item.get("char_offset")) is int and item["char_offset"] >= 0
+            and ("query" not in item or (isinstance(item["query"], str) and len(item["query"]) == 64))
+        ):
+            # A bounded continuation token is atomic: retaining just its keys
+            # would make a displayed page impossible to resume.
+            return dict(item)
+        if isinstance(item, (dict, list, tuple)) and remaining <= 0:
+            omitted(path, "depth", len(item), 0)
+            return "<omitted>"
+        if isinstance(item, dict):
+            selected = list(item.items())[:max_items]
+            if len(selected) < len(item):
+                omitted(path, "dict_entries", len(item), len(selected))
+            return {
+                str(key): bound(nested, remaining - 1,
+                                path + "/" + str(key).replace("~", "~0").replace("/", "~1"))
+                for key, nested in selected
+            }
+        if isinstance(item, (list, tuple)):
+            if len(item) > max_items:
+                omitted(path, "list_items", len(item), max_items)
+            return [bound(nested, remaining - 1, path + f"/{index}")
+                    for index, nested in enumerate(item[:max_items])]
+        return bound(str(item), remaining, path)
+
+    projected = bound(value, depth, "")
+    if isinstance(projected, dict) and omission_count:
+        upstream = projected.pop("__context_projection__", None)
+        projected["__context_projection__"] = {
+            "model_visible_complete": False,
+            "source_truncated": (
+                value.get("truncated")
+                if isinstance(value, dict) and isinstance(value.get("truncated"), bool)
+                else None
+            ),
+            "omission_count": omission_count,
+            "omissions": omissions,
+            **({"upstream_projection": upstream} if upstream is not None else {}),
         }
-    if isinstance(value, (list, tuple)):
-        return [
-            _bounded_decision_value(
-                item,
-                depth=depth - 1,
-                max_items=max_items,
-                max_string_chars=max_string_chars,
-            )
-            for item in value[:max_items]
-        ]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)[:max_string_chars]
+    return projected
 
 
 def _matched_task_playbook(
@@ -4794,6 +4922,7 @@ def _planner_metadata(
     backend_result: PlannerBackendResult | None = None,
     backend_usage: JsonDict | None = None,
     backend_usage_sources: JsonDict | None = None,
+    provider_interactions: list[JsonDict] | None = None,
     validation_attempts: int | None = None,
     validation_attempt_history: list[JsonDict] | None = None,
     validation_errors: list[str] | None = None,
@@ -4819,6 +4948,8 @@ def _planner_metadata(
         metadata["backend_usage"] = dict(backend_usage)
     if backend_usage_sources:
         metadata["backend_usage_sources"] = dict(backend_usage_sources)
+    if provider_interactions:
+        metadata["provider_interactions"] = [dict(item) for item in provider_interactions]
     if validation_attempts is not None:
         metadata["validation_attempts"] = validation_attempts
     if validation_attempt_history is not None:
@@ -4997,6 +5128,7 @@ def _observation_summary(
 
 def _contract_driven_tool_references(
     tools: list[ToolSpec],
+    *, profile: str = "legacy_compatible",
 ) -> tuple[list[JsonDict], JsonDict]:
     """Build Agent-visible schemas from ToolContract, not duplicate ToolSpec prose."""
 
@@ -5011,12 +5143,14 @@ def _contract_driven_tool_references(
     audit_rows: list[JsonDict] = []
     for spec in tools:
         contract = catalog.get(spec.name)
-        references.append(project_agent_tool_contract(contract))
+        from agent.runtime.interface_profiles import project_tool_reference
+        references.append(project_tool_reference(project_agent_tool_contract(contract), profile))
         audit_rows.append(audit_agent_tool_projection(contract, spec))
     mismatches = [row for row in audit_rows if row.get("matches") is not True]
     return references, {
         "schema_version": "openeta.agent_tool_contract_projection_catalog_audit.v1",
         "authoritative_projection": "tool_contract",
+        "experimental_interface_profile": profile,
         "runtime_authority": "tool_registry_handler_binding",
         "tool_count": len(audit_rows),
         "matching_tool_count": len(audit_rows) - len(mismatches),

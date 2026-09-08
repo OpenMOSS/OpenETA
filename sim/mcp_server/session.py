@@ -66,8 +66,14 @@ _session_stream_interval: dict[str, float] = {}
 # session_id → float (monotonic timestamp of last activity)
 _session_last_activity: dict[str, float] = {}
 
-# seconds of inactivity before a non-SSE session is considered stale
-_SESSION_TTL_S = 1800  # 30 min
+# Seconds of inactivity before a detached SSE/REST session is considered stale.
+#
+# Perception backends and a human-in-the-loop planner may legitimately spend
+# tens of minutes between simulator calls while the environment must remain
+# intact.  A fixed 30-minute TTL silently destroyed long LIBERO episodes during
+# grasp-pose review.  Keep the limit configurable for constrained deployments,
+# and make the default comfortably longer than the Human VLM runner budget.
+_SESSION_TTL_S = float(os.environ.get("OPENETA_SIM_SESSION_TTL_S", "21600"))
 
 
 # contextvar propagated through SSE → MCP tool calls
@@ -127,8 +133,8 @@ def _is_sse_session(sid: str) -> bool:
 # Session lifecycle
 # ══════════════════════════════════════════════════════════════════════
 
-def _cleanup_session(sid: str) -> None:
-    """Close all env handles on their workers and remove all traces of *sid*."""
+def _cleanup_session(sid: str) -> dict:
+    """Retire acknowledged handles; retain failed cleanup for the next sweep."""
     mgr = _get_mgr()
     prefix = f"{sid}/"
     # Stop stream tasks and queues
@@ -136,32 +142,36 @@ def _cleanup_session(sid: str) -> None:
         if sk == sid or sk.startswith(prefix):
             task = _session_stream_tasks.pop(sk, None)
             if task and not task.done():
-                task.cancel()
+                loop = task.get_loop()
+                if not loop.is_closed():
+                    loop.call_soon_threadsafe(task.cancel)
     for sk in list(_session_streams):
         if sk == sid or sk.startswith(prefix):
             _session_streams.pop(sk, None)
     # Close envs via worker proxy
-    envs = _session_envs.pop(sid, {})
+    envs = _session_envs.get(sid, {})
     from sim.mcp_server.collision import remove_checker
+    from sim.mcp_server.env_lifecycle import close_managed_environment
+    from sim.mcp_server.worker_mgr import _forget_obs_dirty
 
-    for handle, meta in envs.items():
-        try:
-            mgr.proxy_handle_op(meta, f"/env/{meta['remote_handle']}", method="DELETE")
-        except Exception:
-            pass
-        finally:
-            # TTL and disconnected-session cleanup must pair every successful
-            # acquire_worker with a release, just like explicit close_env.
-            try:
-                mgr.release_worker(meta.get("worker_url", ""))
-            except Exception:
-                pass
+    results = {}
+    for handle in list(envs):
+        def retire(meta):
+            with _session_last_obs_lock:
+                _session_last_obs.get(sid, {}).pop(_obs_key(meta), None)
+            _forget_obs_dirty(_obs_key(meta))
             remove_checker(handle)
-    with _session_last_obs_lock:
-        _session_last_obs.pop(sid, None)
+        results[handle] = close_managed_environment(
+            session_id=sid, handle=handle, envs=_session_envs, manager=mgr, retire=retire,
+        )
     _session_stream_interval.pop(sid, None)
-    _session_last_activity.pop(sid, None)
     _sse_sessions.discard(sid)
+    if not _session_envs.get(sid):
+        _session_envs.pop(sid, None)
+        with _session_last_obs_lock:
+            _session_last_obs.pop(sid, None)
+        _session_last_activity.pop(sid, None)
+    return {"ok": not _session_envs.get(sid), "handles": results}
 
 
 def _detach_sse_session(sid: str) -> None:
@@ -199,4 +209,6 @@ async def _stale_session_sweeper(interval_s: float = 60) -> None:
                 stale.append(sid)
         for sid in stale:
             _logger.info("Cleaning stale REST session %s (idle %.0fs)", sid, now - _session_last_activity[sid])
-            _cleanup_session(sid)
+            result = await asyncio.to_thread(_cleanup_session, sid)
+            if not result["ok"]:
+                _logger.warning("Session %s has unconfirmed environment cleanup; will retry", sid)

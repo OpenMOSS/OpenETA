@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import importlib
 import hashlib
 import json
@@ -13,7 +12,6 @@ import tempfile
 import traceback
 from types import SimpleNamespace
 from collections import Counter, defaultdict, deque
-from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -32,16 +30,20 @@ from agent.runtime.image_artifacts import (
 )
 from agent.runtime.response_artifacts import DEFAULT_RESPONSE_ARTIFACT_OUTPUT_ROOT
 from agent.runtime.structured_artifacts import materialize_structured_tool_output
+from agent.runtime.tool_bundles import BUNDLE_ID_PATTERN, MAX_BUNDLE_BYTES
 from agent.tools.outside_python import OutsidePythonExecutor
+from agent.tools.python_sandbox import execute_sandbox
 from agent.runtime.text_artifacts import (
     DEFAULT_MAX_INLINE_TEXT_CHARS,
     DEFAULT_TEXT_ARTIFACT_OUTPUT_ROOT,
     grep_text_artifact,
+    read_text_artifact,
     materialize_long_texts,
 )
 from agent.tools.registry import (
     ToolExecutionContext,
     ToolResult,
+    cooperative_cancellation_when,
     make_tool_result_details,
 )
 
@@ -93,6 +95,10 @@ class PythonExecConfig:
     extra_globals: JsonDict = field(default_factory=dict)
     session_root: str | None = None
     workspace_root: str | None = None
+    max_sandbox_memory_bytes: int = 2_147_483_648
+    max_sandbox_file_bytes: int = 64_000_000
+    max_sandbox_output_bytes: int = 1_000_000
+    max_sandbox_result_bytes: int = 8_000_000
 
 
 def _compile_agent_code(code: str) -> Any:
@@ -128,6 +134,10 @@ class PythonExecRuntime:
     def __init__(self, config: PythonExecConfig | None = None) -> None:
         self.config = config or PythonExecConfig()
 
+    @cooperative_cancellation_when(
+        lambda context: str(context.parameters.get("sandbox", "sandbox") or "sandbox").strip()
+        != "outside_sandbox"
+    )
     def handler(self, context: ToolExecutionContext) -> ToolResult:
         code = str(context.parameters.get("code", "") or "")
         if not code.strip():
@@ -153,41 +163,65 @@ class PythonExecRuntime:
 
         session_id = artifact_session_id(context.metadata)
         invocation_id = uuid4().hex[:10]
-        artifacts = _ArtifactApi(
-            image_output_root=self.config.image_output_root,
-            text_output_root=self.config.text_output_root,
-            response_output_root=self.config.response_output_root,
-            max_inline_text_chars=self.config.max_inline_text_chars,
-            session_id=session_id,
-            session_root=self.config.session_root,
-        )
-        safe_globals = _safe_globals(
-            workspace_root=self.config.workspace_root,
-            read_roots=(self.config.session_root,) if self.config.session_root else (),
-        )
-        safe_globals.update(self.config.extra_globals)
-        safe_globals.update(
-            {
-                "api": SimpleNamespace(artifacts=artifacts),
-                "artifacts": artifacts,
-                "observation": context.observation.to_dict() if context.observation else None,
-                "parameters": dict(context.parameters),
-                "workspace": _workspace_descriptor(
-                    session_root=self.config.session_root,
-                    sandbox_root=self.config.workspace_root,
-                ),
-            }
-        )
-        before_files = _file_snapshot(self.config.workspace_root)
-        stdout = io.StringIO()
         try:
-            with redirect_stdout(stdout):
-                exec(_compile_agent_code(code), safe_globals, safe_globals)
-        except Exception as exc:  # noqa: BLE001 - agent feedback must stay structured.
-            outputs = {
-                "stdout": stdout.getvalue(),
-                "artifacts": list(artifacts.outputs),
-            }
+            timeout_s = float(self.config.default_timeout_s)
+            if not math.isfinite(timeout_s) or timeout_s <= 0:
+                raise ValueError("default_timeout_s must be finite and positive")
+            requested_timeout = context.parameters.get("timeout_s", timeout_s)
+            if (isinstance(requested_timeout, bool)
+                    or not isinstance(requested_timeout, (int, float))
+                    or not math.isfinite(requested_timeout) or requested_timeout <= 0):
+                return _python_exec_result(
+                    context, success=False, content="timeout_s must be finite and positive",
+                    diagnostics=[{"code": "python_exec_invalid_timeout"}],
+                )
+            timeout_s = min(timeout_s, requested_timeout)
+            limits = (self.config.max_sandbox_memory_bytes, self.config.max_sandbox_file_bytes,
+                      self.config.max_sandbox_output_bytes, self.config.max_sandbox_result_bytes)
+            if any(isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0 for limit in limits):
+                raise ValueError("Sandbox resource limits must be positive integers")
+            for root in (self.config.session_root, self.config.workspace_root):
+                if root:
+                    resolved = Path(root).resolve()
+                    if resolved in {Path('/'), Path.home(), Path(tempfile.gettempdir()).resolve(),
+                                    Path(__file__).resolve().parents[2]}:
+                        raise ValueError("Sandbox roots must identify a specific session/workspace")
+                    resolved.mkdir(parents=True, exist_ok=True)
+        except (OSError, TypeError, ValueError) as exc:
+            return _python_exec_result(context, success=False, content=str(exc),
+                                       diagnostics=[{"code": "python_sandbox_invalid_config"}])
+        read_roots = [str(Path(root).resolve()) for root in
+                      (self.config.session_root, self.config.workspace_root) if root]
+        before_files = _file_snapshot(self.config.workspace_root)
+        execution = execute_sandbox(
+            {
+                "code": code, "parameters": dict(context.parameters),
+                "observation": context.observation.to_dict() if context.observation else None,
+                "extra_globals": self.config.extra_globals, "timeout_s": timeout_s,
+                "read_roots": read_roots, "memory_bytes": self.config.max_sandbox_memory_bytes,
+                "file_bytes": self.config.max_sandbox_file_bytes,
+                "options": {
+                    "workspace_root": str(Path(self.config.workspace_root).resolve()) if self.config.workspace_root else None,
+                    "session_root": str(Path(self.config.session_root).resolve()) if self.config.session_root else None,
+                    "artifact_api": {
+                        "image_output_root": self.config.image_output_root,
+                        "text_output_root": self.config.text_output_root,
+                        "response_output_root": self.config.response_output_root,
+                        "max_inline_text_chars": self.config.max_inline_text_chars,
+                        "session_id": session_id, "session_root": self.config.session_root,
+                    },
+                },
+            },
+            cancel_event=context.metadata.get("_cancel_event"),
+            max_output_bytes=self.config.max_sandbox_output_bytes,
+            max_result_bytes=self.config.max_sandbox_result_bytes,
+        )
+        worker_outputs = {key: execution.get(key) for key in
+                          ("stdout", "stderr", "worker_pid", "returncode", "elapsed_s", "policy")}
+        # Never accept an artifact manifest from generated code. Discover only
+        # real, non-symlink files beneath the host-configured workspace.
+        if not execution["success"]:
+            outputs = {**worker_outputs, "artifacts": []}
             text_bundle = materialize_long_texts(
                 outputs,
                 output_root=self.config.text_output_root,
@@ -196,7 +230,6 @@ class PythonExecRuntime:
                 session_id=session_id,
             )
             all_artifacts = [
-                *artifacts.outputs,
                 *_changed_file_artifacts(
                     self.config.workspace_root,
                     before=before_files,
@@ -204,17 +237,17 @@ class PythonExecRuntime:
                 *[artifact.to_dict() for artifact in text_bundle.artifacts],
             ]
             text_bundle.payload["artifacts"] = all_artifacts
-            diagnostic = _python_exec_exception_diagnostic(exc)
+            diagnostic = execution["diagnostic"]
             return _python_exec_result(
                 context,
                 success=False,
-                content=f"python_exec failed: {type(exc).__name__}: {exc}",
+                content=f"python_exec failed: {diagnostic.get('error_type')}: {diagnostic.get('message')}",
                 outputs=text_bundle.payload,
                 artifacts=all_artifacts,
                 diagnostics=[diagnostic],
             )
 
-        result = _json_safe(safe_globals.get("result"))
+        result = execution.get("result")
         structured_artifacts: list[JsonDict] = []
         result_artifact: JsonDict | None = None
         try:
@@ -241,8 +274,8 @@ class PythonExecRuntime:
                 if result_artifact is not None
                 else {}
             ),
-            "stdout": stdout.getvalue(),
-            "artifacts": list(artifacts.outputs),
+            **worker_outputs,
+            "artifacts": [],
             "sandbox": sandbox_mode,
             "workspace": _workspace_descriptor(
                 session_root=self.config.session_root,
@@ -260,7 +293,6 @@ class PythonExecRuntime:
             session_id=session_id,
         )
         all_artifacts = [
-            *artifacts.outputs,
             *structured_artifacts,
             *_changed_file_artifacts(
                 self.config.workspace_root,
@@ -375,8 +407,28 @@ class _ArtifactApi:
         return {
             "session_root": str(self.session_root) if self.session_root else None,
             "read_only_roots": roots,
-            "capabilities": ["list_files", "list_images", "read_json", "read_text", "grep_text"],
+            "capabilities": ["list_files", "list_images", "read_json", "read_text", "read_text_page", "grep_text", "read_bundle"],
         }
+
+    def read_bundle(self, bundle_id: str) -> JsonDict:
+        """Inspect a session manifest; this read does not confer Host authority."""
+        if not isinstance(bundle_id, str) or re.fullmatch(BUNDLE_ID_PATTERN, bundle_id) is None:
+            raise ValueError("expected a bnd- bundle ID, not a path")
+        matches: set[Path] = set()
+        for root in self._owned_roots():
+            for path in root.glob(f"**/bundles/{bundle_id}.json"):
+                if not path.is_symlink() and not path.parent.is_symlink():
+                    matches.add(self._require_owned_path(str(path)))
+        if len(matches) != 1:
+            raise ValueError("bundle manifest not found uniquely in the current session")
+        with next(iter(matches)).open("rb") as stream:
+            raw = stream.read(MAX_BUNDLE_BYTES + 1)
+        if len(raw) > MAX_BUNDLE_BYTES:
+            raise ValueError("bundle manifest exceeds read limit")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("bundle_id") != bundle_id:
+            raise ValueError("invalid bundle manifest")
+        return payload
 
     def list_files(self, *, pattern: str = "*", limit: int = 100) -> JsonDict:
         if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
@@ -454,13 +506,22 @@ class _ArtifactApi:
         *,
         max_matches: int = 20,
         ignore_case: bool = True,
+        cursor: JsonDict | None = None,
     ) -> JsonDict:
-        self._require_owned_path(path)
+        owned_path = self._require_owned_path(path)
         return grep_text_artifact(
-            path,
+            owned_path,
             pattern,
             max_matches=max_matches,
             ignore_case=ignore_case,
+            cursor=cursor,
+        )
+
+    def read_text_page(
+        self, path: str, *, max_chars: int = 1500, cursor: JsonDict | None = None,
+    ) -> JsonDict:
+        return read_text_artifact(
+            self._require_owned_path(path), max_chars=max_chars, cursor=cursor,
         )
 
     def read_json(self, path: str) -> JsonDict:
@@ -670,11 +731,7 @@ def _safe_open(
     if writes and workspace_root is None:
         raise PermissionError("python_exec sandbox open() is read-only.")
     path = _resolve_workspace_path(file, workspace_root)
-    allowed_roots = (
-        tuple(root for root in (workspace_root, *read_roots) if root is not None)
-        if workspace_root is not None
-        else _safe_open_roots()
-    )
+    allowed_roots = tuple(root for root in (workspace_root, *read_roots) if root is not None)
     if not any(_is_relative_to(path, root) for root in allowed_roots):
         roots = ", ".join(str(root) for root in allowed_roots)
         raise PermissionError(f"python_exec sandbox can only read files under: {roots}")
@@ -826,7 +883,7 @@ def _file_snapshot(root: str | None) -> dict[str, tuple[int, int]]:
         return {}
     snapshot: dict[str, tuple[int, int]] = {}
     for path in base.rglob("*"):
-        if not path.is_file():
+        if path.is_symlink() or not path.resolve().is_relative_to(base) or not path.is_file():
             continue
         try:
             stat = path.stat()
@@ -848,7 +905,11 @@ def _changed_file_artifacts(
             continue
         path = Path(path_text)
         try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            hasher = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1_048_576), b""):
+                    hasher.update(chunk)
+            digest = hasher.hexdigest()
         except OSError:
             continue
         artifacts.append(
@@ -863,14 +924,6 @@ def _changed_file_artifacts(
             }
         )
     return artifacts
-
-
-def _safe_open_roots() -> tuple[Path, ...]:
-    roots = [Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve()]
-    private_tmp = Path("/private/tmp")
-    if private_tmp.exists():
-        roots.append(private_tmp.resolve())
-    return tuple(roots)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

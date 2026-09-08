@@ -73,6 +73,18 @@ def test_planner_retry_prompt_marks_previous_candidate_rejected_and_requires_cha
     assert "do not repeat the same rejected" in payload["instruction"]
 
 
+def test_main_request_repeats_exact_existing_command_contract_without_affecting_isolated_roles():
+    for errors in ([], ["Unsupported command kind: 'tool'."]):
+        request = PlannerBackendRequest(tool_context={}, validation_errors=errors)
+        instruction = json.loads(_planner_user_prompt(request))["instruction"]
+        assert "kind must be exactly tool_call or response, never tool" in instruction
+        assert "available_tools contract" in instruction
+        request.metadata["isolated_context"] = True
+        isolated = json.loads(_planner_user_prompt(request))["instruction"]
+        assert "exact JSON object" in isolated
+        assert "never tool" not in isolated
+
+
 def test_provider_timeout_defaults_allow_reasoning_provider_latency(
     tmp_path: Path,
 ) -> None:

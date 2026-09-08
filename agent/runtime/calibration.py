@@ -843,6 +843,8 @@ def _collect_parallel_batch_evidence(
     split_counts: dict[str, JsonDict],
     excluded: list[JsonDict],
 ) -> None:
+    from agent.runtime.experiments import objective_success_evidence
+
     outcomes = payload.get("outcomes")
     if not isinstance(outcomes, list):
         raise ValueError("evidence is neither calibration evidence nor a batch result")
@@ -875,7 +877,7 @@ def _collect_parallel_batch_evidence(
             excluded.append({"episode_id": episode_id, "reason": "missing_objective_steps"})
             continue
         split_counts[split]["attempts"] += 1
-        if _episode_has_positive_reward(steps):
+        if objective_success_evidence(outcome):
             split_counts[split]["successes"] += 1
         assistance = outcome.get("assistance")
         if isinstance(assistance, dict) and assistance.get("assisted") is True:
@@ -1006,17 +1008,6 @@ def _determinant3(matrix: list[list[float]]) -> float:
         - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
         + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
     )
-
-
-def _episode_has_positive_reward(steps: list[object]) -> bool:
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        result = step.get("step_result")
-        reward = result.get("reward") if isinstance(result, dict) else None
-        if isinstance(reward, (int, float)) and not isinstance(reward, bool) and float(reward) > 0:
-            return True
-    return False
 
 
 def _validate_transition_state(proposal: JsonDict, *, target_status: str) -> None:

@@ -208,28 +208,9 @@ def objective_success_evidence(outcome: JsonDict) -> list[JsonDict]:
     episode = outcome.get("episode")
     if not isinstance(episode, dict):
         return []
-    evidence: list[JsonDict] = []
-    for index, step in enumerate(episode.get("steps") or []):
-        if not isinstance(step, dict):
-            continue
-        result = step.get("step_result")
-        if not isinstance(result, dict):
-            continue
-        reward = result.get("reward")
-        if isinstance(reward, (int, float)) and not isinstance(reward, bool) and reward > 0:
-            evidence.append({"kind": "positive_reward", "step": index, "value": reward})
-        info = result.get("info")
-        if not isinstance(info, dict):
-            continue
-        for key in (
-            "task_success",
-            "environment_success",
-            "checker_success",
-            "benchmark_success",
-        ):
-            if info.get(key) is True:
-                evidence.append({"kind": key, "step": index, "value": True})
-    return evidence
+    from agent.runtime.success_evidence import episode_success_evidence
+
+    return episode_success_evidence(episode, env_id=str(outcome.get("env_id") or ""))
 
 
 def objective_batch_metrics(payload: JsonDict) -> JsonDict:

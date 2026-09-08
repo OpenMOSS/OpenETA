@@ -9,6 +9,7 @@ manual_vlm_host="127.0.0.1"
 manual_vlm_port="${OPENETA_MANUAL_VLM_PORT:-8099}"
 sim_host="127.0.0.1"
 sim_port="${OPENETA_LOCAL_SIM_PORT:-8766}"
+simulator_timeout_s="${OPENETA_SIMULATOR_TIMEOUT_S:-300}"
 max_turns="${OPENETA_HUMAN_MAX_TURNS:-200}"
 
 if [[ ! -x "${openeta_bin}" ]]; then
@@ -27,7 +28,7 @@ fi
 
 if ! nc -z -w 2 "${sim_host}" "${sim_port}"; then
   echo "Local OpenETA simulator is not listening on ${sim_host}:${sim_port}." >&2
-  echo "The current .mcp.json expects http://${sim_host}:${sim_port}/sse." >&2
+  echo "Selected simulator endpoint: http://${sim_host}:${sim_port}/sse." >&2
   exit 1
 fi
 
@@ -57,4 +58,6 @@ echo "Instruction: open the middle drawer of the cabinet"
 echo "Turn budget: ${max_turns}"
 echo "Answer each pending planner request in http://${manual_vlm_host}:${manual_vlm_port}/"
 
-exec "${openeta_bin}" --once "${task}" --max-turns "${max_turns}"
+exec "${openeta_bin}" --simulator-timeout-s "${simulator_timeout_s}" \
+  --simulator-mcp-url "http://${sim_host}:${sim_port}/sse" \
+  --once "${task}" --max-turns "${max_turns}"

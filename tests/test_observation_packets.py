@@ -10,6 +10,7 @@ from agent.runtime.memory_store import JsonMemoryStore
 from agent.runtime.observation_packets import (
     ObservationPacketResolutionError,
     build_observation_packet_entries,
+    find_packet_reference_for_path,
     resolve_packet_source,
 )
 
@@ -183,3 +184,29 @@ def test_memory_projects_short_packet_id_and_resolves_it(tmp_path: Path) -> None
         event for event in memory.events if event.event_type == "observation"
     )
     assert observation_event.payload["visual_artifacts"][0]["packet_id"] == "obs-0000"
+
+
+def test_reused_artifact_path_resolves_to_newest_observation_packet(tmp_path: Path) -> None:
+    rgb = tmp_path / "agentview.png"
+    rgb.write_bytes(b"rgb")
+    entries = [
+        {
+            "packet_id": "obs-0004",
+            "observation_index": 4,
+            "artifacts": [
+                {"kind": "rgb", "frame_id": "agentview", "path": str(rgb)}
+            ],
+        },
+        {
+            "packet_id": "obs-0009",
+            "observation_index": 9,
+            "artifacts": [
+                {"kind": "rgb", "frame_id": "agentview", "path": str(rgb)}
+            ],
+        },
+    ]
+
+    assert find_packet_reference_for_path(entries, str(rgb)) == {
+        "source_packet_id": "obs-0009",
+        "camera_frame_id": "agentview",
+    }

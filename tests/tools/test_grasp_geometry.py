@@ -432,7 +432,7 @@ def test_wrist_viewpoint_proposals_point_camera_at_compiled_target() -> None:
         "select_sam3_detection",
         "compute_wrist_alignment_or_grasp_pose_estimate",
     ]
-    assert len(result["candidates"]) == 3
+    assert len(result["candidates"]) == 8
     for candidate in result["candidates"]:
         pose = candidate["target_pose"]
         camera = candidate["camera_goal"]
@@ -450,10 +450,11 @@ def test_wrist_viewpoint_proposals_point_camera_at_compiled_target() -> None:
         assert candidate["requires_ik_preview"] is True
 
 
-def test_compile_grasp_seed_uses_generic_fallback_for_unlisted_object() -> None:
+@pytest.mark.parametrize("family", ["apple", "mug", "mug_handle", "custom:tool"])
+def test_compile_grasp_seed_uses_generic_fallback_for_unlisted_object(family) -> None:
     parameters = _compile_parameters()
     parameters.pop("target_class")
-    parameters["target_geometry_family"] = "apple"
+    parameters["target_geometry_family"] = family
 
     result = compile_grasp_seed(
         parameters,
@@ -787,6 +788,8 @@ def test_wrist_alignment_with_clipped_mask_and_clamped_correction_emits_no_pose(
     assert result["executable_reference"] is False
     assert result["aligned_hover_pose"] is None
     assert result["adjusted_contact_pose"] is None
+    assert result["geometry_intent"]["kind"] == "grasp_refinement"
+    assert result["geometry_intent"]["quality_authorizes_motion"] is False
     failed_codes = {
         check["code"] for check in result["operating_region"]["failed_checks"]
     }

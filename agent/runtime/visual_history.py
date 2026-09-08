@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from adapter.protocol import EnvObservation, JsonDict
 from agent.backends.planner import PlannerBackend, PlannerBackendRequest
+from agent.backends.request_lineage import isolated_request_lineage
 from agent.runtime.actions import PipelineStatus
 
 if TYPE_CHECKING:
@@ -329,6 +330,8 @@ class VisualHistoryManager:
         request = PlannerBackendRequest(
             tool_context={
                 "schema_version": "openeta.visual_delta_request.v1",
+                "role": "visual_differencing",
+                **isolated_request_lineage(memory.session_id),
                 "task": task,
                 "from_observation": _public_observation_ref(previous, previous_main),
                 "to_observation": _public_observation_ref(current, current_main),

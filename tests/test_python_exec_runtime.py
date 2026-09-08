@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 import agent.tools.coding as coding_module
 from agent.tools.coding import PythonExecConfig, PythonExecRuntime
 from agent.tools.registry import ToolExecutionContext, build_default_tool_registry
@@ -111,7 +112,7 @@ def test_python_exec_allows_safe_imports_and_readonly_artifact_open(
 ) -> None:
     artifact_path = tmp_path / "response.json"
     artifact_path.write_text('{"value": 7}', encoding="utf-8")
-    runtime = PythonExecRuntime()
+    runtime = PythonExecRuntime(PythonExecConfig(session_root=str(tmp_path)))
 
     result = runtime.handler(
         _context(
@@ -160,12 +161,11 @@ def test_python_exec_reports_allowed_but_missing_import(monkeypatch) -> None:
         return real_import_module(name)
 
     monkeypatch.setattr(coding_module.importlib, "import_module", fake_import_module)
-    runtime = PythonExecRuntime()
-
-    result = runtime.handler(_context("import numpy\nresult = {'ok': True}"))
-
-    assert result.success is False
-    diagnostic = result.details["diagnostics"][0]
+    # Unit-test feedback construction; a host monkeypatch must not leak into
+    # the new interpreter that executes generated code.
+    with pytest.raises(ImportError) as caught:
+        coding_module._safe_import("numpy")
+    diagnostic = coding_module._python_exec_exception_diagnostic(caught.value)
     assert diagnostic["code"] == "python_exec_import_error"
     assert "allowed by python_exec sandbox but is not installed" in diagnostic["message"]
     assert "missing from the configured OpenETA runtime" in diagnostic["remediation"]
@@ -221,6 +221,28 @@ def test_python_exec_has_no_simulator_mcp_helper() -> None:
 
     assert result.success is False
     assert result.details["diagnostics"][0]["error_type"] == "NameError"
+
+
+def test_python_artifact_pages_keep_unicode_cursor_and_session_boundary(tmp_path):
+    session = tmp_path / "session"
+    session.mkdir()
+    path = session / "long.jsonl"
+    path.write_text("中🙂" * 1000)
+    outside = tmp_path / "outside"
+    outside.write_text("private")
+    runtime = PythonExecRuntime(PythonExecConfig(session_root=str(session)))
+    first = runtime.handler(_context(f"result = artifacts.read_text_page({str(path)!r}, max_chars=7)"))
+    assert first.success is True
+    page = first.details["outputs"]["result"]
+    assert page["text"] == "中🙂中🙂中🙂中"
+    second = runtime.handler(_context(
+        f"result = artifacts.read_text_page({str(path)!r}, max_chars=7, cursor={page['next_cursor']!r})"
+    ))
+    assert second.success is True
+    assert second.details["outputs"]["result"]["text"] == "🙂中🙂中🙂中🙂"
+    escaped = runtime.handler(_context(f"result = artifacts.read_text_page({str(outside)!r})"))
+    assert escaped.success is False
+    assert escaped.details["diagnostics"][0]["error_type"] == "PermissionError"
 
 
 def test_python_exec_reads_full_session_and_writes_only_sandbox(tmp_path: Path) -> None:

@@ -75,7 +75,19 @@ def _role_observation() -> EnvObservation:
     )
 
 
-def _memory_context(*, freshness: str = "current_object_scene") -> dict:
+def _memory_context(
+    *,
+    freshness: str = "current_object_scene",
+    target_geometry_family: str | None = None,
+) -> dict:
+    grasp_node = {
+        "kind": "compiled_targeted_grasp",
+        "compiled_grasp_id": "compiled-1",
+        "candidate_id": "handle-1",
+        "freshness": freshness,
+    }
+    if target_geometry_family is not None:
+        grasp_node["target_geometry_family"] = target_geometry_family
     return {
         "memory": {
             "scene_epoch": 4,
@@ -90,14 +102,7 @@ def _memory_context(*, freshness: str = "current_object_scene") -> dict:
             },
             "provenance_evidence_graph": {
                 "schema_version": "openeta.provenance_evidence_graph.v1",
-                "nodes": [
-                    {
-                        "kind": "compiled_targeted_grasp",
-                        "compiled_grasp_id": "compiled-1",
-                        "candidate_id": "handle-1",
-                        "freshness": freshness,
-                    }
-                ],
+                "nodes": [grasp_node],
                 "edges": [],
             },
         }
@@ -146,6 +151,22 @@ def test_prepare_linear_probe_freezes_exact_five_centimetres() -> None:
         "enable_collision_check",
     }
     assert result["probe_id"] == f"probe:{result['path_sha256']}"
+
+
+def test_prepare_probe_labels_portable_object_without_articulated_semantics() -> None:
+    result = prepare_attachment_probe(
+        {
+            "compiled_grasp_id": "compiled-1",
+            "motion_type": "linear",
+            "direction_world_xyz": [0, 0, 1],
+        },
+        observation=_observation(),
+        supervision_context=_memory_context(target_geometry_family="upright_can"),
+    )
+
+    assert result["interaction_family"] == "portable_object"
+    assert result["target_geometry_family"] == "upright_can"
+    assert result["frozen_path"][0]["probe_type"] == "portable_object_attachment"
 
 
 def test_prepare_linear_probe_preserves_quaternion_orientation() -> None:
@@ -298,6 +319,56 @@ def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
             observation=_observation(),
             supervision_context=memory,
         )
+
+
+@pytest.mark.parametrize("bad_state", [
+    {"latched": False},
+    {"latched": 0},
+    {"latched": "true"},
+    {"gripper_actuation_receipt": {
+        "schema_version": "openeta.gripper_actuation_receipt.v1",
+        "command": "open", "command_latched": True, "steps_executed": 60,
+    }},
+    {"gripper_actuation_receipt": None},
+])
+def test_probe_rejects_unconfirmed_latch_even_with_tentative_proxy(bad_state):
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"].update(bad_state)
+    with pytest.raises(AttachmentProbeError, match="latch|receipt"):
+        prepare_attachment_probe(
+            {"compiled_grasp_id": "compiled-1", "motion_type": "linear",
+             "direction_world_xyz": [0, 0, 1]},
+            observation=_observation(), supervision_context=memory,
+        )
+
+
+@pytest.mark.parametrize("openness", [True, -0.1, 1.1, float("nan"), float("inf")])
+def test_probe_rejects_malformed_aperture_instead_of_using_coarse_boolean(openness):
+    observation = _observation()
+    observation.robot.gripper_state = {"open": False, "openness": openness}
+    with pytest.raises(AttachmentProbeError, match="invalid measured gripper openness"):
+        _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]},
+                 observation=observation)
+
+
+def test_probe_accepts_consistent_modern_close_receipt_and_partial_aperture():
+    memory = _memory_context()
+    memory["memory"]["gripper_command_state"].update({
+        "latched": True,
+        "gripper_actuation_receipt": {
+            "schema_version": "openeta.gripper_actuation_receipt.v1",
+            "command": "close", "command_latched": True, "steps_executed": 60,
+        },
+    })
+    observation = _observation()
+    observation.robot.gripper_state = {"open": True, "openness": 0.4}
+    result = prepare_attachment_probe(
+        {"compiled_grasp_id": "compiled-1", "motion_type": "linear",
+         "direction_world_xyz": [0, 0, 1]},
+        observation=observation, supervision_context=memory,
+    )
+    assert result["gripper_evidence"]["measured_openness"] == 0.4
+    assert result["gripper_evidence"]["probe_evidence_basis"] == "tentative_carried_object_proxy"
 
 
 def test_libero_drawer_probe_accepts_reached_contact_when_carried_proxy_is_inapplicable() -> None:

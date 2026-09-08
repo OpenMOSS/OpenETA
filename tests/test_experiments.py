@@ -52,11 +52,26 @@ def _outcome(episode_id: str, session_id: str, *, reward: float) -> dict:
         "session_id": session_id,
         "status": "success",
         "episode": {
+            "session_id": session_id,
+            "metadata": {"execution_id": episode_id},
             "steps": [
                 {
                     "step_result": {
                         "reward": reward,
-                        "info": {},
+                        "terminated": reward == 1.0,
+                        "truncated": False,
+                        "info": {
+                            "task_success": reward == 1.0,
+                            "environment_receipt_trusted": True,
+                            "official_reward": True,
+                            "environment_receipt": {
+                                "schema_version": "openeta.environment_receipt.v1",
+                                "execution_id": episode_id,
+                                "agent_session_id": session_id,
+                                "reward_present": True, "reward": reward,
+                                "terminated": reward == 1.0, "truncated": False,
+                            },
+                        },
                     }
                 }
             ]
@@ -321,6 +336,8 @@ def test_experiment_propagates_reviewed_exact_task_playbook_candidate(
         "status": "success",
         "episode": {
             "task": task,
+            "session_id": session_id,
+            "metadata": {"execution_id": episode_id},
             "steps": [
                 {
                     "observation": {
@@ -330,7 +347,21 @@ def test_experiment_propagates_reviewed_exact_task_playbook_candidate(
                             "task_index": 1,
                         }
                     },
-                    "step_result": {"reward": 1.0, "info": {}},
+                    "step_result": {
+                        "reward": 1.0, "terminated": True, "truncated": False,
+                        "info": {
+                            "task_success": True,
+                            "environment_receipt_trusted": True,
+                            "official_reward": True,
+                            "environment_receipt": {
+                                "schema_version": "openeta.environment_receipt.v1",
+                                "execution_id": episode_id,
+                                "agent_session_id": session_id,
+                                "reward_present": True, "reward": 1.0,
+                                "terminated": True, "truncated": False,
+                            },
+                        },
+                    },
                 }
             ],
         },
@@ -472,6 +503,7 @@ def test_strategy_evidence_records_paired_provenance(tmp_path: Path) -> None:
     candidate_outcome.update({"env_id": "libero-task", "seed": 7})
     candidate_outcome["episode"]["task"] = "pick bowl"
     candidate_outcome["episode"]["metadata"] = {
+        **candidate_outcome["episode"]["metadata"],
         "grasp_strategy_tree_sha256": strategy_tree_sha,
         "calibration_profile_sha256": calibration_sha,
     }
@@ -562,6 +594,7 @@ def test_reviewed_autonomy_strategy_iteration_accepts_paired_candidate(
             outcome.update({"env_id": spec.env_id, "seed": spec.seed})
             outcome["episode"]["task"] = spec.task
             outcome["episode"]["metadata"] = {
+                **outcome["episode"]["metadata"],
                 "grasp_strategy_tree_sha256": tree_hash,
                 "calibration_profile_sha256": calibration_sha,
             }

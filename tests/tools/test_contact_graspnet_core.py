@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from tools import contact_graspnet_core
 from tools.contact_graspnet_core import (
     GRIPPER_DEPTH,
     ContactGraspNetBackend,
@@ -319,6 +320,65 @@ def test_load_checkpoint_model_state_uses_restricted_loader(tmp_path: Path) -> N
         "weights_only": True,
     }
     assert safe_globals
+
+
+def test_checkpoint_loading_does_not_require_parent_multiarray_attribute(tmp_path):
+    # Model the partially populated parent observed after importing Mink.
+    numpy_view = SimpleNamespace(_core=SimpleNamespace(), dtype=np.dtype, float64=np.float64)
+    registered = []
+    calls = []
+    fake_torch = SimpleNamespace(
+        serialization=SimpleNamespace(add_safe_globals=registered.extend),
+        load=lambda *args, **kwargs: calls.append(kwargs) or {"model": {"weight": 1}},
+    )
+    state = load_checkpoint_model_state(
+        torch=fake_torch, np=numpy_view, checkpoint_path=tmp_path / "trusted.pt", device="cpu",
+    )
+    assert state == {"weight": 1}
+    aliases = {item[1] for item in registered if isinstance(item, tuple)}
+    assert aliases == {"numpy.core.multiarray.scalar", "numpy._core.multiarray.scalar"}
+    assert calls[0]["weights_only"] is True
+
+
+@pytest.mark.parametrize("partial_new_module", [False, True])
+def test_checkpoint_scalar_falls_back_to_available_legacy_leaf(monkeypatch, partial_new_module):
+    registered = []
+    requested = []
+    scalar = lambda: None
+
+    def load_module(name):
+        requested.append(name)
+        if name == "numpy._core.multiarray":
+            if partial_new_module:
+                return SimpleNamespace()
+            raise ModuleNotFoundError("absent new layout", name="numpy._core")
+        return SimpleNamespace(scalar=scalar)
+
+    monkeypatch.setattr(contact_graspnet_core, "importlib", SimpleNamespace(import_module=load_module))
+    contact_graspnet_core._register_checkpoint_safe_globals(
+        torch=SimpleNamespace(serialization=SimpleNamespace(add_safe_globals=registered.extend)),
+        np=np,
+    )
+    assert requested == ["numpy._core.multiarray", "numpy.core.multiarray"]
+    assert registered[0] == (scalar, "numpy.core.multiarray.scalar")
+
+
+def test_checkpoint_scalar_does_not_hide_import_dependency_failure(monkeypatch):
+    def load_module(name):
+        raise ModuleNotFoundError("broken dependency", name="unexpected_dependency")
+
+    monkeypatch.setattr(contact_graspnet_core, "importlib", SimpleNamespace(import_module=load_module))
+    with pytest.raises(ModuleNotFoundError, match="broken dependency"):
+        contact_graspnet_core._register_checkpoint_safe_globals(torch=None, np=np)
+
+
+def test_checkpoint_scalar_missing_both_layouts_fails_before_loading(monkeypatch):
+    monkeypatch.setattr(
+        contact_graspnet_core, "importlib",
+        SimpleNamespace(import_module=lambda name: SimpleNamespace()),
+    )
+    with pytest.raises(RuntimeError, match="multiarray.scalar is unavailable"):
+        contact_graspnet_core._register_checkpoint_safe_globals(torch=None, np=np)
 
 
 def test_seed_inference_resets_numpy_and_torch_rngs() -> None:

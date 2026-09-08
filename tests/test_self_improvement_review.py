@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agent.backends.planner import StaticPlannerBackend
 from adapter.protocol import EnvAction, EnvObservation, RobotState, StepResult
 from agent.runtime.episode import (
@@ -137,7 +139,8 @@ def test_episode_runner_skips_review_without_signal(tmp_path: Path) -> None:
     assert not (tmp_path / "pending").exists()
 
 
-def test_positive_episode_extracts_reviewed_task_playbook(tmp_path: Path) -> None:
+@pytest.mark.parametrize("verified", [True, False])
+def test_positive_episode_extracts_reviewed_task_playbook(tmp_path: Path, verified: bool) -> None:
     session_id = "session-success"
     rollout = (
         tmp_path
@@ -193,11 +196,24 @@ def test_positive_episode_extracts_reviewed_task_playbook(tmp_path: Path) -> Non
                 turn_index=0,
                 observation=observation,
                 action=action,
-                step_result=StepResult(observation=observation, reward=1.0),
+                step_result=StepResult(
+                    observation=observation, reward=1.0, terminated=True,
+                    info={
+                        "checker_success": True,
+                        "environment_receipt_trusted": True,
+                        "official_reward": True,
+                        "environment_receipt": {
+                            "schema_version": "openeta.environment_receipt.v1",
+                            "execution_id": "execution-success", "agent_session_id": session_id,
+                            "reward_present": True, "reward": 1.0,
+                            "terminated": True, "truncated": False,
+                        },
+                    } if verified else {},
+                ),
             )
         ],
         terminated=True,
-        metadata={"assistance": {"agent_assisted": False}},
+        metadata={"execution_id": "execution-success", "assistance": {"agent_assisted": False}},
     )
     reviewer = SelfImprovementReviewer(
         config=SelfImprovementConfig(
@@ -212,7 +228,10 @@ def test_positive_episode_extracts_reviewed_task_playbook(tmp_path: Path) -> Non
     review = reviewer.maybe_review(result, skills=SkillRegistry())
 
     task_candidate = review["task_playbook_candidate"]
-    assert task_candidate["created"] is True
+    assert task_candidate["created"] is verified
+    if not verified:
+        assert not list((tmp_path / "playbooks").rglob("*.json"))
+        return
     assert task_candidate["review"]["reviewer"] == "objective_evidence"
     assert Path(task_candidate["path"]).is_file()
 

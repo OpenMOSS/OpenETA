@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Protocol, TYPE_CHECKING
 
 from adapter.protocol import JsonDict
 from agent.backends.planner import PlannerBackend, PlannerBackendRequest
+from agent.backends.request_lineage import isolated_request_lineage
 
 if TYPE_CHECKING:
     from agent.tools.registry import ToolExecutionContext
@@ -225,6 +227,7 @@ class BackendActionReviewer:
         tool_context: JsonDict = {
             "schema_version": SUPERVISION_SCHEMA_VERSION,
             "role": "independent_action_reviewer",
+            **isolated_request_lineage(context.metadata.get("session_id")),
             "task": str(context.metadata.get("task") or ""),
             "session_context": session_context,
             "tool": context.name,
@@ -348,8 +351,10 @@ class BackendGuidanceResolver:
         tool_context: JsonDict = {
             "schema_version": SUPERVISION_SCHEMA_VERSION,
             "role": "guidance_agent",
+            **isolated_request_lineage(context.get("_host_parent_session_id")),
             "question": question,
-            "session_context": dict(context),
+            "session_context": {key: value for key, value in context.items()
+                                if key != "_host_parent_session_id"},
             "vision_image_paths": _bounded_image_paths(context),
         }
         result = self.backend.decide(
@@ -376,6 +381,11 @@ class BackendGuidanceResolver:
                 "isolated_context": True,
                 "provider": result.provider,
                 "model": result.model,
+                **{
+                    key: deepcopy(result.details[key])
+                    for key in ("usage", "usage_source")
+                    if key in result.details
+                },
             },
         )
 

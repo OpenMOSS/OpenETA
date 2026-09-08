@@ -94,6 +94,23 @@ def _contract_snapshot(assembly):
     }
 
 
+@pytest.mark.parametrize("profile", ["bundle_stage2", "bundle_stage3"])
+def test_experimental_profiles_bind_real_proposal_handlers_and_matching_authority(tmp_path, profile):
+    workspace = SessionWorkspace.create(root=tmp_path / profile, session_id="profile-assembly")
+    assembled = assemble_runtime(RuntimeAssemblyConfig(
+        workspace=workspace, provider=PlannerProviderConfig(model="fixture"),
+        backend_factory=_backend_factory, supervision_policy=SupervisionPolicy.for_profile("standard"),
+        agent_interface_profile=profile, endpoints=RuntimeMcpEndpoints(), web_access_config=WebAccessConfig(),
+    ))
+    runtime = assembled.runtime
+    assert runtime.planner.context_config.agent_interface_profile == profile
+    assert runtime.pipeline.agent_interface_profile == profile
+    assert runtime.memory.agent_interface_profile == profile
+    assert runtime.tools.can_execute("propose_motion_target")
+    assert runtime.tools.can_execute("compose_ik_trajectory") == (profile == "bundle_stage3")
+    assert runtime.planner.tool_contract_catalog.get("propose_motion_target").batchable is False
+
+
 def test_tui_and_batch_profiles_share_runtime_contracts(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "agent.runtime.runtime_assembly.load_configured_object_memory_bank",

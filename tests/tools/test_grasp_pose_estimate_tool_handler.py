@@ -229,6 +229,8 @@ def test_graspgenx_prefers_packet_owned_up_direction_hint(tmp_path: Path) -> Non
 
 def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> None:
     parameters = _parameters(tmp_path)
+    context = _context(parameters)
+    context.metadata["session_id"] = "host-parent-session"
     Image.new("RGB", (16, 16), (50, 60, 70)).save(parameters["rgb"])
     Image.new("I;16", (16, 16), 500).save(parameters["depth"])
     Image.new("L", (16, 16), 255).save(parameters["object_mask"]["mask_ref"])
@@ -238,6 +240,7 @@ def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> Non
     class Advisor:
         def advise(self, selection_bundle, *, task):
             seen.append((selection_bundle, task))
+            selection_bundle["candidates"][0]["advisor_private_note"] = "not host geometry"
             ids = [item["candidate_id"] for item in selection_bundle["candidates"]]
             return {
                 "schema_version": "openeta.grasp_selection_advice.v1",
@@ -267,11 +270,16 @@ def test_advisor_runs_after_final_filtering_and_reranking(tmp_path: Path) -> Non
         backend_order=("anygrasp",),
         advisor=Advisor(),
         selection_output_root=tmp_path / "selection",
-    )(_context(parameters))
+    )(context)
 
     assert result.success is True
     assert len(seen) == 1
     bundle = seen[0][0]
+    assert bundle["_host_parent_session_id"] == "host-parent-session"
+    published_bundle = result.details["grasp_selection_bundle"]
+    assert "_host_parent_session_id" not in published_bundle
+    assert "advisor_private_note" not in published_bundle["candidates"][0]
+    assert "_host_parent_session_id" not in Path(published_bundle["bundle_ref"]).read_text()
     assert seen[0][1] == ""
     assert [item["backend_candidate_id"] for item in bundle["candidates"]] == [
         "higher",

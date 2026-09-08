@@ -119,9 +119,9 @@ their request fields, returned references, validity rules, and repair payloads.
     Keep visual adjustments inside the host-provided safety envelope.
 15. A reachable endpoint proves kinematics, not controller convergence or path
     safety. Compare execution-seed quality and residual diagnostics. If a full
-    contact orientation is infeasible, use a position-only reach only as a safe
-    observation or retreat waypoint; do not close at the same position with an
-    unrelated orientation and call it the same grasp.
+    contact orientation is not found, change the candidate or observation pose.
+    Preserving orientation requires full-pose IK, not position-only motion.
+    Closing at another orientation is not the same grasp.
 
 ## Contact, attachment, and transport
 

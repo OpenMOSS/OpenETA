@@ -98,6 +98,60 @@ def test_completion_waits_for_manual_response_and_preserves_wire_request() -> No
         provider_thread.join(timeout=2)
         assert completion["status"] == 200
         assert completion["body"]["choices"][0]["message"]["content"] == xml
+        interaction = completion["body"]["provider_interaction"]
+        assert interaction["schema_version"] == "manual_vlm.provider_interaction.v1"
+        assert interaction["mode"] == "manual_console"
+        assert interaction["request_id"] == pending["id"]
+        assert interaction["wait_s"] >= 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("automatic_timeout", [False, True])
+def test_cancelled_completion_is_terminal_for_real_backend_without_new_queue_requests(automatic_timeout):
+    from concurrent.futures import ThreadPoolExecutor
+    from agent.backends.planner import (
+        OpenAICompatiblePlannerBackend, OpenAICompatiblePlannerBackendConfig,
+        PlannerBackendRequest,
+    )
+    from agent.backends.provider_config import ProviderEndpointConfig
+
+    server, base, thread = _start_server()
+    if automatic_timeout:
+        server.decision_timeout_s = 0.05
+    backend = OpenAICompatiblePlannerBackend(OpenAICompatiblePlannerBackendConfig(
+        api_base=base, api_key="fixture", model="fixture", timeout_s=3,
+        max_attempts=3, retry_backoff_s=0, enable_vision=False,
+        # Even fallback is an owned loopback fixture, never an external model.
+        fallback=ProviderEndpointConfig(
+            provider="fixture", api_base=base, api_key="fixture", model="fallback", timeout_s=3,
+        ),
+    ))
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(backend.decide, PlannerBackendRequest(
+                tool_context={"task": "fixed cancellation fixture"}, system_prompt="fixture",
+            ))
+            for _ in range(50):
+                listing = server.store.summaries()
+                if listing:
+                    break
+                time.sleep(0.02)
+            assert len(listing) == 1
+            if not automatic_timeout:
+                status, _ = _json_request(
+                    base + f"/api/requests/{listing[0]['id']}/cancel", {"reason": "fixture cancel"},
+                )
+                assert status == 200
+            result = future.result(timeout=4)
+        assert result.details["provider_error_code"] == "manual_provider_cancelled"
+        assert result.details["provider_attempts"] == 1
+        assert result.details["provider_failover"] is False
+        assert result.details["retryable"] is False
+        assert len(server.store.summaries()) == 1
+        assert server.store.summaries()[0]["status"] == "cancelled"
     finally:
         server.shutdown()
         server.server_close()
@@ -393,6 +447,182 @@ def test_response_mode_detects_isolated_json_request() -> None:
         )
         == "json"
     )
+
+
+def _advisor_wire(*, parent="main-session", child="advisor-child", **context_overrides):
+    context = {
+        "schema_version": "openeta.grasp_selection_advice.v1",
+        "role": "read_only_grasp_pose_advisor",
+        "request_lineage": {"parent_session_id": parent, "child_session_id": child},
+        **context_overrides,
+    }
+    return {
+        "model": "human-vlm", "response_format": {"type": "json_object"},
+        "messages": [{"role": "user", "content": json.dumps({
+            "instruction": "Return the requested JSON.", "tool_context": context,
+        })}],
+    }
+
+
+def test_advisor_queue_links_parent_without_merging_session_histories():
+    store = RequestStore(adapter=OpenETAProtocolAdapter())
+    parent = store.add({"messages": [{"role": "user", "content": "main"}]},
+                       session_hint="main-session")
+    child = store.add(_advisor_wire())
+    other = store.add(_advisor_wire(parent="other-parent", child="advisor-other"))
+    summary = store.public_detail(child.request_id)
+    assert child.session_id == "advisor-child"
+    assert child.session_id != parent.session_id
+    assert summary["parent_session_id"] == "main-session"
+    assert summary["wait_reason"] == "等待人工 advisor 响应"
+    assert summary["request_type"] == "grasp_selection_advice"
+    assert summary["presentation"]["composer"]["kind"] == "raw"
+    store.cancel(child.request_id, "operator cancelled")
+    assert store.public_detail(child.request_id)["wait_reason"] == ""
+    assert parent.status == other.status == "pending"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"parent": ""}, {"parent": "same", "child": "same"},
+    {"parent": "bad\nparent"}, {"child": "x" * 257},
+    {"role": "main_planner"}, {"schema_version": "unrelated.schema"},
+])
+def test_invalid_advisor_lineage_is_not_used_for_parent_grouping(overrides):
+    body = _advisor_wire(**overrides)
+    assert "parent_session_id" not in classify_request(body)
+    session, _ = OpenETAProtocolAdapter().session_identity(body, {})
+    assert session == ""
+
+
+def test_legacy_advisor_is_visible_without_inventing_parent():
+    body = _advisor_wire(request_lineage={})
+    store = RequestStore(adapter=OpenETAProtocolAdapter())
+    request = store.add(body)
+    summary = store.public_detail(request.request_id)
+    assert request.session_id.startswith("inferred-")
+    assert summary["parent_session_id"] == ""
+    assert summary["wait_reason"] == "等待人工 advisor 响应"
+
+
+def test_backend_guidance_http_wait_has_parent_and_independent_identity():
+    from agent.backends.planner import (
+        OpenAICompatiblePlannerBackend, OpenAICompatiblePlannerBackendConfig,
+    )
+    from agent.runtime.supervision import BackendGuidanceResolver
+
+    server, base, thread = _start_server(adapter=OpenETAProtocolAdapter())
+    resolver = BackendGuidanceResolver(OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            provider="manual-vlm", model="human-vlm", api_base=base + "/v1",
+            api_key="local-test-placeholder", timeout_s=2.0, max_attempts=1,
+        ),
+    ))
+    result = {}
+
+    def resolve():
+        try:
+            result["resolution"] = resolver.resolve(question="Which fixture object?", context={
+                "_host_parent_session_id": "fixture-parent",
+                "memory": {"session_id": "wrong-history"},
+            })
+        except Exception as exc:
+            result["error"] = repr(exc)
+
+    worker = threading.Thread(target=resolve)
+    worker.start()
+    try:
+        child = None
+        for _ in range(100):
+            _, listing = _json_request(base + "/api/requests")
+            matches = [item for item in listing["requests"]
+                       if item["parent_session_id"] == "fixture-parent"]
+            if matches:
+                child = matches[0]
+                break
+            time.sleep(0.01)
+        assert child is not None
+        assert child["request_type"] == "guidance_agent"
+        assert child["session_id"].startswith("isolated-")
+        assert child["wait_reason"] == "等待人工 guidance 响应"
+        status, _ = _json_request(base + f"/api/requests/{child['id']}/response", {
+            "content": json.dumps({"decision": "abstain", "reason": "fixture uncertainty"}),
+        })
+        assert status == 200
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert "error" not in result
+        assert result["resolution"].resolved is False
+        assert server.store.public_detail(child["id"])["wait_reason"] == ""
+    finally:
+        for item in server.store.summaries():
+            if item["status"] == "pending":
+                server.store.cancel(item["id"], "fixture cleanup")
+        worker.join(timeout=3)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_backend_advisor_http_wait_is_discoverable_and_response_unblocks():
+    from agent.backends.planner import (
+        OpenAICompatiblePlannerBackend, OpenAICompatiblePlannerBackendConfig,
+    )
+    from agent.tools.grasp_pose_advisor import BackendGraspPoseAdvisor
+
+    server, base, thread = _start_server(adapter=OpenETAProtocolAdapter())
+    advisor = BackendGraspPoseAdvisor(OpenAICompatiblePlannerBackend(
+        OpenAICompatiblePlannerBackendConfig(
+            provider="manual-vlm", model="human-vlm", api_base=base + "/v1",
+            api_key="local-test-placeholder", timeout_s=2.0, max_attempts=1,
+        ),
+    ))
+    result = {}
+
+    def advise():
+        try:
+            result["advice"] = advisor.advise({
+                "bundle_id": "test-bundle", "candidates": [{"candidate_id": "g-1"}],
+                "_host_parent_session_id": "host-parent",
+            }, task="compare candidates")
+        except Exception as exc:
+            result["error"] = repr(exc)
+
+    worker = threading.Thread(target=advise)
+    worker.start()
+    try:
+        child = None
+        for _ in range(100):
+            _, listing = _json_request(base + "/api/requests")
+            matching = [item for item in listing["requests"]
+                        if item["parent_session_id"] == "host-parent"]
+            if matching:
+                child = matching[0]
+                break
+            time.sleep(0.01)
+        assert child is not None
+        assert child["session_id"].startswith("advisor-")
+        assert child["wait_reason"] == "等待人工 advisor 响应"
+        assert worker.is_alive()
+        status, _ = _json_request(base + f"/api/requests/{child['id']}/response", {
+            "content": json.dumps({"decision": "abstain", "recommended_candidate_id": "",
+                                   "confidence": 0.2, "uncertainties": ["occluded"]}),
+        })
+        assert status == 200
+        worker.join(timeout=3)
+        assert not worker.is_alive()
+        assert "error" not in result
+        assert result["advice"]["decision"] == "abstain"
+        _, detail = _json_request(base + f"/api/requests/{child['id']}")
+        assert detail["status"] == "responded"
+        assert detail["wait_reason"] == ""
+    finally:
+        for request in server.store.summaries():
+            if request["status"] == "pending":
+                server.store.cancel(request["id"], "test cleanup")
+        worker.join(timeout=3)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
 def test_operator_summary_projects_main_turn_without_dropping_wire_audit() -> None:

@@ -1879,3 +1879,64 @@ suite passed 63 tests; Ruff and compile checks passed. The native/model path
 for these larger inputs still requires the planned formal episodes, not an
 extra model pretest. The preparation checkpoint consumed zero simulator and
 zero operator Codex starts.
+
+
+### Shot scaling pause checkpoint — 2026-09-09
+
+Execution used the pushed `9bac8b5` baseline. The fixed 2400-cell matrix is
+**not complete**: 10 accepted episodes are native-evaluable, one cell exhausted
+its three pre-ready attempts, and 2389 cells remain not_run. All touched cells
+use query seed 1000000. There were 13 simulator starts and 10 operator Codex
+processes, with no accepted episode rerun.
+
+| Task | Condition | Native result / termination | Control steps | Model ending |
+|---|---|---|---:|---|
+| Insert Tube | B_1shot | failure / early stop | 18 | natural |
+| Insert Tube | C_1shot | success | 22 | natural, after reconnection |
+| Insert Tube | B_2shot | failure / early stop | 13 | terminal grace expired |
+| Lift Can | C_1shot | initialization unavailable after 3 attempts | — | no Codex |
+| Lift Can | B_2shot | success | 46 | natural |
+| Lift Bottle | B_2shot | failure / voluntary finish | 472 | natural |
+| Lift Bottle | C_2shot | failure / early stop | 301 | natural |
+| Lift Bottle | B_4shot | success | 73 | terminal grace expired |
+| Pull Out Key | C_2shot | failure / early stop | 50 | natural |
+| Pull Out Key | B_4shot | failure / early stop | 58 | natural |
+| Pull Out Key | C_4shot | success | 58 | terminal grace expired |
+
+The pause was triggered by recurring Codex WebSocket disconnections across
+independent contexts: logs include broken-pipe errors, retries through 5/5 and
+automatic fallback to HTTPS. The CLI did recover and continue operation, so
+these messages do not establish permanent service unavailability, a 4-shot
+capacity failure or a native task-failure cause. Dispatch was paused under the
+user's recurring-service-error rule; accepted episodes kept their original
+budgets and finalized. Seven models exited naturally; three reached the
+existing terminal-grace limit. Their missing final/usage is not replaced with
+zero. Native outcomes and model/transport status remain separate.
+
+The first dispatch pause was followed by an actual resumption after connection
+recovery: seven completed identities were skipped and only new identities
+started. The second pause is the current state; the older
+`pause_resolution.json` describes only that first recovery. Do not interpret it
+as authorization to resume now. No execution configuration changed during
+either session. All 13 worker lifecycles report complete cleanup.
+
+All ten actual deliveries passed host/context projection and expert-count
+checks, including four-shot B for Bottle (96 images) and four-shot C for Key
+(64 images). This does not establish live delivery of the unrun 192-image
+Bottle C_4shot package. All ten slow videos passed complete decoding/frame-count
+checks; representative browser checks are indexed separately. Native terminal
+feedback remained neutral and no `check_task` was exposed.
+
+Sampled GPU use peaked at 20847 MiB, minimum GPU free was 11254 MiB, minimum
+MemAvailable was 48.00 GiB, and swap did not increase. Minimum sampled disk free
+was 640.00 GiB. The old resource log is retained (about 1 GiB); a recording-only
+follow-up limits future per-second phase entries to active lanes instead of
+repeating all 2400 pending cells. It does not alter control, inputs or budgets.
+
+[Paused matrix, partial curves, raw results and slow videos](http://127.0.0.1:9401/artifact?run=univtac-shot-scaling&path=report.html)
+include every planned state. There are too few evaluated seeds or matched
+conditions to select K or infer shot/tactile gains. The incomplete curves are
+not a completed 100-seed result. Preserve all completed and unavailable cells
+when the authorized queue is resumed; do not regrant attempts or rerun them.
+No A, D/E, main-table remainder, other-model comparison or old R1.12 recovery
+was started.

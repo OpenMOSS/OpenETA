@@ -382,6 +382,8 @@ def run(args, settings):
         while not done.wait(1):
             try:
                 row=resources(coordinator,previous)
+                with coordinator.lock:
+                    row['phases']={str(k):coordinator.phases[k] for k in coordinator.active_roots}
                 row['disk_free_bytes']=shutil.disk_usage(root).free
                 with (root/'resources.jsonl').open('a') as f:
                     f.write(json.dumps(row)+'\n')

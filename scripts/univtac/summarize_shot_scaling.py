@@ -100,6 +100,8 @@ def report(root, *, plots=False):
     data=json.loads((root/'results.json').read_text());stats=statistics(data['cells'])
     (root/'statistics.json').write_text(json.dumps(stats,indent=2))
     page='<meta charset="utf-8"><style>body{max-width:1300px;margin:25px auto;font:17px/1.5 sans-serif}td,th{padding:6px;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>四任务 B/C · 1/2/4-shot</h1><p>2400个计划格；共用seed1000000–1000099。缺失不算native失败；已完成格在恢复后保留。仅历史示范数量和触觉投影变化，当前视觉/触觉均完整。</p>'
+    if data.get('abort_reason'):
+        page+='<p><strong>当前暂停，曲线不完整：</strong>'+html.escape(data['abort_reason'])+'</p>'
     page+='<p>完整矩阵未结束前不选择K。四任务参与shot选择，未来引用不是独立测试。旧0-shot不拼入曲线。</p><table><tr><th>任务</th><th>条件</th><th>shot</th><th>planned/evaluable/success/unavailable</th><th>状态</th><th>可评价成功率及95% Wilson区间</th></tr>'
     for g in stats['groups']:
         page+=f'<tr><td>{g["task"]}</td><td>{g["condition"]}</td><td>{g["shot"]}</td><td>{g["planned"]}/{g["evaluable"]}/{g["success"]}/{g["unavailable"]}</td><td>{g["states"]}</td><td>{g["evaluable_rate"]} {g["wilson_95_evaluable"]}</td></tr>'

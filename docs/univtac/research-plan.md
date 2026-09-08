@@ -1998,3 +1998,23 @@ for advice; it must be read back before any ambiguous resend. The user-level
 service `univtac-shot-c-only.service` is inactive at this checkpoint.
 Provider job `job_db8ebae6e3de4d20` checks and reports every 1800 seconds;
 it preserves scope and attempts and does not silently bypass this error.
+
+Pro message `8070380f-699e-45aa-b208-6012acbdf5a6` subsequently authorized
+remaining-attempt recovery without investigating or changing the native library.
+The host now recognizes only a cleaned, pre-ready/no-Codex native SIGSEGV with
+the observed fatal omniClientFreeContent stack. The peer cancellation requires
+the explicit saved authorization for this attempt and retains its original
+cancellation reason. Both current cells continue at attempt_2, with attempt_3
+as their final possible initialization try. The same classifier is used by
+live handling and recovery readback. An eligible local failure does not cancel
+a normal peer. Three such native crashes without any intervening worker ready
+pause dispatch; the existing chronological event ledger preserves this count
+across restarts. Cancelled attempts do not count as native crashes.
+
+The focused offline suite passed 22 tests, including third-crash stopping,
+peer isolation, accepted/exhausted-cell preservation and C-only order.
+Readback of the two actual failed attempts confirmed the narrow classifications
+and a current crash streak of one. No additional simulator/model was used for
+these checks. Existing runtime, WebSocket/HTTPS behavior, model, task inputs and
+budgets remain unchanged. Restart the same service once after commit/push,
+with Restart=no; do not create another queue or rerun prepare.

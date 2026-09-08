@@ -28,7 +28,11 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from scripts.univtac.run_autonomous_insert_hole import codex_command, operator_prompt
-from scripts.univtac.run_eight_task_coverage import retryable_initialization, run_cell
+from scripts.univtac.run_eight_task_coverage import (
+    retryable_initialization,
+    run_cell,
+    startup_crashes_since_ready,
+)
 from scripts.univtac.run_fourway_capacity import Coordinator, resources
 from sim.envs.univtac.feedback_protocol import PROTOCOL, project_query
 from sim.envs.univtac.tactile_history import export_review_video
@@ -401,6 +405,8 @@ def run(args, settings):
     coordinator = Coordinator(root,[tuple(c['cell_key']) for c in cells],protocol_smoke=True)
     state = {tuple(c['cell_key']):c for c in cells}
     pending = []
+    if startup_crashes_since_ready(root)>=3:
+        coordinator.abort('Three preserved omniClient startup crashes without an intervening ready')
     for cell in cells:
         old = recover_cell(root,cell)
         if old:

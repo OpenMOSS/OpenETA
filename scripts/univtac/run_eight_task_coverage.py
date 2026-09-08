@@ -150,14 +150,76 @@ def prepare_queue(args):
             'max_simulator_starts':24,'max_codex_starts':8,'concurrency':2})
 
 
+def confirmed_pre_ready_exit(folder):
+    """Use host lifecycle evidence, not absence of ready alone."""
+    if any((folder/name).exists() for name in (
+            'ready.json', 'codex_command.json', 'codex_lifecycle.json',
+            'tool_trace.jsonl', 'operator_context.jsonl', 'native_reset_limit.json')):
+        return False
+    if not (folder/'episode.json').exists() or not (folder/'worker_lifecycle.json').exists():
+        return False
+    episode=load(folder/'episode.json'); life=load(folder/'worker_lifecycle.json')
+    return (episode.get('codex_process_count') == 0 and episode.get('reset_valid') is False
+            and life.get('root_pid') is not None and life.get('cleanup_complete') is True
+            and life.get('final_process_group_members') == []
+            and all(episode.get(k,0) == 0 for k in ('control_steps','physics_steps','actual_motion_requests')))
+
+
+def native_startup_crash(folder):
+    """Only the observed pre-reset omniClientFreeContent SIGSEGV is eligible."""
+    if not confirmed_pre_ready_exit(folder):
+        return False
+    life=load(folder/'worker_lifecycle.json')
+    if life.get('returncode') != -11 or life.get('sigterm_sent') or life.get('sigkill_sent'):
+        return False
+    log=folder/'launcher/stdout_stderr.log'
+    text=log.read_text(errors='replace') if log.exists() else ''
+    return ('libomniclient.so!omniClientFreeContent' in text and '[Fatal]' in text
+            and not any(x in text.lower() for x in
+                        ('out of gpu memory','out of memory','failed to allocate memory'))
+            and not (folder/'worker_error.json').exists())
+
+
+def authorized_cancelled_initialization(folder):
+    marker=folder/'authorized_pre_ready_cancelled.json'
+    if not marker.exists() or not confirmed_pre_ready_exit(folder):
+        return False
+    authorization=load(marker); episode=load(folder/'episode.json')
+    life=load(folder/'worker_lifecycle.json')
+    return (authorization.get('pro_message_id') == '8070380f-699e-45aa-b208-6012acbdf5a6'
+            and authorization.get('original_error') == episode.get('infrastructure_error')
+            and episode.get('status') == 'cancelled'
+            and 'batch cancelled:' in episode.get('infrastructure_error','')
+            and life.get('returncode') == -15 and life.get('sigterm_sent') is True)
+
+
+def startup_crashes_since_ready(root):
+    """Persist the streak through the existing chronological event ledger."""
+    events=root/'events.jsonl'
+    if not events.exists():
+        return 0
+    attempts={}; completed=[]; last_ready=0
+    for line in events.read_text().splitlines():
+        row=json.loads(line); key=tuple(row.get('cell',[]))
+        if row['event']=='attempt_started':
+            attempts[key]=Path(row['output_root'])
+        elif row['event']=='ready_resident':
+            last_ready=row['timestamp_s']
+        elif row['event']=='cleanup' and key in attempts:
+            completed.append((row['timestamp_s'],attempts[key]))
+    return sum(native_startup_crash(folder) for timestamp,folder in completed if timestamp>last_ready)
+
+
 def retryable_initialization(folder):
-    """Only confirmed native reset/pre_move failures or its ready timeout retry."""
+    """Confirmed reset failures plus narrowly identified cleaned pre-ready exits."""
     error_path=folder/'worker_error.json'
     raw=error_path.read_text() if error_path.exists() else ''
     log=folder/'launcher/stdout_stderr.log'
     text=log.read_text(errors='replace') if log.exists() else ''
     if any(x in text.lower() for x in ('out of gpu memory','out of memory','failed to allocate memory')):
         return False
+    if native_startup_crash(folder) or authorized_cancelled_initialization(folder):
+        return True
     if 'task.reset(seed=args.seed)' in raw or 'official reset/pre_move failed' in raw:
         return True
     episode=load(folder/'episode.json') if (folder/'episode.json').exists() else {}
@@ -202,6 +264,9 @@ def run_cell(args,cell,coordinator):
         life=load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}
         if not life.get('cleanup_complete') or not retryable_initialization(folder):
             coordinator.abort('Non-retryable initialization/interface failure: '+str(folder))
+            return {**cell,'status':'infrastructure_issue','episode_path':str(folder),'episode':episode,'attempts':attempt}
+        if native_startup_crash(folder) and startup_crashes_since_ready(args.output_root)>=3:
+            coordinator.abort('Three omniClient startup crashes without an intervening ready')
             return {**cell,'status':'infrastructure_issue','episode_path':str(folder),'episode':episode,'attempts':attempt}
     return {**cell,'status':'initialization_unavailable','episode_path':str(folder),'episode':episode,'attempts':3}
 

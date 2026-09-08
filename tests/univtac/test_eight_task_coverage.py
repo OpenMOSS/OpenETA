@@ -103,3 +103,102 @@ def test_queue_has_two_slots_including_cleanup_and_continues_native_failure(tmp_
     run_queue(SimpleNamespace(output_root=tmp_path))
     assert peak==2 and started==tasks
     assert len(json.loads((tmp_path/'coverage_results.json').read_text())['cells'])==8
+
+
+def crash_fixture(folder):
+    folder.mkdir(parents=True,exist_ok=True)
+    (folder/'launcher').mkdir(exist_ok=True)
+    (folder/'launcher/stdout_stderr.log').write_text('[Fatal] libomniclient.so!omniClientFreeContent')
+    (folder/'episode.json').write_text(json.dumps({
+        'codex_process_count':0,'reset_valid':False,'status':'infrastructure_issue'}))
+    (folder/'worker_lifecycle.json').write_text(json.dumps({
+        'root_pid':123,'cleanup_complete':True,'final_process_group_members':[],
+        'returncode':-11,'sigterm_sent':False,'sigkill_sent':False}))
+
+
+def test_narrow_crash_and_authorized_cancel_classification(tmp_path):
+    from scripts.univtac.run_eight_task_coverage import native_startup_crash
+    crash_fixture(tmp_path)
+    assert native_startup_crash(tmp_path) and retryable_initialization(tmp_path)
+    log=tmp_path/'launcher/stdout_stderr.log'
+    original=log.read_text()
+    for text in ('[Fatal] some_other_library',original+' Out of memory'):
+        log.write_text(text)
+        assert not retryable_initialization(tmp_path)
+    log.write_text(original)
+    (tmp_path/'ready.json').write_text('{}')
+    assert not retryable_initialization(tmp_path)
+    (tmp_path/'ready.json').unlink()
+    episode={'codex_process_count':0,'reset_valid':False,'status':'cancelled',
+             'infrastructure_error':'RuntimeError: batch cancelled: original crash'}
+    (tmp_path/'episode.json').write_text(json.dumps(episode))
+    life=json.loads((tmp_path/'worker_lifecycle.json').read_text())
+    life.update(returncode=-15,sigterm_sent=True)
+    (tmp_path/'worker_lifecycle.json').write_text(json.dumps(life))
+    assert not retryable_initialization(tmp_path)
+    (tmp_path/'authorized_pre_ready_cancelled.json').write_text(json.dumps({
+        'pro_message_id':'8070380f-699e-45aa-b208-6012acbdf5a6',
+        'original_error':episode['infrastructure_error']}))
+    assert retryable_initialization(tmp_path) and not native_startup_crash(tmp_path)
+    life['cleanup_complete']=False
+    (tmp_path/'worker_lifecycle.json').write_text(json.dumps(life))
+    assert not retryable_initialization(tmp_path)
+
+
+def test_crash_streak_uses_persistent_ready_order(tmp_path):
+    from scripts.univtac.run_eight_task_coverage import startup_crashes_since_ready
+    rows=[]
+    for i in range(3):
+        f=tmp_path/f'attempt_{i+1}';crash_fixture(f)
+        rows.extend([{'event':'attempt_started','timestamp_s':i*2,'cell':[i],'output_root':str(f)},
+                     {'event':'cleanup','timestamp_s':i*2+1,'cell':[i]}])
+    (tmp_path/'events.jsonl').write_text('\n'.join(map(json.dumps,rows))+'\n')
+    assert startup_crashes_since_ready(tmp_path)==3
+    with (tmp_path/'events.jsonl').open('a') as f:
+        f.write(json.dumps({'event':'ready_resident','timestamp_s':6})+'\n')
+    assert startup_crashes_since_ready(tmp_path)==0
+
+
+def test_local_crash_retry_preserves_peer_and_attempt_number(tmp_path,monkeypatch):
+    from scripts.univtac import run_eight_task_coverage as module
+    from scripts.univtac.run_shot_scaling import recover_cell
+    key=('lift_can',1000000,'C_2shot');peer=('insert_tube',1000000,'C_2shot')
+    coordinator=Coordinator(tmp_path,[key,peer],protocol_smoke=True)
+    cell={'task':key[0],'seed':key[1],'condition':key[2],'cell_key':list(key),
+          'config':str(tmp_path/'config.json')}
+    Path(cell['config']).write_text('{}')
+    folder=tmp_path/'cells'/key[0]/str(key[1])/key[2]/'attempt_1'
+    crash_fixture(folder)
+    assert recover_cell(tmp_path,cell) is None
+    seen=[]
+    def episode(args,config,seed,root):
+        seen.append(root.name);crash_fixture(root)
+        if root.name=='attempt_2':
+            coordinator.processes[key,'worker']=SimpleNamespace(poll=lambda:-11)
+            coordinator.abort('worker exited before ready',key)
+            assert not coordinator.cancel.is_set() and not coordinator.lane_cancel[peer].is_set()
+            return json.loads((root/'episode.json').read_text())
+        (root/'ready.json').write_text('{}')
+        return {'status':'completed','codex_process_count':1,'task_success':False}
+    monkeypatch.setattr(module,'run_episode',episode)
+    result=run_cell(SimpleNamespace(output_root=tmp_path),cell,coordinator)
+    assert seen==['attempt_2','attempt_3'] and result['status']=='completed'
+    assert not coordinator.cancel.is_set()
+
+
+def test_third_startup_crash_pauses_before_another_attempt(tmp_path,monkeypatch):
+    from scripts.univtac import run_eight_task_coverage as module
+    key=('lift_can',1000000,'C_2shot')
+    coordinator=Coordinator(tmp_path,[key],protocol_smoke=True)
+    cell={'task':key[0],'seed':key[1],'condition':key[2],'cell_key':list(key),
+          'config':str(tmp_path/'config.json')}
+    Path(cell['config']).write_text('{}')
+    calls=[]
+    def episode(args,config,seed,folder):
+        calls.append(folder.name);crash_fixture(folder)
+        return json.loads((folder/'episode.json').read_text())
+    monkeypatch.setattr(module,'run_episode',episode)
+    monkeypatch.setattr(module,'startup_crashes_since_ready',lambda root:3)
+    result=run_cell(SimpleNamespace(output_root=tmp_path),cell,coordinator)
+    assert calls==['attempt_1'] and result['status']=='infrastructure_issue'
+    assert coordinator.cancel.is_set()

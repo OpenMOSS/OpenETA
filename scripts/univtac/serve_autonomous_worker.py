@@ -21,12 +21,15 @@ def main(argv=None):
     parser.add_argument('--reset-timing-only', action='store_true')
     parser.add_argument('--reset-timing', action='store_true')
     parser.add_argument('--uipc-native-report', action='store_true')
+    parser.add_argument('--pad-scene-condition', choices=('O','K','Z'))
     base, _ = parser.parse_known_args(argv)
     if base.uipc_native_report and not base.reset_timing_only:
         parser.error('--uipc-native-report requires --reset-timing-only')
+    if base.pad_scene_condition and not (base.reset_timing_only and base.uipc_native_report):
+        parser.error('pad scene condition requires reset-only native reports')
     root = base.output_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    app = task = server = session = timing_probe = None
+    app = task = server = session = timing_probe = pad_probe = None
     if base.reset_timing_only or base.reset_timing:
         sys.path.insert(0, str(base.repo_root.resolve()))
         from sim.envs.univtac.reset_timing import ResetTiming
@@ -65,10 +68,20 @@ def main(argv=None):
             if args.uipc_native_report:
                 cfg.uipc_sim.logger_level = 'Info'
                 timing_probe.enable_native_reports(UipcSim)
-            with timing_probe.span('Task.construct'):
+            from contextlib import nullcontext
+            creation = nullcontext()
+            if args.pad_scene_condition:
+                from envs.utils.actor import ActorManager
+
+                from sim.envs.univtac.pad_scene_diagnostic import PadSceneDiagnostic
+                pad_probe = PadSceneDiagnostic(root, args.pad_scene_condition)
+                creation = pad_probe.creation(ActorManager)
+            with creation, timing_probe.span('Task.construct'):
                 task = module.Task(cfg, mode='eval')
             reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
             write_json(root/'native_reset_limit.json', reset_limit)
+            if pad_probe:
+                pad_probe.install(task,config)
             timing_probe.install_task(task)
             if args.uipc_native_report:
                 timing_probe.record_uipc_configuration(task)
@@ -143,6 +156,8 @@ def main(argv=None):
             session.recorder.close()
         if timing_probe and base.uipc_native_report:
             timing_probe.export_native_report('reset_final', getattr(task, 'step_count', None))
+        if pad_probe:
+            pad_probe.close()
         if task:
             task.close()
         if timing_probe:

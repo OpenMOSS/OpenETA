@@ -1479,3 +1479,29 @@ No extra startup or formal recovery is authorized. Related R1.12 starts total11,
 with formal9 valid/1 failed/22 unstarted unchanged. See the
 [short diagnostic report](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r112/uipc-diagnostic&path=report.html)
 and `outputs/univtac-isaac51-r112/uipc-diagnostic/report.json` for raw references.
+
+#### Planned goal-pad scene diagnostic (O/K/Z, unscored)
+
+The next authorized diagnostic holds grasp_classify/1000034 fixed for nine fresh
+processes: O/K/Z, K/Z/O, Z/O/K. O keeps both pads dynamic at z0.002; K changes only
+the two pads to native kinematic; Z changes only their initial z to0.010. The
+formal default, pinned checkout and other actors remain untouched. These are
+scene interventions, not benchmark-equivalent performance fixes. No formal
+recovery or candidate adoption is authorized.
+
+Offline USD tetrahedral-boundary inspection finds metre units, identity authored
+transforms and collision-surface minimum gap at the source-specified initial pose
+(offline, before runtime verification) about+1mm to the UIPC
+z0.001 plane (+9mm for Z). This is actual boundary-vertex geometry against a
+plane, not just actor origins or AABB overlap. The visible/PhysX table surface is
+a different surface; it must not be conflated with the UIPC implicit ground.
+Runtime pad transforms, native fixed/contact attributes and surface gaps will
+be recorded before reset and after native steps. Existing render-buffer sampling
+will record initialization only, with no extra physics/render/sync or Agent.
+
+The common native600/outer900/cleanup300 limits, max_iter1024 and prior Timer/Info
+instrumentation remain. Expected initialization timeouts are comparison outcomes:
+continue the next predeclared cell only after cleanup. Any unrelated startup,
+configuration, CUDA or cleanup error pauses. No replacement attempts. Maximum9
+new starts brings related R1.12 total to20; formal9 valid/1 failed/22not_run and
+R1.11 remain unchanged. Runtime results are not yet available at this checkpoint.

@@ -18,17 +18,26 @@ def main(argv=None):
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--seed', type=int, required=True)
+    parser.add_argument('--reset-timing-only', action='store_true')
     base, _ = parser.parse_known_args(argv)
     root = base.output_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    app = task = server = session = None
+    app = task = server = session = timing_probe = None
+    if base.reset_timing_only:
+        sys.path.insert(0, str(base.repo_root.resolve()))
+        from sim.envs.univtac.reset_timing import ResetTiming
+        timing_probe = ResetTiming(root)
     try:
         from isaaclab.app import AppLauncher
         AppLauncher.add_app_launcher_args(parser)
         args = parser.parse_args(argv)
         args.enable_cameras = True
         args.device = 'cuda:0'
-        app = AppLauncher(args).app
+        if timing_probe:
+            with timing_probe.span('AppLauncher'):
+                app = AppLauncher(args).app
+        else:
+            app = AppLauncher(args).app
         for p in (args.repo_root, args.source_root):
             sys.path.insert(0, str(p.resolve()))
         import yaml
@@ -40,6 +49,21 @@ def main(argv=None):
         native, _ = load_task_config(args.source_root / 'task_config' / f"{config['task_config']}.yml")
         module, cfg, timing, _ = build_task_env_cfg(config['task'], native, config['task_config'], 'eval', device=args.device, save_dir=root/'native')
         # Save observations through OpenETA; the native control/render timing is unchanged.
+        if timing_probe:
+            from tacex_uipc.sim.uipc_sim import UipcSim
+            timing_probe.install_uipc_callbacks(UipcSim)
+            with timing_probe.span('Task.construct'):
+                task = module.Task(cfg, mode='eval')
+            timing_probe.install_task(task)
+            with timing_probe.span('Task.reset'):
+                task.reset(seed=args.seed)
+            write_json(root/'reset_diagnostic_result.json', {
+                'reset_returned':True, 'seed':args.seed, 'codex_process_count':0,
+                'task_body_actions':0, 'native_success_evaluated':False,
+                'native_reset_time_limit_s':cfg.reset_time_limit,
+                'initialization_steps':task.step_count,
+                'initialization_physics_steps':task._physics_step_count})
+            return 0
         task = module.Task(cfg, mode='eval')
         task.reset(seed=args.seed)
         if not task.plan_success:
@@ -92,6 +116,8 @@ def main(argv=None):
             session.recorder.close()
         if task:
             task.close()
+        if timing_probe:
+            timing_probe.close()
         if app:
             app.close()
 

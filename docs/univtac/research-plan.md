@@ -1338,3 +1338,32 @@ Representative frames and the partial-result page were visually inspected;
 this is not a claim of manually watching every frame. No video was fabricated
 for a failed initialization or an unrun cell. The final focused suite passed
 56 tests, with scoped Ruff, compileall, diff checks and GPT-6 low scoped neat.
+
+### Limited reset timing diagnosis (authorized, not a formal retry)
+
+Pro `43fd5010-a8e6-4baa-b761-50b17c04c5db` keeps the formal batch paused and
+allows at most one seed-1000028 reset-only timing diagnostic if retained logs
+are insufficient. Current cumulative startup cap for this diagnostic stage is
+12 (11 already used plus at most one); future formal recovery needs separate
+Pro authorization. No timeout or behavior change is authorized in this stage.
+
+Retained logs show first-step cumulative Running times 62.74/74.22 seconds in
+the failures, with second-step increments 104.52/60.06 seconds. Successful
+B26 recovery and A28/C28 have second-step increments 0.21/0.17/0.17 seconds.
+B27 also had a slow first step (76.81 seconds) yet passed the reset test. Running
+is cumulative from `start_time` set near `_reset_idx`'s end; the first value
+includes surrounding reset work, not just one step. The exception checks a
+separate cumulative clock starting immediately before the five-step loop.
+Retained process samples have membership/libcuda mappings, not CPU/GPU activity
+or stacks. They cannot distinguish computation from waiting inside `_step`.
+
+The optional worker flag `--reset-timing-only` records existing first-five-step
+boundaries and wall/process CPU time, plus one 30-second traceback per long step.
+UIPC callbacks are wrapped before registration, with the same original call,
+arguments and order. No extra render, physics or GPU synchronization is added.
+After native reset returns it saves timing and closes, with no Codex, autonomous
+session, task-body action or added success check. Native initialization still
+moves the robot and physics. Logs are separate under
+`outputs/univtac-isaac51-r111/reset-diagnostic/`; no diagnostic outcome enters
+A/B/C statistics. Two focused tests verify call count/order and exception
+preservation. This is instrumentation, not a fix or claim of a known root cause.

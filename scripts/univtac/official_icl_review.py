@@ -58,7 +58,7 @@ def previous_episode_attempts(folder):
 
 def round_names(root):
     name = round_manifest(root).get('round')
-    return {'R1.11':GRASP_NAMES, 'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
+    return {'R1.12':CURRENT_TOUCH_NAMES, 'R1.11':GRASP_NAMES, 'R1.8':RULE_NAMES, 'R1.9':NEW_SEED_NAMES, 'R1.10':CURRENT_TOUCH_NAMES}.get(name, NAMES)
 
 
 def round_seeds(root):
@@ -68,7 +68,7 @@ def round_seeds(root):
 
 def round_page(root, fallback='R1.7'):
     name = round_manifest(root).get('round', fallback)
-    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19', 'R1.10':'r110', 'R1.11':'r111'}[name]
+    route = {'R1.7':'r17', 'R1.8':'r18', 'R1.9':'r19', 'R1.10':'r110', 'R1.11':'r111', 'R1.12':'r112'}[name]
     return PAGE.replace('R1.7', name).replace('r17-', route+'-')
 
 
@@ -187,6 +187,39 @@ def episodes(root, rebuild=False):
     (root/'videos.html').write_text(page)
 
 
+COST_FIELDS = ('move_request_count', 'actual_motion_requests', 'tool_call_count',
+               'control_steps', 'physics_steps', 'simulation_time_seconds', 'codex_wall_seconds')
+USAGE_FIELDS = ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens')
+
+
+def cost_totals(rows):
+    """Missing measurements stay unavailable, including in aggregate totals."""
+    def total(values):
+        return sum(values) if values and all(v is not None for v in values) else None
+    return {'n':len(rows), 'seeds':[r['seed'] for r in rows],
+            **{k:total([r.get(k) for r in rows]) for k in COST_FIELDS},
+            'usage':{k:total([(r.get('usage') or {}).get(k) for r in rows]) for k in USAGE_FIELDS}}
+
+
+def summarize_costs(cells, comparisons):
+    valid = [r for r in cells if r['evaluable'] is True]
+    paired = {}
+    for key in comparisons:
+        a,b = key.split('-')
+        seeds = sorted({r['seed'] for r in valid if r['condition']==a and r['task_success'] is True}
+                       & {r['seed'] for r in valid if r['condition']==b and r['task_success'] is True})
+        paired[key] = {'paired_seeds':seeds,
+                       a:cost_totals([r for r in valid if r['condition']==a and r['seed'] in seeds]),
+                       b:cost_totals([r for r in valid if r['condition']==b and r['seed'] in seeds])}
+    return {'all_evaluable':{c:cost_totals([r for r in valid if r['condition']==c])
+                            for c in sorted({r['condition'] for r in cells})},
+            'jointly_successful_pairs':paired,
+            'initialization_and_worker_costs_separate':[
+                {k:r.get(k) for k in ('seed','condition','status','reset_wall_seconds',
+                 'task_construct_wall_seconds','worker_wall_seconds','infrastructure_error')} for r in cells],
+            'note':'Cached input and reasoning output are subsets; do not add twice. Joint-success rows do not replace all-evaluable costs.'}
+
+
 def summarize(root):
     cells=[]
     names=round_names(root)
@@ -240,13 +273,13 @@ def summarize(root):
         live, no_live = (contrasts[a+'-'+b] for a,b in CURRENT_TOUCH_COMPARISONS[:2])
         contrasts['historical_touch_difference_in_differences'] = live-no_live if live is not None and no_live is not None else None
     paired_comparisons = {}
-    if names is GRASP_NAMES:
+    if names in (GRASP_NAMES, CURRENT_TOUCH_NAMES):
         for key, counts in pairs.items():
             n = sum(v for k,v in counts.items() if k!='unavailable')
             paired_comparisons[key] = {'evaluable_pairs':n, 'difference_percentage_points':(counts['method_only_success']-counts['control_only_success'])*100/n if n else None}
     recovery_path = root/'batch/recovery_manifest.json'
-    write_json(root/'results.json',{'paired_comparisons':paired_comparisons, 'recovery':json.loads(recovery_path.read_text()) if recovery_path.exists() else None, 'timed_recovery':json.loads((root/'batch/timed_recovery_manifest.json').read_text()) if (root/'batch/timed_recovery_manifest.json').exists() else None, 'reset_limit_recovery':json.loads((root/'batch/reset_limit_recovery_manifest.json').read_text()) if (root/'batch/reset_limit_recovery_manifest.json').exists() else None, 'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
-        'class_subgroups_host_only':{c:{kind:{'episodes':sum(x['condition']==c and x['object_class_host_only']==kind for x in cells), 'successes':sum(x['condition']==c and x['object_class_host_only']==kind and x['evaluable'] is True and x['task_success'] is True for x in cells)} for kind in ('rough','plain')} for c in names} if names is GRASP_NAMES else {},
+    write_json(root/'results.json',{'costs':summarize_costs(cells, pairs), 'paired_comparisons':paired_comparisons, 'recovery':json.loads(recovery_path.read_text()) if recovery_path.exists() else None, 'timed_recovery':json.loads((root/'batch/timed_recovery_manifest.json').read_text()) if (root/'batch/timed_recovery_manifest.json').exists() else None, 'reset_limit_recovery':json.loads((root/'batch/reset_limit_recovery_manifest.json').read_text()) if (root/'batch/reset_limit_recovery_manifest.json').exists() else None, 'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
+        'class_subgroups_host_only':{c:{kind:{'episodes':sum(x['condition']==c and x['object_class_host_only']==kind for x in cells), 'successes':sum(x['condition']==c and x['object_class_host_only']==kind and x['evaluable'] is True and x['task_success'] is True for x in cells)} for kind in ('rough','plain')} for c in names} if names is GRASP_NAMES or round_manifest(root).get('config',{}).get('task')=='grasp_classify' else {},
         'interpretation':('Six-seed grasp_classify autonomous pilot; historical class is used only for offline demo selection; current class only for host post-run subgroups. Cross-task results remain separate.' if names is GRASP_NAMES else 'Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
             'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.')})
 
@@ -271,7 +304,7 @@ def pair_specs(root):
 
 def review_pairs(root):
     modality = round_names(root) is CURRENT_TOUCH_NAMES
-    route = 'r110' if modality else 'r111' if round_names(root) is GRASP_NAMES else 'r19'
+    route = ('r112' if round_manifest(root).get('round')=='R1.12' else 'r110') if modality else 'r111' if round_names(root) is GRASP_NAMES else 'r19'
     page = round_page(root)+'<h1>同 seed 并排审阅</h1><p>两侧都是现场 GPT-6 low 自主操作，动作可以不同。按接管后的真实仿真时间对齐，同倍率播放；短侧结束后保持末帧，不拉伸归一化运动时长。历史 expert 不是这里的当前操作。</p>'
     if modality:
         page += '<p>每对左侧有当前触觉，右侧无当前触觉。右侧录像中的触觉仅供用户审阅，本episode未送给Agent。历史示范在同一对中完全相同。</p>'

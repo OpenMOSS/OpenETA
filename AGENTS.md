@@ -18,6 +18,9 @@ labels intact. The current official-demonstration runner defaults to
 `configs/univtac/new_seed_tactile_icl.yaml`; older configs are historical.
 R1.10 is invoked explicitly with `configs/univtac/current_tactile_ablation.yaml`;
 its no_live projection is an ablation, not a new default for the complete method.
+R1.12 uses `configs/univtac/grasp_classify_current_tactile_ablation.yaml`
+explicitly for Grasp & Classify; current-touch omission is an ablation, not the
+complete-method default.
 This project rule does not authorize changing global Codex configuration.
 
 ## Neat after each experimental step

@@ -1345,3 +1345,58 @@ separate [initialization diagnostic](http://127.0.0.1:9401/artifact?run=univtac-
 is host-only and excluded from task success.
 
 Validation: 65 focused tests passed; scoped Ruff, compileall and git diff checks passed. All 48 query video files (36 individual 1×/slow videos and 12 paired 1×/0.05× videos) reached browser playback end. Individual slow versions use 0.1× or 0.05× according to duration. This verifies playable delivery, not a human watching every frame; representative failure and success frames were inspected separately. No generated intermediate observations were used. Scoped GPT-6 low neat confirmed the result and cost statements.
+
+### R1.12 planned: Grasp & Classify current/history touch ablation
+
+Pro accepted R1.11, including the descriptive secondary result that C used fewer
+control steps than B in all six jointly successful pairs (94 versus 64 total).
+This does not establish overall lower time/cost: C had more input tokens and
+slightly more Codex wall time. The 23-start R1.11 ledger is closed.
+
+R1.12 uses eight new development seeds 1000032–1000039 and four conditions:
+B_live/B_no_live share the frozen R1.11 B package; C_live/C_no_live share C,
+including C_no_live's historical touch. Only live receives current bilateral
+tactile history. All still record four host views with unchanged sensors,
+original controller and native task physics (`use_adaptive_grasp=False`).
+No_live is omitted Agent input, not a no-contact measurement.
+
+Configuration: `configs/univtac/grasp_classify_current_tactile_ablation.yaml`.
+All prompts are identical, with R1.11 rules plus the explicit missing-modality
+notice and “when provided” format wording. The official 0/1 demonstrations,
+segmentation, image selection and measured-motion interpretation remain frozen.
+No task hints, new examples, controller changes or classification quiz are added.
+
+The primary comparison is B_live−B_no_live. Also report C_live−B_live,
+C_live−C_no_live and C_no_live−B_no_live, evaluable paired n/outcomes, and the
+historical-touch difference-in-differences descriptively. Native success remains
+the main outcome. Report all-evaluable costs and jointly-successful paired costs;
+missing usage remains unavailable and subsets are not added twice. Final success
+does not imply correct first classification, since feedback-driven recovery is
+allowed. Initialization/failed-start costs stay separate.
+
+All 32 starts use native reset limit 600 s, outer ready 900 s, cleanup 300 s,
+Codex 3600 s including terminal grace 300 s, native 300 control steps,
+80 per segment, 30 admitted motion requests and 100 MCP calls. Exactly one
+fresh Task reset and Codex context per cell. No debug, warmup, expert or retry
+reserve. Any infrastructure error pauses the remaining batch; native failure
+continues the frozen order. No UIPC performance diagnosis is added.
+
+Planned command (not yet executed at this entry):
+
+```bash
+uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
+  --config configs/univtac/grasp_classify_current_tactile_ablation.yaml \
+  --demonstrations outputs/univtac-isaac51-r111/demonstrations \
+  --output-root outputs/univtac-isaac51-r112/batch
+```
+
+Existing replay routes: [R1.12 inputs/results](http://127.0.0.1:9401/r112-autonomous),
+[videos](http://127.0.0.1:9401/r112-videos),
+[live/no_live pairs](http://127.0.0.1:9401/r112-pairs).
+Complete delivery is 64 individual and 32 paired video files. No_live touch is
+labelled host-only; missing/unready episodes do not receive fabricated videos.
+Implementation/configuration and offline checks precede all physical execution.
+
+Prelaunch evidence records 32 passing offline tests, equal B/C non-tactile
+content, and 4/8 historical images. Simulator and operator starts are both zero
+at this checkpoint; runtime delivery remains unverified.

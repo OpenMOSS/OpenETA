@@ -10,13 +10,13 @@ from sim.envs.univtac.codex_readonly import read_jsonl
 
 def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
     batches = []
-    pattern = {'R1.11':'univtac-isaac51-r111/**/run_manifest.json','R1.10':'univtac-isaac51-r110/**/run_manifest.json','R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
+    pattern = {'R1.12':'univtac-isaac51-r112/**/run_manifest.json','R1.11':'univtac-isaac51-r111/**/run_manifest.json','R1.10':'univtac-isaac51-r110/**/run_manifest.json','R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
         if manifest.get('round') != round_name or manifest.get('mode') == 'observe_only':
             continue
         episodes = []
-        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9','R1.10','R1.11') else 'seed_*/episode.json')):
+        for path in sorted(manifest_path.parent.glob('seed_*/*/episode.json' if round_name in ('R1.7','R1.8','R1.9','R1.10','R1.11','R1.12') else 'seed_*/episode.json')):
             root = effective_episode_folder(path.parent)
             def read(name, root=root):
                 candidate = root/name
@@ -38,13 +38,13 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
         note_path=manifest_path.parent/'validation_note.json'
         note=json.loads(note_path.read_text()) if note_path.exists() else None
         batches.append({'name':manifest_path.parent.name,'manifest':manifest,'episodes':episodes,'validation_note':note})
-    if round_name in ('R1.7', 'R1.8', 'R1.9', 'R1.10', 'R1.11'):
+    if round_name in ('R1.7', 'R1.8', 'R1.9', 'R1.10', 'R1.11', 'R1.12'):
         conditions = ('UA','UB','UC','RA','RB','RC') if round_name == 'R1.8' else ('no_demo','visual_action_icl','tactile_action_icl')
         if round_name == 'R1.9':
             conditions = ('RA','RB','RC')
         if round_name == 'R1.11':
             conditions = ('A','B','C')
-        if round_name == 'R1.10':
+        if round_name in ('R1.10','R1.12'):
             conditions = ('B_live','C_live','B_no_live','C_no_live')
         batches = [{**b, 'name': b['name']+' / '+c, 'manifest':{**b['manifest'],'mode':'batch'},
                     'episodes':[e for e in b['episodes'] if e['condition']==c]}
@@ -209,3 +209,15 @@ R111_HTML = R111_HTML.replace("review(e)+'<h3>Agent Saw", "(e.previous_infrastru
 R111_HTML = R111_HTML.replace("const prompts=d.batches[0]?.manifest?.prompts??{};", "for(const [a,b] of [['C','B'],['B','A'],['C','A']]){const paired=(groups[a]||[]).filter(e=>e.episode.evaluable&&(groups[b]||[]).some(x=>x.episode.seed===e.episode.seed&&x.episode.evaluable));const diff=paired.reduce((v,e)=>v+Number(e.episode.task_success)-Number((groups[b]||[]).find(x=>x.episode.seed===e.episode.seed).episode.task_success),0);t+='<p>仅可评价配对 '+a+'−'+b+'：n='+paired.length+'，'+(paired.length?(100*diff/paired.length).toFixed(1)+' pp':'unavailable')+(paired.length===6?'；六seed完整配对。':'；未完成六seed全表，不能将缺失算失败。')+'</p>';}const attempts=d.batches.flatMap(b=>b.episodes).reduce((n,e)=>n+(e.previous_infrastructure_attempts?.length??0),0);t+='<p>另行保留的历史初始化失败 attempts：'+attempts+'；当前未恢复错误另列于上表。</p>';const prompts=d.batches[0]?.manifest?.prompts??{};")
 
 R111_HTML = R111_HTML.replace('evaluator:e.host_evaluator,worker_error', 'evaluator:e.host_evaluator,native_reset_limit:e.native_reset_limit,worker_error').replace('<main id="content">','<p>后续恢复启动的原生初始化墙钟限额统一为600秒，旧有效轨迹为120秒；任务预算/输入/控制/评价未改。这是超时缓解，不是UIPC性能修复。</p><main id="content">')
+
+
+R112_HTML = R110_HTML.replace('R1.10', 'R1.12').replace('r110-', 'r112-').replace(
+    'Autonomous Insert Hole', 'Autonomous Grasp & Classify').replace(
+    '1000018', '1000032').replace('1000025', '1000039').replace(
+    '不关闭传感器、初始化自适应抓持、物理或录像。',
+    '不关闭传感器、物理或录像；本任务原生use_adaptive_grasp=False。全部初始化限额600秒，任务预算不变。').replace(
+    '<h3>固定比较与逐 seed 配对</h3>',
+    '<h3>固定比较与逐 seed 配对</h3><p>首要对照 B_live−B_no_live；历史触觉对照 C_live−B_live。Grasp & Classify 八个新开发seed，旧任务不并表。</p>').replace(
+    "counts.join(' / ')+'</p>';", "counts.join(' / ')+'；有效配对 n='+(8-counts[4])+'；配对差值 '+((8-counts[4])?((counts[0]-counts[1])*100/(8-counts[4])).toFixed(1)+' pp':'unavailable')+'</p>';").replace(
+    'render().then(bindReviews);',
+    "render().then(bindReviews).then(async()=>{const r=await fetch('/api/r112-results');if(r.ok){const d=await r.json();document.getElementById('content').insertAdjacentHTML('afterbegin','<details><summary>全部有效成本、共同成功配对成本及单列初始化成本</summary>'+pretty(d.costs??{})+'</details>');}});")

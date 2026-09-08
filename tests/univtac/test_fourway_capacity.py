@@ -69,3 +69,37 @@ def test_two_way_barrier_and_abort_source(tmp_path):
     coordinator.abort('initialization failure', seeds[0])
     coordinator.abort('collateral cancellation', seeds[1])
     assert coordinator.abort_seed == seeds[0]
+
+
+def test_smoke_retry_is_pre_ready_only(tmp_path, monkeypatch):
+    from scripts.univtac.run_fourway_capacity import run_lane
+    coordinator = Coordinator(tmp_path, SEEDS[:2], protocol_smoke=True)
+    args=SimpleNamespace(coordinator=coordinator)
+    calls=[]
+    def episode(args,config,seed,folder):
+        calls.append(folder)
+        folder.mkdir(parents=True)
+        (folder/'worker_lifecycle.json').write_text(json.dumps({'cleanup_complete':True}))
+        coordinator.processes[seed,'worker']=SimpleNamespace(poll=lambda:0)
+        if len(calls)==1:
+            coordinator.abort('native reset failed',seed)
+            assert not coordinator.cancel.is_set()
+            return {'seed':seed,'infrastructure_error':'native reset failed','codex_process_count':0}
+        coordinator.ready[seed]={}
+        return {'seed':seed,'codex_process_count':1,'evaluable':True,'task_success':False}
+    monkeypatch.setattr('scripts.univtac.run_fourway_capacity.run_episode',episode)
+    result=run_lane(args,{},SEEDS[0],tmp_path/'lane')
+    assert len(calls)==2 and result['task_success'] is False
+    assert [p.name for p in calls]==['attempt_1','attempt_2']
+
+
+def test_smoke_accepts_first_ready_without_waiting_or_replacement(tmp_path):
+    coordinator=Coordinator(tmp_path,SEEDS[:2],protocol_smoke=True)
+    coordinator.ready[SEEDS[0]]={}
+    coordinator.barrier(SEEDS[0])
+    coordinator.processes[SEEDS[1],'worker']=SimpleNamespace(poll=lambda:0)
+    coordinator.abort('other initialization failed',SEEDS[1])
+    assert not coordinator.cancel.is_set()
+    assert not coordinator.lane_cancel[SEEDS[0]].is_set()
+    assert coordinator.lane_cancel[SEEDS[1]].is_set()
+    assert any(e['event']=='operator_released' for e in coordinator.events)

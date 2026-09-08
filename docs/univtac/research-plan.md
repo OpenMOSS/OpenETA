@@ -1620,7 +1620,7 @@ speedup nor long-term concurrency stability across tasks. D, the eight-task
 rollout and the full batch remain unstarted.
 
 
-### Query evaluation feedback removal — implemented, offline only
+### Query evaluation feedback removal — implemented; live acceptance completed
 
 The completed two-way results above used the legacy online-feedback protocol;
 they are not acceptance evidence for `native_eval_no_online_task_feedback_v1`.
@@ -1641,7 +1641,53 @@ post-terminal motion, live MCP output/context, tactile strip annotations and
 protocol-separated result loading. The existing shared MCP file's unrelated
 lint debt was not expanded. `outputs/univtac-no-online-feedback-offline/`
 contains read-only projection checks over 18 historical tool responses;
-original records and expert outcomes were retained. No simulator or operator
-Codex started. Fresh two-way acceptance, D and the eight-task rollout remain
-pending under the new frozen protocol; no extra experiment cells or full batch
-were started.
+original records and expert outcomes were retained. That implementation/offline
+round started no simulator or operator Codex. The separate live acceptance below
+subsequently exercised the new protocol. D, the eight-task rollout and the full
+batch remain unstarted; R1.12 remains paused under its existing protocol.
+
+
+### No-online-feedback live acceptance — completed, unscored
+
+A fresh C_live Insert Hole batch used seeds 1000040/1000041, gpt-6-astra/low
+and `native_eval_no_online_task_feedback_v1`, reusing
+`run_fourway_capacity.py --protocol-smoke --concurrency 2`. This option allows
+at most three pre-ready attempts per lane, retains each attempt separately,
+and never replaces an accepted ready episode. Both lanes accepted attempt 1:
+two simulator starts, two independent Codex contexts, no retries. Each ready
+lane proceeded independently; this was protocol acceptance, not another
+capacity scan. Batch wall time was 379.09 s.
+
+| Seed | Motions / tools | Control / physics steps | Task simulation s | Codex / worker s | Host native result |
+|---|---:|---:|---:|---:|---|
+| 1000040 | 7 / 10 | 18 / 36 | 0.3000 | 86.276 / 375.231 | success |
+| 1000041 | 4 / 7 | 17 / 34 | 0.2833 | 76.675 / 363.736 | success |
+
+Both actual MCP lists contain only `review_demonstrations`, `observe`,
+`mark_point`, `move_to`, `report_issue` and `finish_episode`; `check_task` is
+absent. All 17 returns matched host response projection and actual
+`operator_context` delivery. Historical demonstrations retained their outcomes
+and delivered 24 images each; query observations and motion returns delivered
+four images each. Ordinary execution feedback remained available. Both
+automatic endings delivered neutral feedback, and both Codex finals explicitly
+acknowledged that tools had not supplied task success.
+
+Protocol delivery and the autonomous chain passed independently of host task
+outcomes. The only actual post-terminal tool was `finish_episode`, without
+additional physics. Post-terminal motion rejection and unobserved failure/error
+branches remain offline-test coverage. The focused suite passed 55 tests.
+Finals, usage and host results were saved; worker and Codex process trees were
+empty after cleanup. The two 1× and two 0.05× videos all reached browser playback
+end without error, from 19/18 real samples; final score labels are user-only.
+
+Lightweight sampling recorded GPU peak use 20,951 MiB, minimum GPU free memory
+11,151 MiB and minimum MemAvailable 55.26 GiB. Pre-existing swap was
+2,143,350,784 bytes with zero sampled peak increase. Cleanup left GPU use at
+988 MiB. No benchmark, controller motion, physics, demonstration or budget
+change was made.
+
+[New-protocol report, videos and actual inputs](http://127.0.0.1:9401/artifact?run=univtac-no-online-feedback-live-smoke&path=report.html)
+remain separate from legacy two-way/four-way evidence and the paused R1.12
+ledger. These two episodes do not enter paper success rates and establish
+neither old/new protocol equivalence nor absence of performance loss. D,
+eight-task rollout and the full batch remain unstarted.

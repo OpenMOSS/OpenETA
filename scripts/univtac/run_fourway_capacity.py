@@ -18,17 +18,21 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from scripts.univtac.run_autonomous_insert_hole import operator_prompt, run_episode
-from sim.envs.univtac.feedback_protocol import new_run_config, protocol
+from scripts.univtac.run_autonomous_insert_hole import codex_command, operator_prompt, run_episode
+from sim.envs.univtac.feedback_protocol import PROTOCOL, new_run_config, protocol
 from sim.envs.univtac.trace import write_json
 
 SEEDS = (1000040, 1000041, 1000042, 1000043)
 
 
 class Coordinator:
-    def __init__(self, root, seeds=SEEDS):
+    def __init__(self, root, seeds=SEEDS, protocol_smoke=False):
         self.root = root
         self.seeds = tuple(seeds)
+        self.protocol_smoke = protocol_smoke
+        self.lane_cancel = {s: threading.Event() for s in seeds}
+        self.active_roots = {}
+        self.initialization_failures = set()
         self.cancel = threading.Event()
         self.lock = threading.RLock()
         self.processes = {}
@@ -58,15 +62,23 @@ class Coordinator:
                 self.processes[seed, kind] = process
                 self.phases[seed] = 'initializing' if kind == 'worker' else 'operating'
                 self.event(seed, kind+'_started', pid=process.pid)
-        return {'cancel_event': self.cancel, 'on_started': started}
+        return {'cancel_event': self.lane_cancel[seed] if self.protocol_smoke else self.cancel, 'on_started': started}
 
     def abort(self, reason, seed=None):
         with self.lock:
+            if self.protocol_smoke and seed is not None and seed not in self.ready and (seed, 'worker') in self.processes:
+                if seed not in self.initialization_failures:
+                    self.event(seed, 'initialization_attempt_failed', reason=str(reason))
+                self.initialization_failures.add(seed)
+                self.lane_cancel[seed].set()
+                return
             if not self.cancel.is_set():
                 self.abort_reason = str(reason)
                 self.abort_seed = seed
                 self.event(seed, 'batch_abort', reason=str(reason))
                 self.cancel.set()
+                for event in self.lane_cancel.values():
+                    event.set()
 
     def wait_ready(self, seed, root, future, timeout):
         deadline = time.monotonic()+timeout
@@ -90,6 +102,16 @@ class Coordinator:
         raise TimeoutError(f'{seed}: ready deadline {timeout}s')
 
     def barrier(self, seed):
+        if self.protocol_smoke:
+            with self.lock:
+                if self.cancel.is_set():
+                    raise RuntimeError('batch cancelled before operator release')
+                if len(self.ready) == len(self.seeds) and not self.release.is_set() and all(
+                        self.processes[s, 'worker'].poll() is None for s in self.seeds):
+                    self.event(None, 'all_ready_resident')
+                    self.release.set()
+                self.event(seed, 'operator_released')
+            return
         while not self.release.wait(0.1):
             with self.lock:
                 if self.cancel.is_set():
@@ -144,20 +166,51 @@ def resources(coordinator, previous):
             'swap_used_bytes': mem['SwapTotal']-mem['SwapFree'], 'trees': trees, 'phases': phases}
 
 
+
+def run_lane(args, config, seed, root):
+    """Only pre-takeover failures may retry; a ready episode is never replaced."""
+    coordinator = args.coordinator
+    attempts = 3 if coordinator.protocol_smoke else 1
+    for number in range(1, attempts + 1):
+        if coordinator.cancel.is_set():
+            return {'seed': seed, 'status': 'cancelled', 'evaluable': False}
+        folder = root/f'attempt_{number}' if coordinator.protocol_smoke else root
+        with coordinator.lock:
+            coordinator.active_roots[seed] = folder
+            coordinator.initialization_failures.discard(seed)
+            coordinator.lane_cancel[seed].clear()
+            coordinator.phase(seed, 'submitted')
+            coordinator.event(seed, 'attempt_started', attempt=number, output_root=str(folder))
+        episode = run_episode(args, config, seed, folder)
+        if not coordinator.protocol_smoke or seed in coordinator.ready or episode.get('codex_process_count'):
+            return episode
+        lifecycle_path = folder/'worker_lifecycle.json'
+        if not lifecycle_path.exists() or not json.loads(lifecycle_path.read_text()).get('cleanup_complete'):
+            coordinator.abort('Initialization attempt did not finish owned-process cleanup')
+            return episode
+        coordinator.event(seed, 'initialization_attempt_closed', attempt=number)
+    return episode
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--protocol-smoke', action='store_true', help='Two independent new-protocol lanes, at most three pre-ready attempts each')
     parser.add_argument('--concurrency', type=int, choices=(2, 4), default=4)
     parser.add_argument('--config', type=Path, default=REPO/'outputs/univtac-isaac51-r110/batch/C_live.yaml')
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
     parser.add_argument('--source-root', type=Path, default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
     args = parser.parse_args()
+    if args.protocol_smoke and args.concurrency != 2:
+        parser.error('--protocol-smoke requires --concurrency 2')
     seeds = SEEDS[:args.concurrency]
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     config = new_run_config(yaml.safe_load(args.config.read_text()))
     original_prompt = operator_prompt(config)
     config.update(round=('Two-way capacity' if args.concurrency == 2 else 'Four-way capacity'), seeds=list(seeds), scored=False, wait_for_operator_release=True)
+    if args.protocol_smoke:
+        config['round'] = 'No-online-feedback live smoke'
     config.pop('episode_order', None)
     if (config['task'], config['model'], config['reasoning_effort'], config['condition']) != ('insert_hole', 'gpt-6-astra', 'low', 'C_live'):
         raise ValueError('Expected successful Insert Hole C_live configuration')
@@ -165,9 +218,18 @@ def main():
     args.config = root/'config.yaml'
     args.config.write_text(yaml.safe_dump(config, sort_keys=False))
     (root/'prompt.txt').write_text(original_prompt)
+    if args.protocol_smoke:
+        from tools.embodied_mcp_server import build_live_backend_server
+        server = build_live_backend_server(root=root, worker_url='http://127.0.0.1:0',
+            demonstrations=True, feedback_protocol=protocol(config))
+        command = codex_command(root, 'http://127.0.0.1:0', config)
+        if protocol(config) != PROTOCOL or 'check_task' in server._tool_manager._tools or 'check_task' in ' '.join(command):
+            raise ValueError('New protocol preflight mismatch')
+        write_json(root/'protocol_preflight.json', {'feedback_protocol':protocol(config),
+            'tools':list(server._tool_manager._tools), 'command_not_executed':command, 'passed':True})
     args.mode = 'batch'
-    args.coordinator = coordinator = Coordinator(root, seeds)
-    write_json(root/'run_manifest.json', {'feedback_protocol':protocol(config), 'scored': False, 'seeds': seeds, 'max_simulator_starts': args.concurrency,
+    args.coordinator = coordinator = Coordinator(root, seeds, args.protocol_smoke)
+    write_json(root/'run_manifest.json', {'feedback_protocol':protocol(config), 'scored': False, 'seeds': seeds, 'max_simulator_starts': args.concurrency * (3 if args.protocol_smoke else 1),
         'max_codex_starts': args.concurrency, 'config': config, 'started_s': time.time(),
         'repo_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=REPO, text=True).strip(),
         'source_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=args.source_root, text=True).strip()})
@@ -188,9 +250,10 @@ def main():
                 if row['MemAvailable'] < 256*1024**2:
                     coordinator.abort('MemAvailable below 256 MiB during live batch')
                 for seed in seeds:
-                    error = root/f'seed_{seed}'/'worker_error.json'
-                    if error.exists() and not coordinator.cancel.is_set():
-                        coordinator.abort(f'{seed}: '+error.read_text(), seed)
+                    with coordinator.lock:
+                        error = coordinator.active_roots.get(seed, root/f'seed_{seed}')/'worker_error.json'
+                        if error.exists() and not coordinator.cancel.is_set():
+                            coordinator.abort(f'{seed}: '+error.read_text(), seed)
             except Exception as exc:  # noqa: BLE001 -- retain batch/resource failure evidence
                 coordinator.event(None, 'resource_sampling_error', error=str(exc))
             done.wait(max(0, 1-(time.monotonic()-start)))
@@ -199,7 +262,7 @@ def main():
     episodes = []
     try:
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            futures = [pool.submit(run_episode, args, config, seed, root/f'seed_{seed}') for seed in seeds]
+            futures = [pool.submit(run_lane, args, config, seed, root/f'seed_{seed}') for seed in seeds]
             for future in futures:
                 try:
                     episodes.append(future.result())
@@ -212,7 +275,7 @@ def main():
     write_json(root/'summary.json', {'feedback_protocol':protocol(config), 'scored': False, 'ended_s': time.time(), 'episodes': episodes,
         'all_ready': coordinator.release.is_set(), 'abort_reason': coordinator.abort_reason, 'abort_seed': coordinator.abort_seed,
         'completed_count': sum(e.get('evaluable', False) for e in episodes), 'events': coordinator.events})
-    return int(coordinator.cancel.is_set())
+    return int(coordinator.cancel.is_set() or any(e.get('infrastructure_error') for e in episodes))
 
 
 if __name__ == '__main__':

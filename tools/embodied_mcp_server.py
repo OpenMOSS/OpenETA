@@ -2702,6 +2702,12 @@ def build_live_backend_server(*, root: Path, worker_url: str, demonstrations: bo
         """End interaction. Success is established by the native evaluator."""
         return call("finish_episode", {"reason": reason})
 
+    if feedback_protocol == PROTOCOL:
+        (root/'mcp_tools.json').write_text(json.dumps({
+            'feedback_protocol': feedback_protocol,
+            'tools': {name: tool.parameters for name, tool in server._tool_manager._tools.items()},
+            'structured_output': False,
+        }, indent=2))
     return server
 
 

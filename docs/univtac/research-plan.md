@@ -1698,7 +1698,7 @@ neither old/new protocol equivalence nor absence of performance loss. D,
 eight-task rollout and the full batch remain unstarted.
 
 
-### Eight-task new-protocol coverage — prepared, not yet run
+### Eight-task new-protocol coverage — completed
 
 `configs/univtac/eight_task_coverage.yaml` fixes eight new cells at seed
 1000040: Insert Hole D and one C cell each for Grasp & Classify, Insert Tube,
@@ -1718,11 +1718,49 @@ The runner reuses the existing Coordinator and episode runner, with two slots
 including cleanup, at most three pre-ready initialization attempts per cell,
 and limits of eight operator Codex starts and 24 simulator starts. Native task
 control limits remain 600 for HDMI, 500 for Lift Bottle and 300 for the others.
-The focused offline suite passed 55 tests. This is preparation evidence, not
-autonomous coverage or a success-rate result. Live execution has not started at
-this checkpoint. R1.12 remains paused; no full batch is resumed.
+The preparation suite passed 55 focused offline tests. The implementation was
+committed and pushed as `415f56d` before the fixed queue started. R1.12 remains
+paused; no full batch was resumed.
 
 Prepare with `uv run --no-sync python scripts/univtac/run_eight_task_coverage.py
 --phase prepare`, then run the frozen queue with the same command and
 `--phase run`. Artifacts use `outputs/univtac-eight-task-coverage/`; persistent
 attempt directories retain the initialization budget across invocations.
+
+The frozen queue completed all eight new autonomous cells with eight operator
+Codex processes and nine simulator starts in 1616.16 wall seconds. Lift Can
+required one preserved pre-ready initialization retry: native reset timed out
+after 153.77 s against its unchanged 120 s limit. Attempt 2 was accepted. No
+accepted episode was rerun. All eight accepted episodes were evaluable; all
+nine worker lifecycles report complete cleanup.
+
+| New cell (seed 1000040) | Native outcome / ending | Motion requests / physical motions | Tools | Control / physics steps | Simulation s | Codex wall s | Input / output tokens |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Insert Hole D | success | 5 / 5 | 8 | 14 / 28 | 0.2333 | 117.18 | 345379 / 754 |
+| Grasp & Classify C | success | 2 / 2 | 7 | 14 / 28 | 0.2333 | 121.73 | 269383 / 621 |
+| Insert Tube C | early stop, failure | 6 / 6 | 9 | 12 / 24 | 0.2000 | 97.23 | 509914 / 976 |
+| Insert HDMI C | success | 8 / 7 | 16 | 13 / 26 | 0.2167 | 150.18 | 870747 / 1634 |
+| Pull Out Key C | success | 5 / 5 | 8 | 62 / 124 | 1.0333 | 99.98 | 413336 / 898 |
+| Lift Bottle C | early stop, failure | 24 / 24 | 37 | 377 / 754 | 6.2833 | 876.82 | 3613599 / 4240 |
+| Lift Can C | early stop, failure | 2 / 2 | 6 | 22 / 44 | 0.3667 | 130.63 | 460397 / 593 |
+| Put Bottle in Shelf C | voluntary finish, failure | 9 / 9 | 16 | 299 / 598 | 4.9833 | 389.17 | 1137735 / 2326 |
+
+All eight Codex processes exited naturally with final text and actual usage.
+Cached input and reasoning output remain subsets in raw usage; they are not
+added again to the input/output totals above. The 107 actual tool responses
+matched host projection and recorded operator context. No `check_task` was
+registered. Historical expert outcomes remained visible, current-query scoring
+remained host-only, and all actual post-terminal calls preserved physics counts.
+Unobserved terminal/error branches remain covered by offline tests.
+
+Sampled GPU usage peaked at 20807 MiB; minimum MemAvailable was 53.28 GiB,
+with no sampled swap increase. GPU use after cleanup was 908 MiB. The failed
+initialization is retained separately from four unsuccessful task outcomes.
+The prior Insert Hole C episode is a separate coverage reference, not a ninth
+new result. This one-seed coverage check establishes neither ICL gains nor
+multi-seed reliability.
+
+[Eight-task report, real inputs and 1×/0.05× videos](http://127.0.0.1:9401/artifact?run=univtac-eight-task-coverage&path=report.html)
+uses real recorded frames; slow playback adds display time, not observations.
+Host outcome labels are user-only. No benchmark, motion algorithm, physical
+parameter, solver setting or success threshold changed.

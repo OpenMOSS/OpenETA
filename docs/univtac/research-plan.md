@@ -1974,3 +1974,27 @@ not a completed 100-seed result. Preserve all completed and unavailable cells
 when the authorized queue is resumed; do not regrant attempts or rerun them.
 No A, D/E, main-table remainder, other-model comparison or old R1.12 recovery
 was started.
+
+### C-only authorized recovery — native startup failure
+
+After the user's explicit pause release, the C-only service started two new
+workers at seed 1000000. Lift Can C_2shot attempt_1 exited before ready with
+SIGSEGV (returncode -11, 22.04 s); the native stack includes libomniclient.so.
+Insert Tube C_2shot attempt_1 was cancelled because of that batch failure
+(SIGTERM, returncode -15, 26.27 s), not a second independent crash. Neither
+reached ready or launched Codex. Both process groups completed cleanup.
+
+The updated ledger is C 1200 = 4 completed/evaluable + 1 initialization
+unavailable + 2 infrastructure_issue + 1193 not_run. B retains six completed
+results and 1194 deferred pending cells. Total starts are 15 simulator and
+10 operator Codex, with all 15 worker cleanups complete. Each new failed or
+cancelled attempt remains counted; no accepted episode or exhausted cell was
+rerun. The library named in the stack is not an established root cause.
+
+The existing non-retryable initialization/interface-error branch stopped
+dispatch. No retry-policy, connection, CLI, benchmark or runtime modification
+was applied. A single evidence report was sent to the current Pro conversation
+for advice; it must be read back before any ambiguous resend. The user-level
+service `univtac-shot-c-only.service` is inactive at this checkpoint.
+Provider job `job_db8ebae6e3de4d20` checks and reports every 1800 seconds;
+it preserves scope and attempts and does not silently bypass this error.

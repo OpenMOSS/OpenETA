@@ -1457,4 +1457,25 @@ Timer (including its existing CUDA timing synchronization); this diagnostic adds
 no Timer enable or explicit sync. It exports construction/before/after-step/final
 windows and export overhead, covers the native 5/20/5 intervals, and changes only
 the existing diagnostic process's UIPC logger from Error to Info. No solver fix
-or additional retry is authorized. Runtime internal evidence remains pending.
+or additional retry is authorized. At the prelaunch checkpoint, runtime internal evidence was pending.
+
+
+The sole diagnostic completed (implementation `e8999b5`): reset 155.887 s,
+243 native initialization/physics steps, zero operator/task-body/additional checker
+calls. Native test intervals were 134.529/1.662/0.333 s. Newton scope counts were
+1024/1024/640 for the first three steps, 6/6 for steps4/5, then 2–8. Sustained slow
+steps were not reproduced; normal completion does not prove a fix. First-step
+Newton45.931 s includes line search31.953 s, including trajectory candidates16.918 s
+and CCD13.690 s. Both repeated iterations and per-scope cost increased. These
+inclusive times are not additive. Info logs confirm max-iteration exits for the
+first two steps; native strict_mode0 still returns without proving convergence.
+
+All 62 draining Timer windows exported successfully. Export calls totaled
+0.007956 s; total export-and-write overhead was 0.025283 s. Existing Timer CUDA synchronization was unchanged;
+Info overhead is unmeasured. Actual r09 binary paths, pyuipc0.9.0/tacex_uipc0.1.0,
+effective config and workspace are retained. No specific collision pair or
+validated repair was established; no solver/geometry/initialization fix applied.
+No extra startup or formal recovery is authorized. Related R1.12 starts total11,
+with formal9 valid/1 failed/22 unstarted unchanged. See the
+[short diagnostic report](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r112/uipc-diagnostic&path=report.html)
+and `outputs/univtac-isaac51-r112/uipc-diagnostic/report.json` for raw references.

@@ -985,7 +985,7 @@ that vision alone suffices. R1.10 is a supplementary modality ablation, not a
 change to the original A/B/C definitions or the complete multimodal method.
 
 The [fixed configuration](../../configs/univtac/current_tactile_ablation.yaml)
-plans eight new seeds 1000018–1000025, four conditions each (32 fresh episodes):
+completed eight new seeds 1000018–1000025, four conditions each (32 fresh episodes):
 B_live / C_live retain current bilateral tactile history; B_no_live / C_no_live
 omit it from Agent-visible outputs. B has the same twelve historical visual
 images and measured-motion text as R1.9; C adds the same twelve historical
@@ -1025,7 +1025,7 @@ The existing dashboard adds `/r110-autonomous`, `/r110-videos`,
 `/r110-demonstrations` and `/r110-pairs`; paired views compare live/no_live within
 B and within C on common simulation time, holding an ended side's last frame.
 
-The planned 2×2 main table reports successes/8, evaluability, native failures and
+The 2×2 main table reports successes/8, evaluability, native failures and
 infrastructure issues. Fixed contrasts are C_live−B_live, C_no_live−B_no_live,
 B_live−B_no_live and C_live−C_no_live, each with paired outcomes. The difference
 between the first two is descriptive, not proof of model internals. Input length
@@ -1036,6 +1036,125 @@ Prelaunch validation passed 63 focused tests, scoped Ruff, compileall and diff
 checks. The MCP file retains 19 pre-existing Ruff diagnostics; comparison with
 the baseline found no new diagnostic from its changed tool description.
 GPT-6 low full-history scoped neat found no documentation inconsistency.
-The implementation and offline checks are complete; the 32-cell physical batch
-is pending launch. Preserve failures without replacement, keep previous rounds
-separate, and report actual results and costs before any subsequent instruction.
+The 32-cell batch completed on execution commit `601f02c`, starting from
+`7757bea`. There were no replacements, retries, added debugging episodes or
+mid-batch implementation changes. All 32 were evaluable, 26 succeeded and six
+ended in native early stop. No episode exhausted its budget. All model processes
+exited naturally with usage; no recoverable tool error or infrastructure failure
+was recorded. Previous rounds remain separate.
+
+
+### R1.10 results: historical-touch gain appears only under no_live in this batch
+
+| Historical examples | Current touch available | Current touch omitted |
+|---|---:|---:|
+| B: visual–measured-motion | 7/8 (87.5%) | 5/8 (62.5%) |
+| C: same plus historical touch | 7/8 (87.5%) | 7/8 (87.5%) |
+
+Every cell has planned=8, evaluable=8 and infrastructure issues=0. Native
+failures for B_live / C_live / B_no_live / C_no_live are 1 / 1 / 3 / 1.
+
+| Fixed comparison | Difference (percentage points) | Only first succeeds | Only second succeeds | Both succeed | Both fail | Unavailable |
+|---|---:|---:|---:|---:|---:|---:|
+| B_live-B_no_live | +25.0 | 2 | 0 | 5 | 1 | 0 |
+| C_live-B_live | +0.0 | 1 | 1 | 6 | 0 | 0 |
+| C_live-C_no_live | +0.0 | 1 | 1 | 6 | 0 | 0 |
+| C_no_live-B_no_live | +25.0 | 2 | 0 | 5 | 1 | 0 |
+
+The descriptive difference-in-differences is **−25.0 percentage points**:
+(C_live−B_live)−(C_no_live−B_no_live). This batch does not support the simple
+claim that historical touch mainly improves the use of current touch. With B,
+current touch adds two successes; with C, its aggregate difference is zero,
+but one seed improves and another worsens. Historical touch adds no net success
+under live input and two under no_live. These are limited input-condition
+comparisons, not evidence that the model ignored a modality or learned a
+particular internal mechanism. Removing touch also changes context length;
+fresh resets and one model attempt per cell leave substantial uncertainty.
+No new default or controller change follows from these results alone.
+
+Each entry is **native outcome; actual motion requests / control steps**.
+Physics steps are twice control steps, and task-body simulation seconds are
+control steps / 60. Initialization counts remain separate.
+
+| Seed | B_live | C_live | B_no_live | C_no_live |
+|---|---|---|---|---|
+| 1000018 | success; 6 / 17 | early stop; 6 / 18 | early stop; 6 / 18 | success; 6 / 16 |
+| 1000019 | success; 6 / 17 | success; 6 / 17 | success; 6 / 19 | success; 7 / 17 |
+| 1000020 | success; 7 / 17 | success; 7 / 17 | success; 6 / 15 | success; 7 / 19 |
+| 1000021 | success; 6 / 18 | success; 6 / 18 | success; 6 / 15 | success; 6 / 18 |
+| 1000022 | success; 7 / 16 | success; 6 / 14 | success; 7 / 19 | success; 5 / 14 |
+| 1000023 | success; 6 / 14 | success; 6 / 19 | success; 6 / 16 | success; 5 / 18 |
+| 1000024 | success; 8 / 20 | success; 5 / 17 | early stop; 6 / 18 | early stop; 6 / 17 |
+| 1000025 | early stop; 6 / 17 | success; 6 / 19 | early stop; 5 / 14 | success; 6 / 19 |
+
+The following are totals over eight episodes per condition. Worker wall time
+includes startup/shutdown; offline review encoding is excluded. Codex wall time
+includes model/tool waiting, not just physics. In particular, 1000022/C_live
+waited after demonstrations before continuing and exited normally; its Codex
+wall time was 348.8 seconds. Shorter failure is not an efficiency gain.
+
+| Condition | Motion requests | MCP calls | Control / physics steps | Sim seconds | Codex / worker wall seconds |
+|---|---:|---:|---:|---:|---:|
+| B_live | 52 | 86 | 136 / 272 | 2.267 | 822.1 / 1887.1 |
+| C_live | 48 | 82 | 139 / 278 | 2.317 | 1081.2 / 2146.1 |
+| B_no_live | 48 | 82 | 134 / 268 | 2.233 | 855.9 / 1906.7 |
+| C_no_live | 48 | 81 | 138 / 276 | 2.300 | 806.5 / 1835.5 |
+
+| Condition | Input tokens | Cached input (subset) | Output tokens | Reasoning output (subset) |
+|---|---:|---:|---:|---:|
+| B_live | 3,625,932 | 3,162,368 | 8,189 | 915 |
+| C_live | 3,871,966 | 3,463,296 | 7,677 | 711 |
+| B_no_live | 3,195,812 | 2,840,832 | 7,981 | 833 |
+| C_no_live | 3,595,349 | 3,247,488 | 7,475 | 643 |
+
+These are actual CLI cumulative fields; cached and reasoning subsets are not
+added again. All 32 command records explicitly use GPT-6 `gpt-6-astra` / low,
+CLI 0.153.4, and the common frozen prompt. Demonstrations are delivered once
+per context: B=12 and C=24 historical images. All current observation returns
+contain four images under live and two head/wrist images under no_live;
+no_live omits tactile-history selection metadata. Current touch remains in
+host recordings, not Agent Saw. Readback passed for all 32 in
+`outputs/univtac-isaac51-r110/delivery_validation.json`; full per-cell costs and
+paired counts are in `results.json` beside it. Raw recording retains 579
+synchronized sample sets, including each takeover frame, without added physics.
+
+### R1.10 viewing guide
+
+[All 32 videos](http://127.0.0.1:9401/r110-videos),
+[live/no_live paired views](http://127.0.0.1:9401/r110-pairs),
+[actual inputs/actions](http://127.0.0.1:9401/r110-autonomous), and
+[historical expert examples](http://127.0.0.1:9401/r110-demonstrations) use the
+existing dashboard. All current trajectories explicitly request only world
+translations and preserve inherited gripper commands; this does not mean actual
+orientation is perfectly constant.
+
+- **1000018:** B_live succeeds and B_no_live fails; C_live fails and C_no_live
+  succeeds. The two successful request sequences first explore negative x and
+  then move positive-x/downward; failed sequences explore positive x first.
+  Watch both B and C pairs, not just one favorable comparison.
+- **1000024:** both live conditions succeed and both no_live conditions fail.
+  Successful requests again explore negative x first; failed requests explore
+  positive x first. These are action descriptions, not a tactile interpretation.
+- **1000025:** both B conditions fail and both C conditions succeed, irrespective
+  of current touch. It provides a counterpoint to a story requiring current
+  touch for historical examples to help.
+
+The same seed does not create identical initial robot states. For example,
+1000024's observed initial approach-axis x component was approximately −0.0093
+and −0.0102 under B_live/C_live, versus +0.0332 and +0.0348 under the two no_live
+runs. These ordinary proprioceptive differences limit single-pair attribution;
+no object or robot state was moved to force matching. Requested translation is
+not measured translation, and native success is not target arrival. Some final
+requests report arm arrival and native early stop together; others reach native
+success before the requested target. Keep both feedback fields visible.
+
+Every episode has 1× and 0.05× playback; all recorded task-body durations are
+below 0.5 seconds. Sixteen same-seed B/C live/no_live pairs also have 1× and
+0.05× versions, on shared simulation time with explicit ended-side frame holds.
+No interpolated sensor observations are generated. The no_live tactile panels
+are visibly labelled “仅供用户审阅，本episode未送给Agent”.
+All 96 playback files reached browser `ended`; receipts are in
+`outputs/univtac-isaac51-r110/browser_playback_check.json`. Representative paired
+frames were visually inspected, including the no_live warning. This is not a
+claim of manually reviewing every frame. Final GPT-6 low full-history scoped neat completed a read-only result/cost and
+claim-boundary check; no numerical inconsistency was found.

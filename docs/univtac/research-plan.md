@@ -1159,330 +1159,189 @@ frames were visually inspected, including the no_live warning. This is not a
 claim of manually reviewing every frame. Final GPT-6 low full-history scoped neat completed a read-only result/cost and
 claim-boundary check; no numerical inconsistency was found.
 
-## R1.11: second-task autonomous pilot (partial; reset blocker)
+## R1.11: autonomous Grasp & Classify — completed development pilot
 
-Pro accepted R1.10 and stopped further Insert Hole mechanism ablations. Expert
-examples have helped autonomous insertion, but stable additional benefit from
-historical touch, and positive interaction between historical and current touch,
-remain unestablished. The descriptive −25 pp interaction is not proof of
-negative synergy or substitution.
+The 18 planned task cells are now natively evaluable: **A 4/6, B 6/6, C 6/6**.
+The main comparison **C−B is 0 pp**, with all six pairs successful in both
+conditions. B−A and C−A are each +33.3 pp (two method-only successes, four
+shared successes). This supports a demonstration benefit in these six
+development seeds, not an additional historical-touch success-rate benefit.
+It is not a full benchmark or held-out generalization claim. Insert Hole
+results remain separate; stable historical-touch benefit and positive
+historical/current-touch interaction remain unestablished.
 
-R1.11 extends the same method to `grasp_classify`, with fresh seeds
-1000026–1000031 and A/B/C, 18 planned autonomous episodes. All groups retain
-current head/wrist, bilateral tactile history, robot state and execution feedback,
-GPT-6 `gpt-6-astra` / low, original control, 30 admitted motion requests,
-100 MCP calls, 3600 Codex seconds, native 300 control steps, 80-step segments
-and existing terminal grace. No controller or native task parameters change.
-The task's own initialization has `use_adaptive_grasp=False`; its native friction
-and grasp initialization are retained. It has no task-specific early-stop
-predicate; wrong-goal placement does not create an extra failure rule.
+### Fixed method, task information and official examples
 
-The common prompt uses the official seen instruction, one active object,
-rough → orange / plain → green, and static native placement tolerances:
-object origin in its correct goal frame has strict |x|/|y| < 0.02 m and
-|z| < 0.01 m, and positive-axis dot product > 0.965. No current class,
-true target transform or target error enters the operator. Class is recorded
-only in host finalization for post-run subgroup analysis. The goal must be
-located from ordinary observations and supported head-camera marking.
+Task: pinned Isaac51 `grasp_classify`; seeds 1000026–1000031. A has no examples,
+B has official expert visual–measured-motion–outcome examples, C adds only
+historical bilateral touch to the same examples. All current inputs retain
+head/wrist, bilateral tactile history, proprioception and actual feedback.
+Model: explicit `gpt-6-astra` / `model_reasoning_effort="low"`, real Codex CLI
+0.153.4, isolated context/memory/history and scoped MCP. Original controller,
+retained gripper targets, 30 admitted move requests, 100 MCP calls, 3600 Codex
+seconds, native 300 control steps, 80-step segments and terminal grace remain.
 
-Official `isaac51/grasp_classify` metadata records success for episodes 0 and 1.
-They are the first plain and rough records respectively in ascending ID order;
-only these two were downloaded/inspected. Metadata lacks class, so historical
-active-actor/final-goal records establish class only for host selection. The
-Agent-visible package contains no hidden class or asset-name answer label.
-Both HDF5s have 48 aligned rows, steps 222–316 with gap 2, and one actual motion
-segment. All 384 four-view images decoded. Metadata ends at step 337; the saved
-sequence does not cover the expert's final unsaved delay. No continuous frames
-are fabricated. Original action commands are absent: examples contain measured
-EE/joint changes, not invented OpenETA calls. B delivers four visual strips;
-C adds four bilateral tactile strips, with identical non-tactile content.
+The official instruction is: “Touch the cylinders to perceive their surface
+texture, classify each object, and place it at the goal region for its class.”
+All groups also know one object is active, rough maps to orange, plain/smooth
+to green, and static native success tolerances: object origin in its correct
+goal frame has strict |x|/|y| < 0.02 m and |z| < 0.01 m; positive-axis dot
+product > 0.965. No current class, target transform or target error is supplied.
+The task has no special wrong-goal early stop. Its native initialization uses
+`use_adaptive_grasp=False`; native friction and grasp setup were preserved.
+Class is written only in host finalization for subgroup analysis. Head marking
+uses current depth/calibration; wrist geometry remains explicitly unavailable.
 
-Configuration: `configs/univtac/grasp_classify_tactile_icl.yaml`.
-Official source: [ModelScope UniVTAC](https://modelscope.cn/datasets/byml2024/UniVTAC),
-[Isaac51 download script](https://github.com/univtac/UniVTAC/blob/isaac51/data/download.sh).
-Data, matched projections and provenance are retained locally under
-`outputs/univtac-isaac51-r111/{data/official,demonstrations}`. A maximum of one
-unscored reset/observe/shutdown check at seed 999999 is allowed before the
-18 formal episodes; it executes no task-body motion and no Codex.
+Only official `isaac51/grasp_classify` HDF5 0/1 were downloaded, in ascending
+ID order. Metadata records success and seed/source_seed 0/1. Class is absent
+from metadata; historical active-actor/final-goal data establish 0 as the first
+plain and 1 as the first rough success, solely for host selection. No hidden
+class/asset-name answer label enters examples. Each has 48 aligned rows,
+steps 222–316 at gap 2 and one actual motion segment; all 384 four-view images
+decoded. Metadata ends at step 337: the expert's final unsaved delay is not
+fabricated as video. Original commands are absent, so examples describe
+measured EE/joint motion, not invented OpenETA calls. B has four visual strips;
+C adds four tactile strips. The non-tactile JSON and image correspondence match.
+The data producer commit and a task-specific formal split remain unrecorded.
+The existing dataset entry in [Related Work](related-work.md) covers this reuse.
+
+### Native outcomes and actual operations
+
+Each table entry is native outcome; admitted requests / control steps.
+All requests below also caused physical stepping. Success is the native checker,
+not classification text, goal naming, command arrival or model self-report.
+
+| Seed | A: no examples | B: visual–motion | C: plus historical touch |
+|---|---|---|---|
+| 1000026 | success; 3 / 24 | success; 1 / 11 | success; 1 / 9 |
+| 1000027 | success; 5 / 39 | success; 3 / 22 | success; 2 / 11 |
+| 1000028 | success; 6 / 58 | success; 2 / 12 | success; 1 / 10 |
+| 1000029 | step-limit failure; 8 / 300 | success; 3 / 20 | success; 2 / 11 |
+| 1000030 | success; 4 / 39 | success; 2 / 17 | success; 2 / 12 |
+| 1000031 | step-limit failure; 7 / 300 | success; 2 / 12 | success; 2 / 11 |
+
+Every group has six evaluable results and zero unresolved infrastructure cells.
+This does **not** mean no infrastructure attempts failed: three earlier startup
+failures are retained below. All 18 Codex processes exited naturally with real
+usage. Actual operator-context readback passed: demonstrations delivered once
+(0/4/8 images for A/B/C), four current images per observation return, common
+frozen prompt, explicit model/effort, and separate control/physics counts.
+There were no task-stage tool errors. The recordings contain 936 four-view
+sample sets (including takeover), without added physics.
+
+Actual classes were rough on 1000026/28/31 and plain on 1000027/29/30. A succeeded
+2/3 within each class; B/C succeeded 3/3 within each. No query class screening or
+replacement occurred. Class correctness alone was never scored as task success.
+A29 and A31 first requested +65 mm lift with close, then lateral movement with
+open. Inspected frames show the cylinder outside the fingers/on the table;
+subsequent regrasp requests consumed the native 300-step budget. This is a
+specific control sequence and failed recovery, not evidence that the Agent
+simply “does not understand touch.” B/C succeeded on both seeds; their shared
+success does not isolate touch from the rest of the examples.
+
+### Costs (six evaluable episodes per condition)
+
+Worker wall time includes initialization/cleanup and excludes offline review
+encoding. Initialization failures and non-scored launches are listed separately.
+Cached input is an input subset and reasoning is an output subset; do not add
+them twice. A's larger cost includes two full-budget failures and is not a
+matched-success efficiency comparison. C's lower control count does not establish
+an extra success-rate gain or a general efficiency mechanism.
+
+| Condition | Requests / MCP | Control / physics | Sim s | Codex / worker wall s | Input / cached subset | Output / reasoning subset |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 33 / 89 | 760 / 1520 | 12.667 | 915.673 / 1380.357 | 2,347,941 / 2,085,888 | 7,945 / 1,678 |
+| B | 13 / 52 | 94 / 188 | 1.567 | 503.452 / 1005.123 | 1,671,581 / 1,455,360 | 4,292 / 715 |
+| C | 10 / 52 | 64 / 128 | 1.067 | 515.988 / 1386.798 | 1,853,972 / 1,654,144 | 4,175 / 602 |
+
+### Initialization history and explicit mitigation
+
+There were **23 simulator starts = 18 valid autonomous episodes + three failed
+initializations + two non-scored starts**. The non-scored runs were debug999999
+(reset/observe/close, zero post-reset steps) and one reset-only timing diagnostic
+seed1000028 (240 native initialization physics steps, no Agent/task-body actions).
+Neither was an expert collection or formal task result. Debug worker wall time
+was 184.981 s; reset-only diagnostic worker wall time was 70.017 s.
+
+| Startup record | Outcome / evidence | Worker wall s |
+|---|---|---:|
+| B26 original | reset five-step interval 166.903 s > 120; no Codex | 198.161 |
+| B26 attempt_2 | unique valid task result, success; original error retained | included in B cost |
+| B28 original | reset interval 133.951 s > 120; no Codex | 164.059 |
+| reset-only diagnostic B28 | reset returned in 39.703 s; not reproduced, not fixed | 70.017 |
+| B28 attempt_2 with timing | reset interval 120.783 s > 120; no Codex | 150.342 |
+| B28 attempt_3 with 600 s | unique valid task result, success; both earlier errors retained | included in B cost |
+
+Thus two cells ultimately recovered successfully, through three recovery starts
+(one failed). No already-valid Agent episode was retried. Failures were recognized
+from `worker_error`/not-ready even where launcher returncode was zero. All three
+failed starts cleaned up. Every stop/resume was separately authorized by Pro;
+retained instructions and partial reports remain under the R1.11 output root.
+
+Timed B28 failure localized its two long `_step`s to UIPC: whole steps
+66.516/54.267 s, UIPC advance+retrieve 66.442/54.196 s, render updates about
+0.064/0.065 s. Both 30-second main-thread stacks were at `world.advance()`.
+Interval process CPU was 76.204/62.344 s across all threads; a contemporaneous
+GPU snapshot showed 95% utilization. This locates the slow call interval and
+shows computational activity, but does not identify solver/compilation/contact/
+driver internals. Nested spans overlap. The earlier normal diagnostic's
+6.223-second UIPC first step was not used as proof of the failed-run cause.
+
+Pro explicitly authorized **only the remaining ten starts** to use native
+`cfg.reset_time_limit=600.0`, with the existing 900-second ready deadline.
+The first eight valid episodes used the original 120-second native default.
+This mid-batch startup configuration difference is disclosed; the batch is not
+claimed to have an identical startup configuration throughout. Task body, input,
+controller, physics and native outcome rules were unchanged. No pinned source,
+global default, cache, driver, solver, sensor or thread configuration was changed.
+
+New copies in `batch/reset_limit_recovery_configs` add only the explicit override;
+`native_reset_limit.json` records default/requested/configured/actual Task values.
+Timing closes before the same Task enters ready/Codex; no second reset occurs.
+The native clock is read after original steps, never replaced. Small logging
+wall-time overhead remains. Clock observations distinguish separate five/20/five
+reset loops and the marker-calibration clock; whole reset is not a substitute.
+
+**C29 is the actual mitigation witness:** first five-step interval 430.807 s
+(over 120, under 600), post-actor 20-step interval 53.719 s, final five-step
+interval 0.398 s; marker-calibration global clock 485.604 s; complete reset
+507.953 s, then normal ready and native task success. These overlapping clocks
+must not be added together. The extra window enabled this initialization to
+complete; it did not make UIPC faster or establish a root-cause repair. Other
+new recorded intervals remained below 120 seconds, so their normal recovery
+alone is not evidence that the override helped them.
+
+### Reproduction and review
+
+Configuration: `configs/univtac/grasp_classify_tactile_icl.yaml`. Main source/data
+artifacts: `outputs/univtac-isaac51-r111/{demonstrations,results.json,final_analysis.json}`.
+Original order remains in `batch/run_manifest.json`; original partial summary
+and failed attempts remain intact. The first recovery, timed recovery and
+600-second recovery have separate manifests. Effective cells choose the latest
+**authorized** attempt regardless of outcome, never whichever succeeded best.
+Execution revisions and their backfill provenance are in `execution_versions.json`.
+
+The original fresh batch used:
 
 ```bash
-uv run --no-sync python -m scripts.univtac.run_autonomous_insert_hole \
-  --config configs/univtac/grasp_classify_tactile_icl.yaml --mode observe_only \
-  --output-root outputs/univtac-isaac51-r111/debug
 uv run --no-sync python -m scripts.univtac.run_official_tactile_icl \
   --config configs/univtac/grasp_classify_tactile_icl.yaml \
   --demonstrations outputs/univtac-isaac51-r111/demonstrations \
   --output-root outputs/univtac-isaac51-r111/batch
 ```
 
-These commands require fresh output subdirectories and do not authorize retries.
-The reused runner filenames retain their historical names. The one allowed seed-999999 observation check completed: four images, head
-marking available, wrist geometry unavailable, zero post-reset control/physics
-steps and zero Codex processes. The worker exited normally in 184.98 seconds.
-Success was deliberately not evaluated. Its retained termination label
-`codex_exit` is an old generic host-close label, not evidence that Codex ran;
-the subsequent label-only fix names future observe-only closure explicitly.
-No physical rerun was needed. Formal native results and video delivery remain pending. Review entry: `http://127.0.0.1:9401/r111-autonomous`.
+The authorized final recovery used the same command with
+`--resume-r111-reset-limit`. Its manifest is one-time and already consumed;
+these commands document execution, not permission to repeat this completed pilot.
+The runner reuses the existing generic worker/MCP and original controller.
 
-### R1.11 partial execution and initialization blocker
+[Actual Agent inputs and requests](http://127.0.0.1:9401/r111-autonomous),
+[all individual videos](http://127.0.0.1:9401/r111-videos),
+[B/C paired playback](http://127.0.0.1:9401/r111-pairs), and
+[historical expert/B–C input previews](http://127.0.0.1:9401/r111-demonstrations)
+use the existing dashboard. Start with A29/A31 to see release/regrasp failures,
+then B/C pairs for those same seeds: both example conditions succeed. The
+separate [initialization diagnostic](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r111/reset-diagnostic&path=report.html)
+is host-only and excluded from task success.
 
-The frozen formal version is `370366a`. Two formal simulator invocations occurred,
-plus the single debug above; 16 planned cells have not started. The runner stopped
-on the second cell through its existing infrastructure-error mechanism.
-
-- 1000026/A: native success, 3 physical motions, 24 control / 48 physics steps,
-  0.4 simulation seconds, 11 MCP calls. GPT-6 low exited naturally after
-  114.046 Codex seconds; worker wall time was 254.776 seconds. Actual usage:
-  input 292,516, cached-input subset 260,864, output 1,021, reasoning subset 200.
-  The host-only class was rough. Agent requested a 30 mm upward move with close,
-  then an absolute placement target and a downward adjustment. Its final text
-  attributes classification to touch; this self-report does not establish a
-  tactile mechanism. Native checking, not the explanation, establishes success.
-- 1000026/B: official reset raised `Timeout: reset exceed time limit of 120.0 s,
-  cost 166.90325421496527 s.` in `_base_task.py:462`, during the initial five-step
-  reset test. No Codex process, operator observation or task-body action occurred.
-  `native_success_available=false`, `task_success=null`, not a native failure.
-  The launcher observed return code 0 despite the persisted worker exception;
-  the not-ready record still correctly makes the cell infrastructure/unavailable.
-
-There is no completed A/B/C success-rate comparison: A has 1 evaluable success
-of 6 planned, B has one unavailable attempt of 6 planned, C has no attempts.
-No cell was retried, no reset-time limit changed, and no query was replaced.
-The remaining 16 cells are pending Pro's decision about recovery within the
-invocation budget. The reset failure is a startup wall-time issue, distinct from
-native task control-step exhaustion or an Agent timeout; its low-level cause is
-not yet established.
-
-A's actual MCP input, prompt and counters passed readback. Its 1× and 0.05×
-videos both reached browser ended; no B task-body video exists because takeover
-was never reached. The historical expert preview and B/C matched images are
-available at the R1.11 dashboard; missing formal videos/results remain labelled
-pending rather than manufactured. A subsequent UI-only correction excludes the
-observe-only manifest from formal group aggregation; it does not change the
-frozen controller, prompt, examples or physical outcome.
-
-### Explicit one-time recovery authorization
-
-Pro reply `b42baf5b-0e18-467a-88e7-162a7a2149bf` accepts the partial report,
-not a completed R1.11 result. It explicitly raises the simulator invocation cap
-from 19 to 20: exactly one unchanged-configuration recovery for 1000026/B,
-then the remaining 16 cells in original order. A and debug are never rerun.
-Any subsequent worker-not-ready infrastructure error pauses the entire tail.
-The native reset wall-time limit remains 120 seconds; worker total wall time
-is not evidence that this reset limit is inadequate.
-
-Use the existing runner with `--resume-r111` and the same config, demonstrations
-and `--output-root outputs/univtac-isaac51-r111/batch`. The original B error stays
-in its directory; recovery uses `seed_1000026/B/attempt_2`. A dedicated recovery
-manifest records authorization, attempts and stop state. Review selects that
-one authorized recovery regardless of success/failure, never the better result.
-The original partial `batch/summary.json` remains retained; `results.json` and
-`batch/recovery_manifest.json` describe the combined current state. Historical
-infrastructure errors remain visible even if recovery succeeds. Paired differences
-use only jointly evaluable seeds and report their count; missing cells are not
-native failures. No new physical startup has yet occurred at this authorization
-checkpoint.
-
-### Recovery outcome: paused again at the required boundary
-
-The one authorized 1000026/B recovery succeeded. Seven valid episodes completed
-in the recovery continuation before 1000028/B hit the same reset-test limit:
-120 seconds allowed, 133.95139663503505 seconds measured. Codex had not started.
-The runner immediately stopped, as Pro required; no 1000029–1000031 episode
-was launched. No limits or task/controller parameters changed.
-
-Total startup count is **11**: one debug, eight evaluable autonomous episodes,
-and two failed initialization attempts. The earlier 1000026/B failure remains
-retained even though its sole recovery succeeded. Current 18-cell state is
-8 successful/evaluable, 1 unavailable, 9 not run; no completed native failure.
-There is no complete six-seed success-rate result.
-
-| Seed | A | B | C |
-|---|---|---|---|
-| 1000026 | success; 3 moves / 24 control | success after one reset recovery; 1 / 11 | success; 1 / 9 |
-| 1000027 | success; 5 / 39 | success; 3 / 22 | success; 2 / 11 |
-| 1000028 | success; 6 / 58 | reset unavailable; no Codex | success; 1 / 10 |
-| 1000029–1000031 | not run | not run | not run |
-
-A=3 successes/3 evaluable/6 planned, B=2/2/6, C=3/3/6. C−B and B−A are
-0 pp across two jointly evaluable seeds; C−A is 0 pp across three. These partial
-pairs do not establish an ICL gain or general lack of value. Host-only classes
-among evaluable episodes are A/C: two rough, one plain; B: one rough, one plain.
-No missing episode was assigned a class from another run or removed from plan.
-
-All eight operators exited naturally with actual usage; actual-input readback
-passed, with 0/4/8 historical images for A/B/C and four current images per
-observation return. There were no task-phase tool errors. The recordings retain
-192 four-view sample sets, including each takeover, without added physics.
-Costs below cover only evaluable episodes (unequal counts), not initialization
-failures, so totals must not be compared as matched efficiency estimates.
-
-| Condition (completed n) | Motions / MCP | Control / physics | Sim s | Codex / worker wall s | Input / cached subset | Output / reasoning subset |
-|---|---:|---:|---:|---:|---:|---:|
-| A (3) | 14 / 42 | 121 / 242 | 2.017 | 416.615 / 691.654 | 1,079,677 / 983,936 | 3,937 / 967 |
-| B (2) | 4 / 16 | 33 / 66 | 0.550 | 172.101 / 413.511 | 517,324 / 459,904 | 1,241 / 136 |
-| C (3) | 4 / 27 | 30 / 60 | 0.500 | 259.163 / 473.243 | 911,599 / 820,224 | 2,147 / 318 |
-
-For viewing, 1000027/A includes an explicit open followed by native success;
-1000028/A contains several position adjustments before success. B/C on the first
-two seeds both succeed; no extra success is attributable to historical touch in
-those pairs. Native success is not evidence that the Agent's stated texture
-reasoning was necessary. Further initialization diagnosis or physical recovery
-requires the next Pro instruction; no automatic additional attempts are made.
-
-All 20 derived videos for completed cells reached browser `ended`: eight
-individual episodes × 1×/slow playback, plus two B/C pairs × 1×/0.05×.
-Individual slow playback is 0.1× for 1000027/A and 1000028/A, otherwise 0.05×.
-Receipts are retained in `outputs/univtac-isaac51-r111/browser_playback_check.json`.
-Representative frames and the partial-result page were visually inspected;
-this is not a claim of manually watching every frame. No video was fabricated
-for a failed initialization or an unrun cell. The final focused suite passed
-56 tests, with scoped Ruff, compileall, diff checks and GPT-6 low scoped neat.
-
-### Limited reset timing diagnosis (authorized, not a formal retry)
-
-Pro `43fd5010-a8e6-4baa-b761-50b17c04c5db` keeps the formal batch paused and
-allows at most one seed-1000028 reset-only timing diagnostic if retained logs
-are insufficient. Current cumulative startup cap for this diagnostic stage is
-12 (11 already used plus at most one); future formal recovery needs separate
-Pro authorization. No timeout or behavior change is authorized in this stage.
-
-Retained logs show first-step cumulative Running times 62.74/74.22 seconds in
-the failures, with second-step increments 104.52/60.06 seconds. Successful
-B26 recovery and A28/C28 have second-step increments 0.21/0.17/0.17 seconds.
-B27 also had a slow first step (76.81 seconds) yet passed the reset test. Running
-is cumulative from `start_time` set near `_reset_idx`'s end; the first value
-includes surrounding reset work, not just one step. The exception checks a
-separate cumulative clock starting immediately before the five-step loop.
-Retained process samples have membership/libcuda mappings, not CPU/GPU activity
-or stacks. They cannot distinguish computation from waiting inside `_step`.
-
-The optional worker flag `--reset-timing-only` records existing first-five-step
-boundaries and wall/process CPU time, plus one 30-second traceback per long step.
-UIPC callbacks are wrapped before registration, with the same original call,
-arguments and order. No extra render, physics or GPU synchronization is added.
-After native reset returns it saves timing and closes, with no Codex, autonomous
-session, task-body action or added success check. Native initialization still
-moves the robot and physics. Logs are separate under
-`outputs/univtac-isaac51-r111/reset-diagnostic/`; no diagnostic outcome enters
-A/B/C statistics. Two focused tests verify call count/order and exception
-preservation. This is instrumentation, not a fix or claim of a known root cause.
-
-The single authorized diagnostic completed normally: **not reproduced, not
-fixed**. Task construction took 16.346 seconds and `Task.reset` 39.703 seconds.
-First-five `_step` durations were 6.294/0.167/0.167/0.125/0.106 seconds. In this
-normal sample the first `UipcSim.step` (native `world.advance` + `world.retrieve`)
-accounted for 6.223 seconds; `task._update_render` was 0.063 seconds. That does
-not identify which subcall caused either historical timeout. First-step process
-CPU was 7.283 seconds across all process threads; a contemporaneous device-wide
-5-second GPU sample reported 93% utilization. Neither is a per-kernel trace or
-evidence of the failed runs' resource state. No step exceeded 30 seconds, so no
-timeout stack was captured. Nested spans overlap and must not be summed twice.
-
-Native reset/pre_move advanced 240 physics steps. Zero Codex processes and zero
-task-body actions occurred; no extra success check was invoked. The scoped
-launcher exited normally in 70.017 seconds, cleanup complete. GPU sampling was
-stopped after this diagnostic; no unrelated process was touched. Total R1.11
-simulator invocations are now 12. The formal 8-success/1-unavailable/9-not-run
-state is unchanged. No second diagnostic or formal continuation was launched.
-
-No specific behavior fix is justified yet: the missing evidence is an abnormal
-call's nested timing/stack and contemporaneous resource state. Retain the opt-in
-instrumentation for a future explicitly authorized attempt; do not claim that
-raising the timeout, clearing caches or changing runtime would solve it.
-The separate human-readable report is
-[reset diagnosis](http://127.0.0.1:9401/artifact?run=univtac-isaac51-r111/reset-diagnostic&path=report.html),
-with `report.json`, `retained_timing_comparison.json`, `gpu_samples.csv` and raw
-`seed_1000028/reset_timing.jsonl` beside it. This diagnostic is excluded from
-all autonomous and ICL statistics.
-
-### Timed formal recovery authorization
-
-Pro `ea3a4ea7-4666-4444-99e0-eccce5c4a742` accepts the limited diagnosis as
-not reproduced/unknown cause and authorizes exactly ten further formal starts:
-1000028/B in its own `attempt_2`, then 1000029 A/C/B, 1000030 C/B/A,
-1000031 B/A/C. The cumulative cap is now explicitly **22**, replacing 20.
-No independent diagnostic, warm-up, or rerun of the eight valid episodes is
-included. Any infrastructure failure again pauses the remaining tail.
-
-`--resume-r111-timed` reuses the original frozen condition YAMLs, prompt,
-demonstrations and budgets. Each worker receives `--reset-timing`, independently
-of `--reset-timing-only`. After one native reset, timing/stacks are closed and
-the same Task enters the ordinary ready/Codex path; no second initialization
-occurs. Initialization measurements stay host-only. This adds timing overhead,
-not a claimed behavior fix; the native 120-second guard remains unchanged.
-`batch/timed_recovery_manifest.json` records this authorization separately from
-the earlier recovery. The standalone reset-only diagnostic never fills B28.
-Thirteen focused tests cover the split, exact ten-cell order, original calls,
-exception preservation and accepting native failure without retry.
-
-### Timed recovery reproduced the initialization stall
-
-The first authorized timed continuation, 1000028/B `attempt_2`, again failed
-before ready; no further cell started. The native five-step-loop check reported
-120.782643 seconds against 120 seconds. Total `Task.reset` wall time was
-121.133265 seconds. Both measured `_step` calls returned before the native
-exception; the 30-second stack timer did not terminate either call.
-
-| Reset test step | Whole `_step` s | UipcSim advance+retrieve s | `_update_render` s | Process CPU in UIPC span s |
-|---|---:|---:|---:|---:|
-| 1 | 66.515655 | 66.441903 | 0.064119 | 76.203689 |
-| 2 | 54.266845 | 54.195770 | 0.064827 | 62.344447 |
-
-Both 30-second main-thread stack samples point to
-`tacex_uipc/sim/uipc_sim.py:241`, `self.world.advance()`. This identifies the
-slow call interval and its sampled location; the wrapper times advance and
-retrieve jointly, so it is not separate timing of every inner operation.
-Render was approximately 0.017/0.019 seconds and tactile update 0.042/0.040
-seconds, unlike the long physics callback. During the first long call, a saved
-snapshot showed device GPU utilization 95% and process CPU 200% (lifetime
-average); the interval CPU totals above sum all process threads. These are
-consistent with computational activity, not proof of any specific solver,
-compilation, contact or driver cause. Native internals remain unlocalized.
-
-The formal grid is still eight successes, B28 unavailable and nine not run.
-There are now **13 starts = eight valid + three failed initializations + two
-non-scored starts**. No B28 Codex process was launched, no valid trajectory/video
-was rerun, and no timeout/physics/input change was applied after the failure.
-Failed startup worker wall costs are 198.161 s (B26 original), 164.059 s (B28
-original), and 150.342 s (B28 timed recovery), separate from Agent costs. All
-three retained worker exceptions despite launcher returncode 0; cleanup was
-complete. Details are in `timed_recovery_pause.json` and
-`batch/seed_1000028/B/attempt_2/{reset_timing.jsonl,reset_stacks.txt,worker_error.json}`.
-The remaining formal recovery is paused for the next Pro decision.
-
-### Explicit 600-second initialization mitigation
-
-Pro `32151410-590d-4469-9d8c-c5e734294536` now authorizes a fixed native
-`cfg.reset_time_limit` override from 120 to 600 seconds for all remaining ten
-starts. This supersedes the earlier 120-second restriction only for those
-starts; the outer ready deadline stays 900 seconds. It is a bounded startup
-mitigation, not a UIPC performance fix. No solver, physics, sensor, control,
-task success or Agent budget/input change is authorized.
-
-Use `--resume-r111-reset-limit` on the existing official runner. It saves new
-`batch/reset_limit_recovery_configs/{A,B,C}.yaml` copies, adding only
-`native_reset_time_limit_seconds: 600.0`; original frozen files remain untouched.
-Worker applies the existing native field after configuration build and before
-Task construction, recording native default, requested, configured and actual
-Task values in host-only `native_reset_limit.json`. No native global default
-or pinned source is modified. It still requires complete native reset/pre_move
-and ready checks before passing the same Task to Codex.
-
-The order is B28 `attempt_3`, then 1000029 A/C/B, 1000030 C/B/A, 1000031 B/A/C.
-Maximum ten new starts; total cap is explicitly **23**, replacing 22. Eight
-valid episodes, three failed starts and two non-scored starts stay preserved.
-Any new infrastructure error pauses the remaining tail without increasing time
-or adding an attempt. Task failure is retained and does not trigger retry.
-
-Instrumentation additionally samples each native reset-test clock immediately
-after its original `_step` returns, including separate five/20/five-step loops
-and the marker-calibration global clock. It reads native local clocks without
-replacing them. Native checks occur just after logging, so small instrumentation
-overhead remains; whole `Task.reset` duration is not substituted for an interval.
-An interval exceeding 120 seconds but completing under 600, followed by complete
-reset, would support the narrow claim that extra waiting enabled that startup.
-If all intervals remain below 120, recovery alone does not demonstrate that the
-override helped. Neither result establishes a faster solver or fixed root cause.
-Thirty-nine related offline tests passed, including 600 propagation to actual
-Task config, exact ten-cell order, preserved failed attempts and unchanged prompt.
+Validation: 65 focused tests passed; scoped Ruff, compileall and git diff checks passed. All 48 query video files (36 individual 1×/slow videos and 12 paired 1×/0.05× videos) reached browser playback end. Individual slow versions use 0.1× or 0.05× according to duration. This verifies playable delivery, not a human watching every frame; representative failure and success frames were inspected separately. No generated intermediate observations were used. Scoped GPT-6 low neat confirmed the result and cost statements.

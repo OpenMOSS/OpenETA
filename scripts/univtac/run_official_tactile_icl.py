@@ -68,7 +68,8 @@ def resume_r111(args):
     record = {'authorization':('Pro 32151410-590d-4469-9d8c-c5e734294536' if extended else 'Pro ea3a4ea7-4666-4444-99e0-eccce5c4a742' if timed else 'Pro b42baf5b-0e18-467a-88e7-162a7a2149bf'),
               'total_invocation_limit':23 if extended else 22 if timed else 20, 'previous_invocations':13 if extended else 12 if timed else 3,
               'maximum_new_invocations':10 if timed else 17, 'record_reset_timing':timed,
-              'native_reset_time_limit_seconds':600 if extended else 120, 'status':'running', 'attempts':[]}
+              'native_reset_time_limit_seconds':600 if extended else 120, 'status':'running', 'attempts':[],
+              'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()}
     with record_path.open('x') as f:
         json.dump(record, f, indent=2)
     manifest['status'] = 'recovering'

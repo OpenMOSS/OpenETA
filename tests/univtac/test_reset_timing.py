@@ -49,3 +49,54 @@ def test_callback_patch_before_registration_and_original_exception(tmp_path):
     assert Callback.step is original
     rows=[json.loads(l) for l in (tmp_path/'reset_timing.jsonl').read_text().splitlines()]
     assert any(r.get('error')=='ValueError: native error' for r in rows)
+
+
+@pytest.mark.parametrize('only',[False,True])
+def test_worker_timing_returns_same_reset_task_to_live_session(tmp_path,monkeypatch,only):
+    import sys
+
+    import yaml
+
+    import sim.envs.univtac.autonomous_session as sessions
+    import sim.envs.univtac.reset_timing as probes
+    from scripts.univtac.serve_autonomous_worker import main
+
+    calls=[];instances=[]
+    cfg=SimpleNamespace(step_lim=300,reset_time_limit=120,sim=SimpleNamespace(dt=1/120),decimation=2)
+    class Task:
+        def __init__(self,cfg,mode):
+            self.cfg=cfg;self.mode=mode;self.plan_success=True;self.step_count=240;self._physics_step_count=240
+            instances.append(self);calls.append('construct')
+        def reset(self,seed):calls.append(('reset',seed))
+        def close(self):calls.append('task_close')
+    class Probe:
+        def __init__(self,root):calls.append('probe')
+        def install_uipc_callbacks(self,cls):pass
+        def install_task(self,task):pass
+        def span(self,name):
+            from contextlib import nullcontext
+            return nullcontext()
+        def close(self):calls.append('probe_close')
+    class AppLauncher:
+        @staticmethod
+        def add_app_launcher_args(parser):pass
+        def __init__(self,args):self.app=SimpleNamespace(close=lambda:calls.append('app_close'))
+    class Session:
+        def __init__(self,task,config,root,seed):
+            assert task is instances[0] and calls[-1]=='probe_close'
+            calls.append('session');self.host_closed=True;self.recorder=None
+        def finalize(self,reason):calls.append('finalize')
+    monkeypatch.setitem(sys.modules,'isaaclab.app',SimpleNamespace(AppLauncher=AppLauncher))
+    monkeypatch.setitem(sys.modules,'envs.utils.env_parser',SimpleNamespace(
+        load_task_config=lambda p:({},None),
+        build_task_env_cfg=lambda *a,**k:(SimpleNamespace(Task=Task),cfg,SimpleNamespace(),None)))
+    monkeypatch.setitem(sys.modules,'tacex_uipc.sim.uipc_sim',SimpleNamespace(UipcSim=object))
+    monkeypatch.setattr(probes,'ResetTiming',Probe)
+    monkeypatch.setattr(sessions,'AutonomousSession',Session)
+    config=tmp_path/'config.yaml';config.write_text(yaml.safe_dump({'task':'grasp_classify','task_config':'demo','codex_timeout_seconds':3600,'shutdown_timeout_seconds':300}))
+    assert main(['--repo-root',str(tmp_path),'--source-root',str(tmp_path),'--output-root',str(tmp_path/'out'),
+                 '--config',str(config),'--seed','1000028','--reset-timing-only' if only else '--reset-timing'])==0
+    assert calls.count('construct')==1 and calls.count(('reset',1000028))==1
+    assert calls.count('probe_close')==1
+    assert ('session' in calls) is not only
+    assert (tmp_path/'out/ready.json').exists() is not only

@@ -146,3 +146,25 @@ def test_recovery_failure_is_not_replaced_by_original_and_pairs_exclude_missing(
     bgroup=next(g for g in groups if g['name'].endswith('/ B'))
     assert len(bgroup['episodes'])==6
     assert bgroup['episodes'][0]['run'].endswith('/B/attempt_2')
+
+
+def test_timed_recovery_only_runs_fixed_ten_and_accepts_native_failure(tmp_path,monkeypatch):
+    import scripts.univtac.run_official_tactile_icl as runner
+    root=tmp_path/'batch';(root/'seed_1000026/A').mkdir(parents=True);(root/'seed_1000028/B').mkdir(parents=True)
+    (root/'seed_1000026/A/episode.json').write_text(json.dumps({'evaluable':True}))
+    (root/'seed_1000028/B/episode.json').write_text(json.dumps({'reset_valid':False,'codex_process_count':0}))
+    _,order=experiment_plan(BASE)
+    (root/'run_manifest.json').write_text(json.dumps({'round':'R1.11','order':order}))
+    for c in 'ABC':(root/f'{c}.yaml').write_text(yaml.safe_dump(condition_config(BASE,c)))
+    calls=[]
+    def fake(args,config,seed,folder):
+        assert args.record_reset_timing
+        assert operator_prompt(config)==operator_prompt(condition_config(BASE,'A'))
+        calls.append((seed,config['condition'],folder));folder.mkdir(parents=True)
+        return {'evaluable':True,'task_success':False,'infrastructure_error':None}
+    monkeypatch.setattr(runner,'run_episode',fake)
+    runner.resume_r111(SimpleNamespace(output_root=root,resume_r111_timed=True))
+    assert [(s,c) for s,c,_ in calls]==order[8:] and len(calls)==10
+    assert calls[0][2]==root/'seed_1000028/B/attempt_2'
+    record=json.loads((root/'timed_recovery_manifest.json').read_text())
+    assert record['status']=='completed' and record['total_invocation_limit']==22

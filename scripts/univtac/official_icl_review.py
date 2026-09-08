@@ -190,8 +190,11 @@ def summarize(root):
                 return json.loads(p.read_text()) if p.exists() else {}
             state=read('episode.json');life=read('codex_lifecycle.json')
             context=read_jsonl(folder/'operator_context.jsonl')
+            timing=read_jsonl(folder/'reset_timing.jsonl')
             cells.append({'seed':seed,'condition':condition,'status':state.get('status','not_run'),
                 'episode_path':str(folder.relative_to(root)),
+                'reset_wall_seconds':next((x['elapsed_s'] for x in timing if x.get('name')=='Task.reset' and x['event']=='exit'),None),
+                'task_construct_wall_seconds':next((x['elapsed_s'] for x in timing if x.get('name')=='Task.construct' and x['event']=='exit'),None),
                 'previous_infrastructure_attempt':json.loads((original/'episode.json').read_text()) if folder!=original else None,
                 **{k:state.get(k) for k in ('model','reasoning_effort','codex_cli_version','current_tactile','evaluable','task_success','termination','infrastructure_error',
                     'move_request_count','actual_motion_requests','tool_call_count','control_steps','physics_steps','simulation_time_seconds')},
@@ -232,7 +235,7 @@ def summarize(root):
             n = sum(v for k,v in counts.items() if k!='unavailable')
             paired_comparisons[key] = {'evaluable_pairs':n, 'difference_percentage_points':(counts['method_only_success']-counts['control_only_success'])*100/n if n else None}
     recovery_path = root/'batch/recovery_manifest.json'
-    write_json(root/'results.json',{'paired_comparisons':paired_comparisons, 'recovery':json.loads(recovery_path.read_text()) if recovery_path.exists() else None, 'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
+    write_json(root/'results.json',{'paired_comparisons':paired_comparisons, 'recovery':json.loads(recovery_path.read_text()) if recovery_path.exists() else None, 'timed_recovery':json.loads((root/'batch/timed_recovery_manifest.json').read_text()) if (root/'batch/timed_recovery_manifest.json').exists() else None, 'cells':cells,'groups':groups,'contrasts_percentage_points':contrasts,'paired_outcomes':pairs,
         'class_subgroups_host_only':{c:{kind:{'episodes':sum(x['condition']==c and x['object_class_host_only']==kind for x in cells), 'successes':sum(x['condition']==c and x['object_class_host_only']==kind and x['evaluable'] is True and x['task_success'] is True for x in cells)} for kind in ('rough','plain')} for c in names} if names is GRASP_NAMES else {},
         'interpretation':('Six-seed grasp_classify autonomous pilot; historical class is used only for offline demo selection; current class only for host post-run subgroups. Cross-task results remain separate.' if names is GRASP_NAMES else 'Eight-seed current/history modality ablation; prior rounds stay separate; no_live only omits Agent input, not sensing or physics.' if names is CURRENT_TOUCH_NAMES else
             'Project new-seed validation, not an official test split; R1.8 remains separate.' if names is NEW_SEED_NAMES else 'Three-seed development pilot; ICL comparisons share original controller and current tactile history.')})

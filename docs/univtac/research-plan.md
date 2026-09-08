@@ -1395,3 +1395,23 @@ The separate human-readable report is
 with `report.json`, `retained_timing_comparison.json`, `gpu_samples.csv` and raw
 `seed_1000028/reset_timing.jsonl` beside it. This diagnostic is excluded from
 all autonomous and ICL statistics.
+
+### Timed formal recovery authorization
+
+Pro `ea3a4ea7-4666-4444-99e0-eccce5c4a742` accepts the limited diagnosis as
+not reproduced/unknown cause and authorizes exactly ten further formal starts:
+1000028/B in its own `attempt_2`, then 1000029 A/C/B, 1000030 C/B/A,
+1000031 B/A/C. The cumulative cap is now explicitly **22**, replacing 20.
+No independent diagnostic, warm-up, or rerun of the eight valid episodes is
+included. Any infrastructure failure again pauses the remaining tail.
+
+`--resume-r111-timed` reuses the original frozen condition YAMLs, prompt,
+demonstrations and budgets. Each worker receives `--reset-timing`, independently
+of `--reset-timing-only`. After one native reset, timing/stacks are closed and
+the same Task enters the ordinary ready/Codex path; no second initialization
+occurs. Initialization measurements stay host-only. This adds timing overhead,
+not a claimed behavior fix; the native 120-second guard remains unchanged.
+`batch/timed_recovery_manifest.json` records this authorization separately from
+the earlier recovery. The standalone reset-only diagnostic never fills B28.
+Thirteen focused tests cover the split, exact ten-cell order, original calls,
+exception preservation and accepting native failure without retry.

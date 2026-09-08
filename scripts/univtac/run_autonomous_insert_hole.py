@@ -173,6 +173,8 @@ def run_episode(args, config, seed, root):
     command = [str(REPO/'scripts/univtac/serve_autonomous_worker.py'),'--repo-root',str(REPO),
                '--source-root',str(args.source_root),'--output-root',str(root), '--config',str(args.config),
                '--seed',str(seed),'--headless']
+    if getattr(args, 'record_reset_timing', False):
+        command.append('--reset-timing')
     timeout = config['startup_timeout_seconds'] + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
     spec = ScopedIsaac51LaunchSpec(python_executable=args.runtime_python,command=tuple(command),
             cwd=args.source_root,output_root=root,timeout_seconds=timeout)

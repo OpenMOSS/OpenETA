@@ -19,11 +19,12 @@ def main(argv=None):
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--seed', type=int, required=True)
     parser.add_argument('--reset-timing-only', action='store_true')
+    parser.add_argument('--reset-timing', action='store_true')
     base, _ = parser.parse_known_args(argv)
     root = base.output_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     app = task = server = session = timing_probe = None
-    if base.reset_timing_only:
+    if base.reset_timing_only or base.reset_timing:
         sys.path.insert(0, str(base.repo_root.resolve()))
         from sim.envs.univtac.reset_timing import ResetTiming
         timing_probe = ResetTiming(root)
@@ -58,14 +59,19 @@ def main(argv=None):
             with timing_probe.span('Task.reset'):
                 task.reset(seed=args.seed)
             write_json(root/'reset_diagnostic_result.json', {
+                'record_scope':'initialization before ready',
                 'reset_returned':True, 'seed':args.seed, 'codex_process_count':0,
                 'task_body_actions':0, 'native_success_evaluated':False,
                 'native_reset_time_limit_s':cfg.reset_time_limit,
                 'initialization_steps':task.step_count,
                 'initialization_physics_steps':task._physics_step_count})
-            return 0
-        task = module.Task(cfg, mode='eval')
-        task.reset(seed=args.seed)
+            timing_probe.close()
+            timing_probe = None
+            if args.reset_timing_only:
+                return 0
+        else:
+            task = module.Task(cfg, mode='eval')
+            task.reset(seed=args.seed)
         if not task.plan_success:
             raise RuntimeError('official reset/pre_move failed')
         task.mean_steps = cfg.step_lim

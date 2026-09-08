@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.univtac.official_icl_review import effective_episode_folder
+from scripts.univtac.official_icl_review import effective_episode_folder, previous_episode_attempts
 from sim.envs.univtac.codex_readonly import read_jsonl
 
 
@@ -22,7 +22,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
                 candidate = root/name
                 return json.loads(candidate.read_text()) if candidate.exists() else None
             episodes.append({'run':str(root.relative_to(runs_root)), 'condition':path.parent.name,
-                             'previous_infrastructure_attempt':json.loads(path.read_text()) if root!=path.parent else None,
+                             'previous_infrastructure_attempts':previous_episode_attempts(path.parent),
                              'episode':{**read('episode.json'), 'condition':path.parent.name},
                              'prompt':(root/'prompt.txt').read_text() if (root/'prompt.txt').exists() else None,
                              'context':read_jsonl(root/'operator_context.jsonl'),
@@ -32,7 +32,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
                              'recording':read('recording.json'), 'gripper_commands':read_jsonl(root/'gripper_commands.jsonl'),
                              'selections':[json.loads(p.read_text()) for p in sorted(root.glob('history/action_*/selection.json'))],
                              'agent_final': (root/'agent_final.md').read_text() if (root/'agent_final.md').exists() else None,
-                             'host_evaluator':read('host_evaluator.json'),
+                             'host_evaluator':read('host_evaluator.json'), 'native_reset_limit':read('native_reset_limit.json'),
                              'usage':read('codex_trace_summary.json'),
                              'worker_error':read('worker_error.json'), 'codex_lifecycle':read('codex_lifecycle.json')})
         note_path=manifest_path.parent/'validation_note.json'
@@ -204,6 +204,8 @@ R111_HTML = R19_HTML.replace(R19_SUMMARY, R111_SUMMARY).replace('R1.9','R1.11').
     'valid.length===12','valid.length===6').replace("wins.length+'/12'", "wins.length+'/6'").replace(
     "valid.length+'/12；成功 '", "valid.length+'/6；成功 '").replace('RB/RC','B/C')
 
-R111_HTML = R111_HTML.replace("review(e)+'<h3>Agent Saw", "(e.previous_infrastructure_attempt?'<details class=host><summary>此格首次初始化失败，已保留；下面为唯一恢复尝试</summary>'+pretty(e.previous_infrastructure_attempt)+'</details>':'')+review(e)+'<h3>Agent Saw")
+R111_HTML = R111_HTML.replace("review(e)+'<h3>Agent Saw", "(e.previous_infrastructure_attempts?.length?'<details class=host><summary>此格历史初始化失败均保留；下面为最新授权尝试</summary>'+pretty(e.previous_infrastructure_attempts)+'</details>':'')+review(e)+'<h3>Agent Saw")
 
-R111_HTML = R111_HTML.replace("const prompts=d.batches[0]?.manifest?.prompts??{};", "for(const [a,b] of [['C','B'],['B','A'],['C','A']]){const paired=(groups[a]||[]).filter(e=>e.episode.evaluable&&(groups[b]||[]).some(x=>x.episode.seed===e.episode.seed&&x.episode.evaluable));const diff=paired.reduce((v,e)=>v+Number(e.episode.task_success)-Number((groups[b]||[]).find(x=>x.episode.seed===e.episode.seed).episode.task_success),0);t+='<p>仅可评价配对 '+a+'−'+b+'：n='+paired.length+'，'+(paired.length?(100*diff/paired.length).toFixed(1)+' pp':'unavailable')+'；未完成六seed全表，不能将缺失算失败。</p>';}const attempts=d.batches.flatMap(b=>b.episodes).filter(e=>e.previous_infrastructure_attempt).length;t+='<p>已执行恢复尝试且保留首次基础设施失败的格：'+attempts+'；当前未恢复错误另列于上表。</p>';const prompts=d.batches[0]?.manifest?.prompts??{};")
+R111_HTML = R111_HTML.replace("const prompts=d.batches[0]?.manifest?.prompts??{};", "for(const [a,b] of [['C','B'],['B','A'],['C','A']]){const paired=(groups[a]||[]).filter(e=>e.episode.evaluable&&(groups[b]||[]).some(x=>x.episode.seed===e.episode.seed&&x.episode.evaluable));const diff=paired.reduce((v,e)=>v+Number(e.episode.task_success)-Number((groups[b]||[]).find(x=>x.episode.seed===e.episode.seed).episode.task_success),0);t+='<p>仅可评价配对 '+a+'−'+b+'：n='+paired.length+'，'+(paired.length?(100*diff/paired.length).toFixed(1)+' pp':'unavailable')+'；未完成六seed全表，不能将缺失算失败。</p>';}const attempts=d.batches.flatMap(b=>b.episodes).reduce((n,e)=>n+(e.previous_infrastructure_attempts?.length??0),0);t+='<p>另行保留的历史初始化失败 attempts：'+attempts+'；当前未恢复错误另列于上表。</p>';const prompts=d.batches[0]?.manifest?.prompts??{};")
+
+R111_HTML = R111_HTML.replace('evaluator:e.host_evaluator,worker_error', 'evaluator:e.host_evaluator,native_reset_limit:e.native_reset_limit,worker_error').replace('<main id="content">','<p>后续恢复启动的原生初始化墙钟限额统一为600秒，旧有效轨迹为120秒；任务预算/输入/控制/评价未改。这是超时缓解，不是UIPC性能修复。</p><main id="content">')

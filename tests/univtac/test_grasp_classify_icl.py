@@ -168,3 +168,37 @@ def test_timed_recovery_only_runs_fixed_ten_and_accepts_native_failure(tmp_path,
     assert calls[0][2]==root/'seed_1000028/B/attempt_2'
     record=json.loads((root/'timed_recovery_manifest.json').read_text())
     assert record['status']=='completed' and record['total_invocation_limit']==22
+
+
+
+def test_extended_recovery_changes_only_native_wait_and_preserves_two_failures(tmp_path,monkeypatch):
+    import scripts.univtac.run_official_tactile_icl as runner
+    from scripts.univtac.official_icl_review import (
+        effective_episode_folder,
+        previous_episode_attempts,
+    )
+    root=tmp_path/'batch';(root/'seed_1000026/A').mkdir(parents=True)
+    b=root/'seed_1000028/B';(b/'attempt_2').mkdir(parents=True)
+    (root/'seed_1000026/A/episode.json').write_text(json.dumps({'evaluable':True}))
+    failed={'reset_valid':False,'codex_process_count':0}
+    for folder in (b,b/'attempt_2'):(folder/'episode.json').write_text(json.dumps(failed))
+    _,order=experiment_plan(BASE)
+    (root/'run_manifest.json').write_text(json.dumps({'round':'R1.11','order':order}))
+    for c in 'ABC':(root/f'{c}.yaml').write_text(yaml.safe_dump(condition_config(BASE,c)))
+    calls=[]
+    def fake(args,config,seed,folder):
+        assert args.record_reset_timing and config['native_reset_time_limit_seconds']==600
+        old=condition_config(BASE,config['condition'])
+        assert {k:v for k,v in config.items() if k!='native_reset_time_limit_seconds'}==old
+        assert operator_prompt(config)==operator_prompt(old)
+        assert args.config.parent==root/'reset_limit_recovery_configs'
+        calls.append((seed,config['condition'],folder));folder.mkdir(parents=True)
+        return {'evaluable':True,'task_success':False,'infrastructure_error':None}
+    monkeypatch.setattr(runner,'run_episode',fake)
+    runner.resume_r111(SimpleNamespace(output_root=root,resume_r111_reset_limit=True))
+    assert len(calls)==10 and calls[0][2]==b/'attempt_3'
+    assert effective_episode_folder(b)==b/'attempt_3'
+    assert previous_episode_attempts(b)==[failed,failed]
+    record=json.loads((root/'reset_limit_recovery_manifest.json').read_text())
+    assert record['total_invocation_limit']==23 and record['previous_invocations']==13
+    assert 'native_reset_time_limit_seconds' not in yaml.safe_load((root/'B.yaml').read_text())

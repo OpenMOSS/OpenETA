@@ -1450,3 +1450,39 @@ three retained worker exceptions despite launcher returncode 0; cleanup was
 complete. Details are in `timed_recovery_pause.json` and
 `batch/seed_1000028/B/attempt_2/{reset_timing.jsonl,reset_stacks.txt,worker_error.json}`.
 The remaining formal recovery is paused for the next Pro decision.
+
+### Explicit 600-second initialization mitigation
+
+Pro `32151410-590d-4469-9d8c-c5e734294536` now authorizes a fixed native
+`cfg.reset_time_limit` override from 120 to 600 seconds for all remaining ten
+starts. This supersedes the earlier 120-second restriction only for those
+starts; the outer ready deadline stays 900 seconds. It is a bounded startup
+mitigation, not a UIPC performance fix. No solver, physics, sensor, control,
+task success or Agent budget/input change is authorized.
+
+Use `--resume-r111-reset-limit` on the existing official runner. It saves new
+`batch/reset_limit_recovery_configs/{A,B,C}.yaml` copies, adding only
+`native_reset_time_limit_seconds: 600.0`; original frozen files remain untouched.
+Worker applies the existing native field after configuration build and before
+Task construction, recording native default, requested, configured and actual
+Task values in host-only `native_reset_limit.json`. No native global default
+or pinned source is modified. It still requires complete native reset/pre_move
+and ready checks before passing the same Task to Codex.
+
+The order is B28 `attempt_3`, then 1000029 A/C/B, 1000030 C/B/A, 1000031 B/A/C.
+Maximum ten new starts; total cap is explicitly **23**, replacing 22. Eight
+valid episodes, three failed starts and two non-scored starts stay preserved.
+Any new infrastructure error pauses the remaining tail without increasing time
+or adding an attempt. Task failure is retained and does not trigger retry.
+
+Instrumentation additionally samples each native reset-test clock immediately
+after its original `_step` returns, including separate five/20/five-step loops
+and the marker-calibration global clock. It reads native local clocks without
+replacing them. Native checks occur just after logging, so small instrumentation
+overhead remains; whole `Task.reset` duration is not substituted for an interval.
+An interval exceeding 120 seconds but completing under 600, followed by complete
+reset, would support the narrow claim that extra waiting enabled that startup.
+If all intervals remain below 120, recovery alone does not demonstrate that the
+override helped. Neither result establishes a faster solver or fixed root cause.
+Thirty-nine related offline tests passed, including 600 propagation to actual
+Task config, exact ten-cell order, preserved failed attempts and unchanged prompt.

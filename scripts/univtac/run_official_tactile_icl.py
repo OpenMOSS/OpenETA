@@ -52,31 +52,43 @@ def condition_config(base, condition):
 def resume_r111(args):
     """One explicitly authorized initialization recovery, then the untouched tail."""
     root = args.output_root.resolve()
-    timed = getattr(args, 'resume_r111_timed', False)
+    extended = getattr(args, 'resume_r111_reset_limit', False)
+    timed = extended or getattr(args, 'resume_r111_timed', False)
     recovery_seed = 1000028 if timed else 1000026
     start_index = 8 if timed else 1
-    record_path = root/('timed_recovery_manifest.json' if timed else 'recovery_manifest.json')
+    record_path = root/('reset_limit_recovery_manifest.json' if extended else 'timed_recovery_manifest.json' if timed else 'recovery_manifest.json')
     manifest = json.loads((root/'run_manifest.json').read_text())
     first = json.loads((root/'seed_1000026/A/episode.json').read_text())
-    failed = json.loads((root/f'seed_{recovery_seed}/B/episode.json').read_text())
+    failed_path = root/f'seed_{recovery_seed}'/'B'
+    if extended:
+        failed_path = failed_path/'attempt_2'
+    failed = json.loads((failed_path/'episode.json').read_text())
     if manifest['round'] != 'R1.11' or not first['evaluable'] or failed['codex_process_count'] != 0 or failed['reset_valid']:
         raise ValueError('This recovery is only for the recorded R1.11 B initialization failure')
-    record = {'authorization':('Pro ea3a4ea7-4666-4444-99e0-eccce5c4a742' if timed else 'Pro b42baf5b-0e18-467a-88e7-162a7a2149bf'),
-              'total_invocation_limit':22 if timed else 20, 'previous_invocations':12 if timed else 3,
+    record = {'authorization':('Pro 32151410-590d-4469-9d8c-c5e734294536' if extended else 'Pro ea3a4ea7-4666-4444-99e0-eccce5c4a742' if timed else 'Pro b42baf5b-0e18-467a-88e7-162a7a2149bf'),
+              'total_invocation_limit':23 if extended else 22 if timed else 20, 'previous_invocations':13 if extended else 12 if timed else 3,
               'maximum_new_invocations':10 if timed else 17, 'record_reset_timing':timed,
-              'reset_time_limit_unchanged':120, 'status':'running', 'attempts':[]}
+              'native_reset_time_limit_seconds':600 if extended else 120, 'status':'running', 'attempts':[]}
     with record_path.open('x') as f:
         json.dump(record, f, indent=2)
     manifest['status'] = 'recovering'
     write_json(root/'run_manifest.json', manifest)
+    config_root = root
+    if extended:
+        config_root = root/'reset_limit_recovery_configs'
+        config_root.mkdir()
+        for condition in ('A','B','C'):
+            config = yaml.safe_load((root/f'{condition}.yaml').read_text())
+            config['native_reset_time_limit_seconds'] = 600.0
+            (config_root/f'{condition}.yaml').write_text(yaml.safe_dump(config,sort_keys=False))
     args.mode = 'batch'
     args.record_reset_timing = timed
     for seed, condition in manifest['order'][start_index:]:
-        args.config = root/f'{condition}.yaml'
+        args.config = config_root/f'{condition}.yaml'
         config = yaml.safe_load(args.config.read_text())
         folder = root/f'seed_{seed}'/condition
         if (seed, condition) == (recovery_seed, 'B'):
-            folder = folder/'attempt_2'
+            folder = folder/('attempt_3' if extended else 'attempt_2')
         print(json.dumps({'starting':seed,'condition':condition,'attempt_root':str(folder)}),flush=True)
         episode = run_episode(args,config,seed,folder)
         episode['condition'] = condition
@@ -103,10 +115,11 @@ def main():
     parser.add_argument('--demonstrations', type=Path, required=True)
     parser.add_argument('--resume-r111', action='store_true', help='Only the Pro-authorized one-time R1.11 recovery')
     parser.add_argument('--resume-r111-timed', action='store_true', help='Authorized B28 recovery and final nine cells with reset timing')
+    parser.add_argument('--resume-r111-reset-limit', action='store_true', help='Authorized B28 attempt_3 and tail with native reset limit 600 seconds')
     parser.add_argument('--runtime-python', type=Path, default=Path('/home/ubuntu/anaconda3/envs/UniVTAC-isaac51-sm120-r09/bin/python3.11'))
     parser.add_argument('--source-root', type=Path, default=Path('/home/ubuntu/wybcode/.worktrees/univtac-isaac51-r081'))
     args = parser.parse_args()
-    if args.resume_r111 or args.resume_r111_timed:
+    if args.resume_r111 or args.resume_r111_timed or args.resume_r111_reset_limit:
         return resume_r111(args)
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)

@@ -49,12 +49,20 @@ def main(argv=None):
         config = yaml.safe_load(args.config.read_text())
         native, _ = load_task_config(args.source_root / 'task_config' / f"{config['task_config']}.yml")
         module, cfg, timing, _ = build_task_env_cfg(config['task'], native, config['task_config'], 'eval', device=args.device, save_dir=root/'native')
+        reset_limit = {'native_default_seconds':float(cfg.reset_time_limit),
+                       'override_seconds':config.get('native_reset_time_limit_seconds')}
+        if reset_limit['override_seconds'] is not None:
+            cfg.reset_time_limit = float(reset_limit['override_seconds'])
+        reset_limit['configured_seconds'] = float(cfg.reset_time_limit)
+        write_json(root/'native_reset_limit.json', reset_limit)
         # Save observations through OpenETA; the native control/render timing is unchanged.
         if timing_probe:
             from tacex_uipc.sim.uipc_sim import UipcSim
             timing_probe.install_uipc_callbacks(UipcSim)
             with timing_probe.span('Task.construct'):
                 task = module.Task(cfg, mode='eval')
+            reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
+            write_json(root/'native_reset_limit.json', reset_limit)
             timing_probe.install_task(task)
             with timing_probe.span('Task.reset'):
                 task.reset(seed=args.seed)
@@ -71,6 +79,8 @@ def main(argv=None):
                 return 0
         else:
             task = module.Task(cfg, mode='eval')
+            reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
+            write_json(root/'native_reset_limit.json', reset_limit)
             task.reset(seed=args.seed)
         if not task.plan_success:
             raise RuntimeError('official reset/pre_move failed')

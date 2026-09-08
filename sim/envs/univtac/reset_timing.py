@@ -6,6 +6,7 @@ import functools
 import json
 import os
 import resource
+import sys
 import time
 from contextlib import contextmanager
 
@@ -74,14 +75,31 @@ class ResetTiming:
         original = task._step
         @functools.wraps(original)
         def step(*args, **kwargs):
+            caller = sys._getframe(1)
+            native_clock = caller.f_locals.get('reset_test_start') if caller.f_code.co_name == 'reset' else None
+            if caller.f_code.co_name == '_stabilize_and_calibrate_marker_references':
+                native_clock = task.start_time
+            if task.step_count == 0 and caller.f_code.co_name == 'reset':
+                self.write(event='reset_pretest_guard', native_elapsed_s=caller.f_locals.get('total_cost'))
+            def invoke():
+                value = original(*args, **kwargs)
+                if native_clock is not None:
+                    # Read the native clock, never replace it. The native guard
+                    # runs just after this wrapper returns, including logging overhead.
+                    self.write(event='reset_interval_progress', source_line=caller.f_lineno,
+                               source_function=caller.f_code.co_name,
+                               interval_start_monotonic_s=native_clock,
+                               native_interval_elapsed_s=time.perf_counter()-native_clock,
+                               native_step=task.step_count)
+                return value
             index = task.step_count+1
             if task.first_frame is not None or index > 5:
-                return original(*args, **kwargs)
+                return invoke()
             self.active_step = index
             faulthandler.dump_traceback_later(30, repeat=False, file=self.stacks)
             try:
                 with self.span('task._step'):
-                    return original(*args, **kwargs)
+                    return invoke()
             finally:
                 faulthandler.cancel_dump_traceback_later()
                 self.active_step = None

@@ -52,7 +52,8 @@ def test_callback_patch_before_registration_and_original_exception(tmp_path):
 
 
 @pytest.mark.parametrize('only',[False,True])
-def test_worker_timing_returns_same_reset_task_to_live_session(tmp_path,monkeypatch,only):
+@pytest.mark.parametrize('override',[None,600.0])
+def test_worker_timing_returns_same_reset_task_to_live_session(tmp_path,monkeypatch,only,override):
     import sys
 
     import yaml
@@ -93,10 +94,35 @@ def test_worker_timing_returns_same_reset_task_to_live_session(tmp_path,monkeypa
     monkeypatch.setitem(sys.modules,'tacex_uipc.sim.uipc_sim',SimpleNamespace(UipcSim=object))
     monkeypatch.setattr(probes,'ResetTiming',Probe)
     monkeypatch.setattr(sessions,'AutonomousSession',Session)
-    config=tmp_path/'config.yaml';config.write_text(yaml.safe_dump({'task':'grasp_classify','task_config':'demo','codex_timeout_seconds':3600,'shutdown_timeout_seconds':300}))
+    config=tmp_path/'config.yaml';config.write_text(yaml.safe_dump({'task':'grasp_classify','task_config':'demo','codex_timeout_seconds':3600,'shutdown_timeout_seconds':300,'native_reset_time_limit_seconds':override}))
     assert main(['--repo-root',str(tmp_path),'--source-root',str(tmp_path),'--output-root',str(tmp_path/'out'),
                  '--config',str(config),'--seed','1000028','--reset-timing-only' if only else '--reset-timing'])==0
     assert calls.count('construct')==1 and calls.count(('reset',1000028))==1
     assert calls.count('probe_close')==1
     assert ('session' in calls) is not only
     assert (tmp_path/'out/ready.json').exists() is not only
+
+    recorded=json.loads((tmp_path/'out/native_reset_limit.json').read_text())
+    assert recorded=={'native_default_seconds':120.0,'override_seconds':override,'configured_seconds':override or 120.0,'actual_task_seconds':override or 120.0}
+
+
+def test_native_interval_clock_is_read_not_replaced(tmp_path):
+    import time
+    noop=lambda *a,**k:None
+    task=SimpleNamespace(step_count=0,first_frame=None,scene=SimpleNamespace(write_data_to_sim=noop,update=noop),
+        sim=SimpleNamespace(step=noop,render=noop),_actor_manager=SimpleNamespace(update=noop),
+        _tactile_manager=SimpleNamespace(update=noop),_update_render=noop)
+    def step():task.step_count+=1
+    task._step=step
+    probe=ResetTiming(tmp_path);probe.install_task(task)
+    def reset():
+        reset_test_start=time.perf_counter();total_cost=.1
+        task._step();task._step()
+        assert total_cost==.1
+        return reset_test_start
+    origin=reset();probe.close()
+    rows=[json.loads(l) for l in (tmp_path/'reset_timing.jsonl').read_text().splitlines()]
+    measured=[r for r in rows if r['event']=='reset_interval_progress']
+    assert len(measured)==2 and all(r['interval_start_monotonic_s']==origin for r in measured)
+    assert measured[1]['native_interval_elapsed_s']>=measured[0]['native_interval_elapsed_s']>=0
+    assert next(r for r in rows if r['event']=='reset_pretest_guard')['native_elapsed_s']==.1

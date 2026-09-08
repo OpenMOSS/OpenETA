@@ -2628,7 +2628,7 @@ def _shutdown() -> None:
             pass
 
 
-def build_live_backend_server(*, root: Path, worker_url: str, demonstrations: bool = False) -> FastMCP:
+def build_live_backend_server(*, root: Path, worker_url: str, demonstrations: bool = False, feedback_protocol: str | None = None) -> FastMCP:
     """Register OpenETA's numeric tool surface for a capability-declaring worker."""
     from tools.embodied_gateway import LiveBackendGateway
     from tools.univtac_operation_mcp_server import _record_context
@@ -2690,10 +2690,12 @@ def build_live_backend_server(*, root: Path, worker_url: str, demonstrations: bo
         """Record a recoverable issue without ending the episode."""
         return call("report_issue", {"message": message})
 
-    @server.tool(structured_output=False)
-    def check_task() -> list[Any]:
-        """Return available and the native success boolean; no task geometry."""
-        return call("check_task", {})
+    from sim.envs.univtac.feedback_protocol import PROTOCOL
+    if feedback_protocol != PROTOCOL:
+        @server.tool(structured_output=False)
+        def check_task() -> list[Any]:
+            """Return available and the native success boolean; no task geometry."""
+            return call("check_task", {})
 
     @server.tool(structured_output=False)
     def finish_episode(reason: str = "") -> list[Any]:
@@ -2707,6 +2709,7 @@ def main(argv: list[str] | None = None) -> int:
     global _GATEWAY
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="fresh episode artifact root")
+    parser.add_argument("--univtac-feedback-protocol", choices=("native_eval_no_online_task_feedback_v1",))
     parser.add_argument("--live-worker-url", help="existing general-tool worker URL")
     parser.add_argument("--demonstrations", action="store_true", help="enable the shared one-time demonstration tool")
     parser.add_argument("--env-id", default="openeta/libero_libero_spatial_task0-v0")
@@ -2730,7 +2733,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.live_worker_url:
-        build_live_backend_server(root=args.root, worker_url=args.live_worker_url, demonstrations=args.demonstrations).run(transport="stdio")
+        build_live_backend_server(root=args.root, worker_url=args.live_worker_url, demonstrations=args.demonstrations, feedback_protocol=args.univtac_feedback_protocol).run(transport="stdio")
         return 0
 
     if __import__("os").environ.get("OPENETA_POINT_ONLY_OPERATOR") == "1":

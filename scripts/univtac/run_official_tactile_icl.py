@@ -10,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from scripts.univtac.run_autonomous_insert_hole import REPO, operator_prompt, run_episode
+from sim.envs.univtac.feedback_protocol import new_run_config, protocol
 from sim.envs.univtac.trace import write_json
 
 CONDITIONS = ('no_demo', 'visual_action_icl', 'tactile_action_icl')
@@ -124,7 +125,7 @@ def main():
         return resume_r111(args)
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    base = yaml.safe_load(args.config.read_text())
+    base = new_run_config(yaml.safe_load(args.config.read_text()))
     base['demonstration_package'] = str(args.demonstrations.resolve())
     args.mode = 'batch'
     source = subprocess.check_output(['git', '-C', str(args.source_root), 'rev-parse', 'HEAD'], text=True).strip()
@@ -140,7 +141,7 @@ def main():
         path.write_text(yaml.safe_dump(config, sort_keys=False))
         configs[condition] = (config, path)
         (root/f'{condition}_prompt.txt').write_text(operator_prompt(config))
-    manifest = {'round':base['round'], 'status':'running', 'order':order, 'source_head':source,
+    manifest = {'feedback_protocol':protocol(base), 'round':base['round'], 'status':'running', 'order':order, 'source_head':source,
                 'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
                 'config':base, 'prompts':{c:operator_prompt(v[0]) for c,v in configs.items()},
                 'codex_cli_version':subprocess.check_output(['codex','--version'],text=True).strip(),
@@ -156,7 +157,7 @@ def main():
         episode['condition'] = condition
         write_json(root/f'seed_{seed}'/condition/'episode.json',episode)
         episodes.append(episode)
-        write_json(root/'summary.json', {'episodes':episodes, 'planned':len(order)})
+        write_json(root/'summary.json', {'feedback_protocol':protocol(base), 'episodes':episodes, 'planned':len(order)})
         print(json.dumps(episode), flush=True)
         if episode.get('infrastructure_error'):
             manifest['status'] = 'infrastructure_issue'

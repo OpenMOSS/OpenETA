@@ -6,13 +6,16 @@ from pathlib import Path
 
 from scripts.univtac.official_icl_review import effective_episode_folder, previous_episode_attempts
 from sim.envs.univtac.codex_readonly import read_jsonl
+from sim.envs.univtac.feedback_protocol import LEGACY, protocol
 
 
-def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
+def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4', feedback_protocol: str = LEGACY) -> dict:
     batches = []
     pattern = {'R1.12':'univtac-isaac51-r112/**/run_manifest.json','R1.11':'univtac-isaac51-r111/**/run_manifest.json','R1.10':'univtac-isaac51-r110/**/run_manifest.json','R1.9':'univtac-isaac51-r19/**/run_manifest.json','R1.8':'univtac-isaac51-r18/**/run_manifest.json','R1.7':'univtac-isaac51-r17/**/run_manifest.json','R1.5':'univtac-isaac51-r15*/**/run_manifest.json'}.get(round_name,'univtac-isaac51-r14*/run_manifest.json')
     for manifest_path in sorted(runs_root.glob(pattern)):
         manifest = json.loads(manifest_path.read_text())
+        if protocol(manifest) != feedback_protocol:
+            continue
         if manifest.get('round') != round_name or manifest.get('mode') == 'observe_only':
             continue
         episodes = []
@@ -32,6 +35,7 @@ def load_autonomous_runs(runs_root: Path, round_name: str = 'R1.4') -> dict:
                              'recording':read('recording.json'), 'gripper_commands':read_jsonl(root/'gripper_commands.jsonl'),
                              'selections':[json.loads(p.read_text()) for p in sorted(root.glob('history/action_*/selection.json'))],
                              'agent_final': (root/'agent_final.md').read_text() if (root/'agent_final.md').exists() else None,
+                             'host_execution':read_jsonl(root/'host_tool_trace.jsonl'),
                              'host_evaluator':read('host_evaluator.json'), 'native_reset_limit':read('native_reset_limit.json'),
                              'usage':read('codex_trace_summary.json'),
                              'worker_error':read('worker_error.json'), 'codex_lifecycle':read('codex_lifecycle.json')})

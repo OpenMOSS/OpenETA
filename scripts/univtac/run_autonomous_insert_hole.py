@@ -21,6 +21,13 @@ from scripts.univtac.run_codex_readonly_observation import _run_to_files
 from scripts.univtac.run_pull_out_key_live_codex import _post, _wait_for_worker
 from sim.envs.univtac.autonomous_operation import PROMPT, TOOLS, quaternion_matrix, rotvec_matrix
 from sim.envs.univtac.codex_readonly import read_jsonl, summarize_codex_exec
+from sim.envs.univtac.feedback_protocol import (
+    PROTOCOL,
+    new_run_config,
+    offline_feedback,
+    protocol,
+    public_tools,
+)
 from sim.envs.univtac.scoped_isaac51_launcher import (
     ScopedIsaac51LaunchSpec,
     run_scoped_isaac51_command,
@@ -31,6 +38,8 @@ from tools.embodied_gateway import LiveBackendGateway
 
 
 def operator_prompt(config):
+    if offline_feedback(config):
+        config = new_run_config(config)
     prompt = PROMPT.replace('UniVTAC Insert Hole', 'UniVTAC ' + config.get('task_display_name', 'Insert Hole'))
     if config.get('demonstrations'):
         prompt = prompt.replace('Start by calling observe.',
@@ -67,6 +76,11 @@ def operator_prompt(config):
         prompt += ('\n' + config['missing_modality_notice'] + '\n') if config.get('missing_modality_notice') else ('\nSome observation modalities may be absent. Use only the\n'
                    'images and measurements actually returned. Missing tactile\n'
                    'input is not a tool failure.\n')
+    if offline_feedback(config):
+        prompt = prompt.replace("Use check_task to verify completion and finish_episode to end.",
+            "Use finish_episode to end voluntarily or acknowledge the neutral episode-ended notification. "
+            "Voluntary ending is final. Native evaluation and automatic stopping run in the background; "
+            "current task scores and the specific termination reason are not provided.")
     return prompt
 
 
@@ -84,7 +98,9 @@ def codex_command(root: Path, url: str, config: dict) -> list[str]:
                 '--root',str(root),'--live-worker-url',url]
     if config.get('demonstrations'):
         mcp_args.append('--demonstrations')
-    enabled_tools = list(TOOLS) + (['review_demonstrations'] if config.get('demonstrations') else [])
+    if offline_feedback(config):
+        mcp_args += ['--univtac-feedback-protocol', PROTOCOL]
+    enabled_tools = list(public_tools(config, TOOLS)) + (['review_demonstrations'] if config.get('demonstrations') else [])
     options = ['features.memories=false','memories.use_memories=false','memories.generate_memories=false',
                'features.enable_request_compression=false','history.persistence="none"',
                'features.shell_tool=false','features.view_image=false','features.multi_agent=false','features.image_generation=false',
@@ -163,7 +179,7 @@ def run_episode(args, config, seed, root):
             shutil.copyfile(source, destination)
             image['path'] = str(destination.relative_to(root))
         write_json(root/'demonstrations/projection.json', projection)
-    episode = {'round':config['round'],'task':config['task'],'seed':seed,'scored':config.get('scored', args.mode=='batch'),
+    episode = {'feedback_protocol':protocol(config), 'round':config['round'],'task':config['task'],'seed':seed,'scored':config.get('scored', args.mode=='batch'),
                'model':config['model'] if args.mode=='batch' else None,
                'reasoning_effort':config['reasoning_effort'] if args.mode=='batch' else None,
                'task_information':config.get('task_information'),
@@ -290,7 +306,9 @@ def main(argv=None):
     if args.output_root.exists():
         raise FileExistsError('Use a fresh output root; no automatic episode retries')
     args.output_root.mkdir(parents=True)
-    config = yaml.safe_load(args.config.read_text())
+    config = new_run_config(yaml.safe_load(args.config.read_text()))
+    args.config = args.output_root/'run_config.yaml'
+    args.config.write_text(yaml.safe_dump(config, sort_keys=False))
     if args.mode == 'observe_only':
         config['demonstrations'] = False
         config['observe_only'] = True
@@ -301,7 +319,7 @@ def main(argv=None):
     source = subprocess.check_output(['git','-C',str(args.source_root),'rev-parse','HEAD'],text=True).strip()
     if source != '371fac67917307026be8f00869fcc1b61c623a9f':
         raise ValueError('pinned Isaac51 source mismatch')
-    manifest = {'round':config['round'],'mode':args.mode,'status':'running','config':config,
+    manifest = {'feedback_protocol':protocol(config), 'round':config['round'],'mode':args.mode,'status':'running','config':config,
                 'repo_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),
                 'source_head':source,'seeds':([999999] if args.mode=='observe_only' else config['seeds'] if args.mode=='batch' else [config['seeds'][0]])}
     write_json(args.output_root/'run_manifest.json',manifest)
@@ -311,7 +329,7 @@ def main(argv=None):
     episodes = []
     for seed in manifest['seeds']:
         episodes.append(run_episode(args,config,seed,args.output_root/f'seed_{seed}'))
-        write_json(args.output_root/'summary.json',{'mode':args.mode,'episodes':episodes,
+        write_json(args.output_root/'summary.json',{'feedback_protocol':protocol(config),'mode':args.mode,'episodes':episodes,
                   'evaluable_count':sum(e['evaluable'] for e in episodes),
                   'native_success_count':sum(e['evaluable'] and e['task_success'] for e in episodes)})
         if episodes[-1].get('infrastructure_error'):

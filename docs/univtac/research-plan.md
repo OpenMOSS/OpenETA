@@ -55,10 +55,15 @@ to operate, but must not conceal an online expert solution or take over control.
 
 Allow observation, probing, and recovery within the same episode and shared
 budget. These are distinct from restarting failed episodes or selecting the
-best attempt. Use OpenETA's minimal `check_task` success boolean; expose no
-hidden target error, ground-truth target pose, or correct-action suggestion.
-Ordinary feedback about the commanded motion and measured robot state remains
-available. The R1.4 general-tool backend completed two unscored control-debug episodes
+best attempt. Fresh runs use `native_eval_no_online_task_feedback_v1`.
+Native success latching, early failure and budget termination remain active in
+the background. Agent-visible tools expose no current-query task judgement,
+reward, evaluator components, hidden target errors or specific native termination
+reason. All termination reasons use `episode_ended`; further physical actions
+are prohibited. `check_task` is unavailable, and `finish_episode` confirms
+voluntary or completed ending without returning a score. Ordinary motion,
+robot and gripper feedback, static public rules and historical expert outcomes
+remain available. The R1.4 general-tool backend completed two unscored control-debug episodes
 and three fresh no-demo Codex episodes: all three were natively evaluable,
 with autonomous development success 0/3.
 
@@ -1146,7 +1151,9 @@ runs. These ordinary proprioceptive differences limit single-pair attribution;
 no object or robot state was moved to force matching. Requested translation is
 not measured translation, and native success is not target arrival. Some final
 requests report arm arrival and native early stop together; others reach native
-success before the requested target. Keep both feedback fields visible.
+success before the requested target. Both fields remain available in host records and user review; fresh
+no-online-feedback runs expose ordinary arm-arrival feedback and neutral
+episode termination to the Agent.
 
 Every episode has 1× and 0.05× playback; all recorded task-body durations are
 below 0.5 seconds. Sixteen same-seed B/C live/no_live pairs also have 1× and
@@ -1611,3 +1618,30 @@ capacity test, excluded from paper success rates. It establishes only this
 Insert Hole two-way run; without a serial control it establishes neither 2×
 speedup nor long-term concurrency stability across tasks. D, the eight-task
 rollout and the full batch remain unstarted.
+
+
+### Query evaluation feedback removal — implemented, offline only
+
+The completed two-way results above used the legacy online-feedback protocol;
+they are not acceptance evidence for `native_eval_no_online_task_feedback_v1`.
+The fresh-run autonomous, official-ICL and capacity entry points stamp the new
+protocol into generated configuration and results. Existing configuration files
+are unchanged; explicit historical recovery branches retain their old protocol.
+The new protocol removes `check_task` from live UniVTAC registration and Codex
+`enabled_tools`; other backends retain their own tool. A query-field allowlist
+projects actual MCP returns, including nested execution/observation feedback
+and errors. Historical demonstrations retain their recorded success outcome.
+Native evaluation/control stopping remains unchanged; voluntary finish is final
+and is not an infrastructure failure. Host raw responses are preserved in
+`host_tool_trace.jsonl`, evaluator results remain in the usual host artifacts,
+and `operator_context.jsonl` records the actual delivered text/images.
+
+53 focused offline tests passed, including native stop timing/priority, no
+post-terminal motion, live MCP output/context, tactile strip annotations and
+protocol-separated result loading. The existing shared MCP file's unrelated
+lint debt was not expanded. `outputs/univtac-no-online-feedback-offline/`
+contains read-only projection checks over 18 historical tool responses;
+original records and expert outcomes were retained. No simulator or operator
+Codex started. Fresh two-way acceptance, D and the eight-task rollout remain
+pending under the new frozen protocol; no extra experiment cells or full batch
+were started.

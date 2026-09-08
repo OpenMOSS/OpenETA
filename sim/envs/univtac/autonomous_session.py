@@ -17,6 +17,12 @@ from sim.envs.univtac.autonomous_operation import (
     quaternion_matrix,
     resolve_target,
 )
+from sim.envs.univtac.feedback_protocol import (
+    offline_feedback,
+    project_query,
+    protocol,
+    public_tools,
+)
 from sim.envs.univtac.observation import capture_snapshot, to_numpy
 from sim.envs.univtac.planner_diagnostics import safe_diagnostic_value
 from sim.envs.univtac.tactile_history import TactileRecorder
@@ -135,15 +141,19 @@ class AutonomousSession:
 
     def call(self, tool: str, args: dict[str,Any]):
         if self.tool_count >= self.config['max_tool_calls']:
-            return {'ok':False,'text':{'error':'tool_call_limit','terminal':True},'images':[]}
+            payload = {'ok':False,'text':{'error':'tool_call_limit','terminal':True},'images':[]}
+            return project_query(payload, tool=tool, ended=True) if offline_feedback(self.config) else payload
         args = {k:v for k,v in args.items() if v is not None}
         self.tool_count += 1
         before = self.latest
         result = {}
         try:
-            allowed = (*TOOLS, 'review_demonstrations') if self.config.get('demonstrations') else TOOLS
+            tools = public_tools(self.config, TOOLS)
+            allowed = (*tools, 'review_demonstrations') if self.config.get('demonstrations') else tools
             if tool not in allowed:
                 raise ValueError('unsupported tool')
+            if offline_feedback(self.config) and (self.finished or self.termination()) and tool == 'move_to':
+                raise ValueError('episode_ended')
             if self.config.get('demonstrations') and not self.demonstrations_reviewed and tool != 'review_demonstrations':
                 raise ValueError('call review_demonstrations first')
             if tool == 'review_demonstrations':
@@ -236,6 +246,9 @@ class AutonomousSession:
             self.infrastructure_error = f'{type(exc).__name__}: {exc}'
             self.finish_reason = 'infrastructure_error'
             payload = {'ok':False,'text':{'error':self.infrastructure_error,'terminal':'infrastructure_error'},'images':[]}
+        if offline_feedback(self.config):
+            append_row(self.root/'host_tool_trace.jsonl', {'tool':tool, 'arguments':args, 'result':payload, 'timestamp_s':time.time()})
+            payload = project_query(payload, tool=tool, ended=bool(self.finished or self.termination() or self.infrastructure_error))
         payload = project_current_observation(payload, current_tactile=self.config.get('current_tactile', True))
         append_row(self.root/'tool_trace.jsonl',{'tool':tool,'arguments':args,'before':before,'result':payload,'counts':self.controller.counts(),'timestamp_s':time.time()})
         if self.termination() or self.infrastructure_error:
@@ -247,7 +260,7 @@ class AutonomousSession:
 
     def finalize(self, reason=None):
         checker = ({'available':False, 'success':None} if self.config.get('observe_only') else self.controller.check())
-        result = {'round':self.config.get('round','R1.4'),'seed':self.seed,'reset_valid':True,
+        result = {'feedback_protocol':protocol(self.config), 'round':self.config.get('round','R1.4'),'seed':self.seed,'reset_valid':True,
                   'native_success_available':checker['available'], 'task_success':checker['success'],
                   'native_early_stop':self.controller.early_stop,'termination':reason or self.termination() or self.finish_reason or ('unscored_observation_check' if self.config.get('observe_only') else 'codex_exit'),
                   'infrastructure_error':self.infrastructure_error, 'tool_call_count':self.tool_count,

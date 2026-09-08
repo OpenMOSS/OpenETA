@@ -19,6 +19,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from scripts.univtac.run_autonomous_insert_hole import operator_prompt, run_episode
+from sim.envs.univtac.feedback_protocol import new_run_config, protocol
 from sim.envs.univtac.trace import write_json
 
 SEEDS = (1000040, 1000041, 1000042, 1000043)
@@ -154,7 +155,7 @@ def main():
     seeds = SEEDS[:args.concurrency]
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    config = yaml.safe_load(args.config.read_text())
+    config = new_run_config(yaml.safe_load(args.config.read_text()))
     original_prompt = operator_prompt(config)
     config.update(round=('Two-way capacity' if args.concurrency == 2 else 'Four-way capacity'), seeds=list(seeds), scored=False, wait_for_operator_release=True)
     config.pop('episode_order', None)
@@ -166,7 +167,7 @@ def main():
     (root/'prompt.txt').write_text(original_prompt)
     args.mode = 'batch'
     args.coordinator = coordinator = Coordinator(root, seeds)
-    write_json(root/'run_manifest.json', {'scored': False, 'seeds': seeds, 'max_simulator_starts': args.concurrency,
+    write_json(root/'run_manifest.json', {'feedback_protocol':protocol(config), 'scored': False, 'seeds': seeds, 'max_simulator_starts': args.concurrency,
         'max_codex_starts': args.concurrency, 'config': config, 'started_s': time.time(),
         'repo_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=REPO, text=True).strip(),
         'source_head': subprocess.check_output(['git','rev-parse','HEAD'], cwd=args.source_root, text=True).strip()})
@@ -208,7 +209,7 @@ def main():
     finally:
         done.set(); monitor.join()
         write_json(root/'resources_after.json', resources(coordinator, previous))
-    write_json(root/'summary.json', {'scored': False, 'ended_s': time.time(), 'episodes': episodes,
+    write_json(root/'summary.json', {'feedback_protocol':protocol(config), 'scored': False, 'ended_s': time.time(), 'episodes': episodes,
         'all_ready': coordinator.release.is_set(), 'abort_reason': coordinator.abort_reason, 'abort_seed': coordinator.abort_seed,
         'completed_count': sum(e.get('evaluable', False) for e in episodes), 'events': coordinator.events})
     return int(coordinator.cancel.is_set())

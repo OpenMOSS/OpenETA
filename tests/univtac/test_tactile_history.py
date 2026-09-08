@@ -87,7 +87,7 @@ def test_segment_peak_is_causal_sorted_and_shared():
     assert select_times(rows[:1])==rows[:1]
 
 
-def test_sampling_copies_buffers_without_physics_and_builds_exact_strips(tmp_path):
+def test_sampling_copies_buffers_without_physics_and_builds_exact_strips(tmp_path,monkeypatch):
     pixels=np.zeros((60,80,3),dtype=np.uint8)
     sensors={n:SimpleNamespace(frame=np.array([1]),_timestamp_last_update=np.array([0.])) for n in VIEWS}
     task=SimpleNamespace(
@@ -98,7 +98,7 @@ def test_sampling_copies_buffers_without_physics_and_builds_exact_strips(tmp_pat
     count={'simulation_time_seconds':0.,'physics_steps':0}
     state={'xyz_m':[0,0,0],'gripper_command':'inherited_hold','gripper_target_positions_m':[.01,.012],
            'gripper_finger_positions_m':[.02,.02]}
-    controller=SimpleNamespace(counts=lambda:dict(count),state=lambda:state,terminal=lambda:None)
+    controller=SimpleNamespace(counts=lambda:dict(count),state=lambda:state,terminal=lambda:'native_success')
     recorder=TactileRecorder(task,controller,tmp_path,cfg())
     recorder.sample(); recorder.begin('action_001',{'delta_mm':[1,0,0]})
     pixels[:]=100
@@ -106,7 +106,16 @@ def test_sampling_copies_buffers_without_physics_and_builds_exact_strips(tmp_pat
     count.update(simulation_time_seconds=.02,physics_steps=2)
     recorder.sample(); recorder.sample()
     assert len(recorder.rows)==2 and count['physics_steps']==2
+    from PIL import ImageDraw
+    drawn=[]
+    original_text=ImageDraw.ImageDraw.text
+    def record_text(self,xy,text,*args,**kwargs):
+        drawn.append(text)
+        return original_text(self,xy,text,*args,**kwargs)
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", record_text)
     images, selection=recorder.history()
+    assert drawn and all("native_success" not in t and "terminal" not in t for t in drawn)
+    assert recorder.rows[-1]["native_terminal"] == "native_success"
     assert selection['sample_ids']==[0,1]
     assert len(images)==2
     first=np.array(Image.open(tmp_path/recorder.rows[0]['images']['left_tactile']))

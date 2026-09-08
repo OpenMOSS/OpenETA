@@ -23,6 +23,16 @@ explicitly for Grasp & Classify; current-touch omission is an ablation, not the
 complete-method default.
 This project rule does not authorize changing global Codex configuration.
 
+## Query feedback protocol
+
+Fresh UniVTAC runs use `native_eval_no_online_task_feedback_v1`: native
+evaluation and automatic termination remain host-owned. Agent tools expose no
+current-query task score or specific native termination reason. `check_task`
+is absent; terminal feedback is `episode_ended`, and `finish_episode` confirms
+voluntary/final ending without a score. Keep old configurations, traces and
+results under their original protocol; never mix versions in a results table
+or switch an unfinished batch mid-run.
+
 ## Neat after each experimental step
 
 After every substantive experimental step, spawn one subagent that forks the

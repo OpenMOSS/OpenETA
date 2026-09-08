@@ -92,7 +92,8 @@ def test_control_path_uses_native_steps_without_expert():
 
 
 @pytest.mark.parametrize("paced", [False, True])
-def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced):
+@pytest.mark.parametrize("native_stop", [None, "success", "early", "both"])
+def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced, native_stop):
     import sys
 
     class Array(np.ndarray):
@@ -122,7 +123,7 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced
     robot.set_gripper = lambda *a, **k: None
     task=SimpleNamespace(_robot_manager=robot,step_count=20,_physics_step_count=20,take_action_cnt=0,
         cfg=SimpleNamespace(step_lim=2,sim=SimpleNamespace(dt=1/120),decimation=2),eval_success=False,device='cpu',
-        check_success=lambda:False,check_early_stop=lambda:False)
+        check_success=lambda:False,check_early_stop=lambda:native_stop in ("early", "both"))
     calls=[]
     def take_action(action,**kwargs):
         calls.append(kwargs)
@@ -131,6 +132,8 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced
         task.take_action_cnt+=1
         task.step_count+=1
         task._physics_step_count+=2
+        if native_stop in ("success", "both"):
+            task.eval_success=True
     task.take_action=take_action
     c=NativeController(task,{'max_control_steps_per_move':80,'position_tolerance_m':.003,
         'orientation_tolerance_rad':.052,'max_joint_delta_rad':.025},tmp_path)
@@ -142,10 +145,12 @@ def test_native_control_budget_counts_each_waypoint(tmp_path, monkeypatch, paced
     c.state=lambda:{'xyz_m':tcp()[:3,3].tolist()}
     target=np.eye(4);target[0,3]=.5
     result=c.execute(target,None)
-    assert len(calls)==2 and all(k['force'] is False for k in calls)
-    assert c.control_steps==task.take_action_cnt==2
-    assert c.counts()['physics_steps']==4
-    assert result['error']=='native_step_limit' and not result['reached']
+    expected_steps = 2 if native_stop is None else 1
+    expected_terminal = 'native_step_limit' if native_stop is None else ('native_early_stop' if native_stop == 'early' else 'native_success')
+    assert len(calls)==expected_steps and all(k['force'] is False for k in calls)
+    assert c.control_steps==task.take_action_cnt==expected_steps
+    assert c.counts()['physics_steps']==2*expected_steps
+    assert result['error']==expected_terminal and not result['reached']
     # Original retains the R1.5 first IK correction; candidate reaches its
     # intermediate reference without falsely claiming final arrival.
     import json

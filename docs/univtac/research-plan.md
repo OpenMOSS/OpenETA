@@ -2067,3 +2067,11 @@ preserving order and all previously accepted results. Remote paths are relocated
 without changing demonstration content or experimental settings. Host reports are
 local ledgers, not global totals; merge disjoint results by cell identity.
 Assignment does not establish launch; actual services and records do.
+
+### Reviewed hzz provider-capacity pause
+
+hzz-server seed1000057 Tube C_1shot stopped on provider model capacity;
+Bottle C_2shot was peer-cancelled. Pro reviewed both records. Cleaned accepted
+operator issues use a per-attempt reviewed marker to skip without retry,
+preserving original errors and costs. These remain infrastructure_issue and
+cancelled respectively, not native task failures.

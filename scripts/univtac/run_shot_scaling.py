@@ -266,6 +266,14 @@ def recover_cell(root, cell, attempt_limit=3):
         episode = load(folder/'episode.json') if (folder/'episode.json').exists() else {}
         life = load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}
         accepted = (folder/'ready.json').exists() or (folder/'codex_command.json').exists()
+        marker = folder/'reviewed_operator_issue.json'
+        if marker.exists():
+            review = load(marker)
+            assert accepted and life.get('cleanup_complete'), 'Reviewed operator must be cleaned'
+            assert review['cell_key'] == cell['cell_key'] and review['no_retry'] is True
+            assert review['status'] in ('infrastructure_issue', 'cancelled')
+            return {**cell, 'status':review['status'], 'episode_path':str(folder),
+                    'attempts':number, 'reviewed_skip':True, 'review_reason':review['reason']}
         if accepted:
             if episode.get('status')!='completed' and (folder/'final_result.json').exists() and (folder/'codex_lifecycle.json').exists():
                 model = load(folder/'codex_lifecycle.json')

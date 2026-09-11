@@ -189,8 +189,8 @@ update does not open a new literature survey.
 
 The shot experiment keeps gpt-6-astra/low, the no-online-task-feedback protocol,
 original control, pinned Isaac51 and each task's accepted public rules/budgets.
-Use two simulator slots including cleanup and at most three pre-ready attempts
-per cell, with attempts retained across the scope revision. The old
+Each host uses two simulator slots including cleanup. New cells receive one total
+initialization attempt, without retry; historical attempts remain preserved. The old
 2400 Codex / 7200 simulator ceilings are historical upper bounds, not an
 authorization to dispatch B or replenish any exhausted cell. Model-started episodes are
 not initialization retries. Fixed expert media are shared read-only. Only slow
@@ -2058,3 +2058,12 @@ model or budget was changed; the check started zero simulator/operator processes
 The earlier three-attempt recovery is historical. New dispatch remains limited
 to one total initialization. The 30-minute monitor must not treat the old drain
 handover instructions as permission to release this new resource-related pause.
+
+### Fixed two-host continuation
+
+The remaining 720 C cells are assigned once: 360 local and 360 on hzz-server,
+30 per task/shot per host. `--assignment` and `--host` filter dispatch only,
+preserving order and all previously accepted results. Remote paths are relocated
+without changing demonstration content or experimental settings. Host reports are
+local ledgers, not global totals; merge disjoint results by cell identity.
+Assignment does not establish launch; actual services and records do.

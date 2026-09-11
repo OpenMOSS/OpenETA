@@ -412,6 +412,16 @@ def run(args, settings):
     cells = [{k:v for k,v in c.items() if k!='effective_config'} for c in manifest['cells']]
     coordinator = Coordinator(root,[tuple(c['cell_key']) for c in cells],protocol_smoke=True)
     state = {tuple(c['cell_key']):c for c in cells}
+    assignment = getattr(args, 'assignment', None)
+    host = getattr(args, 'host', None)
+    assigned = None
+    if assignment:
+        groups = load(assignment)['assignments']
+        assert host in groups, 'Unknown assignment host'
+        keys = [tuple(k) for values in groups.values() for k in values]
+        assert len(keys) == len(set(keys)), 'Overlapping host assignments'
+        assert set(keys) <= {tuple(c['cell_key']) for c in cells}, 'Unknown assigned cells'
+        assigned = {tuple(k) for k in groups[host]}
     pending = []
     if startup_crashes_since_ready(root)>=3:
         coordinator.abort('Three preserved omniClient startup crashes without an intervening ready')
@@ -433,7 +443,7 @@ def run(args, settings):
             state[tuple(cell['cell_key'])] = old
             if old['status']=='unresolved_previous_attempt':
                 coordinator.abort('Unresolved prior accepted/in-flight attempt: '+old['episode_path'])
-        elif cell['comparison_condition'] in conditions:
+        elif cell['comparison_condition'] in conditions and (assigned is None or tuple(cell['cell_key']) in assigned):
             pending.append(cell)
     def save():
         atomic_json(root/'results.json',{'feedback_protocol':PROTOCOL,'planned':sum(c['comparison_condition'] in conditions for c in cells),
@@ -539,6 +549,8 @@ def run(args, settings):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--assignment', type=Path)
+    parser.add_argument('--host', choices=['local', 'hzz-server'])
     parser.add_argument('--phase',choices=('download','prepare','revise-scope','run'),required=True)
     parser.add_argument('--config',type=Path,default=REPO/'configs/univtac/shot_scaling.yaml')
     parser.add_argument('--output-root',type=Path,default=REPO/'outputs/univtac-shot-scaling')

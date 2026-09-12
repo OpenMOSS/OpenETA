@@ -23,6 +23,24 @@ from agent.evals.tool_contract_authority import audit_tool_contract_authority
 from agent.tools.registry import ToolResult, build_default_tool_registry
 
 
+def test_interrupt_updates_rollout_without_fabricating_completion(tmp_path):
+    runtime = OpenEtaAgentRuntime(
+        tools=_tools(), memory=AgentMemory(store=JsonMemoryStore(tmp_path)),
+        planner=ToolCallingPlanner(StaticPlannerBackend({"kind": "tool_call", "name": "get_memory", "parameters": {}})),
+    )
+    runner = OpenEtaEpisodeRunner(runtime=runtime, environment=DummyEpisodeEnvironment())
+    runner.start(task="pick", max_turns=3)
+    runner.total_tokens = 4321
+    runner.interrupt(code="parallel_batch_interrupted")
+    rollout = tmp_path / "sessions" / runtime.memory.session_id / "rollout"
+    manifest = json.loads((rollout / "manifest.json").read_text())
+    assert manifest["status"] == "interrupted"
+    assert manifest["interruption"]["usage_complete"] is False
+    assert manifest["interruption"]["known_usage"]["total_tokens"] == 4321
+    assert _rows(rollout / "episodes.jsonl")[-1]["event"] == "interrupted"
+    assert "result" not in _rows(rollout / "episodes.jsonl")[-1]
+
+
 def _rows(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -133,7 +151,7 @@ def test_rollout_transition_preserves_media_state_action_and_reward(tmp_path: Pa
         "openeta.tool_contract_runtime_provenance.v1"
     )
     assert len(contract_runtime["catalog_sha256"]) == 64
-    assert contract_runtime["catalog_summary"]["tool_count"] == 35
+    assert contract_runtime["catalog_summary"]["tool_count"] == 36
     assert contract_runtime["policy"] == {
         "schema_version": "openeta.tool_contract_runtime_policy.v1",
         "request_validation_authority": [],

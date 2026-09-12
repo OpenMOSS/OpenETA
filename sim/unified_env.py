@@ -1020,6 +1020,10 @@ class UnifiedEnv(gym.Env):
                 }
                 object_state.update(bounds)
                 objects.append(object_state)
+            from sim.libero_contact_geometry import fixture_geometry
+            objects.extend(fixture_geometry(
+                model, data, getattr(inner_env, "fixtures", ()), self._mujoco_geom_world_aabb,
+            ))
             return objects
         except Exception:
             return []

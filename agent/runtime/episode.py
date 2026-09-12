@@ -1070,6 +1070,15 @@ class OpenEtaEpisodeRunner:
                 "cleanup": dict(self.interrupt_cleanup),
             },
         )
+        if self.runtime.rollout_recorder is not None:
+            self.runtime.rollout_recorder.record_episode_interruption(
+                episode_id=self.execution_id,
+                snapshot={"failure_reason": dict(reason), "turn_index": self.turn_index,
+                          "cleanup": dict(self.interrupt_cleanup),
+                          "known_usage": {"total_tokens": self.total_tokens,
+                                          "token_usage_sources": dict(self.token_usage_sources)},
+                          "usage_complete": False, "remote_call_state": "unknown"},
+            )
         return dict(self.interrupt_cleanup)
 
     def wait_for_idle(self, *, timeout_s: float = INTERRUPT_CLOSE_GRACE_S) -> bool:

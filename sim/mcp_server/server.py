@@ -44,6 +44,7 @@ from sim.mcp_server.worker_mgr import (
     _forget_obs_dirty,
     _proxy_observe,
     _proxy_controller_goal,
+    _proxy_gripper_goal,
     _proxy_reachability,
     _proxy_render,
     _proxy_reset,
@@ -51,6 +52,7 @@ from sim.mcp_server.worker_mgr import (
 )
 from sim.mcp_server.collision import (
     RECEPTACLE_CATEGORIES,
+    _object_aabb,
     check_attached_object_collision,
     get_checker,
     remove_checker,
@@ -406,6 +408,7 @@ def reset_env(handle: str, *, seed: int | None = None, session_id: str = "") -> 
     # gripper_close establishes the opposite latch.
     meta["_gripper_cmd"] = -1.0
     meta.pop("_attachment_proxy", None)
+    meta.pop("_fixture_contact", None)
     reset_obs = _proxy_reset(meta, seed=seed)
     # Let physics settle before returning — objects can spawn hovering /
     # jittering right after reset; a few hold steps bring them to rest.
@@ -606,12 +609,20 @@ def _arm_attachment_proxy(
         else list(meta.get("_collision_objects", []))
     )
     for obj in candidates:
-        if not isinstance(obj, dict):
+        if not isinstance(obj, dict) or str(obj.get("geometry_kind", "")).startswith("fixture_"):
             continue
         category = str(obj.get("category") or "").strip().lower()
         if category in RECEPTACLE_CATEGORIES:
             continue
-        position = obj.get("position")
+        # An asset's free-joint origin need not be its geometry centre (the
+        # wine bottle's origin is near its base). Use the same world AABB for
+        # proximity and carry geometry, with the legacy origin fallback only
+        # when no bounds are available.
+        bounds = _object_aabb(obj)
+        position = (
+            [(bounds[0][i] + bounds[1][i]) / 2.0 for i in range(3)]
+            if bounds is not None else obj.get("position")
+        )
         if not isinstance(position, list) or len(position) < 3:
             continue
         distance = math.dist(
@@ -641,8 +652,16 @@ def _arm_attachment_proxy(
             ),
         }
     obj = nearest[1]
-    position = [float(value) for value in obj.get("position", [])[:3]]
-    dims = obj.get("dims")
+    bounds = _object_aabb(obj)
+    position = (
+        [(bounds[0][i] + bounds[1][i]) / 2.0 for i in range(3)]
+        if bounds is not None
+        else [float(value) for value in obj.get("position", [])[:3]]
+    )
+    dims = (
+        [bounds[1][i] - bounds[0][i] for i in range(3)]
+        if bounds is not None else obj.get("dims")
+    )
     if not isinstance(dims, list) or len(dims) < 3:
         dims = [0.06, 0.06, 0.10]
     meta["_attachment_proxy"] = {
@@ -652,6 +671,7 @@ def _arm_attachment_proxy(
         "relative_xyz": [position[i] - float(eef[i]) for i in range(3)],
         "dims": [max(0.01, float(value)) for value in dims[:3]],
         "anchor_eef_xyz": [float(value) for value in eef[:3]],
+        "anchor_eef_quat_xyzw": _extract_ee_quat_from_result(result),
         # Aperture is evidence for the independent attachment reviewer, not a
         # proxy-arming gate: thin objects may legitimately close near zero.
         "measured_open_fraction": float(openness),
@@ -1295,11 +1315,14 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             with _session_last_obs_lock:
                 cached = _session_last_obs.get(sid, {}).get(_obs_key(meta), {})
             baseline_eef = _extract_ee_xyz_from_result(cached)
+            baseline_quat = _extract_ee_quat_from_result(cached)
             attached_collision, attached_info = check_attached_object_collision(
                 attachment,
                 list(meta.get("_collision_objects", [])),
                 [float(x), float(y), float(z)],
                 baseline_eef_xyz=baseline_eef,
+                predicted_eef_quat_xyzw=target_quat if use_ori else baseline_quat,
+                baseline_eef_quat_xyzw=baseline_quat,
             )
             if attached_collision:
                 return {
@@ -1315,12 +1338,16 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                         "trajectory_checked": False,
                         "world_checked": True,
                         **attached_info,
+                        "check_stage": "target_endpoint",
                     },
                     "steps_executed": 0,
                     "reached_target": False,
                     "stop_reason": "collision_detected",
                 }
-        resolved_contact: dict | None = None
+        resolved_contact: dict | None = (
+            dict(meta["_fixture_contact"])
+            if isinstance(meta.get("_fixture_contact"), dict) and _gripper_cmd(meta) > 0 else None
+        )
         if contact_authorization is not None:
             target_object, resolution = resolve_contact_object_authorization(
                 contact_authorization,
@@ -1342,10 +1369,12 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                     "reached_target": False,
                     "stop_reason": "contact_authorization_unresolved",
                 }
-            resolved_contact = {
-                **resolution,
-                "target_object_name": str(target_object.get("name") or ""),
-            }
+            if (resolved_contact is not None and
+                    resolution.get("target_geom_name") != resolved_contact.get("target_geom_name")):
+                return {"ok": False, "code": "fixture_contact_conflict", "steps_executed": 0,
+                        "stop_reason": "contact_authorization_unresolved",
+                        "error": "Open the gripper before changing the fixture contact binding."}
+            resolved_contact = dict(resolution)
         body = {
             "target_xyz": [float(x), float(y), float(z)],
             "preserve_current_orientation": not use_ori,
@@ -1372,6 +1401,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                     "relative_xyz",
                     "dims",
                     "anchor_eef_xyz",
+                    "anchor_eef_quat_xyzw",
                 )
             }
         if use_ori:
@@ -2194,6 +2224,43 @@ _GRIPPER_OPEN_STEPS = 40
 _GRIPPER_CLOSE_STEPS = 60
 
 
+def _step_gripper_with_final_observation(meta: dict, action, *, num_steps: int,
+                                         contact_authorization: dict | None = None) -> dict:
+    """Settle without intermediate camera transport, then render once.
+
+    Called under the gripper tool's environment lock. Keep the step's reward,
+    terminal flags and info; a render response is only an observation. Terminal
+    steps already carry their exact visual evidence and must not be replaced.
+    """
+    controller = (meta.get('control_spec') or {}).get('controller') or {}
+    if controller.get('goal_executor') == 'openeta.worker_mink_goal.v1':
+        result = _proxy_gripper_goal(meta, {'action':list(action), 'max_steps':num_steps,
+            'contact_authorization':contact_authorization})
+        result.setdefault('steps_executed',None)
+        if result.get('stop_reason') == 'collision_detected':
+            result.update(ok=False, code='collision_detected')
+        return result
+    result = _proxy_step(meta, action, num_steps=num_steps, render=False)
+    if result.get("error") or result.get("terminated") or result.get("truncated"):
+        return result
+    try:
+        observation = _proxy_render(meta)
+        if not isinstance(observation, dict) or observation.get("error"):
+            raise RuntimeError(
+                observation.get("error") if isinstance(observation, dict)
+                else "invalid render response"
+            )
+    except Exception as exc:
+        # Actuation has happened: retain its receipt, but never present cached
+        # pre-actuation images as a successful final visual observation.
+        result["error"] = f"Post-actuation render failed: {exc}"
+        return result
+    result["observation"] = observation
+    with _session_last_obs_lock:
+        _session_last_obs.setdefault(meta.get("_sid", ""), {})[_obs_key(meta)] = observation
+    return result
+
+
 def _gripper_actuation_receipt(
     result: dict,
     *,
@@ -2211,9 +2278,13 @@ def _gripper_actuation_receipt(
         "schema_version": "openeta.gripper_actuation_receipt.v1",
         "command": command,
         "command_latched": True,
-        "steps_executed": steps_executed,
+        "steps_executed": result.get('steps_executed', steps_executed),
+        **({'horizon_completed':result['gripper_horizon_completed']}
+           if 'gripper_horizon_completed' in result else {}),
         "settling_policy": (
-            "stationary_continuous_position_hold"
+            "zero_arm_velocity_with_checked_finger_actuation"
+            if 'gripper_horizon_completed' in result
+            else "stationary_continuous_position_hold"
             if command == "close"
             else "stationary_position_actuation"
         ),
@@ -2244,13 +2315,23 @@ def gripper_open(handle: str, *, session_id: str = "") -> dict:
     if not meta:
         return {"error": f"Unknown: {handle}"}
     backend = meta.get("backend", "")
+    release_contact = meta.get('_fixture_contact')
+    if release_contact is None and isinstance(meta.get('_attachment_proxy'),dict):
+        release_contact = {'target_object_name':meta['_attachment_proxy'].get('object_name')}
     meta["_gripper_cmd"] = -1.0  # latch OPEN — held on every subsequent step
     meta.pop("_attachment_proxy", None)
+    meta.pop("_fixture_contact", None)
     try:
         act = make_gripper_action(meta, open_gripper=True, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    result = _proxy_step(meta, act, num_steps=_GRIPPER_OPEN_STEPS)
+    result = _step_gripper_with_final_observation(meta, act, num_steps=_GRIPPER_OPEN_STEPS,
+                                                 contact_authorization=release_contact)
+    if result.get('stop_reason') == 'collision_detected' and release_contact is not None:
+        # Preserve the narrow binding for another checked release attempt.
+        # No carry/attachment claim is re-established by this recovery state.
+        if release_contact.get('contact_kind') == 'articulated_fixture':
+            meta['_fixture_contact'] = dict(release_contact)
     result["gripper_actuation_receipt"] = _gripper_actuation_receipt(
         result,
         command="open",
@@ -2287,7 +2368,10 @@ def gripper_close(
     if not meta:
         return {"error": f"Unknown: {handle}"}
     authorized_object: dict | None = None
-    authorization_receipt: dict | None = None
+    authorization_receipt: dict | None = (
+        dict(meta["_fixture_contact"])
+        if isinstance(meta.get("_fixture_contact"), dict) and _gripper_cmd(meta) > 0 else None
+    )
     if contact_authorization is not None:
         authorized_object, authorization_receipt = resolve_contact_object_authorization(
             contact_authorization,
@@ -2318,19 +2402,39 @@ def gripper_close(
         act = make_gripper_action(meta, open_gripper=False, backend=backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
-    result = _proxy_step(meta, act, num_steps=_GRIPPER_CLOSE_STEPS)
+    result = _step_gripper_with_final_observation(meta, act, num_steps=_GRIPPER_CLOSE_STEPS,
+                                                 contact_authorization=authorization_receipt)
     result["gripper_actuation_receipt"] = _gripper_actuation_receipt(
         result,
         command="close",
         steps_executed=_GRIPPER_CLOSE_STEPS,
     )
-    result["attachment_proxy_receipt"] = _arm_attachment_proxy(
-        meta,
-        result,
-        authorized_object=authorized_object,
-    )
+    if result.get("error") or result.get("ok") is False:
+        meta.pop("_fixture_contact", None)
+        meta.pop("_attachment_proxy", None)
+        if result.get('stop_reason') == 'collision_detected' and (authorization_receipt or {}).get('contact_kind') == 'articulated_fixture':
+            meta['_fixture_contact'] = dict(authorization_receipt)
+        return result
+    if (authorization_receipt or {}).get("contact_kind") == "articulated_fixture":
+        # A clamped drawer handle is an articulated contact, never a free-body
+        # attachment. Retain only this geom exemption until opening/reset.
+        meta.pop("_attachment_proxy", None)
+        meta["_fixture_contact"] = dict(authorization_receipt)
+        result["attachment_proxy_receipt"] = {
+            "status": "not_armed", "reason": "articulated_fixture_contact",
+            "attachment_proven": False,
+        }
+    else:
+        meta.pop("_fixture_contact", None)
+        result["attachment_proxy_receipt"] = _arm_attachment_proxy(
+            meta, result, authorized_object=authorized_object,
+        )
     if isinstance(authorization_receipt, dict):
         result["contact_authorization"] = authorization_receipt
+        if authorization_receipt.get("source_kind") == "model_rgbd_point":
+            if isinstance(meta.get("_attachment_proxy"), dict):
+                meta["_attachment_proxy"]["binding_source"] = "host_model_point_provenance"
+            result["attachment_proxy_receipt"]["binding_source"] = "host_model_point_provenance"
     return result
 
 

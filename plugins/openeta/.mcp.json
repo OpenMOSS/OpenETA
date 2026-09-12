@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "openeta": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "tools.codex_mcp_server"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -55,8 +55,12 @@ as necessary feasibility constraints, but do not trade away grasp stability for
 a merely convenient approach among otherwise executable candidates.
 
 The filled dot and jaw line are centred on `executed_contact_center_xyz`, the
-backend-normalized point that OpenETA will actually compile onto the calibrated
-EEF/grip site. The arrow ends at that same executed contact centre. Native
+backend-normalized candidate point before any later strategy override. The
+rendered jaw axes describe this candidate, not a subsequently clamped or refined
+execution pose. Your recommendation applies only to the rendered geometry;
+changing its orientation or approach requires fresh geometric assessment and
+does not inherit this candidate's closing-span or contact-quality evidence.
+The arrow ends at that same candidate contact centre. Native
 `translation_xyz` and `gripper_tip_position_xyz` use backend-specific origins;
 rank the normalized rendered centre rather than assuming either raw field has
 one universal meaning.
@@ -113,6 +117,14 @@ class GraspPoseAdvisor(Protocol):
 
     def advise(self, selection_bundle: Mapping[str, Any], *, task: str) -> JsonDict:
         """Return one structured recommendation without activating a candidate."""
+
+
+class GraspAdvisorResponseError(ValueError):
+    """Invalid advice with known call accounting, never a substitute recommendation."""
+
+    def __init__(self, message: str, diagnostics: JsonDict) -> None:
+        super().__init__(message)
+        self.advisor_diagnostics = diagnostics
 
 
 class BackendGraspPoseAdvisor:
@@ -187,6 +199,24 @@ class BackendGraspPoseAdvisor:
                 metadata={"isolated_context": True},
             )
         )
+        try:
+            return self._validate_advice(result, selection_bundle, candidates, started)
+        except ValueError as exc:
+            details = result.details if isinstance(result.details, dict) else {}
+            usage = details.get("usage")
+            # Do not retain the rejected model text or arbitrary provider details.
+            known_usage = {key: value for key, value in (usage.items() if isinstance(usage, Mapping) else [])
+                           if key in {"total_tokens", "prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"}
+                           and type(value) is int and value >= 0}
+            raise GraspAdvisorResponseError(str(exc), {
+                "failure_phase": "response_validation",
+                "provider": result.provider, "model": result.model,
+                "usage": known_usage,
+                "usage_source": "provider_reported" if known_usage else "unknown",
+                "latency_ms": round((time.monotonic() - started) * 1000.0, 3),
+            }) from exc
+
+    def _validate_advice(self, result, selection_bundle, candidates, started) -> JsonDict:
         payload = result.payload
         if isinstance(payload, str):
             try:

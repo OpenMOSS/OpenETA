@@ -149,7 +149,12 @@ def test_action_reviewer_prioritizes_current_observation_rgb() -> None:
         observation=observation,
         metadata={
             "supervision_context": {
-                "memory": {"overlay_ref": "synthetic-overlay.png"},
+                "memory": {
+                    "overlay_ref": "synthetic-overlay.png",
+                    "manipulation_advisories": [
+                        {"code": "previous_motion_not_reached", "blocking": False}
+                    ],
+                },
                 "vision_image_paths": ["stale-scene.png"],
             }
         },
@@ -158,6 +163,9 @@ def test_action_reviewer_prioritizes_current_observation_rgb() -> None:
     decision = BackendActionReviewer(CallablePlannerBackend(decide)).review(context)
 
     assert decision.allowed is True
+    assert requests[0].tool_context["manipulation_advisories"] == [
+        {"code": "previous_motion_not_reached", "blocking": False}
+    ]
     assert requests[0].tool_context["vision_image_paths"] == [
         "current-agentview.png",
         "synthetic-overlay.png",

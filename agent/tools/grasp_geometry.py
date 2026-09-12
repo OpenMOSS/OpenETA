@@ -782,6 +782,13 @@ def compile_grasp_seed(
             )
         )
         + (
+            "Strategy overrides the candidate orientation. Native advisor approval "
+            "and closing-span evidence do not validate the changed execution "
+            "geometry; assess the compiled jaw placement and entry clearance "
+            "from current visual/depth evidence before contact. "
+            if orientation_clamped else ""
+        )
+        + (
             "Calibration and strategy outputs are geometric references; the Agent "
             "owns candidate choice, waypoint sequencing, and recovery."
         ),

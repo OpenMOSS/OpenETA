@@ -329,7 +329,8 @@ def test_advisor_abstention_is_prominent_in_tool_feedback(tmp_path: Path) -> Non
     assert result.success is True
     assert "advisor abstained" in result.content
     assert "all contacts lie on the tapered top shoulder" in result.content
-    assert "Do not silently choose rank 0" in result.content
+    assert "main Agent may select a candidate" in result.content
+    assert "No additional advisor approval is required" in result.content
 
 
 def test_estimator_surfaces_compatible_strategy_without_applying_it(tmp_path: Path) -> None:

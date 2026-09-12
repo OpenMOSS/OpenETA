@@ -2,6 +2,174 @@
 
 This list tracks the near-term OpenETA agent work derived from the RFC.
 
+## Current delivery and remaining scope — 2026-09-08
+
+This section is the current delivery index; dated sections below retain historical
+evidence, not competing instructions. A checked implementation item is **not** a
+completed live-performance milestone. See [delivery record](diagnostics/scene-discovery-delivery-2026-09-08.md).
+
+### First delivery: recover a diagnosable real-task experiment loop
+
+- [x] Resolve exact Host-published observation/current-observation image IDs in
+  `inspect_evidence`, preserving historical provenance and session file boundaries.
+  The full Object 0 attempt reproduced an actual producer/consumer ID mismatch;
+  it was not merely an invented planner field. See the
+  [continuation record](diagnostics/object0-image-reference-recovery-2026-09-08.md).
+- [x] Reference-scene comparison follow-up: `inspect_evidence` displays up to three
+  views from the latest explicit object-bank lookup beside up to eight original-color
+  candidate crops, plus the existing four-candidate mask-detail page. Name/namespace
+  and pagination remain explicit; no new model selector or semantic gate.
+- [ ] Establish reliable benefit from reference comparison in fresh standard Luna
+  runs; distinguish one successful identification from repeated task performance.
+  See [reference experiment](diagnostics/reference-scene-comparison-2026-09-08.md).
+- [x] Recommend full fixed-agentview SAM3 `prompt="object"` proposals for ambiguous
+  named objects, then Agent comparison with original-color crops and optional bank
+  references. Keep named-text/point alternatives; no mandatory task-state machine
+  or Host semantic selection. Backend proposals do not guarantee every object is found.
+- [x] Untinted SAM3 crops; `inspect_evidence` pages stored detection bundles four
+  candidates at a time or opens a session-owned image. Preserve IDs, expose
+  `next_offset`, and attach the requested image to the next actual model input.
+  Viewing does not rerun inference, refresh epochs, select identity or authorize motion.
+- [x] Explicit initial identity-parameter normalization feedback; Agent can correct
+  a prior misidentification even after verifier `match`, with the exact old anchor
+  and reason. Verifier opinions remain advice, not identity-repair vetoes.
+- [x] Replace duplicated `open_questions` payloads in `unresolved_obligations`
+  with references. Keep unresolved safety/uncertainty information.
+- [x] Retain whitelisted known usage and validation-failure phase when grasp advisor
+  returns invalid advice; unavailable transport usage remains unknown.
+- [x] Standard batch Ctrl-C writes an atomic partial report (exit 130), retains
+  observed session/usage/cleanup, and marks rollout interruption. Unsettled calls
+  remain unknown; this is not proof of provider cancellation or a complete cost ledger.
+- [x] One fresh standard Luna validation: scene discovery → correct semantic
+  selection → grasp input. Reference-comparison session `74ad399a…` correctly
+  selected the blue soup can and returned 10 AnyGrasp candidates. This is not
+  repeated reliability or physical grasp acceptance; see the reference experiment.
+  Earlier session `555f7523…`: `object` returned seven candidates and the new viewer
+  executed; Luna still selected the wrong foreground can without querying the bank
+  or paging further. Stopped before grasp execution, 142130 recorded main tokens.
+- [ ] Following correct selection: real approach → close → attachment/lift evidence.
+  Preserve failures and actual endpoints; do not infer attachment from command success.
+- [ ] Full Object 0 official success, then Spatial 0 and Long 9; retain Goal 0,
+  Object 0 and Long 0 baseline coverage. Luna only, standard batch, per-task
+  15M known tokens / 160 turns / 320 tools / 10800 seconds.
+- [ ] Collaborator review of new viewer and changed identity/checker contracts.
+  `inspect_evidence` remains declared, not verified; reviewed approval hashes unchanged.
+
+Latest full verification: 2464 passed / 32 skipped / one reviewed-authority failure;
+36/36 tools have deterministic request parity. An additional image-ID provider-input
+case passed in the subsequent 75-test focused run. See the continuation record for
+current verification and the delivery record for earlier experiment/cleanup evidence.
+
+### Remaining implementation and acceptance (not dropped from this delivery)
+
+- [ ] **Active perception / HV-03:** compiled-grasp-free entry, weak localization
+  before a usable mask, geometric diversity/workspace ranking, fresh wrist
+  projection handoff and cross-view instance continuity. Keep fixed agentview
+  semantics; separate grasp refinement from observation planning. Resolve the
+  bootstrapping/projection contract before making the suggested design mandatory.
+- [ ] **Object/part / HV-04/05:** distinct object identity and graspable-part masks,
+  part-level geometry vocabulary, independent consumers and multi-object selection;
+  do not erase object identity when choosing a handle.
+- [ ] **Placement / issue #12, HV-07:** frozen pre-grasp AnyPlace inputs usable on
+  first placement request after carrying; enclosed-cavity whole-object insertion,
+  release stability and door clearance; actual Long 9 regression.
+- [ ] **Geometry/control / HV-01/02, I27-08:** GraspGenX full SE(3) origin convention,
+  final compiled gripper geometry visualization/checks, known-reachable LIBERO IK
+  coverage and controller recovery. Structured no-op receipts must not claim an
+  unchanged world solely from zero controller steps.
+- [ ] **Context / I27-01–08, HV-09:** audit remaining compression/list/scalar paths,
+  full-result recovery and native non-image browsing, namespace mappings,
+  initialization observation reuse, redundant transitions and actual image budgets.
+  Existing text-page/grep and new image viewer are partial implementations, not
+  closure of all issue #27 acceptance criteria.
+- [ ] **Lifecycle/accounting / issue #12, HV-06/08/09:** complete all-role token and
+  failed-call accounting, nested manual cancellation and provider cancellation,
+  shared deadlines/operation leases, crash/orphan recovery, disk quotas and durable
+  state publication. Local Ctrl-C snapshots do not solve distributed cancellation.
+- [ ] **Backend compatibility:** CGN trusted real-weight import-order integration;
+  cuRobo MESH/Warp compatibility before claiming mesh collision support. Do not
+  bypass restricted checkpoint loading or private dependency ownership.
+- [ ] **Migration/release:** stable bundle-only promotion and removal of legacy
+  branches after live evidence/review; default stable profile remains unchanged.
+- [ ] **Broader acceptance:** RLinf episode, long-horizon model planning, successful
+  safety replan/failure recovery, offline reconstruction/demo replay and full-episode
+  schema coverage. These are not all prerequisites for a bounded Object 0 diagnosis.
+
+## Authorized real-task recovery — 2026-09-08
+
+Current branch: `dev/huaizezheng/luna-task-recovery-2026-09-08`, from the user's
+clean `experimental` snapshot `723bed1`. Reuse the existing object memory bank;
+do not inject simulator oracle identity/coordinates into Agent context. See
+[implementation and fresh batch evidence](diagnostics/luna-task-recovery-2026-09-08.md).
+
+- [x] Local historical-failure fixtures for selection fields, geometry enums and
+  optional nulls, plus existing XML repair regressions. Repeat the actual rejected
+  tool schema in repair feedback; preserve strict admission.
+- [x] Retain retrieved catalog images when visual localization fails without
+  manufacturing identity/pixel/motion evidence; expose labeled appearance images
+  to the main Agent. Add general name-to-appearance and empty-SAM3 recovery guidance.
+- [x] One fresh standard Luna milestone: correct localization → confirmed mask →
+  grasp input, using the existing bank's reference images. Fourth session
+  `74c275b3…` correctly selected alphabet soup and AnyGrasp returned 20 candidates.
+  Earlier three samples failed semantic/view alignment and stopped before motion;
+  this is one accepted chain, not a claim of reliable multi-episode performance.
+- [x] Fix canonical-context image omission: backend now reads selection and
+  localization obligations from `open_questions`; actual provider requests include
+  SAM3 candidate contact sheets. Preserve overview/source/catalog images before
+  crops/history under caps. Add optional reference-only lookup (`localize=false`)
+  and reject copied reference pixels bound to a different packet/camera.
+- [ ] After semantic/input acceptance, verify real approach, grasp and lift.
+  Clearance passed in the fresh standard run; contact and later viewpoint motion
+  failed. The former policy gate blocked close; no grasp/lift accepted. Local recorded-pose
+  A/C replays reproduce contact failure without paying for planner retries.
+- [x] Fix full-scene joint-limit / fixed non-arm velocity conflict: only controlled
+  arm position inequalities belong in the arm QP. Local paired telemetry reduces
+  224 QP failures to zero; all arm limits and collision checks remain. This alone
+  does not fix contact arrival.
+- [ ] Resolve target-entry obstruction: private local telemetry shows finger/target
+  contact despite no protected-world collision. Check actual aperture and validate
+  final compiled geometry after strategy changes, rather than treating native
+  advisor approval or global IK feasibility as proof of safe physical entry.
+  Full pre-opening (measured 99.2%) did not resolve the recorded failure. Native
+  advisor/compiler warnings now state their geometry scope. Final exact IK and
+  controller checks remain; actual contact recovery still needs live validation.
+- [ ] Complete Object 0 with official reward, then extend to Spatial 0 and Long 9.
+  Keep 15M known tokens / 160 turns / 320 tools / 3 hours per task, Luna only.
+
+### Agent-owned recovery, host-owned evidence
+
+See [gate simplification and experiment record](diagnostics/manipulation-autonomy-2026-09-08.md).
+
+- [x] Replace failed-motion release/close vetoes, fixed approach corridor and
+  global residual budgets with visible advisory evidence. Retain exact IK and
+  controller checks; do not manufacture attachment or task success.
+- [x] Permit explicit current same-instance compiled alternatives; prevent
+  cross-object contact binding after planning another grasp.
+- [x] Reference verifier abstain/mismatch is advice, not selection authority.
+  Probe preparation can measure uncertain attachment without requiring prior
+  attachment-like evidence; contradictory visual assessment remains UNKNOWN.
+- [ ] Validate autonomous recovery in fresh standard Luna Object 0; no claim of
+  robust grasp/lift from local unit tests alone. Session `e10fa4cc…` stopped before
+  motion for wrong-can selection despite actual reference/selection images being
+  attached (8 recorded main calls / 269971 known main tokens).
+  Unchanged fresh repeat `637c0314…` also selected the wrong foreground can
+  (6 main calls / 185548 known main tokens), stopping before motion; see the
+  [repeat record](diagnostics/luna-autonomy-repeat-2026-09-08.md).
+- [x] Clarify first-selection identity-parameter feedback: a supplied catalog-like
+  `identity_anchor_id` plus `same_instance` now produces nonblocking explicit
+  normalization feedback; Host creates its own ID and does not claim reuse.
+- [x] Local simulator integration reproduces the 22.421 mm / 0.28195 rad failed
+  contact and verifies subsequent close/open execute through the real harness;
+  failure stays FAIL and attachment evidence stays absent. This is deterministic
+  dispatch evidence, not an autonomous grasp/task-success sample.
+- [ ] Collaborator review of revised gate/checker semantics and generated
+  contracts; existing reviewed-authority hashes are not silently updated.
+
+Historical pre-delivery local suite: 2431 passed / 32 skipped / one existing reviewed-authority
+failure; seven controlled-limit tests separately pass in LIBERO Python, and 62
+focused tests pass after final advisor/compiler wording changes. Shared interface
+review remains pending; no approval hash changes or shared-document writes.
+
 ## Approved bundle / IK / perception direction — 2026-09-07
 
 User approved implementation of typed bundle handoffs, stronger IK search with
@@ -47,9 +215,9 @@ sample. Environment and owned processes were closed and verified.
   joint limit no longer acquires prose claiming a feasible endpoint/executable seed.
   Fresh live validation of the correction remains pending.
   Post-repair full suite: 2387 passed / 25 skipped / one existing authority failure.
-- [ ] Finalize interrupted standard batches durably: environment cancellation
-  closes correctly, but CLI currently omits result.json and leaves rollout status
-  active. Preserve partial usage/termination/cleanup records without claiming task success.
+- [x] Finalize Ctrl-C-interrupted standard batches durably: CLI now writes a
+  partial result and rollout interruption. Unknown remote work/usage stays unknown;
+  process crashes, SIGKILL and distributed cancellation remain in the current backlog.
 - [ ] Finish staged migration after real batch evidence; do not expose dual
   reference branches as the final simplified interface.
 
@@ -92,8 +260,10 @@ Stages 2/3 follow-up (user authorized continuous implementation and experiments)
   different MolmoPoint evidence. Do not inject simulator oracle labels into Agent
   context or treat identity continuity as proof of initial semantic correctness.
 - [ ] Retain bounded diagnostic payload/status/usage for invalid grasp-advisor
-  outputs; current generic error cannot distinguish the invalid decision value
-  or faithfully account for failed-advisor token usage.
+  outputs. Partial (current delivery): validation phase, provider/model, latency
+  and whitelisted known usage survive invalid JSON/decision/candidate responses.
+  Bounded rejected-field summaries and all-role aggregate billing remain open;
+  raw rejected text is not copied into Agent context.
 - [ ] Decide stable promotion / legacy removal after live evidence and required
   review. These slices do not migrate every perception parameter or implement
   compiled-grasp-free active perception.
@@ -493,11 +663,14 @@ evidence. I27-09 is the separately reported remaining weight-loading problem.
     tool's `truncated=false` must not imply that a cropped projection is complete.
 
 - [ ] **I27-04 / P2 — Make stored evidence directly browsable and long lines resumable.**
+  - Current delivery: native `inspect_evidence` opens session images and pages
+    stored SAM3 candidates, verified through final model image input. Other native
+    non-image browsing and the complete issue acceptance remain open.
   - Partial (2026-09-06): existing Python artifact API gained `read_text_page`
     with Unicode/intra-line cursors, path/content-version binding, EOF lookahead
     and unchanged session-root checks. Typed text/JSON paths survive final
-    provider projection. Native non-Python tools and image-opening flow remain
-    unimplemented; new return schemas/cursors need collaborator review.
+    provider projection. This earlier slice did not include native image opening;
+    see the current delivery above. New return schemas/cursors need collaborator review.
   [coding.py](../agent/tools/coding.py) already provides session-scoped
   `artifacts.list_files/list_images/read_json/read_text/grep_text` via Python;
   this is an ergonomics and continuation gap, not absence of artifact storage.
@@ -543,9 +716,12 @@ evidence. I27-09 is the separately reported remaining weight-loading problem.
     mappings; do not silently default all tasks to LIBERO.
 
 - [ ] **I27-07 / P2 — Separate outstanding questions from established grounding evidence.**
+  - Current delivery: obligations reference canonical `open_questions` instead
+    of copying them. Broader world-evidence duplication/selection-transition audits
+    remain open; this is one projection correction, not full closure.
   Refine I27-02 and HV-03/HV-04's identity presentation. In
-  [planner.py](../agent/runtime/planner.py), `unresolved_obligations` starts as
-  `dict(open_questions)` and both fields enter the decision context. The full
+  [planner.py](../agent/runtime/planner.py), `unresolved_obligations` previously
+  started as `dict(open_questions)` and both entered the decision context. The full
   extent of duplication with `world_evidence` still needs prompt-level auditing.
   - Acceptance: define one compact authoritative presentation for identity,
     localization, packet provenance, and verification rationale; other sections

@@ -1569,12 +1569,18 @@ def _attach_grasp_selection_advice(
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+        call_diagnostics = getattr(exc, "advisor_diagnostics", None)
+        if isinstance(call_diagnostics, dict):
+            advice.update(call_diagnostics)
+        else:
+            advice["usage_source"] = "unknown"
         diagnostics.append(
             {
                 "code": "grasp_pose_advisor_unavailable",
                 "error_type": type(exc).__name__,
                 "message": str(exc),
                 "bundle_id": bundle.get("bundle_id"),
+                "call_diagnostics": dict(call_diagnostics or {}),
             }
         )
     details["grasp_selection_advice"] = advice
@@ -1604,9 +1610,9 @@ def _attach_grasp_selection_advice(
         )
         result.content = (
             f"{result.content} Read-only grasp advisor abstained; reason: {reason}. "
-            "Do not silently choose rank 0 or the least-bad candidate. Inspect the "
-            "persisted preview evidence and, when all contacts are unstable, obtain "
-            "a different viewpoint or candidate set before compiling a grasp."
+            "This assessment is advisory. Compare the persisted preview evidence; "
+            "the main Agent may select a candidate, refine geometry, or obtain "
+            "a different view. No additional advisor approval is required."
         )
     elif status == "unavailable":
         result.content = (
@@ -3846,14 +3852,20 @@ def _normalise_sam3_response(
                     "Text grounding failed on this view; it is not evidence that the "
                     "target is absent. Preserve this exact packet/camera for point "
                     "grounding when the attached image still visibly contains the "
-                    "target. Change viewpoint only when visual evidence justifies it."
+                    "target. If the name-to-appearance match is uncertain, consider "
+                    "retrieve_asset_reference for catalog appearance evidence before "
+                    "choosing a foreground point. Point segmentation confirms a region, "
+                    "not the task object's semantic identity. Change viewpoint only "
+                    "when visual evidence justifies it."
                 ),
             }
             content += (
                 f" Same-view recovery anchor: source_packet_id={source_packet_id}, "
                 f"camera_frame_id={source_frame_id}. If the attached image still "
                 "contains the target, keep this exact packet/camera for SAM3 point "
-                "mode or MolmoPoint instead of silently switching views."
+                "mode or MolmoPoint instead of silently switching views. For uncertain "
+                "named-object identity, consider retrieve_asset_reference before pointing; "
+                "a point mask alone does not establish the object's name."
             )
     result = ToolResult(
         True,
@@ -4089,11 +4101,12 @@ def _build_sam3_selection_artifacts(
     output_dir: Path,
     prompt: str,
     visual_limit: int = DEFAULT_SAM3_SELECTION_VISUAL_LIMIT,
+    offset: int = 0,
 ) -> tuple[JsonDict, list[JsonDict]]:
     from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
     original = Image.open(source_image).convert("RGB")
-    visualized = detections[: max(1, visual_limit)]
+    visualized = detections[offset: offset + max(1, visual_limit)]
     artifacts: list[JsonDict] = []
     panels: list[tuple[str, Any]] = [("original", original.copy())]
     bundle_candidates: list[JsonDict] = []
@@ -4132,7 +4145,8 @@ def _build_sam3_selection_artifacts(
         overlay_ref = output_dir / f"{detection_id}.overlay.png"
         overlay.save(overlay_ref, format="PNG")
         crop_box = _sam3_padded_crop_box(bbox, image_size=original.size)
-        crop = overlay.crop(crop_box) if crop_box is not None else overlay.copy()
+        # Identity comparison needs the actual RGB, not the mask's synthetic tint.
+        crop = original.crop(crop_box) if crop_box is not None else original.copy()
         crop_ref = output_dir / f"{detection_id}.crop.png"
         crop.save(crop_ref, format="PNG")
         detection["overlay_ref"] = str(overlay_ref)
@@ -4211,6 +4225,10 @@ def _build_sam3_selection_artifacts(
             "candidate_count": len(detections),
             "visualized_candidate_count": len(visualized),
             "visuals_truncated": len(visualized) < len(detections),
+            "offset": offset,
+            "next_offset": offset + len(visualized) if offset + len(visualized) < len(detections) else None,
+            "crop_semantics": "original_rgb_untinted",
+            "coverage": "backend_proposals_not_complete_scene_inventory",
             "candidates": bundle_candidates,
         },
         artifacts,

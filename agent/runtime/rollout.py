@@ -258,6 +258,21 @@ class RolloutRecorder:
         except Exception as exc:  # noqa: BLE001
             self._remember_error("record_transition", exc)
 
+    def record_episode_interruption(self, *, episode_id: str, snapshot: JsonDict) -> None:
+        """Persist interruption without pretending a pending remote call settled."""
+        if not self.enabled:
+            return
+        try:
+            with self._lock:
+                self._append_prepared("episodes.jsonl", EPISODE_EVENT_SCHEMA_VERSION, {
+                    "session_id": self.session_id, "episode_id": episode_id,
+                    "event": "interrupted", "timestamp_s": time.time(), "snapshot": snapshot,
+                })
+                self._update_manifest({"status": "interrupted", "updated_at_s": time.time(),
+                                       "interruption": snapshot})
+        except Exception as exc:  # noqa: BLE001 - recording cannot block cleanup.
+            self._remember_error("record_episode_interruption", exc)
+
     def record_episode_result(
         self,
         *,

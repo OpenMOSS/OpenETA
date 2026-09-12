@@ -550,6 +550,88 @@ def test_parallel_harness_isolates_worker_failure_and_still_cleans_up() -> None:
     assert sorted(state["closed"]) == ["episode-0", "episode-1", "episode-2"]
 
 
+@pytest.mark.parametrize("settles_during_interrupt", [False, True])
+def test_keyboard_interrupt_preserves_settled_and_unknown_entries(monkeypatch, settles_during_interrupt):
+    import agent.runtime.parallel as parallel
+    from types import SimpleNamespace
+
+    started = threading.Event()
+    released = threading.Event()
+    closed = threading.Event()
+    returned = threading.Event()
+
+    class Runner:
+        total_tokens = 321
+        tool_call_count = 2
+        token_usage_sources = {"provider_reported": 1}
+        runtime = SimpleNamespace(memory=SimpleNamespace(session_id="partial-session"))
+
+        def run(self, **kwargs):
+            started.set()
+            released.wait(timeout=2)
+            if settles_during_interrupt:
+                raise RuntimeError("interrupted before EpisodeResult exists")
+            return EpisodeResult(task=kwargs["task"], session_id="partial-session")
+
+        def interrupt(self, *, code):
+            if settles_during_interrupt:
+                released.set()
+                assert returned.wait(timeout=2)
+                return {"ok": True, "close_state": "closed"}
+            return {"ok": False, "reason": "cleanup_pending"}
+
+    def close():
+        closed.set()
+        return {"ok": True}
+
+    def interrupted_iterator(futures):
+        assert started.wait(timeout=2)
+        next(iter(futures)).add_done_callback(lambda _: returned.set())
+        raise KeyboardInterrupt
+        yield  # generator boundary mirrors as_completed
+
+    monkeypatch.setattr(parallel, "as_completed", interrupted_iterator)
+    harness = ParallelEpisodeHarness(lambda spec, batch: ParallelEpisodeWorker(Runner(), close), concurrency=1)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            harness.run([_spec(0), _spec(1)], batch_id="interrupted-test")
+        report = harness.interrupted_report
+        assert report["performance_sample_complete"] is False
+        assert report["outcomes"][0]["known_usage"]["total_tokens"] == 321
+        assert report["outcomes"][0]["session_id"] == "partial-session"
+        assert report["outcomes"][0]["interrupt_cleanup"]["ok"] is settles_during_interrupt
+        assert all(item["episode"] is None for item in report["outcomes"])
+        assert all(item["remote_call_state"] == "unknown" for item in report["outcomes"])
+        assert "rates" not in report
+        before = json.dumps(report, sort_keys=True)
+    finally:
+        released.set()
+        assert closed.wait(timeout=2)
+    assert json.dumps(harness.interrupted_report, sort_keys=True) == before
+
+
+def test_batch_cli_writes_interrupted_report_and_returns_130(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"episodes": [{"task": "pick", "env_id": "fixture"}]}))
+    payload = {"status": "interrupted", "usage_complete": False, "outcomes": []}
+
+    class Harness:
+        interrupted_report = payload
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(batch_eval, "ParallelEpisodeHarness", Harness)
+    monkeypatch.setattr(batch_eval, "build_mcp_episode_worker_factory", lambda **kwargs: object())
+    assert main(["--manifest", "manifest.json", "--output", "result.json"]) == 130
+    assert json.loads((tmp_path / "result.json").read_text()) == payload
+    assert not list(tmp_path.glob(".result.json.*"))
+
+
 def test_parallel_harness_interrupt_propagates_to_active_runner() -> None:
     started = threading.Event()
     interrupted = threading.Event()

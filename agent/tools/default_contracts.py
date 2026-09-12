@@ -207,6 +207,7 @@ def build_default_contract_overrides(
 
     specs = {spec.name: spec for spec in tool_specs}
     builders = {
+        "inspect_evidence": _inspect_evidence,
         "observe": _observe,
         "create_simulator_env": _create_simulator_env,
         "close_simulator_env": _close_simulator_env,
@@ -271,20 +272,9 @@ def build_default_contract_overrides(
 
 
 _COMPILED_GRASP_REPAIR_CODES = (
-    "attached_release_after_failed_motion",
-    "compiled_clearance_not_reached",
-    "compiled_contact_approach_misaligned",
-    "compiled_contact_orientation_misaligned",
-    "compiled_contact_not_reached",
-    "compiled_contact_receipt_mismatch",
-    "compiled_contact_receipt_missing",
-    "compiled_contact_receipt_stale",
     "compiled_grasp_adjustment_invalid",
-    "compiled_grasp_adjustment_out_of_bounds",
     "compiled_grasp_adjustment_stale",
-    "compiled_grasp_adjustment_superseded",
     "compiled_grasp_adjustment_unresolved",
-    "compiled_grasp_adjustment_unverified_orientation_policy",
     "compiled_grasp_target_superseded",
 )
 
@@ -385,7 +375,7 @@ def _runtime_gate_bindings(tool_name: str) -> tuple[GateCheckBinding, ...]:
         bindings.append(
             GateCheckBinding(
                 check_id="runtime.compiled_grasp_provenance",
-                description="Contact and close cannot treat stale or failed grasp evidence as success.",
+                description="Supplied motion references must be valid; failed grasp/placement outcomes are advisory, not gripper vetoes.",
                 implementation="agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
                 repair_codes=_COMPILED_GRASP_REPAIR_CODES,
                 applies_when="the action is geometrically tied to a compiled targeted grasp",
@@ -973,6 +963,7 @@ def _retrieve_asset_reference(spec: ToolSpecLike) -> ToolContract:
                 "target_object": _string(minLength=1),
                 "source_packet_id": _string(minLength=1),
                 "camera_frame_id": _string(minLength=1),
+                "localize": {"type": "boolean", "default": True},
             },
             required=("environment", "target_object", "source_packet_id"),
         ),
@@ -998,6 +989,14 @@ def _retrieve_asset_reference(spec: ToolSpecLike) -> ToolContract:
                 ),
             ),
             OutcomeContract(
+                "reference_images_available", True,
+                _outputs(("reference_images", "localization_status", "identity_confirmed"), {
+                    "reference_images": _array(_string(), minItems=1),
+                    "localization_status": _string(enum=["not_requested"]),
+                    "identity_confirmed": {"const": False},
+                }),
+            ),
+            OutcomeContract(
                 "reference_service_unavailable",
                 False,
                 _object(additional_properties=True),
@@ -1009,7 +1008,7 @@ def _retrieve_asset_reference(spec: ToolSpecLike) -> ToolContract:
         host_resolution=HostResolutionContract(
             mode="object_memory_plus_packet",
             resolver="object-memory reference handler and packet resolver",
-            agent_parameters=("environment", "target_object", "source_packet_id", "camera_frame_id"),
+            agent_parameters=("environment", "target_object", "source_packet_id", "camera_frame_id", "localize"),
             resolved_parameters=("scene image", "ranked canonical references", "localizer inputs"),
             freshness_dimensions=("source packet id",),
             invalidated_by=("unknown packet", "ambiguous/low-confidence memory resolution"),
@@ -1263,8 +1262,9 @@ def _select_sam3(spec: ToolSpecLike) -> ToolContract:
             "detection_id": _string(minLength=1),
             "selection_confidence": _number(minimum=0, maximum=1),
             "reason": _string(),
-            "identity_anchor_id": _string(),
+            "identity_anchor_id": _string("Omit on first target selection; Host creates an anchor. For later target evidence copy the exact active anchor, not a catalog name."),
             "identity_relation": _string(
+                "Omit on first selection. With an existing anchor, explicitly confirm continuity, advance to another required target, or correct a misidentification.",
                 enum=[
                     "same_instance",
                     "new_task_target",
@@ -1917,12 +1917,7 @@ def _prepare_attachment_probe(spec: ToolSpecLike) -> ToolContract:
         gate=GateContract(
             checks=(
                 "compiled grasp exists and target evidence is current",
-                "gripper close is latched and measured aperture is not fully open",
-                (
-                    "a tentative carried-object proxy exists, or an articulated target "
-                    "has a matching reached compiled-contact receipt when that proxy is "
-                    "not applicable"
-                ),
+                "gripper command, aperture and proxy are reported as non-blocking probe context",
                 "linear direction is non-zero or arc has 2-5 bounded segments",
                 "total probe length is 0.05 m within tolerance",
                 "current EEF pose and exactly two required RGB views exist",
@@ -2132,7 +2127,7 @@ def _motion_contract(
                 "receipt exists and is executable",
                 "receipt pose policy and tolerances match the frozen preview",
                 "receipt epochs are current",
-                "compiled residual budget is respected when applicable",
+                "supplied compiled geometry is current; residuals are advisory",
                 "collision capability matches deferred-collision authorization",
             ),
             fail_closed=True,
@@ -2669,6 +2664,29 @@ def _save_memory(spec: ToolSpecLike) -> ToolContract:
             fail_closed=True,
         ),
         source_paths=("agent/runtime/runtime.py", "agent/runtime/memory.py"),
+    )
+
+
+def _inspect_evidence(spec: ToolSpecLike) -> ToolContract:
+    image_reference = _string("Exact Host-published observation/current_observation image evidence_id or session-owned saved image path. Historical viewing never refreshes evidence.", minLength=1)
+    return _explicit_contract(
+        spec,
+        request_schema={"type": "object", "additionalProperties": False,
+                        "properties": {"bundle_id": _string(pattern="^bnd-[0-9a-f]{32}$"),
+                                       "offset": _integer(minimum=0), "image_ref": image_reference},
+                        "oneOf": [
+            _object({"image_ref": image_reference}, required=("image_ref",)),
+            _object({"bundle_id": _string(pattern="^bnd-[0-9a-f]{32}$"),
+                     "offset": _integer(minimum=0)}, required=("bundle_id",)),
+        ]},
+        outcomes=(OutcomeContract("completed", True, _object(additional_properties=True)),
+                  _operational_failure()),
+        maturity=ContractMaturity.DECLARED,
+        gate=GateContract(checks=("exact registered bundle hash/session/type or session-owned image",
+                                  "four mask-detail candidates; optional latest-reference comparison with up to eight crops and three reference views",
+                                  "bounded page/image size; no target selection or motion authorization")),
+        source_paths=("agent/tools/evidence_inspection.py",),
+        coverage_gaps=("New read-only interface pending collaborator review; not promoted to verified authority.",),
     )
 
 

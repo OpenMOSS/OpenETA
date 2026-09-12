@@ -2117,7 +2117,7 @@ def test_decision_state_is_bounded_index_over_packets_bundles_and_last_effect(
     assert "grasp_pose_estimate" in state["available_tools"]
 
 
-def test_superseded_target_blocks_old_contact_but_allows_clearance_waypoint() -> None:
+def test_superseded_target_blocks_explicit_binding_not_independent_recovery() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
     memory.save_fact(
@@ -2207,11 +2207,9 @@ def test_superseded_target_blocks_old_contact_but_allows_clearance_waypoint() ->
     )
 
     assert graph["inconsistencies"][0]["code"] == "compiled_grasp_target_superseded"
-    assert "sam3:sam3-old:detection_001" in contact_errors[0]
-    assert "sam3:sam3-current:detection_002" in contact_errors[0]
-    assert "current bundle_id shown in host_resolved_inputs" in contact_errors[0]
+    assert contact_errors == []  # Independent geometry does not reuse contact authority.
     assert clearance_errors == []
-    assert close_errors
+    assert close_errors == []
 
     tools = build_default_tool_registry()
     tools.bind_handler("move_to", lambda _context: ToolResult(True))
@@ -2232,12 +2230,17 @@ def test_superseded_target_blocks_old_contact_but_allows_clearance_waypoint() ->
         memory=memory,
     )
 
-    assert blocked_plan.status is PipelineStatus.BLOCKED
-    assert blocked_plan.metadata["provenance_integrity_gate"]["blocked"] is True
-    assert "sam3:sam3-current:detection_002" in blocked_plan.tool_calls[0].reason
+    assert blocked_plan.status is PipelineStatus.EXECUTED
+    # Explicitly reusing the superseded contact reference remains forbidden.
+    assert _validate_compiled_grasp_target_freshness(
+        PlannerDecision(action_type="tool_call", action="move_to", parameters={
+            "target_pose": {"frame": "world", "xyz": [0.1, 0.2, 0.15],
+                            "compiled_grasp_id": "compiled-old", "waypoint_role": "grasp_contact"}}),
+        tool_context=tool_context,
+    )
 
 
-def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
+def test_failed_compiled_contact_allows_close_without_fabricating_attachment() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
     memory.save_fact(
@@ -2395,13 +2398,13 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         memory=memory,
     )
 
-    assert blocked.status is PipelineStatus.BLOCKED
-    assert blocked.metadata["repair_bundle"]["code"] == "compiled_contact_not_reached"
-    reason = blocked.tool_calls[0].reason
-    assert "reached_target=false" in reason
-    assert "actual_eef_xyz=[0.1, 0.2, 0.16]" in reason
-    assert "position_error_m=0.06 (limit=0.01)" in reason
-    assert "Collision diagnostics from the preceding arm motion do not block" in reason
+    assert blocked.status is PipelineStatus.EXECUTED
+    advice = blocked.tool_calls[0].result["details"]["manipulation_advisories"]
+    contact_advice = next(item for item in advice if item["code"] == "latest_contact_execution")
+    assert contact_advice["blocking"] is False
+    assert contact_advice["evidence"]["reached_target"] is False
+    assert contact_advice["evidence"]["actual_xyz"] == [0.1, 0.2, 0.16]
+    assert memory.attachment_evidence() is None
 
     memory.add_action(
         contact_action(
@@ -2456,10 +2459,8 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         skills=build_default_skill_registry(),
         memory=memory,
     )
-    assert excessive_orientation_error.status is PipelineStatus.BLOCKED
-    assert "orientation_error_rad=0.301 (limit=0.3)" in (
-        excessive_orientation_error.tool_calls[0].reason or ""
-    )
+    assert excessive_orientation_error.status is PipelineStatus.EXECUTED
+    assert memory.latest_compiled_contact_execution()["orientation_error_rad"] == 0.301
 
     memory.add_action(contact_action(reached=True, steps=3, collision={"detected": False}))
     allowed = pipeline.compile(
@@ -2538,13 +2539,12 @@ def test_failed_compiled_contact_receipt_blocks_gripper_close() -> None:
         skills=build_default_skill_registry(),
         memory=memory,
     )
-    assert cross_target_mismatch.status is PipelineStatus.BLOCKED
-    assert cross_target_mismatch.metadata["repair_bundle"]["code"] == (
-        "compiled_contact_receipt_mismatch"
-    )
+    assert cross_target_mismatch.status is PipelineStatus.EXECUTED
+    assert memory.resolve_active_attachment_candidate() is None
+    assert memory.attachment_evidence() is None
 
 
-def test_release_is_blocked_after_failed_attached_motion_with_actionable_evidence() -> None:
+def test_failed_attached_motion_is_advisory_not_release_veto() -> None:
     memory = AgentMemory()
     memory.start_session(task="place the milk in the basket")
     memory.save_fact(
@@ -2619,14 +2619,10 @@ def test_release_is_blocked_after_failed_attached_motion_with_actionable_evidenc
         memory=memory,
     )
 
-    assert blocked.status is PipelineStatus.BLOCKED
-    assert blocked.metadata["repair_bundle"]["code"] == (
-        "attached_release_after_failed_motion"
-    )
-    reason = blocked.tool_calls[0].reason or ""
-    assert "actual_eef_xyz=[-0.05, 0.26, 0.25]" in reason
-    assert "milk_1_g1" in reason and "basket_1_g4" in reason
-    assert "successful subsequent carrying motion clears this check" in reason
+    assert blocked.status is PipelineStatus.EXECUTED
+    advice = blocked.tool_calls[0].result["details"]["manipulation_advisories"]
+    assert any(item["code"] == "previous_motion_not_reached" and item["blocking"] is False for item in advice)
+    assert memory.transition_ledger()[-1]["verdict"] == "FAIL"
 
     # A later, fresh near-empty closed aperture invalidates the old PASS rather
     # than trapping the Agent between a phantom carried-object collision and a
@@ -2728,7 +2724,7 @@ def test_camera_pose_to_world_reference_remains_in_world_evidence() -> None:
     )
 
 
-def test_compiled_contact_rejects_cross_axis_sweep_without_requiring_a_stage() -> None:
+def test_cross_axis_recovery_defers_to_exact_ik_not_corridor_heuristic() -> None:
     contact_pose = {
         "frame": "world",
         "compiled_grasp_id": "compiled-corridor",
@@ -2762,11 +2758,8 @@ def test_compiled_contact_rejects_cross_axis_sweep_without_requiring_a_stage() -
         parameters={"target_pose": dict(contact_pose)},
     )
 
-    assert blocked is not None
-    assert blocked.startswith("compiled_contact_approach_misaligned:")
-    assert "current_eef_xyz=[0.0, 0.08, 0.25]" in blocked
-    assert "lateral_offset_m=" in blocked
-    assert "not a required hover/descend task stage" in blocked
+    assert blocked is None
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters={"target_pose": contact_pose})
 
     aligned_memory = AgentMemory()
     aligned_memory.start_session(task="pick the cube")
@@ -2795,7 +2788,7 @@ def test_compiled_contact_rejects_cross_axis_sweep_without_requiring_a_stage() -
     ) is None
 
 
-def test_compiled_contact_rejects_large_pending_rotation_without_task_stage() -> None:
+def test_large_rotation_recovery_defers_to_exact_ik() -> None:
     contact_pose = {
         "frame": "world",
         "compiled_grasp_id": "compiled-orientation-entry",
@@ -2834,10 +2827,8 @@ def test_compiled_contact_rejects_large_pending_rotation_without_task_stage() ->
         parameters={"target_pose": dict(contact_pose)},
     )
 
-    assert blocked is not None
-    assert blocked.startswith("compiled_contact_orientation_misaligned:")
-    assert "orientation_delta_rad=1.5708 (limit=0.30)" in blocked
-    assert "not a required alignment stage" in blocked
+    assert blocked is None
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters={"target_pose": contact_pose})
 
     contact_pose["rotation_matrix"] = [
         [0.98006658, -0.19866933, 0.0],
@@ -2858,7 +2849,7 @@ def test_compiled_contact_rejects_large_pending_rotation_without_task_stage() ->
     ) is None
 
 
-def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> None:
+def test_failed_clearance_does_not_veto_new_checked_contact() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
     compiled_id = "compiled-clearance"
@@ -2960,18 +2951,9 @@ def test_failed_agent_chosen_clearance_receipt_blocks_dependent_contact() -> Non
         memory=memory,
     )
 
-    assert blocked.status is PipelineStatus.BLOCKED
-    assert blocked.metadata["repair_bundle"]["code"] == (
-        "compiled_clearance_not_reached"
-    )
-    reason = blocked.tool_calls[0].reason
-    assert "reached_target=false" in reason
-    assert "actual_eef_xyz=[0.098, 0.203, 0.247]" in reason
-    assert "orientation_error_rad=0.45" in reason
-    assert "position<=0.010m and orientation<=0.30rad" in reason
-    assert blocked.metadata["repair_bundle"]["execution_evidence"][
-        "latest_compiled_clearance_execution"
-    ]["stop_reason"] == "iteration_limit"
+    assert blocked.status is PipelineStatus.EXECUTED
+    assert memory.latest_compiled_clearance_execution()["reached_target"] is False
+    assert memory.latest_compiled_clearance_execution()["stop_reason"] == "iteration_limit"
 
     memory.add_action(clearance_action(reached=True))
     assert (
@@ -3052,7 +3034,7 @@ def test_near_clearance_residual_allows_agent_chosen_contact_without_stage() -> 
     )
 
     assert (
-        memory._compiled_contact_clearance_gate_error(
+        memory.compiled_grasp_target_gate_error(
             tool_name="move_to",
             parameters={"target_pose": dict(contact_pose)},
         )
@@ -3060,7 +3042,7 @@ def test_near_clearance_residual_allows_agent_chosen_contact_without_stage() -> 
     )
 
 
-def test_pipeline_reports_compiled_grasp_residual_budget_repair() -> None:
+def test_pipeline_reports_residual_advice_without_budget_veto() -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the cube")
     memory.add_observation(_observation())
@@ -3104,17 +3086,9 @@ def test_pipeline_reports_compiled_grasp_residual_budget_repair() -> None:
         memory=memory,
     )
 
-    assert blocked.status is PipelineStatus.BLOCKED
-    assert blocked.metadata["repair_bundle"]["code"] == (
-        "compiled_grasp_adjustment_out_of_bounds"
-    )
-    assert "per-call limit of 0.020 m" in blocked.tool_calls[0].reason
-    assert "Last accepted residual" in blocked.tool_calls[0].reason
-    assert "not a limit on travel distance from the current EEF" in (
-        blocked.tool_calls[0].reason
-    )
-    assert "exact host reference xyz [0.1, 0.2, 0.15]" in blocked.tool_calls[0].reason
-    assert "omit compiled_grasp_id and waypoint_role" in blocked.tool_calls[0].reason
+    assert blocked.status is PipelineStatus.EXECUTED
+    advice = blocked.tool_calls[0].result["details"]["manipulation_advisories"]
+    assert any(item["code"] == "compiled_geometry_reference" for item in advice)
 
 
 def test_position_only_compiled_move_requires_matching_feasible_ik_policy() -> None:
@@ -3150,8 +3124,8 @@ def test_position_only_compiled_move_requires_matching_feasible_ik_policy() -> N
         tool_name="move_to",
         parameters={"target_pose": target_pose, "tolerance": 0.01},
     )
-    assert unverified is not None
-    assert "unverified_orientation_policy" in unverified
+    assert unverified is None
+    assert memory.ik_execution_gate_error(tool_name="move_to", parameters={"target_pose": target_pose})
 
     memory.add_action(
         EnvAction(

@@ -1,0 +1,19 @@
+{
+  "name": "openeta",
+  "version": "0.1.0+codex.20260911080118",
+  "description": "Operate an OpenETA simulation through existing Host contracts and native MCP tools.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OpenETA",
+    "shortDescription": "Inspect and operate a bounded simulation episode.",
+    "longDescription": "Codex plans; the existing OpenETA Host validates and executes each command.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use OpenETA to inspect and operate the configured simulation episode."
+  },
+  "mcpServers": "./.mcp.json"
+}

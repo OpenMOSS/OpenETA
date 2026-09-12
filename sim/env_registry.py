@@ -282,7 +282,7 @@ def make_env(
         suite_name = parts[0]
         task_idx = int(parts[1]) if len(parts) > 1 else 0
         raw = _make_libero_direct_worker(suite_name, task_idx, task_name,
-                                         image_width=image_width, image_height=image_height)
+                                         image_width=image_width, image_height=image_height, seed=seed)
         ue = UnifiedEnv(raw, render_mode=render_mode)
         ue._include_objects = include_objects
         return ue
@@ -416,7 +416,8 @@ def _make_maniskill_direct(task_id: str, render_mode: str | None = "rgb_array",
 
 
 def _make_libero_direct(task: Any, render_mode: str | None = "rgb_array",
-                         image_width: int | None = None, image_height: int | None = None) -> gym.Env:
+                         image_width: int | None = None, image_height: int | None = None,
+                         seed: int = 0) -> gym.Env:
     """Create a LIBERO OffScreenRenderEnv from a Benchmark Task."""
     import sys, os
     lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
@@ -469,8 +470,11 @@ def _make_libero_direct(task: Any, render_mode: str | None = "rgb_array",
         kwargs["camera_widths"] = image_width
     if image_height is not None:
         kwargs["camera_heights"] = image_height
-    raw_env = OffScreenRenderEnv(**kwargs)
-    return _LibEnvWrapper(raw_env, controller=controller, controller_profile=profile)
+    from sim.libero_seed import LiberoRandomState
+    rng = LiberoRandomState(seed)
+    with rng.scope():
+        raw_env = OffScreenRenderEnv(**kwargs)
+    return _LibEnvWrapper(raw_env, controller=controller, controller_profile=profile, seed=seed)
 
 
 class _LibEnvWrapper(gym.Env):
@@ -481,11 +485,14 @@ class _LibEnvWrapper(gym.Env):
         *,
         controller: str = "OSC_POSE",
         controller_profile: str = "osc_pose",
+        seed: int = 0,
     ):
         super().__init__()
         self._env = raw_env
         self._controller = str(controller)
         self._controller_profile = str(controller_profile)
+        from sim.libero_seed import LiberoRandomState
+        self._reset_rng = LiberoRandomState(seed)
         # OSC_POSE consumes 6 Cartesian deltas + gripper. JOINT_VELOCITY
         # consumes 7 Panda joint velocities + gripper. Keeping this at the
         # historical 7 broke the shared gripper tools in Mink environments
@@ -582,7 +589,14 @@ class _LibEnvWrapper(gym.Env):
         }
 
     def reset(self, *, seed=None, options=None):
-        obs = self._env.reset()
+        if seed is not None:
+            self._reset_rng.reseed(seed)
+        with self._reset_rng.scope():
+            if seed is not None:
+                self._env.seed(self._reset_rng.seed)
+            obs = self._env.reset()
+            from sim.libero_initial_state import apply_initial_state
+            obs = apply_initial_state(self, obs)
 
         self._last_frame = obs.get("agentview_image") if isinstance(obs, dict) else None
         return obs, {}
@@ -636,7 +650,8 @@ class _LibEnvWrapper(gym.Env):
 
 
 def _make_libero_direct_worker(suite_name: str, task_idx: int, _unused: str,
-                                image_width: int | None = None, image_height: int | None = None) -> gym.Env:
+                                image_width: int | None = None, image_height: int | None = None,
+                                seed: int = 0) -> gym.Env:
     """Create a LIBERO env from suite name + task index."""
     import sys, os
     lib_dir = os.environ.get("LIBERO_DIR", "/home/yfzhang/nvme1/LIBERO")
@@ -645,7 +660,9 @@ def _make_libero_direct_worker(suite_name: str, task_idx: int, _unused: str,
     from libero.libero.benchmark import get_benchmark
     b = get_benchmark(suite_name)()
     t = b.get_task(task_idx)
-    env = _make_libero_direct(t, image_width=image_width, image_height=image_height)
+    env = _make_libero_direct(t, image_width=image_width, image_height=image_height, seed=seed)
+    from sim.libero_initial_state import configure_initial_state
+    configure_initial_state(env, b, task_idx)
     env._task_description = t.language
     env._env._task_description = t.language
     return env

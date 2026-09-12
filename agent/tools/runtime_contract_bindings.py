@@ -131,7 +131,10 @@ def _resolve_sam3_input(parameters: JsonDict, memory: Any) -> JsonDict:
         str(parameters.get("camera_frame_id") or ""),
     )
     mode = str(parameters.get("mode") or "text").lower()
-    if mode == "points" or parameters.get("points") is not None:
+    reference_error = memory.reference_pixel_source_error(parameters, source)
+    if reference_error:
+        raise HostResolutionFailure("same_view_packet_mismatch", reference_error)
+    if mode == "points" or parameters.get("points") is not None or parameters.get("positive_points") is not None:
         same_view_error = memory.same_view_point_grounding_source_error([source])
         if same_view_error:
             raise HostResolutionFailure(
@@ -155,6 +158,7 @@ def _resolve_retrieve_asset_reference_input(
         "target_object": parameters.get("target_object"),
         "scene_image": source.get("rgb"),
         "_source_observation": source,
+        **({"localize": parameters["localize"]} if "localize" in parameters else {}),
     }
 
 

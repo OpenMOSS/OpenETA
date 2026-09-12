@@ -229,6 +229,29 @@ def profile_guidance(profile):
         return {}
     return {
         "name": profile,
+        "object_identity_guidance": (
+            "For unfamiliar names or similar packages, first retrieve_asset_reference(localize=false) "
+            "for the task object when the bank is available. Then use a full-agentview "
+            "SAM3 text call with prompt='object' to propose scene instances, then compare original-color "
+            "candidate crops against the task and catalog references. inspect_evidence automatically "
+            "shows the latest retrieved references beside up to eight original-color candidate crops; "
+            "check its reference_object label and compare every plausible candidate before selecting. Use it "
+            "to page the detection bundle or open a saved image. Backend proposals may miss objects; "
+            "do not assume a complete inventory or equate point-prompt masks with different instances. "
+            "This is a recommended discovery strategy, not a required tool order. "
+            "Establish name-to-appearance evidence before committing a named object as the task target. "
+            "For catalog objects, especially branded packages or several similar containers, prefer "
+            "retrieve_asset_reference early to compare the existing object memory bank's reference images "
+            "against the scene, unless prior verified appearance evidence already resolves the identity. "
+            "Prefer localize=false for a direct reference-image lookup, then make your own visual "
+            "comparison; the optional isolated localizer can also misidentify an object. "
+            "A plausible location, a can-shaped mask, or successful point segmentation does not establish "
+            "which named object it is. A failed text prompt is a reason to reconsider semantic identity, "
+            "not just to point at the same guessed object. Use an object-only "
+            "target_object phrase and the current environment/source packet; compare references with the "
+            "actual scene before choosing a mask. Retrieval/localizer output is not proof of scene identity. "
+            "You choose whether to query; no task step or tool order is mandated."
+        ),
         "bundle_only_tools": sorted(migrated_tools(profile)),
         "scope": ("Partial migration: IK, placement, probes and trajectories retain their listed contracts."
                   if profile == BUNDLE_STAGE1 else

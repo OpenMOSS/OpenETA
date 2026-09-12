@@ -387,6 +387,7 @@ def build_object_memory_reference_handler(
                 ],
             )
 
+        reference_paths: list[Path] = []
         try:
             session_root = artifact_session_root(
                 resolved_root,
@@ -401,6 +402,27 @@ def build_object_memory_reference_handler(
                 )
                 for reference in bundle.references
             ]
+            if not reference_paths:
+                raise ValueError("object memory returned no reference images")
+            if context.parameters.get("localize") is False:
+                return make_tool_result(
+                    context, success=True,
+                    content="Retrieved catalog appearance references only. Compare them with the live scene; no target pixel or instance identity was established.",
+                    semantic_outcome="reference_images_available",
+                    outputs={
+                        "reference_images": [str(path) for path in reference_paths],
+                        "target_object": bundle.asset_id,
+                        "environment": bundle.namespace,
+                        "reference_status": "retrieved",
+                        "localization_status": "not_requested",
+                        "identity_confirmed": False,
+                    },
+                    artifacts=[{
+                        "type": "asset_reference_image", "kind": "rgb",
+                        "tool": context.name, "path": str(path),
+                        "target_object": bundle.asset_id, "environment": bundle.namespace,
+                    } for path in reference_paths],
+                )
             scene_size = _image_size(scene_path)
             localized = localizer.localize(
                 environment=environment,
@@ -419,7 +441,19 @@ def build_object_memory_reference_handler(
                 context,
                 success=False,
                 content=f"Reference localization failed: {exc}",
-                outputs={"reason": "reference_localization_failed"},
+                outputs={
+                    "reason": "reference_localization_failed",
+                    "reference_images": [str(path) for path in reference_paths],
+                    "target_object": bundle.asset_id,
+                    "reference_status": "retrieved" if reference_paths else "unavailable",
+                    "localization_status": "failed",
+                    "identity_confirmed": False,
+                },
+                artifacts=[{
+                    "type": "asset_reference_image", "kind": "rgb",
+                    "tool": context.name, "path": str(path),
+                    "target_object": bundle.asset_id, "environment": bundle.namespace,
+                } for path in reference_paths],
                 diagnostics=[
                     {
                         "code": "reference_localization_failed",

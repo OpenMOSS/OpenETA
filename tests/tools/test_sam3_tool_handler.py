@@ -935,6 +935,9 @@ def test_sam3_handler_accepts_empty_detection_success() -> None:
         ]
     }
     assert "keep this exact packet/camera" in result.content
+    assert "retrieve_asset_reference" in result.content
+    assert "semantic identity" in handoff["interpretation"]
+    assert handoff["agent_discretion"] is True
 
 
 def test_sam3_roi_preserves_full_frame_and_clamps_mask(tmp_path: Path) -> None:

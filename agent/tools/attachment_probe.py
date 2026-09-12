@@ -230,6 +230,9 @@ def assess_attachment_probe(
     if verdict not in {"PASS", "FAIL", "UNKNOWN"}:
         raise ValueError("reviewer returned an invalid verdict")
     reason = str(payload.get("reason") or "").strip()
+    if verdict == "PASS" and gripper_evidence.get("measured_open") is not False:
+        verdict = "UNKNOWN"
+        reason = "Visual PASS is not corroborated by a valid non-open aperture. " + reason
     return {
         "schema_version": ARTICULATED_ATTACHMENT_ASSESSMENT_SCHEMA,
         "probe_id": probe.get("probe_id"),
@@ -274,11 +277,9 @@ def prepare_attachment_probe(
         raise AttachmentProbeError(
             "compiled grasp evidence was superseded by a different selected target"
         )
-    if grasp_node.get("freshness") == "invalidated_contact_geometry":
-        raise AttachmentProbeError(
-            "compiled grasp contact geometry was invalidated after gripper reopen; "
-            "compile and execute a current contact branch before preparing a probe"
-        )
+    # The probe uses the current measured EEF pose, not old contact coordinates.
+    # Released contact geometry is not attachment proof, but does not prevent
+    # an identity-bound experiment with newly captured before/after evidence.
     candidate_id = str(grasp_node.get("candidate_id") or "")
     if not candidate_id:
         raise AttachmentProbeError("compiled grasp candidate provenance is incomplete")
@@ -469,104 +470,47 @@ def prepare_attachment_probe(
 
 
 def _require_probe_gripper_evidence(
-    memory: Mapping[str, Any],
-    observation: Any,
-    *,
-    operation: str,
+    memory: Mapping[str, Any], observation: Any, *, operation: str,
     compiled_grasp_id: str,
 ) -> JsonDict:
-    """Reject probes that contradict host command or measured aperture evidence.
+    """Observe probe conditions; do not require proof of attachment to test it.
 
-    A tentative carried-object proxy is sufficient, but it is not required for
-    an articulated mechanism.  When the simulator reports that the host-bound
-    target falls outside the *carried-object* envelope, accept a matching host
-    compiled-contact execution receipt instead.  This does not claim physical
-    attachment; the short probe and independent visual assessment still own
-    that verdict.
+    Missing command/proxy history is uncertainty, not a veto on a bounded
+    Agent-chosen probe. Assessment still needs the frozen before/after evidence.
     """
-
     commanded_value = memory.get("gripper_command_state")
     commanded = dict(commanded_value) if isinstance(commanded_value, Mapping) else {}
-    if commanded.get("position") != 0 or commanded.get("state") != "closed":
-        raise AttachmentProbeError(
-            f"{operation} requires the latest acknowledged gripper command to be "
-            "closed; execute a valid contact close before preparing or assessing a probe"
-        )
-    if "latched" in commanded and commanded["latched"] is not True:
-        raise AttachmentProbeError(
-            f"{operation} requires an acknowledged close latch; measured aperture "
-            "or an inconsistent actuation receipt cannot establish it"
-        )
-    if "gripper_actuation_receipt" in commanded:
-        receipt_error = gripper_actuation_receipt_error(
-            commanded["gripper_actuation_receipt"], position=0,
-        )
-        if receipt_error:
-            raise AttachmentProbeError(f"{operation}: {receipt_error}")
-
     proxy_value = commanded.get("attachment_proxy_receipt")
     proxy = dict(proxy_value) if isinstance(proxy_value, Mapping) else {}
-    status = str(proxy.get("status") or "missing")
-    reason = str(proxy.get("reason") or "no tentative close receipt")
-    contact_receipt = _matching_compiled_contact_receipt(
-        memory,
-        compiled_grasp_id=compiled_grasp_id,
-    )
-    proxy_is_tentative = status == "tentative"
-    articulated_contact_fallback = (
-        status == "not_armed"
-        and reason in _ARTICULATED_PROXY_NOT_APPLICABLE_REASONS
-        and contact_receipt is not None
-    )
-    if not proxy_is_tentative and not articulated_contact_fallback:
-        raise AttachmentProbeError(
-            f"{operation} requires a tentative non-empty close receipt or a matching "
-            "reached compiled-contact receipt for an articulated target whose carried-"
-            f"object proxy is inapplicable; latest attachment_proxy_status={status!r}, "
-            f"reason={reason!r}. Inspect current dual-view evidence, repair contact, "
-            "close again, then prepare a new probe"
-        )
-
     robot = getattr(observation, "robot", None)
     measured_value = getattr(robot, "gripper_state", None)
     measured = dict(measured_value) if isinstance(measured_value, Mapping) else {}
-    is_open = measured.get("open")
-    openness = measured.get("openness")
-    # Continuous aperture is the more informative signal. Some simulator
-    # adapters label a partially obstructed grasp as ``open=True`` even when
-    # the measured aperture is far below fully open. Fall back to the coarse
-    # boolean only when aperture telemetry is absent. Invalid numeric telemetry
-    # cannot establish either open or closed evidence.
-    definitely_open = measured_gripper_open(measured)
-    if definitely_open is True:
-        raise AttachmentProbeError(
-            f"{operation} contradicts the current measured gripper state: "
-            f"open={is_open!r}, openness={openness!r}. Re-establish contact and close "
-            "the gripper before using attachment evidence"
-        )
-    if openness is not None and definitely_open is None:
-        raise AttachmentProbeError(
-            f"{operation} received invalid measured gripper openness; require a "
-            "finite normalized aperture before reusing attachment evidence"
-        )
+    measured_open = measured_gripper_open(measured)
+    warnings = []
+    if commanded.get("position") != 0 or ("latched" in commanded and commanded["latched"] is not True):
+        warnings.append("no_acknowledged_close_latch")
+    if "gripper_actuation_receipt" in commanded:
+        error = gripper_actuation_receipt_error(commanded["gripper_actuation_receipt"], position=0)
+        if error:
+            warnings.append("inconsistent_gripper_actuation_receipt")
+    if proxy.get("status") != "tentative":
+        warnings.append("no_tentative_attachment_proxy")
+    if measured_open is True:
+        warnings.append("measured_gripper_open")
+    elif measured_open is None:
+        warnings.append("measured_aperture_unknown")
+    contact = _matching_compiled_contact_receipt(memory, compiled_grasp_id=compiled_grasp_id)
     return {
-        "commanded_position": 0,
-        "attachment_proxy_status": status,
-        "attachment_proxy_reason": reason,
-        "probe_evidence_basis": (
-            "tentative_carried_object_proxy"
-            if proxy_is_tentative
-            else "matching_reached_compiled_contact"
-        ),
+        "commanded_position": commanded.get("position"),
+        "attachment_proxy_status": proxy.get("status", "missing"),
+        "attachment_proxy_reason": proxy.get("reason"),
+        "probe_evidence_basis": "bounded_probe_not_attachment_proof",
         "compiled_grasp_id": compiled_grasp_id,
-        "compiled_contact_reached": (
-            bool(contact_receipt.get("reached_target"))
-            if contact_receipt is not None
-            else None
-        ),
-        "measured_open": is_open,
-        "measured_openness": openness,
+        "compiled_contact_reached": bool(contact and contact.get("reached_target")),
+        "measured_open": measured_open,
+        "measured_openness": measured.get("openness") if measured_open is not None else None,
         "checked_by": "host_gripper_evidence",
+        "advisories": warnings, "blocking": False,
     }
 
 

@@ -1,0 +1,156 @@
+---
+name: openeta-pick
+description: Use for an OpenETA simulation episode involving visual object selection, grasping, or manipulation through the OpenETA MCP host.
+---
+
+Call `episode_status` first. Use only the native OpenETA tools advertised in this session.
+Inspect returned images directly. Do not write XML or invoke another planner/API.
+The Host owns typed references, current evidence, admission gates and terminal truth.
+Use `observation_references` for registered packet/camera IDs. Each returned image
+has an adjacent JSON label: use that exact reference for point prompts and check
+`is_current_observation`. Artifact IDs and file paths are not packet IDs. On a
+reference error, inspect the returned `repair` and current references before retrying.
+Some tools in the general guidance below are unavailable in this minimal profile;
+check tools/list and do not substitute shell commands or direct simulator access.
+Auxiliary LLM advisor, visual differencing and skill publication are disabled.
+In this plugin, `move_to` automatically previews IK before attempting motion.
+Pass a current target_pose bundle from grasp compilation or another geometry tool,
+an existing ik_result bundle, or a world EEF `target_pose` matching its live schema.
+Separate `propose_motion_target` and `ik_preview_check` calls are optional for
+diagnosis. The Host uses the same pose and tolerances for preview and execution.
+Inspect `motion_hook`: an authorized IK result does not prove controller arrival,
+collision clearance, or attachment. Internal stages still consume episode budgets.
+Use `finish_episode` with success=false if the task cannot be completed within the
+remaining budget. Success=true is a request for Host validation, not proof of success.
+Never inspect repository code, previous rollouts, or privileged task state to solve an episode.
+
+The following guidance is a snapshot of agent/skills/pick.md for this prototype.
+Live MCP schemas remain the authority for field names and availability.
+
+# Pick
+
+Reusable task guidance, not an executable macro. The live tool contracts exclusively define
+request fields, returned references, validity rules, and repair payloads.
+
+## Evidence and target identity
+
+1. For unfamiliar names, retrieve object-bank references, then use SAM3 prompt
+   `object` on fixed agentview. `inspect_evidence` compares retrieved references
+   beside original-color candidates; check the reference name and alternatives. Proposals
+   are not a complete scene inventory. A concise English visual phrase for the
+   target and point grounding remain alternatives.
+2. Scores rank proposals but do not prove identity. Compare source, overlays
+   and untinted crops; mask colors are not object colors. Use `inspect_evidence`
+   to page stored candidates or open an image. Point-prompt masks may be parts
+   of one object, not separate instances. Reject an absent/wrong target; do not
+   choose the least-wrong mask. Preserve physical identity across later views.
+3. After text misses, references or a point-grounding capability can localize
+   in the original scene. Do not add category guesses without visual support.
+4. Use depth enhancement only when sensor depth is too sparse for grasp
+   estimation. Treat enhanced depth as candidate-generation evidence, not as a
+   substitute for the sensor geometry required by collision checking.
+5. An exact-task playbook is a scoped prior, not current evidence. Visually
+   verify its appearance, scene-region and strategy suggestions; do not transfer
+   evidence from a merely similar task or object.
+
+## Grasp estimation and selection
+
+6. Estimate grasps only after target identity and aligned RGB-D evidence are
+   coherent. If the host reports that its prepared input is stale or incomplete,
+   refresh the relevant perception instead of reconstructing private paths or
+   calibration data. Use the grasp-estimation facade rather than choosing a
+   concrete backend directly. Estimator diversity is useful after physical
+   evidence such as a confirmed slip, not after an unrelated transport failure.
+7. Choose for transport stability, not merely the highest estimator score.
+   Compare finger aperture, visible contact depth, object geometry, collision
+   clearance, prior physical outcomes, and the projected contact location on
+   the target mask. Backend scores are local to each estimator and are not
+   directly comparable.
+8. Treat visual grasp-advisor output as evidence, not authority. Prefer a
+   candidate with broad, deep, symmetric contact on a stable body region. A
+   contact on a cap, rim, shoulder, thin edge, or barely overlapping boundary is
+   a slip risk. If every candidate has that weakness, obtain a materially
+   different view or candidate set rather than choosing the least-bad reachable one.
+9. Characterize the target geometry only when visually clear. Compare compatible
+   grasp strategies exposed by the runtime with the estimator-native pose when
+   their geometry assumptions match. Candidate strategies require an explicit
+   Agent choice and remain experimental; validated strategies may be stronger
+   priors, but neither bypasses visual, reachability, collision, contact, or
+   attachment checks. Task- or episode-specific evidence belongs in a playbook
+   or strategy record, not in this skill.
+10. Compile the selected estimator candidate before robot motion. Compilation is
+    the calibrated handoff from camera-frame grasp geometry to a world-frame EEF
+    reference. Do not treat an uncompiled estimator pose as a robot target.
+
+## Approach and near-field refinement
+
+11. Treat clearance, alignment, and contact references as ordinary geometric
+    waypoints rather than host-owned task phases. Choose the number and geometry
+    of motion edges from the current EEF pose, visible obstacles, carried-object
+    extent, and controller feedback.
+12. Approach contact through the corridor behind the selected grasp direction.
+    Avoid a long cross-axis sweep near the object: endpoint reachability alone
+    does not prevent the gripper from pushing the target away on the way in.
+    Establish a compatible contact orientation before the final inward motion.
+13. Use one checked endpoint for a short clear motion. For a long transit,
+    precision-sensitive approach, visible obstruction, or collision recovery,
+    choose a small ordered route and observe from the actual endpoint before
+    extending it. A midpoint on a failed straight path normally preserves the
+    same collision; route around the named obstacle instead. Keep collision
+    checking enabled and treat a controller stop as evidence to change geometry,
+    not as permission to replay or disable checks.
+14. Near the target, use the wrist view when it can materially improve contact:
+
+    - Use calibrated wrist alignment when the approach orientation and axial
+      contact depth remain credible and only a bounded lateral correction is
+      needed.
+    - Move to a target-facing wrist observation viewpoint when the target is
+      clipped or poorly framed.
+    - Run a fresh wrist-view grasp estimate when orientation, contact depth, or
+      candidate identity is uncertain. The wrist estimate is a new candidate
+      branch; it does not silently inherit or replace an earlier strategy.
+
+    Keep visual adjustments inside the host-provided safety envelope.
+15. A reachable endpoint proves kinematics, not controller convergence or path
+    safety. Compare execution-seed quality and residual diagnostics. If a full
+    contact orientation is not found, change the candidate or observation pose.
+    Preserving orientation requires full-pose IK, not position-only motion.
+    Closing at another orientation is not the same grasp.
+
+## Contact, attachment, and transport
+
+16. Decide whether to close from the actual endpoint and fresh visual evidence,
+    not solely arrival at an old planned contact. A reported collision
+    may require visual reassessment, but collision with unrelated scenery does
+    not by itself make a finger-only close unsafe when contact geometry is still
+    valid. Follow the live gripper contract for the closed command.
+17. A close acknowledgement or measured aperture is not proof of attachment.
+    Keep the gripper latched and prepare a short, visually justified probe from
+    the measured EEF pose. Execute the frozen probe geometry through the normal
+    reachability and motion tools, then assess attachment from target/EEF
+    co-motion plus vacancy at the source location.
+18. Continue only on positive attachment evidence. Ambiguous evidence calls for
+    another observation or reassessment; an empty close, visible slip, or failed
+    co-motion calls for contact repair or a materially different candidate.
+19. Once attachment is confirmed, include the whole held object in route
+    clearance. Lift it clear of nearby clutter before lateral transport. Do not
+    combine a long lateral carry with descent toward a receptacle, because a rim
+    can strip an object from an otherwise latched gripper.
+
+## Recovery choices
+
+- Wrong or ambiguous target: reacquire identity before estimating another grasp.
+- Weak candidate set: change view, estimator evidence, or strategy rather than
+  cycling ranks from an unchanged result.
+- Contact motion stopped or missed: reason from the actual endpoint and repair
+  the approach corridor, orientation, or candidate.
+- Empty close or failed probe: reopen when safe, reject the physical branch, and
+  choose a materially different contact.
+- Attachment lost during transport: stop placement, re-observe the displaced
+  object, and begin a new evidence branch.
+- Missing calibration, backend failure, timeout, or malformed response is not
+  physical evidence against the candidate. Follow the structured tool recovery
+  or report the capability gap.
+
+For explicit robot, controller, sensor, or environment characterization, use
+the `embodiment_explore` skill outside the benchmark episode.

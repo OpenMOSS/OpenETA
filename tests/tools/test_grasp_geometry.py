@@ -509,6 +509,8 @@ def test_compile_grasp_seed_accepts_explicit_candidate_task_family_strategy(
     assert result["strategy_status"] == "candidate"
     assert result["strategy_selection"] == "explicit"
     assert result["orientation_clamped"] is True
+    assert "Native advisor approval" in result["warning"]
+    assert "do not validate the changed execution" in result["warning"]
     assert result["approach_world_xyz"] == [0.0, 0.0, -1.0]
     assert result["outside_validated_strategy_scope"] is True
 

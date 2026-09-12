@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -405,7 +407,18 @@ def _write_output(path: str, payload: JsonDict) -> None:
     if output.is_absolute() or ".." in output.parts:
         raise ValueError("--output must be a relative path inside the repository")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent,
+                                         prefix=f".{output.name}.", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def resume_paused_episode(
@@ -734,7 +747,18 @@ def main(argv: list[str] | None = None) -> int:
             worker_factory,
             concurrency=args.concurrency,
         )
-        result = harness.run(specs, batch_id=args.batch_id or None)
+        try:
+            result = harness.run(specs, batch_id=args.batch_id or None)
+        except KeyboardInterrupt:
+            payload = harness.interrupted_report
+            if payload is not None:
+                provider_metrics = getattr(worker_factory, "provider_metrics", None)
+                if callable(provider_metrics):
+                    payload["provider_concurrency"] = provider_metrics()
+                if args.output:
+                    _write_output(args.output, payload)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 130
         payload = result.to_dict()
         provider_metrics = getattr(worker_factory, "provider_metrics", None)
         if callable(provider_metrics):

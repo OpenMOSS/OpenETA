@@ -5,6 +5,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
+def robot_self_collision_groups(robot_geoms, left_finger_geoms, right_finger_geoms):
+    """Keep robot self coverage except the opposing fingers' designed closure.
+
+    Closed pads may touch each other. Their separation cannot change through
+    arm motion and must not veto an otherwise valid collision-boundary escape.
+    World pairs are constructed separately and receive no exemption here.
+    """
+    robot = set(robot_geoms)
+    left = set(left_finger_geoms) & robot
+    right = set(right_finger_geoms) & robot
+    if left & right:
+        # Ambiguous finger metadata grants no exclusion.
+        left, right = set(), set()
+    return [
+        ([geom], sorted(robot - (right if geom in left else left if geom in right else set())))
+        for geom in sorted(robot)
+    ]
+
+
 def project_velocity_to_joint_limits(
     velocity: Sequence[float],
     current: Sequence[float],

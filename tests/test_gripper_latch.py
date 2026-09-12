@@ -129,7 +129,7 @@ def test_gripper_action_polarity():
 
 
 def test_gripper_tools_use_distinct_actuation_and_contact_settle_horizons(monkeypatch):
-    meta = {"backend": "libero"}
+    meta = {"backend": "libero", "_sid": "test", "worker_url": "fixture", "remote_handle": "h"}
     calls = []
 
     monkeypatch.setattr(s, "_session_envs", {"test": {"h": meta}})
@@ -140,8 +140,8 @@ def test_gripper_tools_use_distinct_actuation_and_contact_settle_horizons(monkey
         lambda *_args, open_gripper, **_kwargs: [-1.0 if open_gripper else 1.0],
     )
 
-    def fake_step(_meta, action, *, num_steps):
-        calls.append((list(action), num_steps))
+    def fake_step(_meta, action, *, num_steps, render):
+        calls.append((list(action), num_steps, render))
         openness = 1.0 if action[-1] < 0 else 0.35
         return {
             "observation": {
@@ -150,13 +150,17 @@ def test_gripper_tools_use_distinct_actuation_and_contact_settle_horizons(monkey
         }
 
     monkeypatch.setattr(s, "_proxy_step", fake_step)
+    monkeypatch.setattr(s, "_proxy_render", lambda meta: {
+        "robot": {"gripper_state": {"openness": 1.0 if meta["_gripper_cmd"] < 0 else 0.35}}
+    })
+    monkeypatch.setattr(s, "_session_last_obs", {})
 
     opened = s.gripper_open.__wrapped__(handle="h", session_id="test")
     closed = s.gripper_close.__wrapped__(handle="h", session_id="test")
 
     assert calls == [
-        ([-1.0], s._GRIPPER_OPEN_STEPS),
-        ([1.0], s._GRIPPER_CLOSE_STEPS),
+        ([-1.0], s._GRIPPER_OPEN_STEPS, False),
+        ([1.0], s._GRIPPER_CLOSE_STEPS, False),
     ]
     assert opened["gripper_actuation_receipt"] == {
         "schema_version": "openeta.gripper_actuation_receipt.v1",

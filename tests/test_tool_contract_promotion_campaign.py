@@ -12,11 +12,11 @@ def test_promotion_campaign_inventories_all_remaining_tools_without_granting_aut
 
     assert report["schema_version"] == "openeta.tool_contract_promotion_campaign.v1"
     assert report["authority"] == "promotion_evidence_only"
-    assert report["catalog_tool_count"] == 35
-    assert report["campaign_target_count"] == 34
+    assert report["catalog_tool_count"] == 36
+    assert report["campaign_target_count"] == 35
     assert report["verified_count"] == 35
-    assert report["declared_count"] == 0
-    assert report["request_parity_ready_count"] == 34
+    assert report["declared_count"] == 1
+    assert report["request_parity_ready_count"] == 35
     assert report["fixture_registered_count"] == 34
     assert report["resolver_binding_audit_conformant"] is True
     assert all(
@@ -138,7 +138,7 @@ def test_review_request_cannot_be_mistaken_for_approval() -> None:
     )
 
     assert request["status"] == "pending_three_person_review"
-    assert request["tool_count"] == 34
+    assert request["tool_count"] == 35
     assert "review_status" not in request
     assert request["requested_decisions"]["gate_repair_envelope_authority"] == {
         "requested": False,

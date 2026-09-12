@@ -61,3 +61,10 @@ sim/rlinf/
 third_party/codex-remote-feishu/
 CLAUDE.md
 third_party/
+
+# Experimental repo-local Codex plugin marketplace
+!.agents/
+.agents/*
+!.agents/plugins/
+.agents/plugins/*
+!.agents/plugins/marketplace.json

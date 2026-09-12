@@ -1164,7 +1164,8 @@ def test_wrist_alignment_bundle_hides_host_paths_from_planner_call() -> None:
         memory.resolve_wrist_alignment_bundle(public["bundle_id"])
 
 
-def test_exact_instance_mismatch_cannot_be_overridden_by_sam_selection() -> None:
+@pytest.mark.parametrize("verifier_decision", ["mismatch", "abstain"])
+def test_reference_verifier_cannot_veto_main_agent_selection(verifier_decision) -> None:
     memory = AgentMemory()
     memory.start_session(task="pick the green bottle")
     memory.save_fact(
@@ -1175,7 +1176,7 @@ def test_exact_instance_mismatch_cannot_be_overridden_by_sam_selection() -> None
             "target_prompt": "bottle",
             "candidates": [{"id": "detection_000", "mask_ref": "orange.png"}],
             "identity_conflict": {
-                "decision": "mismatch",
+                "decision": verifier_decision,
                 "confidence": 0.97,
                 "reason": "reference is green; candidate is orange",
             },
@@ -1183,16 +1184,16 @@ def test_exact_instance_mismatch_cannot_be_overridden_by_sam_selection() -> None
         source="asset_reference",
     )
 
-    with pytest.raises(ValueError, match="target_identity_conflict"):
-        memory.resolve_sam3_selection(
+    selected = memory.resolve_sam3_selection(
             result_id="sam-wrong-bottle",
             detection_id="detection_000",
             selection_source="main_agent_vlm",
             reason="generic bottle semantics",
         )
 
-    assert memory.pending_sam3_selection() is not None
-    assert memory.selected_sam3_detection() is None
+    assert memory.pending_sam3_selection() is None
+    assert selected["reference_verification_advice"]["decision"] == verifier_decision
+    assert selected["reference_verification_advice"]["blocking"] is False
 
 
 def test_new_target_detection_requires_explicit_identity_relation() -> None:

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections import deque
 import math
+import os
 from typing import Any, Callable
 
 import numpy as np
 
 from sim.controllers.collision_recovery import (
     project_velocity_to_joint_limits,
+    robot_self_collision_groups,
     verified_collision_boundary_escape,
     verified_joint_limit_escape,
 )
@@ -123,6 +125,32 @@ def execute_libero_mink_goal(
             reason=seeded_joint_positions,
             seed=ik_execution_seed,
         )
+    from sim.controllers.fixture_grip import ENABLE_ENV, LEGACY_ENABLE_ENV, stabilize_grip
+    from sim.controllers.orientation_tracking import orientation_hold_multiplier
+    requested_orientation_change = (
+        _angular_error_rad(start_quat, target_quat) if target_quat is not None else None
+    )
+    grip_enabled = os.environ.get(ENABLE_ENV, os.environ.get(LEGACY_ENABLE_ENV, '0')) == '1'
+    initial_contact = {}
+    if grip_enabled and gripper_command > 0 and (attachment_proxy or (contact_authorization or {}).get('contact_kind') == 'articulated_fixture'):
+        from sim.controllers.gripper_contact import measure_gripper_contact
+        initial_contact = measure_gripper_contact(env)
+    motion_profile, grip_orientation_multiplier, grip_stabilization_kind = stabilize_grip(
+        motion_profile, enabled=grip_enabled, authorization=contact_authorization,
+        attachment_proxy=attachment_proxy,
+        gripper_command=gripper_command, contact=initial_contact,
+        orientation_change_rad=requested_orientation_change,
+        seeded=seeded_joint_positions is not None)
+    # An empty gripper also needs to retain its requested orientation when
+    # translating near obstacles. Keep this independent of grasp evidence and
+    # its slower transport profile. Deliberate rotations use the baseline cost.
+    orientation_multiplier = max(grip_orientation_multiplier, orientation_hold_multiplier(
+        seeded=seeded_joint_positions is not None,
+        orientation_change_rad=requested_orientation_change))
+    # Reorientation keeps the low carry speed and stable-arrival checks even
+    # when it correctly uses the baseline orientation task weight.
+    grip_active = grip_stabilization_kind != 'none'
+    fixture_grip_active = grip_active and grip_stabilization_kind == 'fixture'
     if seeded_joint_positions is not None:
         # The global IK solution selects a useful redundancy basin, but must not
         # become a raw joint-space trajectory: interpolating directly to it can
@@ -133,7 +161,7 @@ def execute_libero_mink_goal(
         # by preview/receipt validation without inventing task-phase logic.
         frame_task.set_position_cost(1.0 / max(float(position_tolerance_m), 0.002))
         frame_task.set_orientation_cost(
-            1.0 / max(float(orientation_tolerance_rad), 0.05)
+            orientation_multiplier / max(float(orientation_tolerance_rad), 0.05)
         )
         seed_cost = np.zeros(model.nv, dtype=np.float64)
         # The global preview is not merely a reachability bit: it identifies a
@@ -176,6 +204,20 @@ def execute_libero_mink_goal(
         )
     )
 
+    from sim.controllers.cartesian_segment import (
+        ENABLE_ENV as SEGMENT_ENV, CartesianSegment, checked_segment_velocity,
+    )
+    segment = (CartesianSegment(start_xyz, target, start_quat, target_quat)
+               if os.environ.get(SEGMENT_ENV, '0') == '1' else None)
+    body_to_site_rotation = _body_rotation(raw, robot).T @ start_site_rotation
+    if segment is not None and target_quat is not None:
+        # Track the intermediate orientation with comparable tolerance-scaled
+        # weight even during deliberate rotation, rather than letting position
+        # dominate until the robot reaches the final XYZ.
+        frame_task.set_orientation_cost(max(
+            orientation_multiplier / max(float(orientation_tolerance_rad), 0.05),
+            1.0 / 0.025))
+
     carrying_object = bool(
         isinstance(attachment_proxy, dict)
         and str(attachment_proxy.get("object_name") or "")
@@ -189,7 +231,7 @@ def execute_libero_mink_goal(
     velocity_by_joint = {
         name: np.array([joint_velocity_limit_rad_s]) for name in robot.robot_joints
     }
-    configuration_limit = mink.ConfigurationLimit(model, gain=0.95)
+    configuration_limit = _arm_configuration_limit(model, qvel_indices)
     velocity_limit = mink.VelocityLimit(model, velocities=velocity_by_joint)
     limits: list[Any] = [configuration_limit, velocity_limit]
     noncollision_limits = list(limits)
@@ -231,6 +273,7 @@ def execute_libero_mink_goal(
         if target_quat is not None
         else None
     )
+    peak_orientation_error = best_orientation_error
     orientation_stall_steps = 0
     convergence_stalled = False
     convergence_stall_kind = ""
@@ -283,6 +326,12 @@ def execute_libero_mink_goal(
             stable_steps_completed = 0
 
         configuration.update(q=raw.sim.data.qpos.copy())
+        if segment is not None:
+            from scipy.spatial.transform import Rotation
+            reference_xyz, reference_quat = segment.reference(current_xyz, current_quat)
+            frame_task.set_target(mink.SE3.from_rotation_and_translation(
+                mink.SO3.from_matrix(Rotation.from_quat(reference_quat).as_matrix() @ body_to_site_rotation),
+                reference_xyz))
         current_pair_distances = (
             _collision_pair_distances(
                 configuration,
@@ -418,6 +467,54 @@ def execute_libero_mink_goal(
                 joint_velocity_projection_steps += 1
                 projected_joint_indices.update(clipped_indices)
                 current_projected_joint_indices = list(clipped_indices)
+        if segment is not None and not settling:
+            rejected_constraints = set()
+
+            def geometric_check(q, xyz, quat):
+                candidate_joints, _, _ = _robot_joint_limit_state(model, q, robot)
+                if not verified_joint_limit_escape(current_joints, candidate_joints,
+                                                  lower_limits, upper_limits):
+                    rejected_constraints.add('joint_limit')
+                    return False
+                if collision_policy is None:
+                    return True
+                preview_config = mink.Configuration(model, q=q)
+                distances = _collision_pair_distances(preview_config, collision_policy['protected_pairs'])
+                hard = float(collision_policy['hard_stop_distance_m'])
+                # Hard penetrations need monotonic escape. A fallback from
+                # an infeasible QP also retains the existing soft-boundary
+                # escape requirement. Ordinary safe QPs keep the hard guard.
+                needs_escape = used_collision_qp_fallback or any(d < hard for d in current_pair_distances.values())
+                safe = (verified_collision_boundary_escape(current_pair_distances, distances,
+                            hard_stop_distance_m=hard,
+                            recovery_boundary_distance_m=float(collision_policy['minimum_distance_from_collisions_m']))
+                        if needs_escape else all(d >= hard for d in distances.values()))
+                if not safe:
+                    rejected_constraints.add('robot_collision')
+                    return False
+                if attached_pairs:
+                    carried_q = _transform_attached_object_with_eef(q, collision_policy,
+                        current_eef_xyz=current_xyz, current_eef_quat_xyzw=current_quat,
+                        predicted_eef_xyz=xyz, predicted_eef_quat_xyzw=quat)
+                    distances = _collision_pair_distances(mink.Configuration(model, q=carried_q), attached_pairs)
+                    safe = (verified_collision_boundary_escape(current_attached_distances, distances,
+                                hard_stop_distance_m=hard) if current_attached_hard_violation
+                            else all(d >= hard for d in distances.values()))
+                    if not safe:
+                        rejected_constraints.add('attached_collision')
+                        return False
+                return True
+
+            bounded_velocity = checked_segment_velocity(configuration, velocity, qvel_indices, dt,
+                segment, lambda q: _configuration_eef_pose(model, q, robot), geometric_check)
+            if bounded_velocity is None:
+                control_error = 'No checked velocity stays within the requested Cartesian segment and safety constraints'
+                control_failure = {'schema_version': 'openeta.controller_failure.v1',
+                    'code': 'cartesian_segment_blocked',
+                    'constraints': sorted(rejected_constraints) or ['path_tracking'],
+                    'current_joint_limit_violation': current_joint_violation}
+                break
+            velocity = bounded_velocity
         if collision_policy is not None:
             commanded_velocity = np.zeros_like(velocity)
             commanded_velocity[qvel_indices] = velocity[qvel_indices]
@@ -546,6 +643,17 @@ def execute_libero_mink_goal(
             elif used_collision_qp_fallback and not (
                 collision_escape_safe and joint_escape_safe
             ):
+                if not collision_escape_safe and preview["detected"]:
+                    # Preserve the geometric cause alongside the QP failure.
+                    # Otherwise this path incorrectly reports collision=false
+                    # even when its candidate crosses the hard distance limit.
+                    collision_detected = True
+                    collision_info = {
+                        **_collision_receipt(collision_policy),
+                        **preview,
+                        "detected": True,
+                        "check_mode": "pre_actuation_configuration",
+                    }
                 control_error = (
                     "mink_qp_no_solution: fallback velocity failed the geometric "
                     "collision/joint safety preview and was not executed"
@@ -650,6 +758,11 @@ def execute_libero_mink_goal(
             if target_quat is not None
             else None
         )
+        segment_stop = (segment.observe(post_step_xyz, post_step_quat,
+                         post_step_position_error, post_step_orientation_error)
+                        if segment is not None else None)
+        if post_step_orientation_error is not None:
+            peak_orientation_error = max(peak_orientation_error or 0.0, post_step_orientation_error)
         post_step_pose_ok = bool(
             post_step_max_axis_error < position_tolerance_m
             and (
@@ -863,6 +976,7 @@ def execute_libero_mink_goal(
                 used_constraint_escape
                 and actual_collision_escape_safe
                 and actual_joint_escape_safe
+                and not segment_stop
             ):
                 collision_boundary_recovery_steps += 1
                 collision_policy["collision_boundary_recovery_steps"] = (
@@ -884,6 +998,11 @@ def execute_libero_mink_goal(
                     ),
                 }
                 break
+        if segment_stop:
+            convergence_stalled = True
+            convergence_stall_kind = segment_stop
+            control_failure = {'schema_version': 'openeta.controller_failure.v1',
+                              'code': segment_stop}
         if convergence_stalled:
             break
 
@@ -895,6 +1014,8 @@ def execute_libero_mink_goal(
         if target_quat is not None
         else None
     )
+    if orientation_error is not None:
+        peak_orientation_error = max(peak_orientation_error or 0.0, orientation_error)
     reached = bool(
         max_axis_error < position_tolerance_m
         and (
@@ -961,6 +1082,8 @@ def execute_libero_mink_goal(
             "execution_policy": execution_policy,
             "joint_velocity_limit_rad_s": joint_velocity_limit_rad_s,
             "transport_profile": (
+                "fixture_grip_stabilized" if fixture_grip_active else
+                "attached_object_stabilized" if grip_active else
                 "attached_object_gentle" if carrying_object else "nominal"
             ),
             "joint_velocity_projection_steps": joint_velocity_projection_steps,
@@ -988,7 +1111,7 @@ def execute_libero_mink_goal(
             "orientation_stall_steps": orientation_stall_steps,
         },
     }
-    if motion_profile.condition != "A":
+    if motion_profile.condition != "A" or grip_active:
         result["motion_execution_profile"] = motion_profile.receipt()
         result["controller_receipt"].update(
             {
@@ -1003,6 +1126,35 @@ def execute_libero_mink_goal(
                 "joint_velocity_max_abs_rad_s": final_joint_velocity_max_abs,
             }
         )
+    from sim.controllers.collision_feedback import classify_collision
+    if collision_policy is not None:
+        result['collision'] = classify_collision(result['collision'], collision_policy)
+    end_joints, end_lower, end_upper = _robot_joint_limit_state(model, raw.sim.data.qpos, robot)
+    margins = np.minimum(np.array(end_joints)-end_lower, np.array(end_upper)-end_joints)
+    result['controller_receipt'].update({
+        'ik_seed_validated': seeded_joint_positions is not None,
+        'position_within_tolerance': max_axis_error < position_tolerance_m,
+        'orientation_within_tolerance': target_quat is None or (orientation_error is not None and orientation_error < orientation_tolerance_rad),
+        'arm_joint_margin_min_rad': float(np.min(margins)),
+        'nearest_limit_joint_index': int(np.argmin(margins)),
+        'full_pose_outcome': 'reached' if reached else 'execution_failed_after_validated_ik' if seeded_joint_positions is not None else 'local_execution_failed',
+        'fixture_grip_stabilization_active': fixture_grip_active,
+        'fixture_orientation_cost_multiplier': grip_orientation_multiplier if fixture_grip_active else 1.0,
+        'grip_stabilization_active': grip_active,
+        'grip_stabilization_kind': grip_stabilization_kind,
+        'grip_orientation_cost_multiplier': grip_orientation_multiplier,
+        'orientation_cost_multiplier': orientation_multiplier,
+        'orientation_hold_active': orientation_multiplier > 1.0,
+        'control_tick_peak_orientation_error_rad': peak_orientation_error,
+    })
+    if segment is not None:
+        result['controller_receipt']['cartesian_segment'] = segment.receipt()
+        result['controller_receipt'].update({
+            'cartesian_tracking_enabled': True,
+            'path_peak_cross_track_m': segment.peak_cross_track_m,
+            'path_peak_rotation_deviation_rad': segment.peak_rotation_deviation_rad,
+            'path_backtracked_steps': segment.backtracked_steps,
+        })
     if progress_diagnostics is not None:
         result["controller_receipt"]["progress_diagnostics"] = progress_diagnostics
     if target_quat is not None:
@@ -1018,16 +1170,19 @@ def execute_libero_mink_goal(
         result["convergence_diagnostics"] = {
             "schema_version": "openeta.controller_convergence_diagnostics.v1",
             "code": (
+                convergence_stall_kind if convergence_stall_kind.startswith('cartesian_') else
                 "cartesian_position_progress_stalled"
-                if convergence_stall_kind == "position_progress_stalled"
+                if convergence_stall_kind in ('position_progress_stalled', 'cartesian_progress_stalled', 'cartesian_path_deviation')
                 else "full_pose_local_convergence_stalled"
             ),
             "message": (
+                "Actual robot motion left the bounded Cartesian segment; inspect the measured pose and replan."
+                if convergence_stall_kind == 'cartesian_path_deviation' else
                 "Measured EEF progress toward the target stalled within the bounded "
                 "tracking window. More iterations on the same segment are unlikely "
                 "to help; use the actual EEF pose and choose a materially different "
                 "waypoint or orientation."
-                if convergence_stall_kind == "position_progress_stalled"
+                if convergence_stall_kind in ('position_progress_stalled', 'cartesian_progress_stalled')
                 else "Position is within tolerance, but explicit orientation stopped "
                 "improving for 30 control steps. More iterations on the same pose "
                 "are unlikely to help; choose a higher-margin orientation or waypoint."
@@ -1261,6 +1416,11 @@ def _libero_collision_policy(
         for geom_id in robot_geoms
         if int(model.geom_bodyid[geom_id]) in gripper_bodies
     }
+    finger_geoms = {
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        for group in ('left_finger', 'right_finger', 'left_fingerpad', 'right_fingerpad')
+        for name in robot.gripper.important_geoms.get(group, [])
+    } & gripper_geoms
     arm_geoms = robot_geoms - gripper_geoms
     world_geoms = collision_geoms - robot_geoms
 
@@ -1279,7 +1439,7 @@ def _libero_collision_policy(
         target_obj = next(
             (
                 obj
-                for obj in raw.env.objects
+                for obj in list(raw.env.objects) + list(getattr(raw.env, "fixtures", ()))
                 if str(getattr(obj, "name", "")) == authorized_name
             ),
             None,
@@ -1297,12 +1457,18 @@ def _libero_collision_policy(
             raise RuntimeError(
                 f"authorized contact object {authorized_name!r} has no MuJoCo root body"
             )
-        target_bodies = descendants(int(target_root))
-        target_geoms = {
-            geom_id
-            for geom_id in world_geoms
-            if int(model.geom_bodyid[geom_id]) in target_bodies
-        }
+        if any(target_obj is obj for obj in getattr(raw.env, "fixtures", ())):
+            if attached_name or (contact_authorization or {}).get("contact_kind") != "articulated_fixture":
+                raise RuntimeError("Fixtures require a scoped contact grant and cannot be carried")
+            from sim.libero_contact_geometry import validate_fixture_geom
+            target_geoms = {validate_fixture_geom(raw.sim.model, target_obj, contact_authorization)}
+        else:
+            target_bodies = descendants(int(target_root))
+            target_geoms = {
+                geom_id
+                for geom_id in world_geoms
+                if int(model.geom_bodyid[geom_id]) in target_bodies
+            }
         if not target_geoms:
             raise RuntimeError(
                 f"authorized contact object {authorized_name!r} has no collision geoms"
@@ -1355,7 +1521,16 @@ def _libero_collision_policy(
         # Only the gripper subtree receives the narrow target-contact exemption.
         geom_pairs.append((sorted(gripper_geoms), sorted(gripper_world)))
     if robot_geoms:
-        geom_pairs.append((sorted(robot_geoms), sorted(robot_geoms)))
+        finger_sides = [
+            {
+                mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+                for group in groups
+                for name in robot.gripper.important_geoms.get(group, [])
+            } & gripper_geoms
+            for groups in (("left_finger", "left_fingerpad"),
+                           ("right_finger", "right_fingerpad"))
+        ]
+        geom_pairs.extend(robot_self_collision_groups(robot_geoms, *finger_sides))
     limit = mink.CollisionAvoidanceLimit(
         model,
         geom_pairs,
@@ -1373,6 +1548,10 @@ def _libero_collision_policy(
         "world_geom_count": len(world_geoms),
         "world_object_count": len(list(raw.env.objects)),
         "robot_geom_count": len(robot_geoms),
+        "robot_geom_ids": sorted(robot_geoms),
+        "gripper_geom_ids": sorted(gripper_geoms),
+        "finger_geom_ids": sorted(finger_geoms),
+        "authorized_target_geom_ids": sorted(target_geoms),
         "protected_pair_count": len(limit.geom_id_pairs),
         "authorized_target_object": authorized_name or None,
         "authorized_target_geom_count": len(target_geoms),
@@ -1660,6 +1839,36 @@ def _joint_limit_diagnostics(
             }
         )
     return diagnostics
+
+
+def _arm_configuration_limit(model: Any, robot_qvel_indices: np.ndarray) -> Any:
+    """Apply joint position bounds only to the arm velocities we can command.
+
+    The full scene also contains fingers and articulated objects. Physics may
+    place their joints slightly outside a soft MuJoCo limit. Asking the arm QP
+    to repair those positions while fixing their velocities to zero makes it
+    infeasible, even when every arm joint and protected collision pair is safe.
+    Keep Mink's exact arm inequalities, and leave non-arm physics to its own
+    actuators. This does not remove any collision pair or allow hypothetical
+    finger/object motion in the geometric preview.
+    """
+    import mink
+    from mink.limits.limit import Constraint, Limit
+
+    full_limit = mink.ConfigurationLimit(model, gain=0.95)
+    indices = np.asarray(full_limit.indices, dtype=np.int64)
+    controlled = np.asarray(robot_qvel_indices, dtype=np.int64)
+    if len(set(controlled.tolist())) != len(controlled) or not set(controlled.tolist()).issubset(set(indices.tolist())):
+        raise RuntimeError("every controlled arm DoF must have a unique joint position limit")
+    selected = np.isin(indices, controlled)
+    rows = np.concatenate([selected, selected])
+
+    class _ArmConfigurationLimit(Limit):
+        def compute_qp_inequalities(self, configuration: Any, dt: float) -> Any:
+            constraint = full_limit.compute_qp_inequalities(configuration, dt)
+            return Constraint(G=constraint.G[rows], h=constraint.h[rows])
+
+    return _ArmConfigurationLimit()
 
 
 def _fixed_nonrobot_velocity_limit(model: Any, robot_qvel_indices: np.ndarray) -> Any:

@@ -1107,6 +1107,7 @@ _STATIC_TOOL_PARAMETER_RULES: dict[str, JsonDict] = {
     "retrieve_asset_reference": {
         "required": ("environment", "target_object", "source_packet_id"),
         "types": {
+            "localize": "boolean",
             "environment": "string",
             "target_object": "string",
             "source_packet_id": "string",
@@ -1285,6 +1286,10 @@ def _validate_static_tool_parameters(
 
 
 def _validate_tool_parameters(tool_name: str, parameters: JsonDict) -> list[str]:
+    if tool_name == "inspect_evidence":
+        # New interface has one schema source, not a second hand-maintained rule set.
+        contract = _default_tool_contract_catalog().get(tool_name)
+        return [str(item.to_dict()) for item in check_tool_request_conformance(contract, parameters)]
     from agent.runtime.tool_bundles import BUNDLE_CONSUMERS
     if (tool_name in BUNDLE_CONSUMERS
             and tool_name not in {"compile_grasp_seed", "ik_preview_check", "move_to"}
@@ -2552,77 +2557,23 @@ def _validate_perception_artifact_provenance(
 
 
 def _validate_compiled_grasp_target_freshness(
-    decision: PlannerDecision,
-    *,
-    tool_context: JsonDict,
+    decision: PlannerDecision, *, tool_context: JsonDict,
 ) -> list[str]:
-    """Reject only stale contact/close actions, while keeping safe waypoints usable."""
-
-    if decision.action_type.lower().strip() != "tool_call":
+    """Reject explicitly misbound references, not independent recovery choices."""
+    if decision.action_type != "tool_call" or decision.action not in {"move_to", "follow_eef_trajectory"}:
         return []
-    graph = tool_context.get("provenance_evidence_graph")
-    graph = graph if isinstance(graph, dict) else {}
-    inconsistencies = graph.get("inconsistencies")
-    mismatch = next(
-        (
-            item
-            for item in inconsistencies or []
-            if isinstance(item, dict)
-            and item.get("code") == "compiled_grasp_target_superseded"
-        ),
-        None,
-    )
-    if not isinstance(mismatch, dict):
-        return []
-
-    unsafe = False
-    if decision.action == "gripper_control":
-        try:
-            unsafe = int(decision.parameters.get("position")) == 0
-        except (TypeError, ValueError):
-            unsafe = False
-    elif decision.action in {"move_to", "follow_eef_trajectory"}:
-        compiled_id = str(mismatch.get("compiled_grasp_id") or "")
-        node = next(
-            (
-                item
-                for item in graph.get("nodes", []) or []
-                if isinstance(item, dict)
-                and item.get("kind") == "compiled_targeted_grasp"
-                and str(item.get("compiled_grasp_id") or "") == compiled_id
-            ),
-            {},
-        )
-        contact_pose = node.get("contact_pose") if isinstance(node, dict) else None
-        contact_xyz = contact_pose.get("xyz") if isinstance(contact_pose, dict) else None
-        if decision.action == "move_to":
-            requested_poses = [decision.parameters.get("target_pose")]
-        else:
-            trajectory = decision.parameters.get("trajectory")
-            requested_poses = trajectory if isinstance(trajectory, list) else []
-        unsafe = any(
-            _pose_xyz_within(pose, contact_xyz, tolerance_m=0.08)
-            for pose in requested_poses
-        )
-    if not unsafe:
-        return []
-
-    bundle = tool_context.get("grasp_input_bundle")
-    bundle_id = bundle.get("bundle_id") if isinstance(bundle, dict) else None
-    recovery = (
-        " Call grasp_pose_estimate with the current bundle_id shown in host_resolved_inputs, choose a current "
-        "candidate, and compile it before contact or gripper close."
-        if isinstance(bundle_id, str) and bundle_id
-        else " Re-segment the current target, estimate a new grasp, and compile it before contact."
-    )
-    return [
-        "compiled_grasp_target_superseded: compiled grasp "
-        f"{mismatch.get('compiled_grasp_id')!r} is bound to target evidence "
-        f"{mismatch.get('compiled_target_evidence_id')!r}, but the current selected "
-        f"target is {mismatch.get('current_target_evidence_id')!r}. The requested "
-        "contact/close action cannot use the old pose. Safe retreat and clearance "
-        "waypoints remain allowed." + recovery
-    ]
+    graph = tool_context.get("provenance_evidence_graph") or {}
+    poses = ([decision.parameters.get("target_pose")] if decision.action == "move_to"
+             else decision.parameters.get("trajectory", []))
+    for item in graph.get("inconsistencies", []):
+        if item.get("code") != "compiled_grasp_target_superseded":
+            continue
+        for pose in poses:
+            if (isinstance(pose, dict) and pose.get("compiled_grasp_id") == item.get("compiled_grasp_id")
+                    and pose.get("waypoint_role") == "grasp_contact"):
+                return ["compiled_grasp_target_superseded: supplied contact reference belongs "
+                        "to a different selected target; use current evidence for contact authorization."]
+    return []
 
 
 def _pose_xyz_within(
@@ -2887,6 +2838,11 @@ def _build_tool_context_payload(
     )
     camera_artifacts = _current_camera_artifacts(observation, memory=memory)
     review_vision_evidence = _latest_tool_review_vision_evidence(memory)
+    # Catalog appearance remains useful during downstream mask confirmation.
+    # These images never become current-scene or identity/geometry authority.
+    for reference in _catalog_reference_vision_evidence(memory):
+        if not any(v.get("path") == reference["path"] for v in review_vision_evidence):
+            review_vision_evidence.append(reference)
     visual_history: JsonDict | None = None
     if config.visual_history.enabled:
         visual_projection = build_visual_history_projection(
@@ -2939,7 +2895,7 @@ def _build_tool_context_payload(
         "provenance_evidence_graph": memory_context.get(
             "provenance_evidence_graph"
         ),
-        "grasp_adjustment_budget": memory_context.get("grasp_adjustment_budget"),
+        "manipulation_advisories": memory_context.get("manipulation_advisories", []),
         "grasp_input_bundle": memory_context.get("grasp_input_bundle"),
         "wrist_alignment_bundle": memory_context.get("wrist_alignment_bundle"),
         "anyplace_input_bundle": memory_context.get("anyplace_input_bundle"),
@@ -3078,7 +3034,11 @@ def _build_agent_decision_context(
         }.items()
         if isinstance(bundle, dict)
     }
-    unresolved_obligations: JsonDict = dict(open_questions)
+    # One canonical copy of question payloads; this index links to them rather
+    # than duplicating masks, references and localization history.
+    unresolved_obligations: JsonDict = {
+        key: {"context_ref": f"open_questions.{key}"} for key in open_questions
+    }
     if runtime_context.get("fresh_observation_obligation") is not None:
         unresolved_obligations["fresh_observation"] = runtime_context.get(
             "fresh_observation_obligation"
@@ -3148,7 +3108,7 @@ def _build_agent_decision_context(
             for receipt in (memory.get("ik_preview_receipts") or {}).get("receipts", [])[-8:]
             if isinstance(receipt, dict)
         ],
-        "grasp_adjustment_budget": memory.get("grasp_adjustment_budget"),
+        "manipulation_advisories": memory.get("manipulation_advisories", []),
         # Execution receipt only: an Agent-chosen clearance is optional, but an
         # explicit miss cannot be silently treated as a successful contact premise.
         "latest_compiled_clearance_execution": memory.get(
@@ -3201,6 +3161,7 @@ def _build_agent_decision_context(
         },
         "decision_state": decision_state,
         "open_questions": open_questions,
+        "evidence_inspection": memory.get("evidence_inspection"),
         "agent_working_state": {
             "facts": agent_facts,
             "skill_notes": working.get("skill_notes", {}),
@@ -3952,6 +3913,25 @@ def _latest_action_effect(recent_events: list[JsonDict]) -> JsonDict | None:
     return None
 
 
+def _catalog_reference_vision_evidence(memory: AgentMemory) -> list[JsonDict]:
+    """Keep the latest retrieved appearance views visible, without grounding facts."""
+    for event in reversed(memory.events):
+        if event.event_type != "action":
+            continue
+        for call in reversed((event.payload.get("command") or {}).get("tool_calls") or []):
+            if not isinstance(call, dict) or call.get("name") != "retrieve_asset_reference":
+                continue
+            details = (call.get("result") or {}).get("details") or {}
+            return [{"path": a["path"], "role": "object_appearance_reference",
+                     "reference_target": a.get("target_object"),
+                     "source_tool": "retrieve_asset_reference", "derived": True,
+                     "not_world_observation": True, "freshness": "catalog_reference"}
+                    for a in details.get("artifacts", [])
+                    if isinstance(a, dict) and a.get("type") == "asset_reference_image"
+                    and isinstance(a.get("path"), str) and a["path"]][:3]
+    return []
+
+
 def _latest_tool_review_vision_evidence(memory: AgentMemory) -> list[JsonDict]:
     """Return bounded derived visuals from the immediately preceding tool call.
 
@@ -3968,6 +3948,8 @@ def _latest_tool_review_vision_evidence(memory: AgentMemory) -> list[JsonDict]:
         calls = command.get("tool_calls")
         calls = calls if isinstance(calls, list) else []
         call = next((item for item in reversed(calls) if isinstance(item, dict)), None)
+        if call is not None and call.get("name") == "retrieve_asset_reference":
+            return _catalog_reference_vision_evidence(memory)
         if call is None or str(call.get("name") or "") != "molmopoint":
             return []
         result = call.get("result")
@@ -4573,6 +4555,10 @@ def _current_camera_artifacts(
     if not isinstance(raw_artifacts, list):
         return []
     preferred_frames = {"agentview": 0, "render": 1, "wrist": 2}
+    packet_references = memory.observation_packet_references_for_paths(
+        raw.get('path') for raw in raw_artifacts
+        if isinstance(raw, dict) and raw.get('kind') in {'rgb', 'depth'}
+    )
     artifacts: list[JsonDict] = []
     for index, raw in enumerate(raw_artifacts):
         if not isinstance(raw, dict) or raw.get("kind") not in {"rgb", "depth"}:
@@ -4594,7 +4580,7 @@ def _current_camera_artifacts(
             value = raw.get(artifact_field)
             if value is not None:
                 artifact[artifact_field] = value
-        packet_reference = memory.observation_packet_reference_for_path(path)
+        packet_reference = packet_references.get(path, {})
         if packet_reference.get("source_packet_id"):
             artifact["packet_id"] = packet_reference["source_packet_id"]
         artifact["_sort_key"] = (

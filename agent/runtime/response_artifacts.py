@@ -301,6 +301,9 @@ def build_motion_summary(payload: JsonDict) -> JsonDict:
     """Return compact controller outcome fields used for closed-loop recovery."""
 
     summary: JsonDict = {}
+    gripper_contact = payload.get("gripper_contact")
+    if isinstance(gripper_contact, dict):
+        summary["gripper_contact"] = _compact_scalar_mapping(gripper_contact)
     collision = payload.get("collision")
     if isinstance(collision, dict):
         summary["collision"] = _compact_scalar_mapping(collision)

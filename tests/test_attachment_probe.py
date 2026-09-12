@@ -293,7 +293,7 @@ def test_prepare_probe_requires_scene_and_wrist_rgb() -> None:
         )
 
 
-def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
+def test_prepare_probe_reports_open_or_empty_close_as_advice() -> None:
     parameters = {
         "compiled_grasp_id": "compiled-1",
         "motion_type": "linear",
@@ -301,24 +301,24 @@ def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
     }
     opened = _observation()
     opened.robot.gripper_state = {"open": True, "openness": 0.998}
-    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
-        prepare_attachment_probe(
-            parameters,
-            observation=opened,
-            supervision_context=_memory_context(),
-        )
+    result = prepare_attachment_probe(
+        parameters,
+        observation=opened,
+        supervision_context=_memory_context(),
+    )
+    assert result["gripper_evidence"]["blocking"] is False
 
     memory = _memory_context()
     memory["memory"]["gripper_command_state"]["attachment_proxy_receipt"] = {
         "status": "not_armed",
         "reason": "empty_close_or_no_measurable_contact",
     }
-    with pytest.raises(AttachmentProbeError, match="tentative non-empty close receipt"):
-        prepare_attachment_probe(
-            parameters,
-            observation=_observation(),
-            supervision_context=memory,
-        )
+    result = prepare_attachment_probe(
+        parameters,
+        observation=_observation(),
+        supervision_context=memory,
+    )
+    assert "no_tentative_attachment_proxy" in result["gripper_evidence"]["advisories"]
 
 
 @pytest.mark.parametrize("bad_state", [
@@ -331,24 +331,24 @@ def test_prepare_probe_rejects_open_or_empty_close_gripper_evidence() -> None:
     }},
     {"gripper_actuation_receipt": None},
 ])
-def test_probe_rejects_unconfirmed_latch_even_with_tentative_proxy(bad_state):
+def test_probe_reports_unconfirmed_latch_without_blocking(bad_state):
     memory = _memory_context()
     memory["memory"]["gripper_command_state"].update(bad_state)
-    with pytest.raises(AttachmentProbeError, match="latch|receipt"):
-        prepare_attachment_probe(
-            {"compiled_grasp_id": "compiled-1", "motion_type": "linear",
-             "direction_world_xyz": [0, 0, 1]},
-            observation=_observation(), supervision_context=memory,
-        )
+    result = prepare_attachment_probe(
+        {"compiled_grasp_id": "compiled-1", "motion_type": "linear",
+         "direction_world_xyz": [0, 0, 1]},
+        observation=_observation(), supervision_context=memory,
+    )
+    assert result["gripper_evidence"]["advisories"]
 
 
 @pytest.mark.parametrize("openness", [True, -0.1, 1.1, float("nan"), float("inf")])
-def test_probe_rejects_malformed_aperture_instead_of_using_coarse_boolean(openness):
+def test_probe_reports_unknown_aperture_without_coarse_boolean_fallback(openness):
     observation = _observation()
     observation.robot.gripper_state = {"open": False, "openness": openness}
-    with pytest.raises(AttachmentProbeError, match="invalid measured gripper openness"):
-        _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]},
-                 observation=observation)
+    result = _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]},
+             observation=observation)
+    assert result["gripper_evidence"]["measured_open"] is None
 
 
 def test_probe_accepts_consistent_modern_close_receipt_and_partial_aperture():
@@ -368,7 +368,7 @@ def test_probe_accepts_consistent_modern_close_receipt_and_partial_aperture():
         observation=observation, supervision_context=memory,
     )
     assert result["gripper_evidence"]["measured_openness"] == 0.4
-    assert result["gripper_evidence"]["probe_evidence_basis"] == "tentative_carried_object_proxy"
+    assert result["gripper_evidence"]["probe_evidence_basis"] == "bounded_probe_not_attachment_proof"
 
 
 def test_libero_drawer_probe_accepts_reached_contact_when_carried_proxy_is_inapplicable() -> None:
@@ -410,10 +410,11 @@ def test_libero_drawer_probe_accepts_reached_contact_when_carried_proxy_is_inapp
         "commanded_position": 0,
         "attachment_proxy_status": "not_armed",
         "attachment_proxy_reason": "close_not_supported_by_host_contact_envelope",
-        "probe_evidence_basis": "matching_reached_compiled_contact",
+        "probe_evidence_basis": "bounded_probe_not_attachment_proof",
+        "advisories": ["no_tentative_attachment_proxy"], "blocking": False,
         "compiled_grasp_id": "compiled-1",
         "compiled_contact_reached": True,
-        "measured_open": True,
+        "measured_open": False,
         "measured_openness": pytest.approx(0.5146711342859446),
         "checked_by": "host_gripper_evidence",
     }
@@ -435,7 +436,7 @@ def test_libero_drawer_probe_accepts_reached_contact_when_carried_proxy_is_inapp
         },
     ],
 )
-def test_prepare_probe_rejects_proxy_fallback_without_matching_reached_contact(
+def test_probe_does_not_require_reached_contact_to_measure_attachment(
     contact_receipt,
 ) -> None:
     memory = _memory_context()
@@ -446,16 +447,16 @@ def test_prepare_probe_rejects_proxy_fallback_without_matching_reached_contact(
     if contact_receipt is not None:
         memory["memory"]["latest_compiled_contact_execution"] = contact_receipt
 
-    with pytest.raises(AttachmentProbeError, match="matching reached compiled-contact"):
-        prepare_attachment_probe(
-            {
-                "compiled_grasp_id": "compiled-1",
-                "motion_type": "linear",
-                "direction_world_xyz": [0, 1, 0],
-            },
-            observation=_observation(),
-            supervision_context=memory,
-        )
+    result = prepare_attachment_probe(
+        {
+            "compiled_grasp_id": "compiled-1",
+            "motion_type": "linear",
+            "direction_world_xyz": [0, 1, 0],
+        },
+        observation=_observation(),
+        supervision_context=memory,
+    )
+    assert result["gripper_evidence"]["compiled_contact_reached"] is False
 
 
 def test_prepare_probe_prefers_continuous_aperture_over_coarse_open_flag() -> None:
@@ -472,7 +473,7 @@ def test_prepare_probe_prefers_continuous_aperture_over_coarse_open_flag() -> No
         supervision_context=_memory_context(),
     )
 
-    assert result["gripper_evidence"]["measured_open"] is True
+    assert result["gripper_evidence"]["measured_open"] is False
     assert result["gripper_evidence"]["measured_openness"] == pytest.approx(0.5258)
 
 
@@ -542,16 +543,16 @@ def test_assessment_rejects_wrong_probe_id_and_missing_after_view() -> None:
         )
 
 
-def test_assessment_rejects_visual_pass_when_gripper_is_measured_open() -> None:
+def test_assessment_returns_unknown_for_visual_pass_with_open_gripper() -> None:
     probe = _prepare({"motion_type": "linear", "direction_world_xyz": [0, 0, 1]})
     after = _observation()
     after.robot.gripper_state = {"open": True, "openness": 0.998}
     context = _assessment_context(probe, after)
 
-    with pytest.raises(AttachmentProbeError, match="measured gripper state"):
-        assess_attachment_probe(
-            context,
-            backend=StaticPlannerBackend(
-                {"verdict": "PASS", "reason": "must not override proprioception"}
-            ),
-        )
+    result = assess_attachment_probe(
+        context,
+        backend=StaticPlannerBackend(
+            {"verdict": "PASS", "reason": "must not override proprioception"}
+        ),
+    )
+    assert result["verdict"] == "UNKNOWN"

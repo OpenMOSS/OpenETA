@@ -453,12 +453,10 @@ def _step_with_image(env, act, handle: str = "", render: bool = True) -> dict:
     Render failure is non-fatal — we still return the step result without
     a camera frame so the user can decide to retry or reset.
 
-    When ``render`` is ``False`` the (GPU-bound, ~130 ms) camera render is
-    skipped entirely.  This is used by ``move_to``'s closed-loop stepping,
-    which only reads the EE pose / joint positions from the result and never
-    the image — the dashboard's own background ``/render_all`` refresh keeps
-    the live view updated independently.  Skipping the render here makes
-    each control step ~5-8x faster.
+    When ``render`` is ``False``, skip the extra render and intermediate camera
+    conversion/encoding for transport. Some backends still render internally
+    during env.step(). The controller only needs robot state on these steps;
+    periodic, terminal and final observations retain their camera frames.
     """
     from adapter.protocol import EnvObservation, StepResult
 
@@ -491,7 +489,12 @@ def _step_with_image(env, act, handle: str = "", render: bool = True) -> dict:
                     pass  # render is best-effort; don't lose the step result
         if handle:
             _last_obs[handle] = obs
-        env_obs = EnvObservation.from_dict(obs)
+        # Keep the complete raw observation in _last_obs for later observe/
+        # render. Strip cameras only from the intermediate wire projection,
+        # BEFORE from_dict expands every RGB/depth pixel into Python numbers.
+        # Terminal receipts must keep the exact final visual evidence too.
+        wire_obs = obs if render or term or trunc else {**obs, "cameras": {}}
+        env_obs = EnvObservation.from_dict(wire_obs)
         # Sanitise info: drop non-serialisable values while still holding the
         # handle lock, then publish the done bit and its exact terminal result
         # atomically so a concurrent repeated request cannot observe one
@@ -530,6 +533,8 @@ def _reset_with_image(env, seed=None, handle: str = "") -> dict:
         with _gl_lock:
             obs, _ = env.reset(seed=seed)
             _inject_render_frame(env, obs)
+            from sim.private_state import capture
+            capture(env, 'initial-reset', {'seed':seed,'handle':handle})
         if handle:
             _last_obs[handle] = obs
             _done_handles.discard(handle)  # fresh episode — stepping allowed again
@@ -1036,10 +1041,13 @@ async def controller_goal_env(request):
         # Always return a fresh final visual observation, even when the short
         # controller run completed before the periodic render cadence.
         result["observation"] = _observe_with_image(env, handle=h)
+        from sim.controllers.gripper_contact import measure_gripper_contact
+        result['gripper_contact'] = measure_gripper_contact(env)
         return result
 
     try:
-        result = await _run_sim_call(_execute)
+        from sim.private_state import recorded
+        result = await _run_sim_call(lambda: recorded(env, 'move', {'handle':h,**body}, _execute))
         _env_errors.pop(h, None)
         return _json_response(result)
     except Exception as exc:
@@ -1059,6 +1067,40 @@ async def controller_goal_env(request):
             },
             500,
         )
+
+
+async def gripper_goal_env(request):
+    h = request.path_params.get('handle', '')
+    env = _envs.get(h)
+    if env is None:
+        return _json_response({'error':'Unknown handle'},400)
+    body = _safe_json_body(await request.body())
+    def execute():
+        from sim.controllers.gripper_guard import execute_checked_gripper
+        result = execute_checked_gripper(env.unwrapped, action=body.get('action'),
+            max_steps=body.get('max_steps'), contact_authorization=body.get('contact_authorization'),
+            step_callback=lambda action, render: _step_with_image(env,action,handle=h,render=render))
+        from sim.controllers.gripper_contact import measure_gripper_contact
+        result['gripper_contact'] = measure_gripper_contact(env.unwrapped)
+        # Camera observables were disabled during physics. Refresh agentview,
+        # wrist and depth once, then add the final render camera. No extra step.
+        from sim.controllers.mink_goal import _libero_runtime
+        from adapter.protocol import EnvObservation
+        raw,_ = _libero_runtime(env.unwrapped)
+        with _obs_lock_for(h), _gl_lock:
+            observation = env.unwrapped._normalise_obs(raw.env._get_observations(force_update=True))
+            _inject_render_frame(env,observation)
+            _last_obs[h] = observation
+            result['observation'] = EnvObservation.from_dict(observation).to_mcp_dict()
+            if result.get('terminated') or result.get('truncated'):
+                _terminal_step_results[h] = copy.deepcopy(result)
+        return result
+    from sim.private_state import recorded
+    try:
+        return _json_response(await _run_sim_call(lambda: recorded(env,'gripper',{'handle':h,**body},execute)))
+    except Exception as exc:
+        return _json_response({'error':f'checked gripper failed: {type(exc).__name__}: {exc}',
+            'stop_reason':'control_step_failed'},500)
 
 
 async def render_env(request):
@@ -1136,6 +1178,7 @@ app = Starlette(routes=[
     Route("/env/{handle}/render", render_env, methods=["POST"]),
     Route("/env/{handle}/reachability", reachability_env, methods=["POST"]),
     Route("/env/{handle}/controller-goal", controller_goal_env, methods=["POST"]),
+    Route("/env/{handle}/gripper-goal", gripper_goal_env, methods=["POST"]),
     Route("/render_all", render_all_envs, methods=["POST"]),
 ])
 

@@ -323,6 +323,7 @@ class OpenEtaAgentRuntime:
 
     def _bind_memory_tool_handlers(self) -> None:
         handlers = {
+            "inspect_evidence": self._inspect_evidence_tool,
             "save_memory": self._save_memory_tool,
             "get_memory": self._get_memory_tool,
             "delete_memory": self._delete_memory_tool,
@@ -370,6 +371,11 @@ class OpenEtaAgentRuntime:
             content="memory loaded",
             details=self.memory.get_memory(key_str or None, namespace=namespace),
         )
+
+    @_session_memory_tool
+    def _inspect_evidence_tool(self, context: ToolExecutionContext) -> ToolResult:
+        from agent.tools.evidence_inspection import inspect_evidence
+        return inspect_evidence(context, self.memory)
 
     @_session_memory_tool
     def _delete_memory_tool(self, context: ToolExecutionContext) -> ToolResult:
@@ -726,6 +732,8 @@ class OpenEtaAgentRuntime:
             content=(
                 f"Selected {detection_id} from SAM3 result {result_id}."
                 f"{content_suffix}"
+                + (" " + selected["identity_parameter_feedback"]["message"]
+                   if selected.get("identity_parameter_feedback") else "")
             ),
             outputs={
                 "result_id": result_id,

@@ -567,6 +567,35 @@ def observation_history(memory: "AgentMemory") -> list[JsonDict]:
     ]
 
 
+def resolve_image_evidence_reference(memory: "AgentMemory", reference: str) -> JsonDict:
+    """Resolve an exact Host-published image ID; never parse it as a file path.
+
+    Historical observation IDs stay inspectable. The current_observation alias
+    resolves only against the latest registered observation, not an older step.
+    Callers must still enforce their session file and image-size boundaries.
+    """
+    records = observation_history(memory)
+    matches = []
+    for index, record in enumerate(records):
+        for artifact in _rgb_artifacts(record):
+            ids = {_evidence_id(record, artifact)}
+            if index == len(records) - 1:
+                step = _environment_step(record)
+                ids.add(f"current_observation:{step if step is not None else 'na'}:{artifact.get('frame_id', '')}")
+            if reference not in ids:
+                continue
+            matches.append({
+                **_planner_image_evidence(record, artifact, role="requested_evidence_view", freshness="stored_evidence"),
+                "requested_image_ref": reference,
+                "source_packet_id": artifact.get("packet_id"),
+                "source_object_scene_epoch": record.get("object_scene_epoch"),
+                "source_robot_motion_epoch": record.get("robot_motion_epoch"),
+            })
+    if len(matches) != 1:
+        raise ValueError("unknown or ambiguous image evidence ID in this session; copy an exact published evidence_id or a saved image path")
+    return matches[0]
+
+
 def visual_delta_history(memory: "AgentMemory") -> list[JsonDict]:
     return [
         dict(payload)

@@ -31,33 +31,33 @@ allowed_tools:
   - move_to
   - follow_eef_trajectory
   - gripper_control
+  - inspect_evidence
 ---
 # Pick
 
-Use this as reusable task guidance, not an executable macro. It explains why
-and when capabilities are useful; the live tool contracts exclusively define
-their request fields, returned references, validity rules, and repair payloads.
+Reusable task guidance, not an executable macro. The live tool contracts exclusively define
+request fields, returned references, validity rules, and repair payloads.
 
 ## Evidence and target identity
 
-1. Inspect the scene before choosing a grasp target. Normalize the task
-   target into a concise English visual phrase when using text segmentation.
-2. Segment the intended object and visually inspect the original image plus
-   candidate overlays. Scores rank proposals but do not prove identity. Confirm
-   the candidate that matches the task, or reject the set and obtain better
-   evidence. Preserve the same physical instance across later views; do not
-   silently relabel a nearby object when the target moves or becomes occluded.
-3. When text segmentation misses an unusual known asset, use an available
-   controlled asset reference or point-grounding capability to localize it in
-   the original scene. Do not add category guesses that were not supported by
-   the task or reference image.
+1. For unfamiliar names, retrieve object-bank references, then use SAM3 prompt
+   `object` on fixed agentview. `inspect_evidence` compares retrieved references
+   beside original-color candidates; check the reference name and alternatives. Proposals
+   are not a complete scene inventory. A concise English visual phrase for the
+   target and point grounding remain alternatives.
+2. Scores rank proposals but do not prove identity. Compare source, overlays
+   and untinted crops; mask colors are not object colors. Use `inspect_evidence`
+   to page stored candidates or open an image. Point-prompt masks may be parts
+   of one object, not separate instances. Reject an absent/wrong target; do not
+   choose the least-wrong mask. Preserve physical identity across later views.
+3. After text misses, references or a point-grounding capability can localize
+   in the original scene. Do not add category guesses without visual support.
 4. Use depth enhancement only when sensor depth is too sparse for grasp
    estimation. Treat enhanced depth as candidate-generation evidence, not as a
    substitute for the sensor geometry required by collision checking.
-5. An exact-task playbook may supply object appearance, likely scene region, or
-   a previously useful strategy. Treat it only as a scoped prior: verify the
-   current object and scene visually before using it. Similar language or a
-   similar object from another task is not transferable evidence.
+5. An exact-task playbook is a scoped prior, not current evidence. Visually
+   verify its appearance, scene-region and strategy suggestions; do not transfer
+   evidence from a merely similar task or object.
 
 ## Grasp estimation and selection
 
@@ -125,8 +125,8 @@ their request fields, returned references, validity rules, and repair payloads.
 
 ## Contact, attachment, and transport
 
-16. Close only after the actual motion receipt and fresh dual-view evidence show
-    that the fingers reached the intended contact geometry. A reported collision
+16. Decide whether to close from the actual endpoint and fresh visual evidence,
+    not solely arrival at an old planned contact. A reported collision
     may require visual reassessment, but collision with unrelated scenery does
     not by itself make a finger-only close unsafe when contact geometry is still
     valid. Follow the live gripper contract for the closed command.

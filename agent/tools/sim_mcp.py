@@ -2332,6 +2332,14 @@ def _agent_visible_simulator_response(response: JsonDict) -> JsonDict:
             return _agent_visible_attachment_proxy_receipt(value)
         if key == "controller_failure":
             return _agent_visible_controller_failure(value)
+        if key == "gripper_contact":
+            contact = {k: value[k] for k in ("available", "left_finger_contact",
+                "right_finger_contact", "left_fingerpad_contact", "right_fingerpad_contact")
+                if type(value.get(k)) is bool}
+            if value.get("contact_pattern") in ("bilateral_pads", "single_pad", "finger_body_only", "no_contact"):
+                contact["contact_pattern"] = value["contact_pattern"]
+            contact["retention_proven"] = False
+            return contact
         public: JsonDict = {}
         for raw_key, item in value.items():
             field = str(raw_key)
@@ -2404,6 +2412,20 @@ def _agent_visible_collision_receipt(collision: JsonDict) -> JsonDict:
         else "none"
     )
     public["feedback_scope"] = "verdict_and_recovery_class_only"
+    for key, choices in {
+        'check_mode': {'pre_actuation_configuration','post_step_configuration','per_step_pre_actuation_and_post_step_configuration'},
+        'robot_part': {'arm','gripper','unknown'},
+        'gripper_part': {'finger','base_or_palm'},
+        'obstacle_relation': {'robot_self','unbound_world','authorized_target','outside_contact_target'},
+        'checked_during': {'gripper_actuation'},
+        'check_stage': {'target_endpoint'},
+        'placement_constraint': {'outside_receptacle_corridor', 'receptacle_corridor_too_narrow'},
+    }.items():
+        if collision.get(key) in choices:
+            public[key] = collision[key]
+    for key in ('contact_binding_active','prediction_checked'):
+        if type(collision.get(key)) is bool:
+            public[key] = collision[key]
     return public
 
 
@@ -2584,11 +2606,10 @@ def _context_execution_cancelled(context: ToolExecutionContext) -> bool:
 def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
     """Turn a failed motion receipt into executable recovery evidence.
 
-    A zero-step collision is materially different from a controller that moved
-    and stopped later.  In the former case the current configuration is already
-    on or beyond a collision boundary; re-segmenting the same object cannot
-    change that robot configuration.  Tell the Agent to escape from the actual
-    endpoint first while leaving the retreat direction to its visual reasoning.
+    A zero-step rejection can come from a proposed endpoint or a current-state
+    safety check.  Step count alone does not establish a collision at the current
+    pose.  Preserve the reported check stage and placement constraint, then leave
+    waypoint selection to the Agent's fresh visual evidence.
     """
 
     motion = build_motion_summary(response)
@@ -2621,6 +2642,34 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
                 ),
             },
         ]
+    if collision.get("detected") is True and collision.get("check_stage") == "target_endpoint":
+        constraint = collision.get("placement_constraint")
+        reason = (
+            "The requested carried-object endpoint was rejected before execution; "
+            "this does not establish a collision at the current pose. Keep collision "
+            "checks enabled and replan the endpoint using fresh views. "
+        )
+        if constraint == "outside_receptacle_corridor":
+            reason += (
+                "The carried object's footprint would extend outside the receptacle's "
+                "conservative interior corridor. At a checked clear height, visually "
+                "align the whole object inside the opening before descending. Account "
+                "for its offset from the gripper; raising alone at the same XY will "
+                "not fix this proposed placement."
+            )
+        elif constraint == "receptacle_corridor_too_narrow":
+            reason += (
+                "The carried object's conservative footprint does not fit the opening "
+                "at this orientation. Inspect the object and opening, then choose a "
+                "checked orientation or placement alternative; do not repeatedly "
+                "descend at the same pose."
+            )
+        return [{"action": "replan_rejected_endpoint",
+                 "parameters": {"actual_eef_xyz": actual_xyz, "enable_collision_check": True},
+                 "evidence": {"collision_class": collision.get("collision_class"),
+                              "check_stage": "target_endpoint", "steps_executed": steps,
+                              **({"placement_constraint": constraint} if constraint else {})},
+                 "reason": reason}]
     if steps == 0 and collision.get("detected") is True:
         return [
             {
@@ -2637,13 +2686,13 @@ def _motion_target_miss_recovery_options(response: JsonDict) -> list[JsonDict]:
                     "feedback_scope": "host_private_geometry_withheld",
                 },
                 "reason": (
-                    "No controller step executed because the current configuration is "
-                    "already on or beyond a safety boundary. Inspect the "
-                    "returned agentview/wrist images, choose a short retreat from "
-                    "actual_eef_xyz that increases separation, preview it, and execute "
-                    "it with the current orientation and collision checking. The "
-                    "controller permits only a monotonic boundary exit; do not rotate "
-                    "toward a new candidate until the current contact is cleared."
+                    "No controller step executed. Step count alone does not establish "
+                    "a collision at the current pose; inspect the reported check stage "
+                    "and returned agentview/wrist images. If the current pose is on a "
+                    "safety boundary, choose a short checked retreat from actual_eef_xyz "
+                    "that increases separation while preserving orientation. Otherwise "
+                    "change the rejected waypoint. Re-segmenting the same object does "
+                    "not move the robot or clear a physical boundary."
                 ),
             },
             {
@@ -2956,8 +3005,9 @@ def _response_content(response: JsonDict, *, mcp_tool: str, success: bool) -> st
     if _collision_rejects_motion(collision):
         steps = compact_motion.get("steps_executed") if isinstance(compact_motion, dict) else None
         stop_note = (
-            " No controller step executed; choose a checked waypoint that reduces or "
-            "escapes the visually observed contact instead of replaying the motion."
+            " No controller step executed; the current pose has not reached the "
+            "rejected target. Inspect the check stage and choose a different checked "
+            "waypoint instead of replaying the motion."
             if steps == 0
             else ""
         )
@@ -3921,19 +3971,16 @@ def _extract_orientation_arguments(
         if norm <= 1e-9:
             raise ValueError(f"{tool_name} target_pose.quat_xyzw must be non-zero.")
         qx, qy, qz, qw = [value / norm for value in (qx, qy, qz, qw)]
-        sin_roll_cos_pitch = 2.0 * (qw * qx + qy * qz)
-        cos_roll_cos_pitch = 1.0 - 2.0 * (qx * qx + qy * qy)
-        roll = math.atan2(sin_roll_cos_pitch, cos_roll_cos_pitch)
-        sin_pitch = 2.0 * (qw * qy - qz * qx)
-        pitch = math.copysign(math.pi / 2.0, sin_pitch) if abs(sin_pitch) >= 1.0 else math.asin(sin_pitch)
-        sin_yaw_cos_pitch = 2.0 * (qw * qz + qx * qy)
-        cos_yaw_cos_pitch = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = math.atan2(sin_yaw_cos_pitch, cos_yaw_cos_pitch)
-        return {
-            "roll": math.degrees(roll),
-            "pitch": math.degrees(pitch),
-            "yaw": math.degrees(yaw),
-        }
+        # At pitch +/-90 degrees, independent atan2 roll/yaw expressions
+        # become atan2(0, 0) and lose the coupled rotation. Use the matrix
+        # branch, which preserves that rotation by fixing yaw at the pole.
+        matrix = [
+            [1-2*(qy*qy+qz*qz), 2*(qx*qy-qw*qz), 2*(qx*qz+qw*qy)],
+            [2*(qx*qy+qw*qz), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qw*qx)],
+            [2*(qx*qz-qw*qy), 2*(qy*qz+qw*qx), 1-2*(qx*qx+qy*qy)],
+        ]
+        roll, pitch, yaw = _rotation_matrix_to_xyz_intrinsic_degrees(matrix)
+        return {"roll": roll, "pitch": pitch, "yaw": yaw}
 
     rotation = pose.get("rotation_matrix")
     if rotation is None:
@@ -4005,9 +4052,10 @@ def _extract_graspnet_panda_orientation_arguments(
 def _rotation_matrix_to_xyz_intrinsic_degrees(
     matrix: list[list[float]],
 ) -> tuple[float, float, float]:
-    pitch = math.asin(max(-1.0, min(1.0, -matrix[2][0])))
-    cosine_pitch = math.cos(pitch)
-    if abs(cosine_pitch) > 1e-8:
+    # atan2 retains the small distance to a pole where asin rounds to pi/2.
+    cosine_pitch = math.hypot(matrix[0][0], matrix[1][0])
+    pitch = math.atan2(-matrix[2][0], cosine_pitch)
+    if cosine_pitch > 1e-8:
         roll = math.atan2(matrix[2][1], matrix[2][2])
         yaw = math.atan2(matrix[1][0], matrix[0][0])
     else:

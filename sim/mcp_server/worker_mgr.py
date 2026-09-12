@@ -840,13 +840,13 @@ def _proxy_reachability(meta: dict, body: dict) -> dict:
     )
 
 
-def _proxy_controller_goal(meta: dict, body: dict) -> dict:
+def _proxy_controller_goal(meta: dict, body: dict, *, operation: str = 'controller-goal') -> dict:
     """Execute a worker-local host-selected controller goal and cache its state."""
 
     mgr = _get_mgr()
     result = mgr.proxy_handle_op(
         meta,
-        f"/env/{meta['remote_handle']}/controller-goal",
+        f"/env/{meta['remote_handle']}/{operation}",
         method="POST",
         body=body,
     )
@@ -862,6 +862,10 @@ def _proxy_controller_goal(meta: dict, body: dict) -> dict:
             )
         _mark_obs_dirty(key)
     return _public_observation_result(meta, result)
+
+
+def _proxy_gripper_goal(meta: dict, body: dict) -> dict:
+    return _proxy_controller_goal(meta, body, operation='gripper-goal')
 
 
 def _proxy_render(meta: dict) -> dict:

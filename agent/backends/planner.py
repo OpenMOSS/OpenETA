@@ -956,6 +956,14 @@ def _planner_user_prompt(
         # automatically selected next action. The complete live contracts apply.
         payload["validation_feedback"]["previous_candidate"] = previous_candidate
         payload["validation_feedback"]["candidate_is_untrusted"] = True
+        references = request.tool_context.get("available_tools", [])
+        reference = next((r for r in references if isinstance(r, dict)
+                          and r.get("name") == previous_candidate.get("name")), None)
+        if reference is not None:
+            payload["validation_feedback"]["repair_focus"] = {
+                "tool": reference["name"], "parameters_schema": reference.get("parameters"),
+                "instruction": "Repair this request using this exact schema. Preserve valid fields; omit optional unknown fields instead of adding null. Do not guess IDs. This is not execution authorization; you may explicitly replan if evidence is missing.",
+            }
     previous_unparsed_response = request.metadata.get("previous_unparsed_response")
     if (request.validation_errors and not isolated
             and isinstance(previous_unparsed_response, str)
@@ -1145,7 +1153,16 @@ def _planner_user_content(
         if isinstance(evidence, dict):
             evidence_by_path[path] = evidence
 
-    localization = request.tool_context.get("pending_reference_localization")
+    # The standard main-Agent projection moved obligations under open_questions.
+    inspection = request.tool_context.get("evidence_inspection")
+    if isinstance(inspection, dict):
+        for item in inspection.get("vision_evidence", []):
+            if isinstance(item, dict):
+                add_priority_path(item.get("path"), item)
+    # Read that canonical shape; retain the old shape for isolated/legacy callers.
+    questions = request.tool_context.get("open_questions")
+    questions = questions if isinstance(questions, dict) else {}
+    localization = questions.get("reference_localization", request.tool_context.get("pending_reference_localization"))
     if isinstance(localization, dict):
         if localization.get("required_parameter") != "positive_points":
             scene_image = localization.get("scene_image")
@@ -1171,48 +1188,47 @@ def _planner_user_content(
                     )
                     if len(priority_paths) >= config.max_vision_images:
                         break
-    else:
-        obligation = request.tool_context.get("pending_target_selection")
-        if isinstance(obligation, dict):
-            bundle = obligation.get("selection_bundle")
-            if not isinstance(bundle, dict):
-                bundle = {}
-            for field, role in (
-                ("original_image_ref", "target_selection_source"),
-                ("contact_sheet_ref", "target_selection_review"),
-            ):
-                value = bundle.get(field)
-                add_priority_path(
-                    value,
-                    {
-                        "role": role,
-                        "freshness": "review_required",
-                        "derived": field != "original_image_ref",
-                        "not_world_observation": field != "original_image_ref",
-                    },
-                )
-            if len(priority_paths) < config.max_vision_images:
-                candidates = bundle.get("candidates")
-                if not isinstance(candidates, list):
-                    candidates = []
-                for candidate in candidates:
-                    if not isinstance(candidate, dict):
-                        continue
-                    for field in ("overlay_ref", "crop_ref"):
-                        value = candidate.get(field)
-                        add_priority_path(
-                            value,
-                            {
-                                "role": "target_selection_candidate_review",
-                                "freshness": "review_required",
-                                "derived": True,
-                                "not_world_observation": True,
-                            },
-                        )
-                        if len(priority_paths) >= config.max_vision_images:
-                            break
+    obligation = questions.get("target_selection", request.tool_context.get("pending_target_selection"))
+    if isinstance(obligation, dict):
+        bundle = obligation.get("selection_bundle")
+        if not isinstance(bundle, dict):
+            bundle = {}
+        for field, role in (
+            ("original_image_ref", "target_selection_source"),
+            ("contact_sheet_ref", "target_selection_review"),
+        ):
+            value = bundle.get(field)
+            add_priority_path(
+                value,
+                {
+                    "role": role,
+                    "freshness": "review_required",
+                    "derived": field != "original_image_ref",
+                    "not_world_observation": field != "original_image_ref",
+                },
+            )
+        if len(priority_paths) < config.max_vision_images:
+            candidates = bundle.get("candidates")
+            if not isinstance(candidates, list):
+                candidates = []
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                for field in ("overlay_ref", "crop_ref"):
+                    value = candidate.get(field)
+                    add_priority_path(
+                        value,
+                        {
+                            "role": "target_selection_candidate_review",
+                            "freshness": "review_required",
+                            "derived": True,
+                            "not_world_observation": True,
+                        },
+                    )
                     if len(priority_paths) >= config.max_vision_images:
                         break
+                if len(priority_paths) >= config.max_vision_images:
+                    break
     for item in review_evidence:
         if isinstance(item, dict):
             add_priority_path(item.get("path"), item)
@@ -1231,6 +1247,14 @@ def _planner_user_content(
             [*priority_paths, *explicit_paths]
         )
     )
+    if any(evidence_by_path.get(p, {}).get("role") == "object_appearance_reference" for p in paths):
+        # Preserve current state and selection overview, then catalog comparison;
+        # individual candidate crops/history must not consume their image slots.
+        priorities = {"requested_evidence_view": -1, "current_scene": 0, "target_selection_review": 1,
+                      "target_selection_source": 2, "reference_localization_scene": 2,
+                      "object_appearance_reference": 3, "reference_localization_reference": 3,
+                      "target_selection_candidate_review": 4}
+        paths.sort(key=lambda p: priorities.get(evidence_by_path.get(p, {}).get("role"), 5))
     if not paths:
         return text, []
 
@@ -1307,6 +1331,7 @@ def _planner_user_content(
                 "source_packet_id",
                 "source_packet_ids",
                 "artifact_type",
+                "reference_target",
                 "not_world_observation",
             ):
                 value = evidence.get(field)

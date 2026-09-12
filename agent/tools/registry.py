@@ -1322,6 +1322,16 @@ def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     for spec in [
         ToolSpec(
+            name="inspect_evidence",
+            category="perception",
+            description="Show SAM3 candidates beside the latest retrieved catalog references, plus mask details; or open a session image. Compare original colors and reference name. No inference, selection, motion, or evidence renewal.",
+            parameters={"bundle_id": "registered SAM3 detection bundle; mutually exclusive with image_ref",
+                        "offset": "optional zero-based candidate offset, default 0; use next_offset",
+                        "image_ref": "exact Host-published image evidence_id (observation:… or current_observation:…) or saved image path in this session; mutually exclusive with bundle_id/offset"},
+            effect=ToolEffect.READ_ONLY,
+            batchable=False,
+        ),
+        ToolSpec(
             name="observe",
             category="perception",
             description="Request or retrieve the latest environment observation.",
@@ -1491,7 +1501,7 @@ def build_default_tool_registry() -> ToolRegistry:
                 ),
                 "mode": "text | points; defaults to text",
                 "prompt": (
-                    "required only for mode=text: concise visual object phrase, preferably English"
+                    "required only for mode=text: use 'object' to propose scene instances before semantic selection, or a concise visual phrase for targeted segmentation; neither guarantees complete coverage"
                 ),
                 "points": (
                     "required only for mode=points: one to 64 objects with exactly "
@@ -1533,12 +1543,15 @@ def build_default_tool_registry() -> ToolRegistry:
                 "Low-confidence or ambiguous search fails structurally "
                 "instead of silently choosing rank 1. A static environment-scoped "
                 "catalog remains a compatibility fallback. The planner never supplies "
-                "a URL. Example: for 'pick up the black bowl on the cookie box', "
+                "a URL. Set localize=false to retrieve only reference images without "
+                "calling the isolated localizer; the main Agent then compares them with "
+                "the scene. Example: for 'pick up the black bowl on the cookie box', "
                 "pass target_object='black bowl'; keep 'on the cookie box' as scene "
                 "context for visual localization, not as part of target_object."
             ),
             parameters={
                 "environment": ("active simulator env_id or catalog environment alias"),
+                "localize": "optional boolean, default true; false retrieves appearance images only, without pixel/identity evidence",
                 "target_object": (
                     "object identity/appearance only, such as 'black bowl' or "
                     "'alphabet soup'; do not include relations or locations such as "
@@ -1590,11 +1603,11 @@ def build_default_tool_registry() -> ToolRegistry:
                 "selection_confidence": "optional VLM confidence in the semantic selection",
                 "reason": "short visual or task-semantic justification",
                 "identity_anchor_id": (
-                    "required for target_object selection from new detection evidence: "
-                    "copy the exact active target identity anchor id"
+                    "omit on the first target selection; Host creates an anchor. "
+                    "After an anchor exists, copy its exact id for new target evidence; never use a catalog name"
                 ),
                 "identity_relation": (
-                    "required with identity_anchor_id for new target evidence: "
+                    "omit on first selection; with an existing identity_anchor_id use: "
                     "same_instance after cross-view comparison, or "
                     "new_task_target when advancing to another explicitly required "
                     "object in a multi-object task, or "
@@ -1876,7 +1889,8 @@ def build_default_tool_registry() -> ToolRegistry:
                 "does not move the robot or re-estimate orientation/axial contact depth. "
                 "The host checks wrist-mask clipping, robot/object freshness, proximity "
                 "to the compiled clearance reference, correction clamping, and the "
-                "compiled-grasp residual budget. Outside that geometric operating region "
+                "local estimator correction envelope. These are estimator limits, not "
+                "a global motion budget. Outside that geometric operating region "
                 "it returns requires_better_view diagnostics and no executable poses. "
                 "For orientation or depth uncertainty, run a full fresh wrist-view grasp "
                 "estimate."

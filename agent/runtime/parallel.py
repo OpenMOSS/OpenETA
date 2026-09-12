@@ -253,6 +253,7 @@ class ParallelEpisodeHarness:
         self._active_workers: dict[int, ParallelEpisodeWorker] = {}
         self._active_workers_lock = threading.Lock()
         self._cancel_event = threading.Event()
+        self.interrupted_report: JsonDict | None = None
 
     def run(
         self,
@@ -267,6 +268,7 @@ class ParallelEpisodeHarness:
         started = time.monotonic()
         outcomes: list[ParallelEpisodeOutcome] = []
         self._cancel_event.clear()
+        self.interrupted_report = None
         executor = ThreadPoolExecutor(
             max_workers=min(self.concurrency, len(specs)),
             thread_name_prefix="openeta-sim",
@@ -282,11 +284,68 @@ class ParallelEpisodeHarness:
                 outcomes.append(outcome)
                 if on_outcome is not None:
                     on_outcome(outcome)
-        except BaseException:
-            self.interrupt()
+        except BaseException as exc:
+            with self._active_workers_lock:
+                active = dict(self._active_workers)
+            snapshots = {}
+            for index, worker in active.items():
+                runner = worker.runner
+                memory = getattr(getattr(runner, "runtime", None), "memory", None)
+                snapshots[index] = {
+                    "session_id": getattr(memory, "session_id", None),
+                    "known_usage": {
+                        "scope": "runner_committed_actions_at_interrupt",
+                        "total_tokens": getattr(runner, "total_tokens", None),
+                        "tool_call_count": getattr(runner, "tool_call_count", None),
+                        "token_usage_sources": dict(getattr(runner, "token_usage_sources", {})),
+                    },
+                    "usage_complete": False,
+                }
+            cleanup = {item["index"]: item for item in self.interrupt()}
             for future in futures:
                 future.cancel()
             executor.shutdown(wait=False, cancel_futures=True)
+            settled = {outcome.index: outcome.to_dict() for outcome in outcomes}
+            for future, index in futures.items():
+                if index not in settled and future.done() and not future.cancelled():
+                    try:
+                        settled[index] = future.result().to_dict()
+                    except BaseException:
+                        pass  # The interrupted snapshot is not a fabricated result.
+            report_outcomes = []
+            for index, spec in enumerate(specs):
+                row = settled.get(index) or {
+                    "index": index, "episode_id": spec.episode_id, "env_id": spec.env_id,
+                    "seed": spec.seed, "status": "interrupted_unsettled",
+                    "episode": None, "session_id": None,
+                    "cleanup": {"ok": False, "reason": "worker_not_settled_at_interrupt"},
+                }
+                snapshot = snapshots.get(index)
+                if snapshot is not None:
+                    row["interruption_snapshot"] = snapshot
+                    row["session_id"] = row.get("session_id") or snapshot["session_id"]
+                    row["known_usage"] = snapshot["known_usage"]
+                # A worker can return a failure without EpisodeResult while its
+                # interrupt cleanup is still finishing. Never drop the captured
+                # session/usage or replace confirmed interrupt cleanup with that
+                # separate worker-close attempt.
+                if snapshot is not None or index not in settled or row.get("episode") is None:
+                    row["interrupt_cleanup"] = cleanup.get(index, {"ok": False, "reason": "worker_not_observed_at_interrupt"})
+                    if index not in settled:
+                        row["cleanup"] = row["interrupt_cleanup"]
+                    row["usage_complete"] = False
+                    row["remote_call_state"] = "unknown"
+                report_outcomes.append(row)
+            self.interrupted_report = {
+                "schema_version": "openeta.parallel_episode_batch.interrupted.v1",
+                "batch_id": resolved_batch_id, "status": "interrupted",
+                "error_type": type(exc).__name__,
+                "concurrency": min(self.concurrency, len(specs)),
+                "duration_s": round(time.monotonic() - started, 3),
+                "episode_count": len(specs), "settled_count": len(settled),
+                "performance_sample_complete": False, "usage_complete": False,
+                "outcomes": report_outcomes,
+            }
             raise
         else:
             executor.shutdown(wait=True)

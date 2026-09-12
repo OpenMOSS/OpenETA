@@ -304,61 +304,51 @@ def find_packet_id_for_path(entries: Iterable[JsonDict], path: object) -> str:
 
 
 def find_packet_reference_for_path(
-    entries: Iterable[JsonDict],
-    path: object,
+    entries: Iterable[JsonDict], path: object,
 ) -> JsonDict:
-    """Return the newest packet and frame owning one local artifact path.
-
-    A read-only render may reuse the simulator's immutable artifact path while
-    the Agent assigns a new compact observation-packet ID. Prefer the newest
-    observation in that case, but continue to fail closed if one path is
-    attributed to different camera frames or has conflicting newest owners.
-    """
-
+    """Return the newest unambiguous packet/frame owning a local artifact path."""
     if not isinstance(path, str) or not path:
         return {}
-    try:
-        requested = Path(path).resolve(strict=False)
-    except (OSError, ValueError):
+    return find_packet_references_for_paths(entries, [path]).get(path, {})
+
+
+def find_packet_references_for_paths(
+    entries: Iterable[JsonDict], paths: Iterable[object],
+) -> dict[str, JsonDict]:
+    """Resolve a batch with unchanged ambiguity rules and call-local path caching."""
+    # Cache only within this call: fresh filesystem resolution on every lookup.
+    cache = {}
+    def resolve(path):
+        if path not in cache:
+            try: cache[path] = Path(path).resolve(strict=False)
+            except (OSError, ValueError): cache[path] = None
+        return cache[path]
+    requested = {p: resolve(p) for p in paths if isinstance(p, str) and p}
+    if not requested:
         return {}
-    matches: dict[tuple[str, str], JsonDict] = {}
+    matches = {p: {} for p in requested.values() if p is not None}
     for entry in entries:
-        for artifact in entry.get("artifacts", []):
-            if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
-                continue
-            try:
-                candidate = Path(str(artifact["path"])).resolve(strict=False)
-            except (OSError, ValueError):
-                continue
-            if candidate == requested:
-                packet_id = str(entry.get("packet_id") or "")
-                frame_id = str(artifact.get("frame_id") or "")
-                if packet_id:
-                    matches[(packet_id, frame_id)] = {
-                        "source_packet_id": packet_id,
-                        "camera_frame_id": frame_id,
-                        "observation_index": entry.get("observation_index"),
-                    }
-    if not matches:
-        return {}
-    frame_ids = {str(match.get("camera_frame_id") or "") for match in matches.values()}
-    if len(frame_ids) != 1:
-        return {}
-
-    def _observation_index(match: JsonDict) -> int:
-        value = match.get("observation_index")
-        return value if isinstance(value, int) and not isinstance(value, bool) else -1
-
-    newest_index = max(_observation_index(match) for match in matches.values())
-    newest = [
-        match for match in matches.values() if _observation_index(match) == newest_index
-    ]
-    if len(newest) != 1:
-        return {}
-    return {
-        "source_packet_id": newest[0]["source_packet_id"],
-        "camera_frame_id": newest[0]["camera_frame_id"],
-    }
+        for artifact in entry.get('artifacts', []):
+            if not isinstance(artifact, dict) or not isinstance(artifact.get('path'), str):continue
+            candidate = resolve(artifact['path'])
+            if candidate not in matches:continue
+            packet_id = str(entry.get('packet_id') or '')
+            frame_id = str(artifact.get('frame_id') or '')
+            if packet_id:
+                matches[candidate][(packet_id, frame_id)] = {'source_packet_id':packet_id,
+                    'camera_frame_id':frame_id,'observation_index':entry.get('observation_index')}
+    result = {}
+    for path, canonical in requested.items():
+        owners = list(matches.get(canonical, {}).values())
+        result[path] = {}
+        if not owners or len({x['camera_frame_id'] for x in owners}) != 1:continue
+        def index(x):
+            n=x.get('observation_index');return n if isinstance(n,int) and not isinstance(n,bool) else -1
+        newest_index = max(map(index, owners))
+        newest = [x for x in owners if index(x) == newest_index]
+        if len(newest)==1:
+            result[path] = {k:newest[0][k] for k in ('source_packet_id','camera_frame_id')}
+    return result
 
 
 def _validate_unique_artifact_keys(packet_id: str, artifacts: list[JsonDict]) -> None:

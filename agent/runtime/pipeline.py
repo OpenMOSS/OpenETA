@@ -1009,6 +1009,11 @@ class ActionPipeline:
                     },
                 )
 
+            manipulation_advisories = (
+                memory.manipulation_advisories(parameters=resolved_parameters)
+                if memory is not None and request.name in {"move_to", "gripper_control", "follow_eef_trajectory"}
+                else []
+            )
             tool_call = self._compile_tool_call(
                 request.name,
                 resolved_parameters,
@@ -1027,6 +1032,10 @@ class ActionPipeline:
                     if isinstance(result_details, dict):
                         result_details["parameters"] = dict(request.parameters)
             post_failure_checks = self._compile_post_failure_checks(tool_call)
+            if manipulation_advisories and isinstance(tool_call.result, dict):
+                if not isinstance(tool_call.result.get("details"), dict):
+                    tool_call.result["details"] = {}
+                tool_call.result["details"]["manipulation_advisories"] = manipulation_advisories
             return CommandPipelinePlan(
                 request=request,
                 status=_aggregate_status([*safety_checks, tool_call]),

@@ -1,15 +1,177 @@
 {
   "schema_version": "openeta.tool_contract_catalog.v1",
   "summary": {
-    "tool_count": 35,
+    "tool_count": 36,
     "maturity_counts": {
       "inferred": 0,
-      "declared": 0,
+      "declared": 1,
       "verified": 35
     },
-    "coverage_gap_counts": {}
+    "coverage_gap_counts": {
+      "New read-only interface pending collaborator review; not promoted to verified authority.": 1
+    }
   },
   "tools": [
+    {
+      "schema_version": "openeta.tool_contract.v1",
+      "name": "inspect_evidence",
+      "category": "perception",
+      "description": "Show SAM3 candidates beside the latest retrieved catalog references, plus mask details; or open a session image. Compare original colors and reference name. No inference, selection, motion, or evidence renewal.",
+      "effect": "read_only",
+      "safe_by_default": false,
+      "batchable": false,
+      "requires_observation_after_call": false,
+      "maturity": "declared",
+      "request_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bundle_id": {
+            "type": "string",
+            "pattern": "^bnd-[0-9a-f]{32}$"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "image_ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact Host-published observation/current_observation image evidence_id or session-owned saved image path. Historical viewing never refreshes evidence."
+          }
+        },
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "image_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact Host-published observation/current_observation image evidence_id or session-owned saved image path. Historical viewing never refreshes evidence."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "image_ref"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "bundle_id": {
+                "type": "string",
+                "pattern": "^bnd-[0-9a-f]{32}$"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "bundle_id"
+            ]
+          }
+        ]
+      },
+      "host_resolution": {
+        "mode": "none",
+        "resolver": "",
+        "implementation": "",
+        "resolution_layer": "",
+        "contract_driven_dispatch": false,
+        "agent_parameters": [],
+        "resolved_parameters": [],
+        "freshness_dimensions": [],
+        "invalidated_by": [],
+        "description": ""
+      },
+      "consumes": [],
+      "outcomes": [
+        {
+          "semantic_outcome": "completed",
+          "operational_success": true,
+          "output_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "produces": [],
+          "diagnostics_required": false,
+          "recovery_required": false,
+          "description": ""
+        },
+        {
+          "semantic_outcome": "operational_failure",
+          "operational_success": false,
+          "output_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+          },
+          "produces": [],
+          "diagnostics_required": true,
+          "recovery_required": true,
+          "description": "The call did not produce its advertised semantic fact."
+        }
+      ],
+      "evidence_lifetime": {
+        "scope": "call",
+        "freshness_dimensions": [],
+        "invalidated_by": [],
+        "description": ""
+      },
+      "gate": {
+        "checks": [
+          "exact registered bundle hash/session/type or session-owned image",
+          "four mask-detail candidates; optional latest-reference comparison with up to eight crops and three reference views",
+          "bounded page/image size; no target selection or motion authorization"
+        ],
+        "bindings": [
+          {
+            "check_id": "runtime.tool_admission",
+            "description": "Executable tool attempts require Host quota admission before authorization and handler dispatch; Agent parameters cannot extend it.",
+            "implementation": "agent/tools/registry.py:ToolRegistry.call",
+            "repair_codes": [
+              "tool_call_budget_exhausted"
+            ],
+            "applies_when": "a Host episode tool-call budget is bound to the execution scope"
+          },
+          {
+            "check_id": "runtime.motion_reconciliation",
+            "description": "Unknown remote mutations remain fenced; position-only observations cannot prove completion. Stop the episode pending Host cleanup.",
+            "implementation": "agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error",
+            "repair_codes": [
+              "motion_reconciliation_required"
+            ],
+            "applies_when": "a motion reconciliation record exists, including legacy position-only verdicts"
+          },
+          {
+            "check_id": "runtime.batch_boundary",
+            "description": "Dependent or world-mutating calls cannot bypass observation boundaries.",
+            "implementation": "agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch",
+            "repair_codes": [
+              "anyplace_requires_atomic_call",
+              "batch_requires_observation_boundary",
+              "batch_gate_rejection",
+              "perception_provenance_integrity"
+            ],
+            "applies_when": "the tool appears inside tool_batch"
+          }
+        ],
+        "fail_closed": false,
+        "repair_schema": "openeta.gate_repair.v1",
+        "preserves_agent_choice": true,
+        "description": ""
+      },
+      "source_paths": [
+        "agent/tools/default_contracts.py",
+        "agent/tools/evidence_inspection.py"
+      ],
+      "coverage_gaps": [
+        "New read-only interface pending collaborator review; not promoted to verified authority."
+      ]
+    },
     {
       "schema_version": "openeta.tool_contract.v1",
       "name": "observe",
@@ -1945,7 +2107,7 @@
       "schema_version": "openeta.tool_contract.v1",
       "name": "retrieve_asset_reference",
       "category": "perception",
-      "description": "Resolve an object-only asset phrase (identity/appearance, not a scene relation) through ranked object-memory search, fetch the selected canonical asset's reference views, and use an isolated visual localizer to return a bounded, ranked foreground seed plus candidate audit. The highest-ranked seed is passed to SAM3 one candidate at a time for main-Agent confirmation. Low-confidence or ambiguous search fails structurally instead of silently choosing rank 1. A static environment-scoped catalog remains a compatibility fallback. The planner never supplies a URL. Example: for 'pick up the black bowl on the cookie box', pass target_object='black bowl'; keep 'on the cookie box' as scene context for visual localization, not as part of target_object.",
+      "description": "Resolve an object-only asset phrase (identity/appearance, not a scene relation) through ranked object-memory search, fetch the selected canonical asset's reference views, and use an isolated visual localizer to return a bounded, ranked foreground seed plus candidate audit. The highest-ranked seed is passed to SAM3 one candidate at a time for main-Agent confirmation. Low-confidence or ambiguous search fails structurally instead of silently choosing rank 1. A static environment-scoped catalog remains a compatibility fallback. The planner never supplies a URL. Set localize=false to retrieve only reference images without calling the isolated localizer; the main Agent then compares them with the scene. Example: for 'pick up the black bowl on the cookie box', pass target_object='black bowl'; keep 'on the cookie box' as scene context for visual localization, not as part of target_object.",
       "effect": "read_only",
       "safe_by_default": false,
       "batchable": false,
@@ -1969,6 +2131,10 @@
           "camera_frame_id": {
             "type": "string",
             "minLength": 1
+          },
+          "localize": {
+            "type": "boolean",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -1988,7 +2154,8 @@
           "environment",
           "target_object",
           "source_packet_id",
-          "camera_frame_id"
+          "camera_frame_id",
+          "localize"
         ],
         "resolved_parameters": [
           "scene image",
@@ -2067,6 +2234,41 @@
               "schema_version": "openeta.asset_reference_grounding.v1"
             }
           ],
+          "diagnostics_required": false,
+          "recovery_required": false,
+          "description": ""
+        },
+        {
+          "semantic_outcome": "reference_images_available",
+          "operational_success": true,
+          "output_schema": {
+            "type": "object",
+            "properties": {
+              "reference_images": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              },
+              "localization_status": {
+                "type": "string",
+                "enum": [
+                  "not_requested"
+                ]
+              },
+              "identity_confirmed": {
+                "const": false
+              }
+            },
+            "additionalProperties": true,
+            "required": [
+              "reference_images",
+              "localization_status",
+              "identity_confirmed"
+            ]
+          },
+          "produces": [],
           "diagnostics_required": false,
           "recovery_required": false,
           "description": ""
@@ -2426,7 +2628,8 @@
             "type": "string"
           },
           "identity_anchor_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Omit on first target selection; Host creates an anchor. For later target evidence copy the exact active anchor, not a catalog name."
           },
           "identity_relation": {
             "type": "string",
@@ -2434,7 +2637,8 @@
               "same_instance",
               "new_task_target",
               "replace_misidentified_anchor"
-            ]
+            ],
+            "description": "Omit on first selection. With an existing anchor, explicitly confirm continuity, advance to another required target, or correct a misidentification."
           },
           "evidence_role": {
             "type": "string",
@@ -4589,7 +4793,7 @@
       "schema_version": "openeta.tool_contract.v1",
       "name": "compute_wrist_alignment",
       "category": "geometry",
-      "description": "Near a compiled clearance/hover reference, compute one bounded world-frame lateral translation correction from a fresh wrist mask, aligned depth, and the configured calibrated gripper-center projection. Use it when approach orientation and contact depth remain credible; it does not move the robot or re-estimate orientation/axial contact depth. The host checks wrist-mask clipping, robot/object freshness, proximity to the compiled clearance reference, correction clamping, and the compiled-grasp residual budget. Outside that geometric operating region it returns requires_better_view diagnostics and no executable poses. For orientation or depth uncertainty, run a full fresh wrist-view grasp estimate.",
+      "description": "Near a compiled clearance/hover reference, compute one bounded world-frame lateral translation correction from a fresh wrist mask, aligned depth, and the configured calibrated gripper-center projection. Use it when approach orientation and contact depth remain credible; it does not move the robot or re-estimate orientation/axial contact depth. The host checks wrist-mask clipping, robot/object freshness, proximity to the compiled clearance reference, correction clamping, and the local estimator correction envelope. These are estimator limits, not a global motion budget. Outside that geometric operating region it returns requires_better_view diagnostics and no executable poses. For orientation or depth uncertainty, run a full fresh wrist-view grasp estimate.",
       "effect": "read_only",
       "safe_by_default": false,
       "batchable": false,
@@ -5360,8 +5564,7 @@
       "gate": {
         "checks": [
           "compiled grasp exists and target evidence is current",
-          "gripper close is latched and measured aperture is not fully open",
-          "a tentative carried-object proxy exists, or an articulated target has a matching reached compiled-contact receipt when that proxy is not applicable",
+          "gripper command, aperture and proxy are reported as non-blocking probe context",
           "linear direction is non-zero or arc has 2-5 bounded segments",
           "total probe length is 0.05 m within tolerance",
           "current EEF pose and exactly two required RGB views exist",
@@ -5881,7 +6084,7 @@
           "receipt exists and is executable",
           "receipt pose policy and tolerances match the frozen preview",
           "receipt epochs are current",
-          "compiled residual budget is respected when applicable",
+          "supplied compiled geometry is current; residuals are advisory",
           "collision capability matches deferred-collision authorization"
         ],
         "bindings": [
@@ -5914,23 +6117,12 @@
           },
           {
             "check_id": "runtime.compiled_grasp_provenance",
-            "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
+            "description": "Supplied motion references must be valid; failed grasp/placement outcomes are advisory, not gripper vetoes.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
-              "attached_release_after_failed_motion",
-              "compiled_clearance_not_reached",
-              "compiled_contact_approach_misaligned",
-              "compiled_contact_orientation_misaligned",
-              "compiled_contact_not_reached",
-              "compiled_contact_receipt_mismatch",
-              "compiled_contact_receipt_missing",
-              "compiled_contact_receipt_stale",
               "compiled_grasp_adjustment_invalid",
-              "compiled_grasp_adjustment_out_of_bounds",
               "compiled_grasp_adjustment_stale",
-              "compiled_grasp_adjustment_superseded",
               "compiled_grasp_adjustment_unresolved",
-              "compiled_grasp_adjustment_unverified_orientation_policy",
               "compiled_grasp_target_superseded"
             ],
             "applies_when": "the action is geometrically tied to a compiled targeted grasp"
@@ -6274,7 +6466,7 @@
           "receipt exists and is executable",
           "receipt pose policy and tolerances match the frozen preview",
           "receipt epochs are current",
-          "compiled residual budget is respected when applicable",
+          "supplied compiled geometry is current; residuals are advisory",
           "collision capability matches deferred-collision authorization"
         ],
         "bindings": [
@@ -6307,23 +6499,12 @@
           },
           {
             "check_id": "runtime.compiled_grasp_provenance",
-            "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
+            "description": "Supplied motion references must be valid; failed grasp/placement outcomes are advisory, not gripper vetoes.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
-              "attached_release_after_failed_motion",
-              "compiled_clearance_not_reached",
-              "compiled_contact_approach_misaligned",
-              "compiled_contact_orientation_misaligned",
-              "compiled_contact_not_reached",
-              "compiled_contact_receipt_mismatch",
-              "compiled_contact_receipt_missing",
-              "compiled_contact_receipt_stale",
               "compiled_grasp_adjustment_invalid",
-              "compiled_grasp_adjustment_out_of_bounds",
               "compiled_grasp_adjustment_stale",
-              "compiled_grasp_adjustment_superseded",
               "compiled_grasp_adjustment_unresolved",
-              "compiled_grasp_adjustment_unverified_orientation_policy",
               "compiled_grasp_target_superseded"
             ],
             "applies_when": "the action is geometrically tied to a compiled targeted grasp"
@@ -6597,23 +6778,12 @@
           },
           {
             "check_id": "runtime.compiled_grasp_provenance",
-            "description": "Contact and close cannot treat stale or failed grasp evidence as success.",
+            "description": "Supplied motion references must be valid; failed grasp/placement outcomes are advisory, not gripper vetoes.",
             "implementation": "agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error",
             "repair_codes": [
-              "attached_release_after_failed_motion",
-              "compiled_clearance_not_reached",
-              "compiled_contact_approach_misaligned",
-              "compiled_contact_orientation_misaligned",
-              "compiled_contact_not_reached",
-              "compiled_contact_receipt_mismatch",
-              "compiled_contact_receipt_missing",
-              "compiled_contact_receipt_stale",
               "compiled_grasp_adjustment_invalid",
-              "compiled_grasp_adjustment_out_of_bounds",
               "compiled_grasp_adjustment_stale",
-              "compiled_grasp_adjustment_superseded",
               "compiled_grasp_adjustment_unresolved",
-              "compiled_grasp_adjustment_unverified_orientation_policy",
               "compiled_grasp_target_superseded"
             ],
             "applies_when": "the action is geometrically tied to a compiled targeted grasp"

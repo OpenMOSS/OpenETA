@@ -1,9 +1,10 @@
 {
   "schema_version": "openeta.tool_contract_readiness.v1",
   "authority": "promotion_evidence_only",
-  "declared_tool_count": 35,
-  "ready_for_live_invalid_canary_count": 35,
+  "declared_tool_count": 36,
+  "ready_for_live_invalid_canary_count": 36,
   "ready_for_live_invalid_canary": [
+    "inspect_evidence",
     "observe",
     "enhance_depth",
     "estimate_depth_prior",
@@ -41,6 +42,17 @@
     "update_skill"
   ],
   "tools": [
+    {
+      "tool": "inspect_evidence",
+      "maturity": "declared",
+      "case_count": 3,
+      "invalid_class_count": 2,
+      "valid_fixture_accepted_by_both": true,
+      "acceptance_mismatch_count": 0,
+      "deterministic_request_parity": true,
+      "ready_for_live_invalid_canary": true,
+      "mismatch_cases": []
+    },
     {
       "tool": "observe",
       "maturity": "verified",
@@ -428,6 +440,75 @@
     }
   ],
   "records": [
+    {
+      "tool": "inspect_evidence",
+      "case": "valid_minimal",
+      "parameters": {
+        "image_ref": "x"
+      },
+      "legacy_accepted": true,
+      "contract_accepted": true,
+      "acceptance_match": true,
+      "legacy_errors": [],
+      "contract_violations": []
+    },
+    {
+      "tool": "inspect_evidence",
+      "case": "wrong_type:image_ref",
+      "parameters": {
+        "image_ref": 7
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "{'tool': 'inspect_evidence', 'code': 'request_type_mismatch', 'path': 'parameters.image_ref', 'message': 'parameters.image_ref must be JSON type string; got integer.'}",
+        "{'tool': 'inspect_evidence', 'code': 'request_one_of_mismatch', 'path': 'parameters', 'message': 'parameters must match exactly one request branch; matched 0.'}"
+      ],
+      "contract_violations": [
+        {
+          "tool": "inspect_evidence",
+          "code": "request_type_mismatch",
+          "path": "parameters.image_ref",
+          "message": "parameters.image_ref must be JSON type string; got integer."
+        },
+        {
+          "tool": "inspect_evidence",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
+        }
+      ]
+    },
+    {
+      "tool": "inspect_evidence",
+      "case": "unexpected_property",
+      "parameters": {
+        "image_ref": "x",
+        "__unexpected__": true
+      },
+      "legacy_accepted": false,
+      "contract_accepted": false,
+      "acceptance_match": true,
+      "legacy_errors": [
+        "{'tool': 'inspect_evidence', 'code': 'request_additional_field', 'path': 'parameters.__unexpected__', 'message': \"parameters does not allow field '__unexpected__'.\"}",
+        "{'tool': 'inspect_evidence', 'code': 'request_one_of_mismatch', 'path': 'parameters', 'message': 'parameters must match exactly one request branch; matched 0.'}"
+      ],
+      "contract_violations": [
+        {
+          "tool": "inspect_evidence",
+          "code": "request_additional_field",
+          "path": "parameters.__unexpected__",
+          "message": "parameters does not allow field '__unexpected__'."
+        },
+        {
+          "tool": "inspect_evidence",
+          "code": "request_one_of_mismatch",
+          "path": "parameters",
+          "message": "parameters must match exactly one request branch; matched 0."
+        }
+      ]
+    },
     {
       "tool": "observe",
       "case": "valid_minimal",

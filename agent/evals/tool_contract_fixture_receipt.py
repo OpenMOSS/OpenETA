@@ -1124,6 +1124,7 @@ def _retrieve_asset_reference_fixture(root: Path) -> JsonDict:
         "scene_image": str(scene),
     }
     success = registry.call("retrieve_asset_reference", parameters)
+    reference_only = registry.call("retrieve_asset_reference", {**parameters, "localize": False})
     failure = registry.call(
         "retrieve_asset_reference",
         {**parameters, "scene_image": str(root / "missing-scene.png")},
@@ -1138,7 +1139,7 @@ def _retrieve_asset_reference_fixture(root: Path) -> JsonDict:
         "retrieve_asset_reference",
         root,
         registry,
-        success.details,
+        [success.details, reference_only.details],
         failure.details,
         success_parameters=parameters,
         handler_implementation=(

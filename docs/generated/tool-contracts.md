@@ -5,9 +5,9 @@
 
 ## Coverage
 
-- Tools: 35
+- Tools: 36
 - Inferred: 0
-- Declared: 0
+- Declared: 1
 - Verified: 35
 
 An inferred contract is an inventory compatibility record, not proof that 
@@ -33,6 +33,7 @@ required fields, output variants, evidence lifetime, or gate behavior are comple
 | `grasp_pose_estimate` | manipulation | `planning` | verified | 2 |
 | `gripper_control` | control | `world_mutating` | verified | 1 |
 | `ik_preview_check` | safety | `read_only` | verified | 13 |
+| `inspect_evidence` | perception | `read_only` | declared | 3 |
 | `molmopoint` | perception | `read_only` | verified | 2 |
 | `move_to` | control | `world_mutating` | verified | 6 |
 | `observe` | perception | `read_only` | verified | 1 |
@@ -45,7 +46,7 @@ required fields, output variants, evidence lifetime, or gate behavior are comple
 | `python_exec` | coding | `planning` | verified | 3 |
 | `register_skill` | skill_management | `planning` | verified | 8 |
 | `reject_sam3_detections` | perception | `planning` | verified | 2 |
-| `retrieve_asset_reference` | perception | `read_only` | verified | 4 |
+| `retrieve_asset_reference` | perception | `read_only` | verified | 5 |
 | `sam3` | perception | `read_only` | verified | 8 |
 | `save_memory` | memory | `bookkeeping` | verified | 4 |
 | `select_sam3_detection` | perception | `planning` | verified | 8 |
@@ -467,7 +468,7 @@ Exclusive request branches: `[{"required": ["grasp_result_id"]}, {"required": ["
 
 ## `compute_wrist_alignment`
 
-Near a compiled clearance/hover reference, compute one bounded world-frame lateral translation correction from a fresh wrist mask, aligned depth, and the configured calibrated gripper-center projection. Use it when approach orientation and contact depth remain credible; it does not move the robot or re-estimate orientation/axial contact depth. The host checks wrist-mask clipping, robot/object freshness, proximity to the compiled clearance reference, correction clamping, and the compiled-grasp residual budget. Outside that geometric operating region it returns requires_better_view diagnostics and no executable poses. For orientation or depth uncertainty, run a full fresh wrist-view grasp estimate.
+Near a compiled clearance/hover reference, compute one bounded world-frame lateral translation correction from a fresh wrist mask, aligned depth, and the configured calibrated gripper-center projection. Use it when approach orientation and contact depth remain credible; it does not move the robot or re-estimate orientation/axial contact depth. The host checks wrist-mask clipping, robot/object freshness, proximity to the compiled clearance reference, correction clamping, and the local estimator correction envelope. These are estimator limits, not a global motion budget. Outside that geometric operating region it returns requires_better_view diagnostics and no executable poses. For orientation or depth uncertainty, run a full fresh wrist-view grasp estimate.
 
 - Category/effect: `geometry` / `read_only`
 - Contract maturity: `verified`
@@ -870,7 +871,7 @@ Follow 1-5 short, individually IK-checked end-effector waypoints atomically whil
 
 ### Gate and repair
 
-- Checks: `receipt exists and is executable`, `receipt pose policy and tolerances match the frozen preview`, `receipt epochs are current`, `compiled residual budget is respected when applicable`, `collision capability matches deferred-collision authorization`
+- Checks: `receipt exists and is executable`, `receipt pose policy and tolerances match the frozen preview`, `receipt epochs are current`, `supplied compiled geometry is current; residuals are advisory`, `collision capability matches deferred-collision authorization`
 - Fail closed: `true`
 - Repair schema: `openeta.gate_repair.v1`
 - Preserves Agent choice: `true`
@@ -881,7 +882,7 @@ Follow 1-5 short, individually IK-checked end-effector waypoints atomically whil
 | `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
 | `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_trajectory_resolution` | always | `invalid_ik_trajectory_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_trajectory_reference` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
 | `runtime.ik_execution_authorization` | always | `ik_preview_required`, `ik_preview_not_feasible`, `ik_target_hard_infeasible`, `ik_collision_delegation_not_authorized` | `agent/runtime/memory.py:AgentMemory.ik_execution_gate_error` |
 | `runtime.pre_safety_checker` | always | `pre_safety_check_failed`, `ik_preview_not_feasible`, `ik_target_hard_infeasible` | `agent/runtime/pipeline.py:ActionPipeline._compile_pre_safety_checks` |
@@ -1088,7 +1089,7 @@ None declared.
 |---|---|---|---|
 | `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
 | `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
 
 ### Traceability and coverage gaps
@@ -1184,6 +1185,74 @@ Exclusive request branches: `[{"required": ["bundle_id"], "properties": {"bundle
 
 - Sources: `agent/tools/default_contracts.py`, `agent/runtime/pipeline.py`, `agent/runtime/memory.py`, `agent/tools/sim_mcp.py`
 - Gaps: None.
+
+## `inspect_evidence`
+
+Show SAM3 candidates beside the latest retrieved catalog references, plus mask details; or open a session image. Compare original colors and reference name. No inference, selection, motion, or evidence renewal.
+
+- Category/effect: `perception` / `read_only`
+- Contract maturity: `declared`
+- Requires observation after call: `false`
+- Agent semantic limits: `read_only`, `atomic_call_only`
+
+### Agent request
+
+| Parameter | Required | Schema / description |
+|---|:---:|---|
+| `bundle_id` | no | `string` —  — `{"pattern": "^bnd-[0-9a-f]{32}$"}` |
+| `offset` | no | `integer` —  — `{"minimum": 0}` |
+| `image_ref` | no | `string` — Exact Host-published observation/current_observation image evidence_id or session-owned saved image path. Historical viewing never refreshes evidence. — `{"minLength": 1}` |
+
+Exclusive request branches: `[{"type": "object", "properties": {"image_ref": {"type": "string", "minLength": 1, "description": "Exact Host-published observation/current_observation image evidence_id or session-owned saved image path. Historical viewing never refreshes evidence."}}, "additionalProperties": false, "required": ["image_ref"]}, {"type": "object", "properties": {"bundle_id": {"type": "string", "pattern": "^bnd-[0-9a-f]{32}$"}, "offset": {"type": "integer", "minimum": 0}}, "additionalProperties": false, "required": ["bundle_id"]}]`
+
+### Host resolution
+
+- Mode/resolver: `none` / `none`
+- Runtime binding: `none` (`none` layer)
+- Contract-driven dispatch: no
+- Agent-visible references: none
+- Private resolved inputs: none
+- Resolution freshness: none
+- Resolution invalidated by: none
+- Notes: None.
+
+### Consumed typed facts
+
+None declared.
+
+### Semantic outcomes and outputs
+
+| Outcome | Operational success | Required outputs | Produces | Executable | Recovery |
+|---|:---:|---|---|:---:|:---:|
+| `completed` | True | none | none | n/a | no |
+| `operational_failure` | False | none | none | n/a | required |
+
+### Evidence lifetime
+
+- Scope: `call`
+- Freshness dimensions: none
+- Invalidated by: none
+- Reusable across packet refresh: `unspecified`
+- Notes: None.
+
+### Gate and repair
+
+- Checks: `exact registered bundle hash/session/type or session-owned image`, `four mask-detail candidates; optional latest-reference comparison with up to eight crops and three reference views`, `bounded page/image size; no target selection or motion authorization`
+- Fail closed: `false`
+- Repair schema: `openeta.gate_repair.v1`
+- Preserves Agent choice: `true`
+- Notes: None.
+
+| Gate check id | Applies when | Repair codes | Implementation |
+|---|---|---|---|
+| `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
+| `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
+| `runtime.batch_boundary` | the tool appears inside tool_batch | `anyplace_requires_atomic_call`, `batch_requires_observation_boundary`, `batch_gate_rejection`, `perception_provenance_integrity` | `agent/runtime/pipeline.py:ActionPipeline._compile_tool_batch` |
+
+### Traceability and coverage gaps
+
+- Sources: `agent/tools/default_contracts.py`, `agent/tools/evidence_inspection.py`
+- Gaps: `New read-only interface pending collaborator review; not promoted to verified authority.`
 
 ## `molmopoint`
 
@@ -1314,7 +1383,7 @@ Exclusive request branches: `[{"required": ["ik_receipt_id"]}, {"required": ["bu
 
 ### Gate and repair
 
-- Checks: `receipt exists and is executable`, `receipt pose policy and tolerances match the frozen preview`, `receipt epochs are current`, `compiled residual budget is respected when applicable`, `collision capability matches deferred-collision authorization`
+- Checks: `receipt exists and is executable`, `receipt pose policy and tolerances match the frozen preview`, `receipt epochs are current`, `supplied compiled geometry is current; residuals are advisory`, `collision capability matches deferred-collision authorization`
 - Fail closed: `true`
 - Repair schema: `openeta.gate_repair.v1`
 - Preserves Agent choice: `true`
@@ -1325,7 +1394,7 @@ Exclusive request branches: `[{"required": ["ik_receipt_id"]}, {"required": ["bu
 | `runtime.tool_admission` | a Host episode tool-call budget is bound to the execution scope | `tool_call_budget_exhausted` | `agent/tools/registry.py:ToolRegistry.call` |
 | `runtime.motion_reconciliation` | a motion reconciliation record exists, including legacy position-only verdicts | `motion_reconciliation_required` | `agent/runtime/memory.py:AgentMemory.motion_reconciliation_gate_error` |
 | `runtime.ik_receipt_resolution` | always | `invalid_ik_receipt_reference` | `agent/runtime/memory.py:AgentMemory.resolve_ik_motion_reference` |
-| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `attached_release_after_failed_motion`, `compiled_clearance_not_reached`, `compiled_contact_approach_misaligned`, `compiled_contact_orientation_misaligned`, `compiled_contact_not_reached`, `compiled_contact_receipt_mismatch`, `compiled_contact_receipt_missing`, `compiled_contact_receipt_stale`, `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_out_of_bounds`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_superseded`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_adjustment_unverified_orientation_policy`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
+| `runtime.compiled_grasp_provenance` | the action is geometrically tied to a compiled targeted grasp | `compiled_grasp_adjustment_invalid`, `compiled_grasp_adjustment_stale`, `compiled_grasp_adjustment_unresolved`, `compiled_grasp_target_superseded` | `agent/runtime/memory.py:AgentMemory.compiled_grasp_target_gate_error` |
 | `runtime.articulated_probe_integrity` | motion carries an articulated probe hash | `articulated_probe_integrity` | `agent/runtime/memory.py:AgentMemory.articulated_probe_action_gate_error` |
 | `runtime.ik_execution_authorization` | always | `ik_preview_required`, `ik_preview_not_feasible`, `ik_target_hard_infeasible`, `ik_collision_delegation_not_authorized` | `agent/runtime/memory.py:AgentMemory.ik_execution_gate_error` |
 | `runtime.pre_safety_checker` | always | `pre_safety_check_failed`, `ik_preview_not_feasible`, `ik_target_hard_infeasible` | `agent/runtime/pipeline.py:ActionPipeline._compile_pre_safety_checks` |
@@ -1455,7 +1524,7 @@ Exclusive request branches: `[{"required": ["direction_world_xyz"], "properties"
 
 ### Gate and repair
 
-- Checks: `compiled grasp exists and target evidence is current`, `gripper close is latched and measured aperture is not fully open`, `a tentative carried-object proxy exists, or an articulated target has a matching reached compiled-contact receipt when that proxy is not applicable`, `linear direction is non-zero or arc has 2-5 bounded segments`, `total probe length is 0.05 m within tolerance`, `current EEF pose and exactly two required RGB views exist`, `every frozen endpoint still requires exact IK preview`
+- Checks: `compiled grasp exists and target evidence is current`, `gripper command, aperture and proxy are reported as non-blocking probe context`, `linear direction is non-zero or arc has 2-5 bounded segments`, `total probe length is 0.05 m within tolerance`, `current EEF pose and exactly two required RGB views exist`, `every frozen endpoint still requires exact IK preview`
 - Fail closed: `true`
 - Repair schema: `openeta.gate_repair.v1`
 - Preserves Agent choice: `true`
@@ -2020,7 +2089,7 @@ Reject every candidate in one pending SAM3 result when visual review shows that 
 
 ## `retrieve_asset_reference`
 
-Resolve an object-only asset phrase (identity/appearance, not a scene relation) through ranked object-memory search, fetch the selected canonical asset's reference views, and use an isolated visual localizer to return a bounded, ranked foreground seed plus candidate audit. The highest-ranked seed is passed to SAM3 one candidate at a time for main-Agent confirmation. Low-confidence or ambiguous search fails structurally instead of silently choosing rank 1. A static environment-scoped catalog remains a compatibility fallback. The planner never supplies a URL. Example: for 'pick up the black bowl on the cookie box', pass target_object='black bowl'; keep 'on the cookie box' as scene context for visual localization, not as part of target_object.
+Resolve an object-only asset phrase (identity/appearance, not a scene relation) through ranked object-memory search, fetch the selected canonical asset's reference views, and use an isolated visual localizer to return a bounded, ranked foreground seed plus candidate audit. The highest-ranked seed is passed to SAM3 one candidate at a time for main-Agent confirmation. Low-confidence or ambiguous search fails structurally instead of silently choosing rank 1. A static environment-scoped catalog remains a compatibility fallback. The planner never supplies a URL. Set localize=false to retrieve only reference images without calling the isolated localizer; the main Agent then compares them with the scene. Example: for 'pick up the black bowl on the cookie box', pass target_object='black bowl'; keep 'on the cookie box' as scene context for visual localization, not as part of target_object.
 
 - Category/effect: `perception` / `read_only`
 - Contract maturity: `verified`
@@ -2035,13 +2104,14 @@ Resolve an object-only asset phrase (identity/appearance, not a scene relation) 
 | `target_object` | yes | `string` —  — `{"minLength": 1}` |
 | `source_packet_id` | yes | `string` —  — `{"minLength": 1}` |
 | `camera_frame_id` | no | `string` —  — `{"minLength": 1}` |
+| `localize` | no | `boolean` —  — `{"default": true}` |
 
 ### Host resolution
 
 - Mode/resolver: `object_memory_plus_packet` / `openeta.host_resolver.retrieve_asset_reference.v1`
 - Runtime binding: `agent.tools.runtime_contract_bindings._resolve_retrieve_asset_reference_input` (`pipeline` layer)
 - Contract-driven dispatch: yes
-- Agent-visible references: `environment`, `target_object`, `source_packet_id`, `camera_frame_id`
+- Agent-visible references: `environment`, `target_object`, `source_packet_id`, `camera_frame_id`, `localize`
 - Private resolved inputs: `scene image`, `ranked canonical references`, `localizer inputs`
 - Resolution freshness: `source packet id`
 - Resolution invalidated by: `unknown packet`, `ambiguous/low-confidence memory resolution`
@@ -2058,6 +2128,7 @@ Resolve an object-only asset phrase (identity/appearance, not a scene relation) 
 | Outcome | Operational success | Required outputs | Produces | Executable | Recovery |
 |---|:---:|---|---|:---:|:---:|
 | `completed` | True | `positive_points`, `localization_bundle` | `openeta.asset_reference_grounding.v1 @ outputs.localization_bundle` | n/a | no |
+| `reference_images_available` | True | `reference_images`, `localization_status`, `identity_confirmed` | none | n/a | no |
 | `reference_service_unavailable` | False | none | none | n/a | required |
 | `operational_failure` | False | none | none | n/a | required |
 
@@ -2252,8 +2323,8 @@ Resolve a pending SAM3 semantic-verification obligation by selecting one stable 
 | `detection_id` | yes | `string` —  — `{"minLength": 1}` |
 | `selection_confidence` | no | `number` —  — `{"minimum": 0, "maximum": 1}` |
 | `reason` | no | `string` —  |
-| `identity_anchor_id` | no | `string` —  |
-| `identity_relation` | no | `string` —  — `{"enum": ["same_instance", "new_task_target", "replace_misidentified_anchor"]}` |
+| `identity_anchor_id` | no | `string` — Omit on first target selection; Host creates an anchor. For later target evidence copy the exact active anchor, not a catalog name. |
+| `identity_relation` | no | `string` — Omit on first selection. With an existing anchor, explicitly confirm continuity, advance to another required target, or correct a misidentification. — `{"enum": ["same_instance", "new_task_target", "replace_misidentified_anchor"]}` |
 | `evidence_role` | no | `string` —  — `{"enum": ["target_object", "placement_region"]}` |
 | `target_geometry_family` | no | `string` — optional truthful gross-geometry hint: apple, articulated_handle, bowl, boxed_item, drawer_handle, lying_bottle, other, unknown, upright_bottle, upright_can; omit or use an empty string when unspecified. Use canonical lowercase values; this hint is not object identity or graspable-part evidence. — `{"enum": ["", "apple", "articulated_handle", "bowl", "boxed_item", "drawer_handle", "lying_bottle", "other", "unknown", "upright_bottle", "upright_can"]}` |
 

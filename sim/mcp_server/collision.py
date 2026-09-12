@@ -61,12 +61,26 @@ def resolve_contact_authorization(
             "code": "contact_authorization_missing",
             "message": "No host-resolved contact authorization was supplied.",
         }
-    if authorization.get("schema_version") != "openeta.contact_authorization.v1":
+    model_point = authorization.get("schema_version") == "openeta.model_point_contact.v1"
+    if authorization.get("schema_version") not in {
+        "openeta.contact_authorization.v1", "openeta.model_point_contact.v1",
+    }:
         return None, {
             "ok": False,
             "code": "contact_authorization_schema_mismatch",
             "message": "Contact authorization has an unsupported schema version.",
         }
+    if model_point:
+        if authorization.get("source_kind") != "model_rgbd_point" or not all(
+            isinstance(authorization.get(key), str) and authorization[key].strip()
+            for key in ("session_id", "source_packet_id", "camera_frame_id", "point_id")
+        ):
+            return None, {"ok": False, "code": "model_point_provenance_missing",
+                          "message": "Model contact requires a host-retained RGB-D point reference."}
+        # The public tool cannot supply this block. The isolated Host creates
+        # it from calibrated depth and additionally bounds the target grip-site
+        # to 10 cm from the mark. Association stays private to collision checks.
+        max_anchor_distance_m = min(max_anchor_distance_m, .02)
     if authorization.get("waypoint_role") != "grasp_contact":
         return None, {
             "ok": False,
@@ -86,6 +100,9 @@ def resolve_contact_authorization(
         if not isinstance(obj, dict):
             continue
         category = str(obj.get("category") or "").strip().lower()
+        kind = obj.get("geometry_kind")
+        if kind == "fixture_static" or (kind == "fixture_contact" and not model_point):
+            continue
         if category in _RECEPTACLE_CATEGORIES:
             continue
         position = obj.get("position")
@@ -141,13 +158,21 @@ def resolve_contact_authorization(
             "nearest_surface_distance_m": best_surface,
             "nearest_center_distance_m": best_center,
         }
+    if model_point and best_center > .15:
+        return None, {"ok": False, "code": "model_point_target_outside_envelope",
+                      "message": "Measured point is too far from candidate contact geometry."}
     return best, {
         "ok": True,
         "schema_version": "openeta.contact_authorization_resolution.v1",
         "compiled_grasp_id": authorization.get("compiled_grasp_id"),
+        **({"source_kind": "model_rgbd_point", "point_id": authorization["point_id"],
+            "source_packet_id": authorization["source_packet_id"]} if model_point else {}),
         "target_evidence_id": authorization.get("target_evidence_id"),
         "object_scene_epoch": authorization.get("object_scene_epoch"),
-        "target_object_name": str(best.get("name") or ""),
+        "target_object_name": str(best.get("contact_object_name") or best.get("name") or ""),
+        **({"contact_kind": "articulated_fixture", "target_geom_name": best["contact_geom_name"],
+            "target_body_name": best["contact_body_name"]}
+           if best.get("geometry_kind") == "fixture_contact" else {}),
         "target_object_category": str(best.get("category") or ""),
         "anchor_world_xyz": anchor_xyz,
         "surface_distance_m": best_surface,
@@ -237,6 +262,8 @@ def check_attached_object_collision(
     predicted_eef_xyz: list[float],
     *,
     baseline_eef_xyz: list[float] | None = None,
+    predicted_eef_quat_xyzw: list[float] | None = None,
+    baseline_eef_quat_xyzw: list[float] | None = None,
     margin_m: float = 0.005,
 ) -> tuple[bool, dict]:
     """Check a conservative attached-object AABB against scene obstacles.
@@ -251,7 +278,15 @@ def check_attached_object_collision(
     dims = attachment.get("dims")
     if not _finite_xyz(relative) or not _finite_xyz(dims) or not _finite_xyz(predicted_eef_xyz):
         return False, {"available": False, "reason": "attached_object_geometry_incomplete"}
-    held_dims = [max(0.01, float(value)) for value in dims]
+    # The proxy is a world AABB captured at grasp time. Rotate its centre
+    # offset and all eight box corners rigidly about the EEF, then take the
+    # resulting world AABB. This remains conservative without mesh inference.
+    relative, held_dims = _attachment_geometry_at_orientation(
+        attachment, predicted_eef_quat_xyzw,
+    )
+    baseline_relative, baseline_dims = _attachment_geometry_at_orientation(
+        attachment, baseline_eef_quat_xyzw,
+    )
     held_center, held_min, held_max = _attached_aabb(
         predicted_eef_xyz,
         relative,
@@ -261,8 +296,8 @@ def check_attached_object_collision(
     baseline_bounds = (
         _attached_aabb(
             baseline_eef_xyz,
-            relative,
-            held_dims,
+            baseline_relative,
+            baseline_dims,
             margin_m=margin_m,
         )
         if _finite_xyz(baseline_eef_xyz)
@@ -355,7 +390,11 @@ def check_attached_object_collision(
             "baseline_overlap_volume_m3": baseline_overlap,
             "new_or_worsened": True,
             **(
-                {"receptacle_corridor": receptacle_corridor}
+                {"receptacle_corridor": receptacle_corridor,
+                 "placement_constraint": (
+                     "outside_receptacle_corridor" if receptacle_corridor["feasible_xy"]
+                     else "receptacle_corridor_too_narrow"
+                 )}
                 if receptacle_corridor is not None
                 else {}
             ),
@@ -378,6 +417,35 @@ def check_attached_object_collision(
             else {}
         ),
     }
+
+
+def _quaternion_rotation_xyzw(value):
+    if (not isinstance(value, (list, tuple)) or len(value) != 4
+        or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   and math.isfinite(float(v)) for v in value)):
+        return None
+    norm = math.sqrt(sum(float(v) ** 2 for v in value))
+    if norm < 1e-12 or not math.isfinite(norm):
+        return None
+    x, y, z, w = [float(v) / norm for v in value]
+    return [[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+            [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+            [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]]
+
+
+def _attachment_geometry_at_orientation(attachment, eef_quat_xyzw):
+    relative = [float(v) for v in attachment["relative_xyz"][:3]]
+    dims = [max(0.01, float(v)) for v in attachment["dims"][:3]]
+    anchor = _quaternion_rotation_xyzw(attachment.get("anchor_eef_quat_xyzw"))
+    current = _quaternion_rotation_xyzw(eef_quat_xyzw)
+    # Legacy callers without an orientation anchor retain the translation-only
+    # contract. New Mink proxies supply both measured anchor and target rotation.
+    if anchor is None or current is None:
+        return relative, dims
+    delta = [[sum(current[i][k] * anchor[j][k] for k in range(3))
+              for j in range(3)] for i in range(3)]
+    return ([sum(delta[i][j] * relative[j] for j in range(3)) for i in range(3)],
+            [sum(abs(delta[i][j]) * dims[j] for j in range(3)) for i in range(3)])
 
 
 def _attached_aabb(

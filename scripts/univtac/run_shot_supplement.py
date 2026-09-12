@@ -48,6 +48,7 @@ def classify(folder):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output-root', type=Path, required=True)
+    parser.add_argument('--media-only', action='store_true')
     parser.add_argument('--host', choices=['local', 'hzz-server'], required=True)
     parser.add_argument('--runtime-python', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
@@ -56,6 +57,13 @@ def main():
     manifest = json.loads((root/'manifest.json').read_text())
     assert manifest['phase'] == 'supplement', 'Separate supplement manifest required'
     cells = [c for c in manifest['cells'] if c['host'] == args.host]
+    if args.media_only:
+        for cell in cells:
+            base = root/'cells'/cell['task']/str(cell['seed'])/cell['condition']
+            for folder in base.glob('attempt_*'):
+                if (folder/'worker_lifecycle.json').exists() and classify(folder)[0] == 'completed':
+                    render_media(folder, {**cell['original_config'], **cell, 'comparison_condition': 'C'}, 0.05)
+        return
     co = Coordinator(root, [tuple(c['cell_key']) for c in cells], protocol_smoke=True)
     state = {tuple(c['cell_key']): {**c, 'status': 'not_run'} for c in cells}
     done = threading.Event()
@@ -118,7 +126,7 @@ def main():
 
     def media_job(folder, cell):
         try:
-            render_media(folder, cell, 0.05)
+            render_media(folder, {**cell['original_config'], **cell, 'comparison_condition': 'C'}, 0.05)
         except Exception as exc:
             atomic_json(folder/'media_error.json', {'error': str(exc)})
 

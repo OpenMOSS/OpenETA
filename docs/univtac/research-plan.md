@@ -2075,3 +2075,17 @@ Bottle C_2shot was peer-cancelled. Pro reviewed both records. Cleaned accepted
 operator issues use a per-attempt reviewed marker to skip without retry,
 preserving original errors and costs. These remain infrastructure_issue and
 cancelled respectively, not native task failures.
+
+### Provider-capacity drain handling
+
+Exact terminal model-capacity errors now pause new dispatch without cancelling
+the existing peer. Existing lanes retain their original budgets and cleanup.
+Other infrastructure and cleanup failures still hard-abort. Twenty focused
+offline tests passed. Historical results are not reclassified or retried.
+
+Pro reviewed one local recovery after a 30-minute cooldown and four cleaned
+issue markers. Local markers are saved; remote marker confirmation is blocked
+by SSH connectivity, so local recovery has not yet been launched. The original
+local assignment retains 235 pending cells. hzz has 360 terminal cells and must
+not restart. Another capacity failure drains and pauses without automatic retry.
+The independent weekly <=2% pause remains active.

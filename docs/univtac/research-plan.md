@@ -2089,3 +2089,17 @@ by SSH connectivity, so local recovery has not yet been launched. The original
 local assignment retains 235 pending cells. hzz has 360 terminal cells and must
 not restart. Another capacity failure drains and pauses without automatic retry.
 The independent weekly <=2% pause remains active.
+
+### Independent missing-result supplement
+
+The user authorized a separate campaign after the first pass reached 1200
+terminal cells: 1086 evaluable (252 successes), 104 initialization unavailable,
+six infrastructure issues and four cancellations. All original records remain
+unchanged. The supplement assigns the 114 missing-result identities 57 per host,
+with new attempt directories under univtac-shot-scaling-supplement. Native reset,
+ready and worker startup total deadlines are disabled only by the supplement
+configuration. Operator and cleanup budgets remain unchanged. Clean ordinary
+initialization failures can repeat; a valid native failure is a result and is
+not retried. Hard infrastructure failures pause for review. Provider capacity
+drains peers without automatic service restart. Media remains asynchronous.
+The 23 focused offline checks passed before launch; live acceptance is pending.

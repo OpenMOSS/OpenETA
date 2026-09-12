@@ -198,7 +198,8 @@ def run_episode(args, config, seed, root):
                '--seed',str(seed),'--headless']
     if getattr(args, 'record_reset_timing', False) or config.get('record_reset_timing', False):
         command.append('--reset-timing')
-    timeout = config['startup_timeout_seconds'] + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
+    startup_timeout = float('inf') if config.get('disable_initialization_timeout') else config['startup_timeout_seconds']
+    timeout = startup_timeout + config['codex_timeout_seconds'] + config['shutdown_timeout_seconds']
     spec = ScopedIsaac51LaunchSpec(python_executable=args.runtime_python,command=tuple(command),
             cwd=args.source_root,output_root=root,timeout_seconds=timeout)
     coordinator = getattr(args, 'coordinator', None)
@@ -210,8 +211,8 @@ def run_episode(args, config, seed, root):
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(run_scoped_isaac51_command,spec, **hooks)
         try:
-            ready = (coordinator.wait_ready(coord_key, root, future, config['startup_timeout_seconds']) if coordinator else
-                     _wait_for_worker(root/'ready.json',future,config['startup_timeout_seconds']))
+            ready = (coordinator.wait_ready(coord_key, root, future, startup_timeout) if coordinator else
+                     _wait_for_worker(root/'ready.json',future,startup_timeout))
             episode['initialization_wall_seconds'] = time.monotonic()-worker_start
             url = ready['worker_url']
             if coordinator:

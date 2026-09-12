@@ -396,7 +396,7 @@ def build_scoped_isaac51_dry_run(
         "child_environment_summary": environment_summary,
         "command": [str(spec.python_executable), *spec.command],
         "cwd": str(spec.cwd),
-        "timeout_seconds": spec.timeout_seconds,
+        "timeout_seconds": None if spec.timeout_seconds == float("inf") else spec.timeout_seconds,
     }
 
 

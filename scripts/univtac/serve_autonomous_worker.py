@@ -61,7 +61,10 @@ def main(argv=None):
                        'override_seconds':config.get('native_reset_time_limit_seconds')}
         if reset_limit['override_seconds'] is not None:
             cfg.reset_time_limit = float(reset_limit['override_seconds'])
-        reset_limit['configured_seconds'] = float(cfg.reset_time_limit)
+        if config.get('disable_initialization_timeout'):
+            cfg.reset_time_limit = float('inf')
+            reset_limit['disabled'] = True
+        reset_limit['configured_seconds'] = None if config.get('disable_initialization_timeout') else float(cfg.reset_time_limit)
         write_json(root/'native_reset_limit.json', reset_limit)
         # Save observations through OpenETA; the native control/render timing is unchanged.
         if timing_probe:
@@ -80,7 +83,7 @@ def main(argv=None):
                 creation = pad_probe.creation(ActorManager)
             with creation, timing_probe.span('Task.construct'):
                 task = module.Task(cfg, mode='eval')
-            reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
+            reset_limit['actual_task_seconds'] = None if config.get('disable_initialization_timeout') else float(task.cfg.reset_time_limit)
             write_json(root/'native_reset_limit.json', reset_limit)
             if pad_probe:
                 pad_probe.install(task,config)
@@ -105,7 +108,7 @@ def main(argv=None):
                 return 0
         else:
             task = module.Task(cfg, mode='eval')
-            reset_limit['actual_task_seconds'] = float(task.cfg.reset_time_limit)
+            reset_limit['actual_task_seconds'] = None if config.get('disable_initialization_timeout') else float(task.cfg.reset_time_limit)
             write_json(root/'native_reset_limit.json', reset_limit)
             task.reset(seed=args.seed)
         if not task.plan_success:

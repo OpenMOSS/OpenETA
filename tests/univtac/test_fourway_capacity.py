@@ -103,3 +103,15 @@ def test_smoke_accepts_first_ready_without_waiting_or_replacement(tmp_path):
     assert not coordinator.lane_cancel[SEEDS[0]].is_set()
     assert coordinator.lane_cancel[SEEDS[1]].is_set()
     assert any(e['event']=='operator_released' for e in coordinator.events)
+
+
+def test_capacity_pause_drains_but_hard_abort_still_cancels(tmp_path):
+    from scripts.univtac.run_fourway_capacity import Coordinator
+    c = Coordinator(tmp_path, seeds=(1, 2), protocol_smoke=True)
+    c.pause_dispatch("provider_model_capacity", 1)
+    assert c.dispatch_paused.is_set()
+    assert not c.cancel.is_set()
+    assert not any(e.is_set() for e in c.lane_cancel.values())
+    c.abort("worker_shutdown_timeout")
+    assert c.cancel.is_set()
+    assert all(e.is_set() for e in c.lane_cancel.values())

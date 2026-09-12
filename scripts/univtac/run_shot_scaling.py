@@ -513,7 +513,7 @@ def run(args, settings):
                     media.append(media_pool.submit(media_job,Path(value['episode_path']),value))
             queue=iter(pending);active={}
             while True:
-                while len(active)<2 and not coordinator.cancel.is_set():
+                while len(active)<2 and not coordinator.cancel.is_set() and not coordinator.dispatch_paused.is_set():
                     cell=next(queue,None)
                     if cell is None:
                         break
@@ -551,7 +551,7 @@ def run(args, settings):
     finally:
         done.set();thread.join()
         atomic_json(root/'resources_after.json',resources(coordinator,previous))
-        runtime.update(status='paused' if coordinator.cancel.is_set() else 'completed',ended_s=time.time())
+        runtime.update(status='paused' if coordinator.cancel.is_set() or coordinator.dispatch_paused.is_set() else 'completed',ended_s=time.time())
         atomic_json(root/'run_manifest.json',runtime);save();report(root)
 
 

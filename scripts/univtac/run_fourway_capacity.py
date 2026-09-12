@@ -34,6 +34,7 @@ class Coordinator:
         self.active_roots = {}
         self.initialization_failures = set()
         self.cancel = threading.Event()
+        self.dispatch_paused = threading.Event()
         self.lock = threading.RLock()
         self.processes = {}
         self.phases = dict.fromkeys(self.seeds, 'submitted')
@@ -65,6 +66,14 @@ class Coordinator:
                 self.phases[seed] = 'initializing' if kind == 'worker' else 'operating'
                 self.event(seed, kind+'_started', pid=process.pid)
         return {'cancel_event': self.lane_cancel[seed] if self.protocol_smoke else self.cancel, 'on_started': started}
+
+    def pause_dispatch(self, reason, seed=None):
+        """Drain existing lanes without cancelling their original budgets."""
+        with self.lock:
+            if not self.dispatch_paused.is_set():
+                self.abort_reason = str(reason)
+                self.event(seed, "dispatch_paused", reason=str(reason))
+                self.dispatch_paused.set()
 
     def abort(self, reason, seed=None):
         with self.lock:

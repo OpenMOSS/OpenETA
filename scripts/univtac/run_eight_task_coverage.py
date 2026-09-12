@@ -291,7 +291,10 @@ def run_cell(args,cell,coordinator):
         episode=run_episode(lane_args,config,cell['seed'],folder)
         if (folder/'ready.json').exists() or episode.get('codex_process_count'):
             if episode.get('infrastructure_error'):
-                coordinator.abort('Accepted episode infrastructure failure: '+str(folder))
+                if episode['infrastructure_error'] == 'provider_model_capacity':
+                    coordinator.pause_dispatch('provider_model_capacity', key)
+                else:
+                    coordinator.abort('Accepted episode infrastructure failure: '+str(folder))
             return {**cell,'status':episode['status'],'episode_path':str(folder),'episode':episode,'attempts':attempt}
         life=load(folder/'worker_lifecycle.json') if (folder/'worker_lifecycle.json').exists() else {}
         if not life.get('cleanup_complete') or not retryable_initialization(folder):
@@ -346,7 +349,7 @@ def run_queue(args):
         with ThreadPoolExecutor(max_workers=2) as pool:
             active={}
             while True:
-                while len(active)<2 and not coordinator.cancel.is_set():
+                while len(active)<2 and not coordinator.cancel.is_set() and not coordinator.dispatch_paused.is_set():
                     cell=next(queue,None)
                     if cell is None:break
                     active[pool.submit(run_cell,args,cell,coordinator)]=cell
@@ -362,7 +365,7 @@ def run_queue(args):
         done.set();monitor.join();write_json(root/'resources_after.json',resources(coordinator,previous))
         seen={tuple(c['cell_key']) for c in results}
         results.extend({**c,'status':'not_run'} for c in cells if tuple(c['cell_key']) not in seen)
-        save();manifest.update(status='paused' if coordinator.cancel.is_set() else 'completed',ended_s=time.time())
+        save();manifest.update(status='paused' if coordinator.cancel.is_set() or coordinator.dispatch_paused.is_set() else 'completed',ended_s=time.time())
         write_json(root/'run_manifest.json',manifest)
 
 

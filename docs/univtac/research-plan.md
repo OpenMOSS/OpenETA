@@ -236,3 +236,22 @@ Current decisions and next designs belong here; update the relevant campaign
 record after every experimental or analytical step. Keep observed results,
 interpretations and unexecuted proposals distinct. Raw attempts and media stay
 in their original output roots, referenced from the campaign record.
+
+## Next analysis decision
+
+The two-round 2026-09-13 Pro consultation is complete. Local replication confirms
+Bottle4−2 = −34pp and Key4−2 = +22pp, including phase/termination sensitivities
+and post-hoc paired tests. All57 `codex_exit` cases are operator overall-deadline
+endings. Pro reviewed eight Can event cases and found the native predicate's
+semantics explain the apparent disagreement with stable-lift self-reports;
+original scores remain unchanged. See [the campaign analysis](shot-scaling-results.md#pro-analysis-consultation--2026-09-13)
+for methods, complete replies, local verification, costs and evidence limits.
+
+Remaining proposed offline work is800 2/4shot action traces, Can300 first
+requests,60 fixed case reviews and16 expert-episode content overviews. These
+are plans, not completed analyses. P0 missing exact timestamps/per-step object
+poses remain unknown and need no historical rerun. The user can choose uniform K
+and main-table initialization/result policy after reviewing the accuracy–cost
+tradeoff; Pro favors2shot as a candidate, not a proven optimum. No main table,
+new rollout or change of native score/model/controller/budget is authorized by
+this advice. The conditional Bottle24-episode proposal remains unapproved.

@@ -450,8 +450,9 @@ video/rollout round.
 Local readback also confirms that all46 Can4shot one-request early stops
 explicitly requested `gripper="open"` on that request. Pro classified41 as
 world-Z upward60–120mm and5 as absolute-position targets. This is a recurring
-opening pattern, not proof that open always causes failure. The remaining
-Can300 first-action comparison is still proposed, not completed.
+opening pattern, not proof that open always causes failure. The Can300
+first-action comparison was subsequently completed below; the46 early-stop
+cases are a subset of49 open-first cases.
 
 ### Fixed 60-case review list and next decision
 
@@ -474,8 +475,234 @@ sample. Neither set gives unweighted population language frequencies.
 
 The consultation is complete. P0 result-definition and Can semantic questions
 are sufficiently resolved for a decision, with the documented missing fields
-left unknown. Remaining proposed work is bounded to800 action extractions,
-Can300 first requests, the60-case review and16-expert content overview. No full
-behavior extraction or new physical experiment was performed in this consultation.
+left unknown. At the consultation checkpoint,800 action extractions, Can300
+first requests, the60-case review and16-expert content overview remained proposed.
+The subsequent offline analysis below completes these bounded inspections;
+neither step launches a new physical experiment.
 The user still chooses uniform K and main-table policy; Pro's preference for
 2shot is advisory. The conditional24-episode Bottle design remains unapproved.
+
+## Full offline behavior analysis — 2026-09-13
+
+### Population, evidence and reproducibility
+
+The requested offline inspection is complete: all800 selected C2/C4 episodes,
+plus100 Can C1 episodes, give900 identities and8747 recorded execution events.
+Each execution was joined to its ordered host tool call only when counts agreed;
+there are zero missing joins. A physical action here advances `control_steps`,
+including gripper-only closure; a request is not automatically physical motion.
+Outcomes and selection remain those of `selected_results.json`, including the
+separate supplement. Nothing was rerun, relabeled or retimed.
+
+The fixed60-case list above was retained. Original head, wrist and bilateral
+raw-touch frames were inspected at takeover, first physical action, first close,
+first upward move, first requested rotation above5degrees, first reopening after
+closure and final action,
+with coincident panels deduplicated. This is **unblinded model-assisted keyframe
+review**, not human review or complete video inspection. The main agent reviewed
+all16 Tube cases and independently reread12 scout-reviewed cases
+(27,28,31,32,35,36,45,46,49,50,59,60). Occluded object/contact states remain
+uncertain; apparent pickup or uprightness does not replace native evaluation.
+The outcome-stratified60 cases cannot estimate population visual-pattern rates.
+
+All artifacts below are under `outputs/univtac-shot-scaling-analysis/` locally:
+
+| Artifact | Contents |
+|---|---|
+| `extract_behavior.py`, `summarize_behavior.py` | Offline extraction and feature/contact-sheet generation helpers |
+| `behavior/{local,hzz-server}/episodes.json`, `events.jsonl` |900 selected episodes,8747 events, original arguments, resolved/actual motion, messages with source line numbers, delivered-context paths and counts |
+| `behavior/episode_features.json`, `analysis_summary.json` | Full-key episode features, population/group counts and phase composition |
+| `behavior/tube_corrections.json` |200 Tube correction-feature rows with the definition below |
+| `behavior/review_sheet_index.json`, `review_annotations.json` |60 full keys, source attempts, panel action/sample indices, per-case notes and reviewer provenance |
+| `behavior/contact_sheets/case_01.png` through `case_60.png` | Scientific contact sheets assembled from original frames without interpolation |
+| `behavior/{local,hzz-server}/review_original_frames.zip` | Original fixed-case images,1276 local and1244 remote image files |
+| `behavior/expert_overview.json` |16 historical expert examples with measured segments, source paths and metadata |
+
+Original remote paths in rows resolve on `hzz-server`; copied analysis artifacts
+resolve locally. The original ledgers and attempt directories were not overwritten.
+Requested translation means resolved target minus pre-action world TCP position;
+measured translation uses the actual post-action world TCP. Requested/actual
+rotation is computed from the corresponding world-frame orientations. Expert
+segments instead describe historical base-frame `panda_hand` motion. Those are
+not interchangeable frames or tool commands. Message observations refer to saved
+visible Agent messages, not private reasoning. We did not label all900 messages
+into subjective strategy categories or estimate their language frequencies.
+
+### Bottle: a strong change in action order, not just wording
+
+| Full-population feature | C2 | C4 |
+|---|---:|---:|
+| Native success |36/100|2/100|
+| First physical action explicitly closes |100/100|2/100|
+| First physical action explicitly opens and moves upward |0/100|98/100|
+| First upward action follows an explicit closure |98/100|2/100|
+| First upward action strictly precedes first requested rotation above5degrees |95/100|7/100|
+| Median first requested / measured TCP up distance |40 /39.77mm (n98)|93.59 /92.81mm (n100)|
+| First later upward action after first closure explicitly opens |1/98|85/100|
+| At least one close→open→close sequence |54/100|98/100|
+
+C4 often begins by lifting the open hand and reorienting to construct another
+grasp;92/100 first actions also request rotation above5degrees. These are hand-repositioning distances,
+not measured bottle lift. In93 C4 episodes the first close is action3, and in
+five it is action4. In C2,98 first upward actions are action2. The two C2 episodes
+without an upward action are1000008 and1000058; both fail.
+
+The opening requests originate in Agent calls, not an inferred host-side release.
+For seed1000038 C4, `codex_exec.jsonl:12` requests an absolute pose with
+`gripper="open"`, line22 closes, and line24 explicitly requests
+`delta_mm=[0,0,90], gripper="open"`. Its line10 message says:
+“The bottle is lying beside the wall, with the gripper near one end. I’ll open
+the fingers and move above its body to set up a centered grasp.” Later it says
+the first closure pushed the bottle and proposes realignment. In the paired C2
+trace, line14 closes and line16 requests up40 without reopening. Full source
+attempts are retained in the feature and review records (cases31/32).
+
+The six C2 review cases show early bottle rise, but three still fail. Several
+later lose contact without an opening command. In C4 cases32,38,40 and42, the
+first close is followed by an explicit open/up action and the bottle does not
+follow the rising hand. This should not be described as spontaneous slip from
+an otherwise retained grip. However, C4 successes1000082 and1000091 also undergo
+this unsuccessful early sequence and subsequently recover. Thus the pattern is
+neither a sufficient failure condition nor proof of the causal effect of K.
+Repeated regrasping also has opportunity/reverse-causality bias: longer failing
+runs have more time to attempt repairs.
+
+### Can:46 of49 open-first cases stop during the first action
+
+| First physical action / outcome | C1 | C2 | C4 |
+|---|---:|---:|---:|
+| Close |100|99|51|
+| Open + upward move |0|0|49|
+| No physical action |0|1|0|
+| Native success, all100 |2|2|3|
+| Native early stop, all100 |33|24|64|
+
+All300 takeover states already have open fingers (about39.01mm per finger).
+Therefore the49 C4 opening-first episodes do **not** demonstrate release of an
+established initial grasp. Their first requested world-Z displacement is60–120mm
+(median100), while measured TCP rise is53.27–81.14mm (median59.85).
+Of these49 episodes,46 stop natively during that first physical action; the
+remaining three end by voluntary finish without success. All three C4 successes
+are among the51 close-first episodes, which still contain48 failures. Opening
+later occurs in89/89/98 episodes across C1/C2/C4, including all seven successes:
+“never open the gripper” would contradict the evidence and task semantics.
+
+Some saved C4 messages explicitly explain the opening-first decision as a
+visibility/repositioning maneuver. Seed1000031 line10 says the can is partly
+hidden and proposes raising the open gripper for a clearer view;1000056 line16
+says there is no clear contact;1000069 line8 says the wrist is too close to the
+surface. These examples support an interpretation that the Agent chooses to
+rebuild the approach. They do not establish a population language frequency.
+
+The250 close-first actions request no translation; their final finger positions
+are near0.824mm per finger. This differs from recorded expert closure geometry,
+but does not alone prove empty grasps or a controller defect. Contact images
+vary, and expert frame/controller differences preclude that shortcut.
+The16 Can case reviews reinforce the earlier semantic finding: native successes
+can leave a low upright can on the table, while a visibly raised horizontal can
+can fail. Case27 (1000078 C2) is heavily occluded with uncertain right-touch
+contact; do not label it contact-free. The native success predicate is unchanged.
+
+### Key: same high-level route, with different correction and pull sizes
+
+| Full-population feature | C2 | C4 |
+|---|---:|---:|
+| Native success |26/100|48/100|
+| First rotation has positive world-Z component |100/100|100/100|
+| Median first requested / measured yaw |30 /27.77deg|30 /27.79deg|
+| Episodes reaching a first upward action |98/100|98/100|
+| Positive-to-negative yaw reversal before first up |98/98|98/98|
+| Median net requested / measured yaw before first up |73.69 /68.95deg|73.01 /69.22deg|
+| First requested up below30mm |19/98|38/98|
+| Median first requested / measured up |30 /24.95mm|30 /24.75mm|
+
+For yaw phase classification, requests with absolute world-Z rotation at most
+1degree are ignored; measured accumulated yaw sums recorded per-control-step
+rotation components. Up means requested world-Z displacement greater than1mm.
+This describes robot motion, not a directly measured key angle.
+Both conditions generally rotate forward, back off and pull. C4 does not simply
+rotate farther. Among32 paired seeds changing from C2 failure to C4 success,
+31 reach an upward action in both: C4 asks for a smaller first pull in16, a
+larger one in4 and the same one in11. Their median actual yaw difference before
+pull is only+0.024deg. Among ten opposite switches, nine reach upward actions in
+both; smaller/larger/same counts are2/3/4. A short first pull is a candidate
+feedback opportunity, not an established cause of success.
+
+Case45/46 (1000025) illustrates this: C2 pulls30mm and loses the tactile patch;
+C4 first pulls10mm, then moves down8.82mm with reverse rotation and pulls again,
+retaining a patch at the final reviewed frame. But1000038 C2 fails despite an
+8mm initial pull, and1000036 changes failure→success with30mm first pulls in
+both conditions. All eight successes in the selected16 show a retained final
+bilateral patch, while the eight failures show disappearance or strong marker
+movement. This is a selected-case observation, not a validated slip classifier
+or evidence that tactile disappearance always causes failure.
+
+Visible messages often describe the same “back off, then pull” plan in both
+conditions. For example,1000025 line19 in each trace announces that route despite
+the different numerical actions. High-level prose therefore misses important
+execution differences; similar final prose can accompany opposite outcomes.
+
+### Tube: no single correction rule separates success and failure
+
+For a reproducible geometric proxy, project each requested translation onto the
+takeover approach axis. Mark a correction if longitudinal motion is below−1mm,
+transverse magnitude exceeds1mm, or requested rotation magnitude exceeds1degree.
+This is an analysis heuristic, not a semantic label proving a response to touch.
+Before the first correction, sum positive longitudinal advance; measured motion
+is projected separately on the same fixed axis.
+
+| Feature | C2 | C4 |
+|---|---:|---:|
+| Native success |32/100|23/100|
+| Any proxy correction |91/100|85/100|
+| Median first correction action index, corrected episodes |3|3|
+| Median requested / measured advance before correction |10.00 /10.07mm|17.98 /17.04mm|
+| Same advance among corrected successes |29.97 /29.27mm (n31)|30.00 /29.08mm (n21)|
+| Same advance among corrected failures |10.00 /10.06mm (n60)|14.99 /13.35mm (n64)|
+
+Successful corrected episodes often advance farther before correcting. That
+contradicts a simple “earlier correction is always better” interpretation;
+more difficult states can demand earlier repair. The16 paired keyframe reviews
+include successful and failed corrections in both conditions, failures with
+stronger tactile deformation, and successful lateral moves without axial retreat.
+Seeds1000059 C4 and1000069 C2 explicitly discuss tactile changes yet fail.
+There is no evidence here for the blanket explanation that one condition ignores
+touch. Images alone do not supply exact insertion depth or per-step object pose.
+
+### What the added expert episodes actually contain
+
+The16-example overview reads the stored `tactile_action_icl.json` content and
+measured segments: four examples per task. It is not a new physical expert run
+or a full visual audit of expert videos. The metadata labels all16 successful.
+C2 contains examples0/1; C4 adds2/3. K and example identity/content therefore
+change together, and the experiment cannot isolate context length from content.
+
+| Task | Example0 | Example1 | Added example2 | Added example3 |
+|---|---|---|---|---|
+| Tube |5 segments; advance→lateral/rotation correction→advance→hold|6; two advances before correction|6; correction approx[−1.8,+4.0,−1.0]mm|6; correction approx[−3.3,−6.8,−1.9]mm|
+| Bottle |12; close, staged lift, approx−30deg base-Y rotation, translate, open|Same route|Same route; final translating segment approx+39.1mm base-X|Same route; final translating segment approx+28.9mm base-X|
+| Key |Forward66.1deg, back6.0deg, up30mm, hold|Forward76.9deg, back2.4deg, up30mm, hold|Forward95.3deg, back4.9deg, up30mm, hold|Forward88.4deg, back2.7deg, up30mm, hold|
+| Can |Close, staged base-Z rise63.4mm, open/hold|Close, staged rise77.7mm, further close, open/hold|Close, staged rise59.6mm, open/hold|Close, staged rise70.3mm, small further closure, open/hold|
+
+Added Bottle/Can examples do not introduce an opening-first measured route.
+Added Key examples expand the forward-rotation range while preserving the
+forward/back/pull sequence. Tube adds different correction directions. Thus
+“the Agent copied a newly demonstrated opening-first strategy” is unsupported.
+We also cannot infer that longer context itself causes the observed change.
+
+### Conclusion and next decision, without a new experiment
+
+The strongest verified behavioral difference is Bottle/Can C4's opening-first
+repositioning, whereas C2 overwhelmingly starts by closing. Key improves with
+similar verbal plans and high-level motion order, with more small initial pulls;
+Tube has heterogeneous corrections without a single separating rule. Success
+and failure counterexamples are preserved rather than reduced to one narrative.
+
+A useful next design would distinguish example-content/order effects from shot
+count, and test the Bottle opening/regrasp decision without changing the native
+score. That is a proposal requiring the user's experiment choice, not an executed
+ablation or permission to force a different policy. Existing C-only evidence
+still does not identify the benefit of historical touch separately from vision.
+The conditional24-episode Bottle proposal, uniform K choice and main-table
+launch remain unapproved. No simulator, model rollout, controller or scoring
+change occurred during this offline analysis.

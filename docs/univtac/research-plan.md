@@ -217,13 +217,14 @@ media checks establish decoding/frame agreement, not human inspection of every v
 The 30-minute monitor is disabled. No main-table experiment was started; one
 uniform K remains undecided. These completed records authorize no new rollout.
 
-The 2-shot/4-shot analysis combines full outcome/action statistics with a
-48-episode deterministic text sample. Bottle has lower observed success and
-more control steps at 4-shot; Key has higher observed success without a distinct
-verbal strategy in the sampled messages. Can's five native successes in those
-two shot groups have negative Agent conclusions. These findings motivate
-further evidence inspection; they do not establish a causal mechanism or
-historical-touch benefit from this C-only campaign.
+The offline 2-shot/4-shot analysis now covers all800 selected episodes, plus
+Can100 C1 episodes,8747 execution events,60 fixed-case keyframe reviews and16
+expert content overviews. Bottle/Can C4 frequently starts by repositioning with
+an open gripper, unlike C2's predominantly closing-first behavior. Key retains
+similar high-level plans but uses small first pulls more often; Tube shows no
+single correction rule separating outcomes. These are observed associations,
+not isolated causal effects of K or historical touch. The image review is
+unblinded and model-assisted, not human or full-video inspection.
 
 | Record | Purpose |
 |---|---|
@@ -247,11 +248,17 @@ semantics explain the apparent disagreement with stable-lift self-reports;
 original scores remain unchanged. See [the campaign analysis](shot-scaling-results.md#pro-analysis-consultation--2026-09-13)
 for methods, complete replies, local verification, costs and evidence limits.
 
-Remaining proposed offline work is800 2/4shot action traces, Can300 first
-requests,60 fixed case reviews and16 expert-episode content overviews. These
-are plans, not completed analyses. P0 missing exact timestamps/per-step object
-poses remain unknown and need no historical rerun. The user can choose uniform K
-and main-table initialization/result policy after reviewing the accuracy–cost
-tradeoff; Pro favors2shot as a candidate, not a proven optimum. No main table,
-new rollout or change of native score/model/controller/budget is authorized by
-this advice. The conditional Bottle24-episode proposal remains unapproved.
+The proposed offline800/Can300/60-case/16-expert inspection is completed in
+[the full behavior analysis](shot-scaling-results.md#full-offline-behavior-analysis--2026-09-13),
+with full-key features, per-case annotations, original frames and source traces
+under `outputs/univtac-shot-scaling-analysis/behavior/`. Added expert examples
+preserve the major routes; they do not demonstrate the opening-first Bottle/Can
+route. Example identity/content and count change together, so context length,
+example content/order and downstream feedback are still not causally separated.
+P0 missing exact timestamps/per-step object poses remain unknown and need no
+historical rerun. The next experiment choice should address those distinctions,
+not rerun valid failures until success. The user can choose uniform K and
+main-table initialization/result policy after reviewing the accuracy–cost
+tradeoff;2shot remains a candidate, not a proven optimum. No main table, new
+rollout or change of native score/model/controller/budget is authorized by this
+analysis. The conditional Bottle24-episode proposal remains unapproved.

@@ -2,7 +2,7 @@
 
 ## Authorized design — 2026-09-13
 
-Status: implementation/preparation; no new experiment started yet. The latest
+Status: first-pass A/B queue running on both hosts (launch2026-09-13 23:05–23:06 +08:00). The latest
 user amendment **excludes all historical A/B reuse**, overriding the earlier
 reuse paragraph. This campaign starts800 new A/B identities and references400
 selected historical C2 identities. Valid results produced within this new
@@ -178,3 +178,32 @@ Validation:40 focused queue/manifest/delivery/capacity/protocol tests and35
 existing autonomous-operation/tactile-ICL tests passed across the scoped runs.
 The final new queue tests include an unknown pre-ready hard-stop case. No
 simulator debug, model canary or expert replay was used.
+
+## Launch and continuation
+
+After focused commit/push and identical execution-code verification, hzz started
+at23:05 and local at23:06 +08:00 on2026-09-13, service
+`univtac-main-four-task-ab`, Restart=no, two slots each. Remote synchronization
+used a new Git bundle because its origin points to an older local bundle; no
+branch rollback or force update occurred. Both operator CLIs are0.153.4.
+The local first service-creation command failed before spawning any experiment
+because of an environment-argument format; corrected arguments created exactly
+one new local queue. Launch quota at23:06 was66% remaining.
+
+The first remote Key1000070 A/B2 pair produced two valid native early-stop
+failures, both cleaned with usage and passing slow media. The queue proceeded
+to Key1000082 without retrying either failure. Local Bottle1000036 A/B2 reached
+actual GPT-6 low operation. Real native-reset records show default120seconds,
+requested override=null, disabled=true and effective/actual limit=null; the
+operation and cleanup limits remain separately recorded. Current counts are in
+`launch_acceptance.json` and host results, not frozen in this narrative.
+
+New provider monitor `job_0e7e212ad2594ec1` checks every1800seconds; its first
+scheduled check is23:38:45 +08:00. The old C-only job stays disabled. The monitor
+never resumes a paused service. The existing9399 read-only dashboard service
+was refreshed to load current campaign-path support; the campaign report now
+passes an HTTP content check. This is not a browser/video-watching claim.
+[Progress page](http://127.0.0.1:9399/artifact?run=univtac-main-four-task-2shot&path=report.html)
+uses the existing dashboard. Per-host JSON remains authoritative; remote mirrors
+are snapshots taken at their recorded update times. The full800-result and final
+ABC/media acceptance remains in progress.

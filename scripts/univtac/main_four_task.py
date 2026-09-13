@@ -169,6 +169,16 @@ def exact_pair(left, right):
     return result
 
 
+def campaign_status(cells, host_states, media_passed):
+    if any(h.get('paused') for h in host_states.values()):
+        return 'paused'
+    if any(c.get('delivery_or_runner_error') for c in cells):
+        return 'review_required'
+    if all(c.get('episode',{}).get('evaluable') for c in cells):
+        return 'completed' if media_passed == len(cells) else 'media_pending'
+    return 'running' if host_states else 'prepared'
+
+
 def report(root):
     manifest = load(root/'manifest.json')
     lookup = {tuple(c['cell_key']):dict(c) for c in manifest['cells']}
@@ -203,6 +213,12 @@ def report(root):
     stats=dict(groups=groups,paired=comparisons,hosts=host_states,
         note='Four configuration-selection tasks; historical C noncontemporaneous; current table retains all valid outcomes. Bootstrap uses existing paired routine, seed20260908/2000 resamples. Four-test primary Holm family; incomplete results provisional.')
     atomic_json(root/'statistics.json', stats)
+    media_passed = sum(c.get('media_status') == 'completed' for c in cells)
+    atomic_json(root/'run_manifest.json', {'phase':'main_AB', 'planned_AB':800,
+        'readonly_C2':400, 'historical_AB_reused':0,
+        'status':campaign_status(cells, host_states, media_passed), 'AB_media_passed':media_passed,
+        'AB_valid_results':sum(bool(c.get('episode',{}).get('evaluable')) for c in cells),
+        'hosts':host_states})
     atomic_json(root/'main_table_index.json', {'cells':rows})
     atomic_json(root/'remaining_AB.json', {'cells':[c for c in cells if not c.get('episode',{}).get('evaluable')],
         'locked_for_delivery_review':[c for c in cells if c.get('delivery_or_runner_error')]})

@@ -31,3 +31,16 @@ def test_exact_pairs_keep_failure_and_unpaired():
     assert result['left_only_success']==result['right_only_success']==1
     assert result['both_failure']==1 and result['valid_pairs']==3
     assert result['unpaired']==97 and result['p_exact']==1
+
+
+def test_campaign_completion_waits_for_media_and_review():
+    from scripts.univtac.main_four_task import campaign_status
+    cells=[{'episode':{'evaluable':True}},{'episode':{'evaluable':True}}]
+    hosts={'local':{'paused':False}}
+    assert campaign_status(cells,hosts,1)=='media_pending'
+    assert campaign_status(cells,hosts,2)=='completed'
+    hosts['local']['paused']=True
+    assert campaign_status(cells,hosts,2)=='paused'
+    hosts['local']['paused']=False
+    cells[0]['delivery_or_runner_error']='review needed'
+    assert campaign_status(cells,hosts,2)=='review_required'

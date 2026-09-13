@@ -268,3 +268,11 @@ statistical optimum. Main-table initialization/missing-result policy and reuse
 of prior supplement data still require a design decision. No main table, new
 rollout or change of native score/model/controller/budget is authorized by the
 K decision. The conditional Bottle24-episode proposal remains unapproved.
+
+The completed third Pro reply recommends returning to the core C2−B2 comparison:
+match expert0/1 and common inputs, retain current touch in both, and vary only
+historical tactile content. It proposes filling matching B2 for the existing
+four-task400 C2 results and interleaving B/C on remaining tasks. This proposal
+is not an execution authorization or approval of historical-result reuse;
+initialization/attempt, missing-result and reuse policies remain to be decided.
+See the campaign record for the full reply and locally checked wording fixes.

@@ -489,7 +489,8 @@ conditional24-episode Bottle design remain unapproved.
 ### Population, evidence and reproducibility
 
 The requested offline inspection is complete: all800 selected C2/C4 episodes,
-plus100 Can C1 episodes, give900 identities and8747 recorded execution events.
+plus100 Can C1 episodes, give900 identities and8747 recorded execution events:
+8627 advance physical control steps and120 have zero steps.
 Each execution was joined to its ordered host tool call only when counts agreed;
 there are zero missing joins. A physical action here advances `control_steps`,
 including gripper-only closure; a request is not automatically physical motion.
@@ -614,24 +615,26 @@ contact; do not label it contact-free. The native success predicate is unchanged
 | Median first requested / measured yaw |30 /27.77deg|30 /27.79deg|
 | Episodes reaching a first upward action |98/100|98/100|
 | Positive-to-negative yaw reversal before first up |98/98|98/98|
-| Median net requested / measured yaw before first up |73.69 /68.95deg|73.01 /69.22deg|
+| Median summed requested / measured world-Z rotation components before first up |73.69 /68.95deg|73.01 /69.22deg|
 | First requested up below30mm |19/98|38/98|
 | Median first requested / measured up |30 /24.95mm|30 /24.75mm|
 
 For yaw phase classification, requests with absolute world-Z rotation at most
-1degree are ignored; measured accumulated yaw sums recorded per-control-step
-rotation components. Up means requested world-Z displacement greater than1mm.
+1degree are ignored; the measured field `actual_z_rotation_before_up_deg`
+sums recorded per-control-step world-Z rotation-vector components, not a
+definitionally net yaw. Up means requested world-Z displacement greater than1mm.
 This describes robot motion, not a directly measured key angle.
 Both conditions generally rotate forward, back off and pull. C4 does not simply
 rotate farther. Among32 paired seeds changing from C2 failure to C4 success,
 31 reach an upward action in both: C4 asks for a smaller first pull in16, a
-larger one in4 and the same one in11. Their median actual yaw difference before
+larger one in4 and the same one in11. Their median measured accumulated world-Z rotation difference before
 pull is only+0.024deg. Among ten opposite switches, nine reach upward actions in
 both; smaller/larger/same counts are2/3/4. A short first pull is a candidate
 feedback opportunity, not an established cause of success.
 
 Case45/46 (1000025) illustrates this: C2 pulls30mm and loses the tactile patch;
-C4 first pulls10mm, then moves down8.82mm with reverse rotation and pulls again,
+C4 first requests up10mm, then requests an absolute target equivalent to
+down11.22mm with reverse rotation (measured down8.82mm), and pulls again,
 retaining a patch at the final reviewed frame. But1000038 C2 fails despite an
 8mm initial pull, and1000036 changes failure→success with30mm first pulls in
 both conditions. All eight successes in the selected16 show a retained final
@@ -730,3 +733,34 @@ It explicitly states that the60-case inspection was model-assisted keyframe
 review, not human or full-video review. Main-table initialization/result policy,
 reuse of prior results and execution remain separate decisions; no new rollout
 is authorized by sending the evidence or by receiving Pro's advice.
+
+### Pro behavior reply: completed and locally checked
+
+The same GPT-6 Pro turn has completed. Its full reply is preserved as
+`outputs/univtac-shot-scaling-analysis/pro_analysis_reply_3.md`; delivery and
+reply identifiers are in `pro_analysis_exchange.json`. Pro reports reading the
+900 episodes,8747 events,60 annotations,16 expert records and eight attached
+contact sheets, not the other52 sheets or complete videos. It accepts K=2 as
+selected and supports the principal Bottle/Can/Key/Tube observations, with
+causal and native-score boundaries unchanged. This remains same-family review.
+
+Local readback confirms three small corrections:8627 events have physical steps
+and120 have none; the derived summary now separates `no_physical_action` from
+omitted gripper arguments (Tube C4:2 absent/98 unspecified; Can C2:1 absent/99
+close); Key1000025 C4 action6 requests an absolute target equivalent to−11.22mm
+world-Z but actually moves−8.82mm. The original traces and previously sent ZIP
+remain unchanged. The rotation table now names accumulated world-Z components
+accurately. Pro additionally reports endpoint-quaternion net-yaw medians of
+68.948/69.221degrees, within0.003degrees per episode of the accumulated values;
+this endpoint recomputation is Pro-reported, not a new local replication.
+
+Pro recommends fixing B/C at the same two expert episodes0/1, retaining current
+touch in both conditions and adding only historical touch to C. Its proposed
+next step is to supply matching B2 for the existing four-task400 C2 identities
+(356 first-pass,44 supplement), retaining failures and phase provenance. For
+remaining main-table tasks it suggests contemporaneous interleaved B/C with
+balanced host/order, and separate reporting of configuration-selection tasks.
+These are recommendations, not launched experiments or accepted data-reuse rules.
+Initialization/attempt policy, missing-result eligibility and historical-result
+reuse still require explicit decisions. No close-first or small-pull prompt
+rule is added, no new shot sweep is requested, and native labels remain intact.

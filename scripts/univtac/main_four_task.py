@@ -213,7 +213,14 @@ def report(root):
     stats=dict(groups=groups,paired=comparisons,hosts=host_states,
         note='Four configuration-selection tasks; historical C noncontemporaneous; current table retains all valid outcomes. Bootstrap uses existing paired routine, seed20260908/2000 resamples. Four-test primary Holm family; incomplete results provisional.')
     atomic_json(root/'statistics.json', stats)
-    media_passed = sum(c.get('media_status') == 'completed' for c in cells)
+    media_passed = 0
+    for c in cells:
+        if not c.get('episode_path'):
+            continue
+        folder = Path(c['episode_path'])
+        mirror = root/'hosts'/c['host']/'cells'/c['task']/str(c['seed'])/c['condition']/folder.name
+        check = next((p/'media_check.json' for p in (folder,mirror) if (p/'media_check.json').exists()),None)
+        media_passed += bool(load(check).get('passed')) if check else c.get('media_status') == 'completed'
     atomic_json(root/'run_manifest.json', {'phase':'main_AB', 'planned_AB':800,
         'readonly_C2':400, 'historical_AB_reused':0,
         'status':campaign_status(cells, host_states, media_passed), 'AB_media_passed':media_passed,

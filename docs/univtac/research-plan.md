@@ -214,8 +214,9 @@ results and 252 successes; the independent supplement contributes 114 and 10.
 The combined table is not a 1200-cell single-attempt experiment under one
 initialization policy. All selected media checks and worker cleanups passed;
 media checks establish decoding/frame agreement, not human inspection of every video.
-The 30-minute monitor is disabled. No main-table experiment was started; one
-uniform K remains undecided. These completed records authorize no new rollout.
+The 30-minute monitor is disabled. No main-table experiment was started.
+On2026-09-13, the user selected uniform **K=2** after the offline analysis.
+This configuration decision authorizes no new rollout by itself.
 
 The offline 2-shot/4-shot analysis now covers all800 selected episodes, plus
 Can100 C1 episodes,8747 execution events,60 fixed-case keyframe reviews and16
@@ -238,7 +239,7 @@ record after every experimental or analytical step. Keep observed results,
 interpretations and unexecuted proposals distinct. Raw attempts and media stay
 in their original output roots, referenced from the campaign record.
 
-## Next analysis decision
+## Uniform K decision and next design
 
 The two-round 2026-09-13 Pro consultation is complete. Local replication confirms
 Bottle4−2 = −34pp and Key4−2 = +22pp, including phase/termination sensitivities
@@ -257,8 +258,13 @@ route. Example identity/content and count change together, so context length,
 example content/order and downstream feedback are still not causally separated.
 P0 missing exact timestamps/per-step object poses remain unknown and need no
 historical rerun. The next experiment choice should address those distinctions,
-not rerun valid failures until success. The user can choose uniform K and
-main-table initialization/result policy after reviewing the accuracy–cost
-tradeoff;2shot remains a candidate, not a proven optimum. No main table, new
-rollout or change of native score/model/controller/budget is authorized by this
-analysis. The conditional Bottle24-episode proposal remains unapproved.
+not rerun valid failures until success. The user's subsequent instruction,
+“发给pro，并且支持2—shot”, selects uniform **2-shot** for subsequent comparisons
+across tasks and B/C, without choosing a best K separately for each task.
+This is an experimental tradeoff: observed macro success is24.0% versus22.5%
+for1-shot and19.0% for4-shot, with heterogeneous task effects. The2−1 paired
+interval includes zero and1-shot has lower observed cost;2-shot is not a proven
+statistical optimum. Main-table initialization/missing-result policy and reuse
+of prior supplement data still require a design decision. No main table, new
+rollout or change of native score/model/controller/budget is authorized by the
+K decision. The conditional Bottle24-episode proposal remains unapproved.

@@ -49,7 +49,8 @@ regenerated missing slow videos/pages without running physics or restarting
 rollout; old `media_error.json` files remain historical evidence. A later
 passing `media_check.json` is the media acceptance record.
 The 30-minute provider monitor is disabled (rechecked 2026-09-13).
-No main-table run was launched and no uniform K has been selected.
+No main-table run was launched. After the offline analysis, the user selected
+uniform K=2 on2026-09-13; this does not authorize launching the main table.
 
 ## Execution changes retained with the result
 
@@ -249,8 +250,8 @@ physical experiments launched or authorized by this document:
 These are offline evidence analyses, not a frozen next experiment matrix.
 Before any new experiment, record its hypothesis, controls, fixed seed/source
 population, model/protocol, action/time budgets, initialization policy, primary
-metric and execution authorization in the research plan. Uniform K and
-main-table reuse of supplement results remain undecided. Preserve C-only
+metric and execution authorization in the research plan. Uniform K was later
+selected as2; main-table reuse of supplement results remains undecided. Preserve C-only
 scope and the distinction between first-pass and supplement evidence.
 
 ## Pro analysis consultation — 2026-09-13
@@ -479,8 +480,9 @@ left unknown. At the consultation checkpoint,800 action extractions, Can300
 first requests, the60-case review and16-expert content overview remained proposed.
 The subsequent offline analysis below completes these bounded inspections;
 neither step launches a new physical experiment.
-The user still chooses uniform K and main-table policy; Pro's preference for
-2shot is advisory. The conditional24-episode Bottle design remains unapproved.
+At that checkpoint, uniform K and main-table policy awaited the user. The user
+subsequently selected2shot after the offline analysis; main-table policy and the
+conditional24-episode Bottle design remain unapproved.
 
 ## Full offline behavior analysis — 2026-09-13
 
@@ -703,6 +705,28 @@ count, and test the Bottle opening/regrasp decision without changing the native
 score. That is a proposal requiring the user's experiment choice, not an executed
 ablation or permission to force a different policy. Existing C-only evidence
 still does not identify the benefit of historical touch separately from vision.
-The conditional24-episode Bottle proposal, uniform K choice and main-table
-launch remain unapproved. No simulator, model rollout, controller or scoring
+The user subsequently selected uniform K=2. The conditional24-episode Bottle
+proposal and main-table launch remain unapproved. No simulator, model rollout, controller or scoring
 change occurred during this offline analysis.
+
+## User decision: uniform2-shot — 2026-09-13
+
+After reviewing the offline findings, the user requested that they be sent back
+to the same Pro conversation and explicitly supported2-shot. Uniform **K=2** is
+therefore selected for subsequent cross-task B/C comparisons, not a per-task
+best-K policy. The observed macro rates are24.0%,22.5% and19.0% for2/1/4-shot;
+the2−1 interval includes zero and1-shot has lower observed cost. This is a
+documented experiment-design choice, not proof that2-shot is optimal or that
+historical tactile input independently improves performance.
+
+The behavior follow-up request is preserved in
+`outputs/univtac-shot-scaling-analysis/pro_behavior_request.txt`, with its
+20-file evidence package in `pro_behavior_evidence.zip`. It includes900 episode
+records/features,60 case annotations,16 expert examples, eight representative
+contact sheets, extraction helpers and the static actor-pose serialization
+clarification. The request asks Pro to check the findings independently, retain
+counterexamples, and propose a minimal next comparison with K fixed at2.
+It explicitly states that the60-case inspection was model-assisted keyframe
+review, not human or full-video review. Main-table initialization/result policy,
+reuse of prior results and execution remain separate decisions; no new rollout
+is authorized by sending the evidence or by receiving Pro's advice.

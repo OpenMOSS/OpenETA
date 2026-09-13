@@ -199,7 +199,7 @@ processing must not hold up simulator/operator dispatch. Preserve every raw
 recording; media can be rebuilt without replaying physics. The full main table
 and all other ablations remain unstarted and unauthorized by this round.
 
-## Current campaign status — 2026-09-13
+## Completed C-only checkpoint — 2026-09-13
 
 The four-task C-only campaign is complete: **1200 unique evaluable identities,
 262 native successes (21.83%)**. The frozen first pass contributes 1086 evaluable
@@ -207,7 +207,9 @@ results and 252 successes; the independent supplement contributes 114 and 10.
 The combined table is not a 1200-cell single-attempt experiment under one
 initialization policy. All selected media checks and worker cleanups passed;
 media checks establish decoding/frame agreement, not human inspection of every video.
-The 30-minute monitor is disabled. No main-table experiment was started.
+The old C-only 30-minute monitor is disabled. At this C-only completion
+checkpoint, no main-table experiment had started; the later authorized A/B
+campaign is recorded in the active-campaign section below.
 On2026-09-13, the user selected uniform **K=2** after the offline analysis.
 This configuration decision authorizes no new rollout by itself.
 

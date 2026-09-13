@@ -207,3 +207,34 @@ passes an HTTP content check. This is not a browser/video-watching claim.
 uses the existing dashboard. Per-host JSON remains authoritative; remote mirrors
 are snapshots taken at their recorded update times. The full800-result and final
 ABC/media acceptance remains in progress.
+
+## Latest monitoring checkpoint — 2026-09-13 23:47 +08:00
+
+Owner-host results merged by full cell key contain30/800 completed evaluable
+A/B identities and4 native successes: local11/400 with2 successes, hzz19/400
+with2 successes. There are770 identities without a locked result:4 in progress
+(local1 initializing +1 operating; hzz2 operating),766 never started, and0
+finished missing-result/blocked identities. Both services are running with
+Restart=no and neither host is paused. Historical C2 remains96/400, read-only.
+These are incomplete progress counts, not a final treatment-effect conclusion.
+
+The independent process/lifecycle inspection at23:42 verified31 simulator starts,
+30 Codex starts and27 completed cleanups across the hosts; all27 completed
+attempt media checks passed. The later23:47 report contains29 passing media
+statuses and1 pending, which remains with the existing bounded encoder. No
+media-only job or rollout restart was needed. Browser/keyframe inspection was
+not performed during this check. Do not confuse these two observation times.
+
+At23:42:11 the live account-only weekly quota request returned no weekly value:
+**current quota unknown**; the previous65% value was not substituted. No quota
+pause was inferred. The23:42 resource samples show local25.03GiB available RAM,
+20739/32607MiB GPU memory used and755GiB free disk; hzz95.32GiB available RAM,
+20327/32607MiB GPU memory used and1596GiB free disk. No new service, cleanup
+or infrastructure anomaly was found in the inspected evidence.
+
+Evidence: campaign-root `latest_monitor_snapshot.json`, `monitor_quota.json`,
+`remaining_AB.json`, `statistics.json`, and each owner host's `results.json`,
+`events.jsonl`, `resources.jsonl` and attempt lifecycle/media checks. The remote
+owner ledger was mirrored only into `hosts/hzz-server`; local and historical C
+records were not overwritten. The new1800-second monitor remains enabled,
+next scheduled00:08:45 +08:00 on2026-09-14; the old C-only monitor remains disabled.

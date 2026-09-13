@@ -11,34 +11,21 @@ improve UniVTAC native task success, and reduce trial and error. Vision and
 proprioception remain normal inputs; visual–action examples are a control for
 the added value of historical touch.
 
-Current status:
+Current status (2026-09-13):
 
-- the isolated Isaac 5.1 harness supports tactile capture, Codex MCP
-  communication, real action traces, and dashboard replay;
-- R1.0–R1.3 include native expert successes, model-selected restricted skills,
-  and expert-assisted continuations. They establish real execution, but not
-  general-tool autonomous success rates or positive tactile ICL benefit;
-- R1.4 connected the general tools to a synchronous UniVTAC worker and ran
-  three fresh Insert Hole no-demo episodes: native success 0/3, all evaluable.
-  Two control-debug episodes are excluded. The A/B/C comparison remains unrun;
-  R1.6 uses native expert successes as its demonstration source, without
-  requiring human or Agent successes first;
-- R1.5 preserves native gripper commands and delivers recorded segment-end
-  tactile history. One unscored debug and three fresh no-demo episodes completed:
-  native success 0/3, all evaluable, all Codex processes exited naturally with
-  usage. Review videos and exact Agent inputs are separate in the
-  [local R1.5 dashboard](http://127.0.0.1:9401/r15-autonomous). This is control and
-  observation validation, not an ICL gain;
-- R1.6 completed six fixed-target controller replays: original native success
-  1/3, paced candidate 2/3, with measured timing and completion differences.
-  Original remains the default. Two sparse R1.2 native expert successes were
-  curated without recapture; these are the demonstration source, distinct from
-  replay success. See the [Chinese video comparison](http://127.0.0.1:9401/r16-motion-pacing);
-- A has no examples; B has visual–action examples; C adds historical bilateral
-  touch to exactly B's trajectories. All three retain current vision, touch,
-  proprioception, and operation history;
-- R0.9.19–R0.9.21 remain historical exploration, with no further expansion or
-  role in selecting the next method.
+- the Isaac 5.1 harness supports autonomous Codex operation, current vision/touch,
+  actual action traces, host-owned native evaluation and recorded replay;
+- the four-task C-only 1/2/4-shot campaign has 1200 evaluable identities and
+  262 native successes. The first pass (1086 results) and separate supplement
+  (114 results, initialization deadlines disabled) remain explicitly separated;
+- all 1200 selected media checks passed. Monitoring is disabled; the eight-task
+  A/B/C main table is unstarted and uniform K is undecided;
+- [Results and analysis](docs/univtac/shot-scaling-results.md) contain the final
+  table, 2-shot/4-shot message observations, evidence paths and open questions.
+  C-only shot differences do not establish an added benefit of historical touch;
+- A has no examples, B has visual–action examples, and C adds historical touch
+  to the same examples. All three retain current vision, touch and proprioception.
+  Earlier development, expert-assisted and replay evidence remains separate.
 
 Read the [UniVTAC research plan](docs/univtac/research-plan.md) first. See
 [Related Work and bibliography](docs/univtac/related-work.md) for literature

@@ -33,19 +33,37 @@ voluntary/final ending without a score. Keep old configurations, traces and
 results under their original protocol; never mix versions in a results table
 or switch an unfinished batch mid-run.
 
-## Neat after each experimental step
+## Mandatory neat after experiments, analyses, conclusions and designs
 
-After every substantive experimental step, spawn one subagent that forks the
-current main conversation history and performs one scoped neat pass. Use GPT-6
-with low reasoning effort (`gpt-6-astra`, `reasoning_effort="low"`); inherit the full conversation, not just
-a handoff summary. This is an explicit exception to the ordinary scout rules
-requiring the default model, `fork_turns="none"`, and read-only exploration.
+After every substantive experiment (including failed or paused runs), result
+analysis, new or revised conclusion, and new or revised experiment design,
+perform a scoped `neat-freak` pass before reporting the step as complete.
+This is standing authorization to update the relevant project records; do not
+leave results or decisions only in chat or merely offer to document them later.
 
-The neat agent synchronizes existing project documentation with that step's
-confirmed decisions and actual evidence, separating completed work, plans, and
-unverified claims. Prefer local doc-neat, otherwise the available neat skill or
-direct Markdown edits. Keep the pass within the step's scope; preserve user
-changes, do not run experiments, and do not create duplicate per-round reports.
-The main agent pauses edits to the same documents, reviews the returned changes,
-and includes them in the step's focused commit and push. Do not silently replace
-the requested model or history fork if the current tools cannot provide them.
+Use the existing canonical research plan and campaign/result record. Record:
+
+- experiments: date, scope/configuration, actual state, results, attempts and evidence paths;
+- analyses: question, population/denominator, selection method, method/command,
+  numerical tables and trace references sufficient to reproduce the finding;
+- conclusions: verified observations, interpretations, uncertainty and counterexamples;
+- designs: hypothesis, comparison, controlled variables, metrics, budgets,
+  execution/approval status and the evidence needed to decide the next step.
+
+Replace stale current status; retain historical evidence under explicit historical
+headings. Link detailed records from the research entrypoint instead of copying
+results into AGENTS.md or creating a report per conversation. Recording a proposed
+design does not authorize execution. Preserve raw ledgers, attempts and media;
+separate phases when protocols or budgets differ. State missing evidence as unknown.
+
+Spawn one GPT-6 low scoped neat subagent with the full conversation history, an
+explicit exception to ordinary clean-context read-only scouts. Pause edits to
+its owned documents; review its changes before the focused commit and push.
+If tool/role restrictions prevent full-history low reasoning or document edits,
+state the restriction, use any permitted read-only check, and complete the edits
+in the main agent without blocking this documentation requirement. Never silently
+substitute a different model or history policy. Do not run new experiments in neat.
+The final reply links the updated records and identifies anything still unverified.
+
+Use [research-plan.md](docs/univtac/research-plan.md) for current intent/design
+and [shot-scaling-results.md](docs/univtac/shot-scaling-results.md) for this campaign.

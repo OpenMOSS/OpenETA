@@ -170,6 +170,15 @@ def replay_controls(gateway, root, commands):
 
 def run_episode(args, config, seed, root):
     root.mkdir(parents=True, exist_ok=False)
+    (root/'config.snapshot.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
+    write_json(root/'initialization_policy.json', {
+        'disable_initialization_timeout': bool(config.get('disable_initialization_timeout')),
+        'configured_startup_seconds': config['startup_timeout_seconds'],
+        'effective_ready_seconds': None if config.get('disable_initialization_timeout') else config['startup_timeout_seconds'],
+        'effective_worker_total_seconds': None if config.get('disable_initialization_timeout') else config['startup_timeout_seconds']+config['codex_timeout_seconds']+config['shutdown_timeout_seconds'],
+        'codex_total_seconds': config['codex_timeout_seconds'],
+        'cleanup_seconds': config['shutdown_timeout_seconds'],
+        'initialization_counts_toward_codex_wall': False})
     if config.get('demonstrations'):
         package = Path(config['demonstration_package'])
         projection = demonstration_projection(config)
@@ -254,8 +263,11 @@ def run_episode(args, config, seed, root):
                 write_json(root/'codex_trace_summary.json',summarize_codex_exec(read_jsonl(root/'codex_exec.jsonl')))
                 if life['returncode'] and not life['stopped_by_worker'] and not life['timed_out']:
                     episode['infrastructure_error'] = 'codex_process_failure'
-                    if any(e.get('type') == 'turn.failed' and e.get('error', {}).get('message') == 'Selected model is at capacity. Please try a different model.' for e in read_jsonl(root/'codex_exec.jsonl')):
+                    failures = [e.get('error', {}).get('message', '') for e in read_jsonl(root/'codex_exec.jsonl') if e.get('type') == 'turn.failed']
+                    if any(message == 'Selected model is at capacity. Please try a different model.' for message in failures):
                         episode['infrastructure_error'] = 'provider_model_capacity'
+                    elif any(any(term in message.lower() for term in ('usage limit', 'rate limit', 'service unavailable', 'server error', 'stream disconnected before completion')) for message in failures):
+                        episode['infrastructure_error'] = 'provider_service_error'
                 if life['timed_out']:
                     episode['codex_time_limit'] = True
         except Exception as exc:  # noqa: BLE001 -- retain runtime failure evidence
@@ -265,7 +277,7 @@ def run_episode(args, config, seed, root):
         finally:
             if coordinator:
                 if episode.get('infrastructure_error'):
-                    (coordinator.pause_dispatch if episode['infrastructure_error'] == 'provider_model_capacity' else coordinator.abort)(episode['infrastructure_error'], coord_key)
+                    (coordinator.pause_dispatch if episode['infrastructure_error'] in ('provider_model_capacity', 'provider_service_error') else coordinator.abort)(episode['infrastructure_error'], coord_key)
                 coordinator.phase(coord_key, 'cleanup')
             if url and not future.done():
                 try:
@@ -279,6 +291,8 @@ def run_episode(args, config, seed, root):
                     episode['infrastructure_error'] = 'worker_failure'
             except TimeoutError:
                 episode['infrastructure_error'] = 'worker_shutdown_timeout'
+                if coordinator:
+                    coordinator.abort('worker_shutdown_timeout')
             if codex_home.exists():
                 shutil.rmtree(codex_home)
     if (root/'samples.jsonl').exists() and not config.get('defer_review_video'):
@@ -304,7 +318,7 @@ def run_episode(args, config, seed, root):
     if coordinator:
         coordinator.phase(coord_key, episode['status'])
         if episode.get('infrastructure_error'):
-            (coordinator.pause_dispatch if episode['infrastructure_error'] == 'provider_model_capacity' else coordinator.abort)(episode['infrastructure_error'], coord_key)
+            (coordinator.pause_dispatch if episode['infrastructure_error'] in ('provider_model_capacity', 'provider_service_error') else coordinator.abort)(episode['infrastructure_error'], coord_key)
     return episode
 
 

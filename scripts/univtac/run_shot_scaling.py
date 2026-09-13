@@ -139,12 +139,12 @@ def matched_subset(sources, ids, target):
     return b, c
 
 
-def check_mcp(package):
+def check_mcp(package, projections=None):
     results = {}
     b, c = [load(package/f'{name}.json') for name in PROJECTIONS.values()]
     common = copy.deepcopy(c['text']); common.pop('historical_touch')
     assert common == b['text'] and c['images'][:len(b['images'])] == b['images']
-    for condition, name in PROJECTIONS.items():
+    for condition, name in (projections or PROJECTIONS).items():
         projection = load(package/f'{name}.json')
         payload = {'ok':True, 'text':{'demonstrations':projection['text'], 'terminal':None,
             'image_labels':[im['label'] for im in projection['images']]}, 'images':projection['images']}
@@ -156,7 +156,7 @@ def check_mcp(package):
         assert len(images)==len(projection['images'])
         for block, descriptor in zip(images, projection['images']):
             assert np.array_equal(np.asarray(Image.open(io.BytesIO(base64.b64decode(block.data)))),
-                                  np.asarray(Image.open(descriptor['path'])))
+                                  np.asarray(Image.open(package/descriptor['path'])))
         results[condition] = {'expert_ids':[e['example_id'] for e in projection['text']['examples']],
                               'images':len(images), 'native_mcp_pixels_match':True}
     (package/'operator_context.jsonl').replace(package/'offline_mcp_context.jsonl')
@@ -300,10 +300,16 @@ def costs(folder):
     for attempt in sorted(folder.parent.glob('attempt_*')):
         life=load(attempt/'worker_lifecycle.json') if (attempt/'worker_lifecycle.json').exists() else {}
         episode=load(attempt/'episode.json') if (attempt/'episode.json').exists() else {}
+        model=load(attempt/'codex_lifecycle.json') if (attempt/'codex_lifecycle.json').exists() else {}
+        summary=load(attempt/'codex_trace_summary.json') if (attempt/'codex_trace_summary.json').exists() else {}
         attempts.append({'attempt':attempt.name,'ready':(attempt/'ready.json').exists(),
             'worker_seconds_including_cleanup':life.get('elapsed_seconds'),
             'initialization_wall_seconds':episode.get('initialization_wall_seconds'),
-            'startup_failure_wall_seconds':episode.get('startup_failure_wall_seconds')})
+            'startup_failure_wall_seconds':episode.get('startup_failure_wall_seconds'),
+            'codex_started':(attempt/'codex_command.json').exists(),
+            'codex_seconds':model.get('elapsed_seconds'), 'usage':summary.get('usage'),
+            'cleanup_complete':life.get('cleanup_complete'),
+            'evaluable':episode.get('evaluable'), 'infrastructure_error':episode.get('infrastructure_error')})
     model=load(folder/'codex_lifecycle.json') if (folder/'codex_lifecycle.json').exists() else {}
     usage=load(folder/'codex_trace_summary.json').get('usage') if (folder/'codex_trace_summary.json').exists() else None
     return {'initialization_attempts':attempts,'codex_seconds':model.get('elapsed_seconds'),
@@ -325,17 +331,23 @@ def verify_delivery(folder, cell):
         assert actual['response_image_paths']==[im['path'] for im in expected['images']]
         if host['tool']=='review_demonstrations':
             demos.append(actual)
-    assert len(demos)==1, 'Historical demonstration not delivered exactly once'
-    content = json.loads(demos[0]['response_text_blocks'][0])['demonstrations']
-    assert [e['example_id'] for e in content['examples']]==cell['mcp_expectation']['expert_ids'], 'Expert count/identity mismatch'
-    assert len(demos[0]['response_image_paths'])==cell['mcp_expectation']['images'], 'Historical image count mismatch'
+    deliveries = [d for d in demos if 'examples' in json.loads(d['response_text_blocks'][0]).get('demonstrations', {})]
+    assert len(deliveries)<=1, 'Historical demonstration delivered more than once'
+    if deliveries:
+        content = json.loads(deliveries[0]['response_text_blocks'][0])['demonstrations']
+        assert [e['example_id'] for e in content['examples']]==cell['mcp_expectation']['expert_ids'], 'Expert count/identity mismatch'
+        assert len(deliveries[0]['response_image_paths'])==cell['mcp_expectation']['images'], 'Historical image count mismatch'
+    else:
+        assert load(folder/'episode.json').get('control_steps', 0)==0, 'Physical operation without demonstration review'
+        content = {'examples': []}
+    assert all(not d['response_image_paths'] for d in demos if d not in deliveries)
     assert 'check_task' not in load(folder/'mcp_tools.json')['tools']
     trace = jsonl(folder/'tool_trace.jsonl')
     stops = [i for i,x in enumerate(trace) if x['result']['text'].get('terminal') or x['result']['text'].get('finished')]
     if stops:
         assert len({x['counts']['physics_steps'] for x in trace[stops[0]:]})==1
     atomic_json(folder/'protocol_delivery_check.json', {'passed':True, 'responses':len(contexts),
-        'expert_count':len(content['examples']), 'historical_images':len(demos[0]['response_image_paths'])})
+        'expert_count':len(content['examples']), 'historical_images':len(deliveries[0]['response_image_paths']) if deliveries else 0})
 
 
 def render_media(folder, cell, rate):

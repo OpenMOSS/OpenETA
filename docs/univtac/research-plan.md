@@ -144,8 +144,8 @@ The planned main table is eight tasks × A/B/C × 100 fixed query seeds (2400
 planned cells). A has no historical examples; B has expert visual observations,
 measured motion, proprioception, time and outcomes; C adds historical touch to
 exactly B. All current inputs retain vision, bilateral tactile history, robot
-state and execution feedback. The number of expert episodes in B/C is not yet
-fixed at two.
+state and execution feedback. B/C now use exactly two fixed official successful expert episodes0/1;
+A has no demonstrations and shot=0.
 
 Before that main table, the completed C-only campaign covers Insert Tube, Lift Can,
 Lift Bottle and Pull Out Key × C × 1/2/4-shot × 100 seeds: 1200 planned
@@ -168,20 +168,13 @@ initializations, accepted task failures and voluntary endings remain separate.
 Completed accepted cells must be skipped after a runner interruption, including
 completed native failures; neither their attempts nor their sample count resets.
 
-The user will review the complete curves and select one common K for all main-
-table tasks and both B/C. No per-task or per-condition best-K selection is
-allowed. The matching four-task C_K results (400 planned cells) will be
-referenced directly in the main table, including failures and unavailable cells,
-without rerunning or counting them twice. Supplement results have a different
-initialization policy and must remain separately labelled; their reuse in a
-main-table population requires an explicit matching policy, not automatic pooling.
-Already executed B cells matching K
-can also be reused; remaining main-table B cells are measured later. This round
-does not require full B curves or C−B comparisons. Reuse requires identical expert IDs
-and one-shot assignment, prompt, model/effort, protocol, controller and budgets;
-matching query seeds alone is insufficient. Retain all shot curves and disclose
-that these four tasks participated in selecting K: the reused data are not an
-independent test outside configuration selection.
+The user selected uniform K=2 across tasks and B/C. Preserve all shot curves
+and disclose configuration selection and development-seed overlap. The latest
+four-task main-table authorization requires800 **new** A/B identities, with no
+historical A/B reuse, and400 read-only selected C2 references including failures.
+Historical C2 first-pass/supplement provenance remains explicit. The detailed
+[current four-task A/B contract](main-four-task-2shot.md) supersedes earlier
+reuse, initialization and launch restrictions for this bounded campaign only.
 
 D (historical touch without external vision), E (expert motion records only),
 current-touch ablations and sol/luna/terra model comparisons are deferred until
@@ -264,8 +257,9 @@ across tasks and B/C, without choosing a best K separately for each task.
 This is an experimental tradeoff: observed macro success is24.0% versus22.5%
 for1-shot and19.0% for4-shot, with heterogeneous task effects. The2−1 paired
 interval includes zero and1-shot has lower observed cost;2-shot is not a proven
-statistical optimum. Main-table initialization/missing-result policy and reuse
-of prior supplement data still require a design decision. No main table, new
+statistical optimum. At that consultation checkpoint, main-table initialization/missing-result policy
+and reuse of prior supplement data still required a design decision. Those
+policies are now fixed for the bounded campaign linked below. No main table, new
 rollout or change of native score/model/controller/budget is authorized by the
 K decision. The conditional Bottle24-episode proposal remains unapproved.
 
@@ -274,5 +268,20 @@ match expert0/1 and common inputs, retain current touch in both, and vary only
 historical tactile content. It proposes filling matching B2 for the existing
 four-task400 C2 results and interleaving B/C on remaining tasks. This proposal
 is not an execution authorization or approval of historical-result reuse;
-initialization/attempt, missing-result and reuse policies remain to be decided.
+those policies were undecided at that checkpoint and are now fixed by the
+bounded campaign authorization below.
 See the campaign record for the full reply and locally checked wording fixes.
+
+## Active authorized campaign: four-task A/B completion
+
+The2026-09-13 user instruction authorizes preparing, offline-testing, committing/
+pushing and launching only800 new A/B identities for Tube/Can/Bottle/Key, then
+limited missing-result rounds. Its final amendment excludes all old A/B reuse.
+A is shot0; B2 and read-only C2 use official experts0/1. The400 C2 references
+remain96/400 successes. New A/B initialization disables startup limits while
+retaining task and cleanup budgets; first valid outcomes lock, including failures.
+The full identity, pair ordering, pause/quota, input, media and analysis contract
+is [main-four-task-2shot.md](main-four-task-2shot.md). That record owns current
+implementation/launch state; no C or other-task run is authorized. Previous
+Pro proposals and historical statements about unspecified policies are superseded
+only by this explicit bounded authorization.

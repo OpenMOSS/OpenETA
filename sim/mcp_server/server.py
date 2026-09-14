@@ -1224,7 +1224,8 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             session_id: str = "",
             enable_collision_check: bool = True,
             contact_authorization: dict | None = None,
-            ik_execution_seed: dict | None = None) -> dict:
+            ik_execution_seed: dict | None = None,
+            motion_mode: str = 'strict') -> dict:
     """Move the end-effector to an absolute pose using closed-loop interpolation.
 
     Re-observes the EE pose from step results for closed-loop correction:
@@ -1287,6 +1288,11 @@ def move_to(handle: str, x: float, y: float, z: float, *,
         command_frame = cartesian_command_frame(meta, backend)
     except ControlCodecError as exc:
         return codec_error_result(exc)
+
+    if motion_mode not in ('strict', 'recovery') or (motion_mode == 'recovery' and
+            (not enable_collision_check or controller_capability.get('goal_executor') != 'openeta.worker_mink_goal.v1')):
+        return {'ok':False, 'error':'Recovery requires Mink and collision checks', 'steps_executed':0,
+                'stop_reason':'control_step_failed'}
 
     # Render cadence for the control loop.  Rendering is the dominant per-step
     # cost (~130 ms GPU); move_to itself only reads the EE pose from the
@@ -1369,11 +1375,16 @@ def move_to(handle: str, x: float, y: float, z: float, *,
                     "reached_target": False,
                     "stop_reason": "contact_authorization_unresolved",
                 }
-            if (resolved_contact is not None and
-                    resolution.get("target_geom_name") != resolved_contact.get("target_geom_name")):
-                return {"ok": False, "code": "fixture_contact_conflict", "steps_executed": 0,
-                        "stop_reason": "contact_authorization_unresolved",
-                        "error": "Open the gripper before changing the fixture contact binding."}
+            if resolved_contact is not None:
+                from sim.libero_contact_geometry import same_local_patch
+                if same_local_patch(resolved_contact, resolution):
+                    # Re-marking an adjacent piece cannot slide or expand a held grant.
+                    resolution = resolved_contact
+                elif (resolved_contact.get("contact_scope") == "local_articulated_patch" or
+                      resolution.get("target_geom_name") != resolved_contact.get("target_geom_name")):
+                    return {"ok": False, "code": "fixture_contact_conflict", "steps_executed": 0,
+                            "stop_reason": "contact_authorization_unresolved",
+                            "error": "Open the gripper before changing the fixture contact binding."}
             resolved_contact = dict(resolution)
         body = {
             "target_xyz": [float(x), float(y), float(z)],
@@ -1386,6 +1397,7 @@ def move_to(handle: str, x: float, y: float, z: float, *,
             # Host-private experiment configuration.  It is selected by the
             # server process and is never copied from an Agent tool argument.
             "motion_execution_condition": motion_profile.condition,
+            "motion_mode": motion_mode,
         }
         if resolved_contact is not None:
             body["contact_authorization"] = resolved_contact

@@ -78,6 +78,7 @@ class CodexHost:
         self.max_requests = max_requests
         self.requests = 0
         self.lock = threading.RLock()
+        self.stop_requested = threading.Event()
         self.closed = False
         self.cleanup = None
         self.official_task_success = False
@@ -85,6 +86,13 @@ class CodexHost:
         self.timer = None
         self.schemas = {}
         self.last_command = None
+        self.interventions = []
+        self.request_physics = []
+        self.request_tool = None
+        self.call_sequence = 0
+        self.previous_response = None
+        self.execution_accounting = {'preflight_calls':0, 'physical_dispatches':0,
+                                     'physical_calls_with_steps':0, 'physical_unknown_outcomes':0}
         self.tool_profile = tool_profile
         self.atomic = None
         self._published_observation = self.runner.current_observation
@@ -132,6 +140,8 @@ class CodexHost:
         self.close("episode_timeout")
 
     def status(self):
+        remaining_internal = max(0, min(self.runner.max_turns-self.runner.turn_index,
+                                        self.runner.max_tool_calls-self.runner.tool_call_count))
         return {
             "session_id": self.runtime.memory.session_id,
             "tool_profile": self.tool_profile,
@@ -149,6 +159,13 @@ class CodexHost:
             "completion_claim": self.completion_claim,
             "auxiliary_model_inference": "disabled",
             "model_usage": "external; see Codex events, not host token estimates",
+            'execution_accounting': dict(self.execution_accounting),
+            'remaining_budget': {'native_requests':max(0,self.max_requests-self.requests),
+                'internal_stages':remaining_internal,
+                'estimated_strict_moves':remaining_internal//3,
+                'estimated_symmetric_moves':remaining_internal//5,
+                'seconds':max(0.,self.runner.timeout_s-self.runner.elapsed_s),
+                'estimate_scope':'uninterrupted full preflight+move sequences; routes cost per segment; time and other calls can reduce capacity'},
         }
 
     def _write_status(self):
@@ -171,7 +188,7 @@ class CodexHost:
             "steps": [{"step_result": self.runtime.memory.latest_environment_receipt() or {}}],
         }, env_id=str(self.runtime.memory.metadata.get("env_id") or ""))
 
-    def result(self, *, error=None, requested=None, executed=None, motion_hook=None):
+    def publish_observation(self):
         # The ordinary runtime indexes an observation at the next act(). Codex
         # must already have its packet references while choosing that next act.
         # Publish the new result observation through the normal memory path;
@@ -180,8 +197,50 @@ class CodexHost:
         if observation is not self._published_observation:
             self.runtime.memory.add_observation(observation)
             self._published_observation = observation
+
+    def response_receipt(self, result):
+        body = json.loads(result.content[0].text)
+        body['current_request'] = {'sequence':self.call_sequence, 'tool':self.request_tool}
+        if self.request_tool == 'episode_status':
+            body['previous_request'] = self.previous_response
+        else:
+            self.previous_response = {key:body[key] for key in (
+                'current_request', 'feedback', 'interventions', 'error', 'robot', 'motion_hook', 'repair') if key in body}
+        try:
+            with (self.output / 'native-feedback.jsonl').open('a') as stream:
+                stream.write(json.dumps({'current_request':body['current_request'],
+                    'feedback':body.get('feedback'), 'interventions':body.get('interventions', []),
+                    'error':body.get('error'), 'repair':body.get('repair')}, ensure_ascii=False)+'\n')
+        except OSError:
+            body['feedback_audit_status'] = 'write_failed'
+        result.content[0].text = json.dumps(body, ensure_ascii=False)
+        return result
+
+    def record_intervention(self, source, effect, code, message, **kwargs):
+        from tools.codex_interventions import event
+        self.interventions.append(event(source, effect, code, message, **kwargs))
+
+    def request_execution_state(self):
+        if any(value is None for value in self.request_physics):
+            return 'unknown'
+        return 'partial' if any(self.request_physics) else 'not_started'
+
+    def result(self, *, error=None, requested=None, executed=None, motion_hook=None):
+        self.publish_observation()
+        if error:
+            messages = {
+                'episode_not_active': 'The episode is inactive or cancellation was requested. This request was not dispatched; inspect episode state and limits.',
+                'codex_request_limit': 'The native request budget was exhausted before this request could execute.',
+                'invalid_arguments': 'The request failed input validation before dispatch. Correct the reported arguments.',
+                'official_success_not_established': 'The success claim was rejected because current official evidence does not establish task success.',
+                'host_execution_error': 'The Host encountered an execution error; completion or zero physical motion cannot be assumed.',
+            }
+            code = error.get('code', 'request_failed')
+            self.record_intervention('host', 'request_failed', code,
+                messages.get(code) or error.get('message') or 'The request was interrupted; inspect its current motion receipt and episode state.',
+                execution_state=self.request_execution_state())
         if self.atomic is not None:
-            return self.atomic.result(error=error)
+            return self.response_receipt(self.atomic.result(error=error))
         ctx = self.context()
         agent_ctx = dict(ctx.get("agent_context") or ctx)
         # Tool schemas are already delivered by MCP. Do not advertise unavailable
@@ -189,7 +248,7 @@ class CodexHost:
         for key in ("available_tools", "tool_references", "relevant_skills", "skill_usage"):
             agent_ctx.pop(key, None)
         visible = _planner_visible_main_agent_context(agent_ctx)
-        body = {"episode": self.status(), "context": visible}
+        body = {"episode": self.status(), "context": visible, "interventions": list(self.interventions)}
         body["observation_references"] = observation_references(self.runtime.memory)
         repair = repair_feedback(self.last_command, self.schemas)
         if repair is not None: body["repair"] = repair
@@ -211,11 +270,18 @@ class CodexHost:
                 content.append(TextContent(type="text", text=image_label(
                     self.runtime.memory, next(attached), image_index)))
                 content.append(ImageContent(type="image", mimeType=header[5:].split(";")[0], data=data))
-        return CallToolResult(content=content, isError=bool(error))
+        return self.response_receipt(CallToolResult(content=content, isError=bool(error)))
 
     def call(self, name, arguments):
         with self.lock:
-            if self.closed or self.runner.terminated or self.runner.truncated or self.runner.waiting_for_human:
+            self.interventions, self.request_physics = [], []
+            self.request_tool = name
+            self.call_sequence += 1
+            self.last_command = None
+            if self.atomic is not None:
+                self.atomic.feedback, self.atomic.overlay = None, {}
+                self.atomic.crop, self.atomic.selected_views = None, None
+            if self.stop_requested.is_set() or self.closed or self.runner.terminated or self.runner.truncated or self.runner.waiting_for_human:
                 return self.result(error={"code": "episode_not_active"})
             self.requests += 1
             self.last_command = None
@@ -252,17 +318,25 @@ class CodexHost:
     def _execute(self, payload, *, parent_request=None):
         """One ordinary budgeted runner step; internal hook stages are logged too."""
         with self.lock:
-            if self.closed or self.runner.terminated or self.runner.truncated or self.runner.waiting_for_human:
+            if self.stop_requested.is_set() or self.closed or self.runner.terminated or self.runner.truncated or self.runner.waiting_for_human:
                 return {}, {"code": "episode_not_active"}
+            stage_context = self.context()
             _, errors = _decision_from_backend_result(PlannerBackendResult(payload=payload),
                 tools=self.runtime.tools, skills=self.runtime.skills,
                 tool_contract_catalog=self.runtime.planner.tool_contract_catalog,
                 tool_contract_policy=self.runtime.planner.tool_contract_policy,
-                tool_context=self.context(), agent_interface_profile=self.runtime.pipeline.agent_interface_profile)
+                tool_context=stage_context, agent_interface_profile=self.runtime.pipeline.agent_interface_profile)
             if errors:
+                self.record_intervention('host', 'rejected', 'host_validation',
+                    'The requested stage failed Host contract validation before dispatch.',
+                    execution_state=self.request_execution_state(),
+                    details={'stage':payload.get('name'), 'validation_messages':[str(e)[:500] for e in errors[:8]]})
                 self._write_status()
                 return {}, {"code": "host_validation", "messages": errors}
             self.backend.pending = payload
+            physical = payload.get('name') in ('move_to', 'gripper_control')
+            if physical:
+                self.request_physics.append(None)
             try:
                 step = self.runner.step()
             except Exception as exc:
@@ -274,7 +348,51 @@ class CodexHost:
                 self.backend.pending = None
             command = step.action.command
             self.last_command = command
+            for call in command.get('tool_calls', []):
+                if call.get('status') not in ('executed', 'failed'):
+                    continue
+                tool_name = call.get('name')
+                if tool_name in ('propose_motion_target', 'ik_preview_check'):
+                    self.execution_accounting['preflight_calls'] += 1
+                elif tool_name in ('move_to', 'gripper_control'):
+                    from tools.codex_feedback import motion_feedback
+                    self.execution_accounting['physical_dispatches'] += 1
+                    executed_physics = motion_feedback(command, tool_name).get('physics_executed')
+                    if executed_physics is True:
+                        self.execution_accounting['physical_calls_with_steps'] += 1
+                    elif executed_physics is None:
+                        self.execution_accounting['physical_unknown_outcomes'] += 1
             executed = command.get("request", {})
+            if physical:
+                from tools.codex_feedback import motion_feedback
+                calls = [c for c in command.get('tool_calls', [])
+                         if c.get('name') == payload.get('name') and c.get('status') in ('executed', 'failed')]
+                self.request_physics[-1] = (motion_feedback(command, payload['name']).get('physics_executed')
+                                           if calls else False)
+            if executed.get('name') != payload.get('name') or executed.get('kind') != payload.get('kind'):
+                code = 'host_invariant_substitution'
+                message = 'A Host gate substituted another operation for the requested stage; its specific reason is unavailable. Inspect the episode state before replanning.'
+                if isinstance(stage_context.get('motion_reconciliation'), dict):
+                    code = 'transport_outcome_unknown'
+                    message = ('A previous simulator action has unknown remote completion. The Host stopped this episode instead of dispatching the requested stage. '
+                               'Do not resend that action or infer completion from position. Host-confirmed environment retirement and a new session are required.')
+                elif (stage_context.get('fresh_observation_obligation') or {}).get('required') is True:
+                    code = 'fresh_observation_required'
+                    message = ('The previous world mutation returned no fresh observation. The Host substituted a same-environment observation refresh before permitting further control. '
+                               'Inspect the new observation and submit a new plan; the requested stage was not replayed automatically.')
+                self.record_intervention('host', 'substituted', code,
+                    message + ' The remaining motion sequence stops; this is not target arrival.',
+                    execution_state=self.request_execution_state(),
+                    details={'requested_stage': payload.get('name'),
+                             'executed_stage': executed.get('name') if executed.get('name') in {*self.schemas, 'task_complete', 'propose_motion_target', 'ik_preview_check'} else 'internal_operation'})
+            metadata = command.get('metadata') or {}
+            for gate, message in (
+                ('interface_profile_gate', 'The request uses parameters unavailable in this interface profile. Use the exposed tool schema.'),
+                ('bundle_resolution_gate', 'The supplied evidence bundle could not be resolved for this operation. Refresh the required evidence before replanning.'),
+            ):
+                if (metadata.get(gate) or {}).get('blocked') is True:
+                    self.record_intervention('host', 'rejected', gate, message,
+                        execution_state=self.request_execution_state())
             self.official_task_success = bool(self.success_evidence())
             if executed.get("name") == "task_complete":
                 self.completion_claim = executed.get("parameters", {}).get("success")
@@ -291,7 +409,13 @@ class CodexHost:
             error = execution_error(command)
             return command, error
 
+    def request_stop(self):
+        # Does not wait for the execution lock. A cancelled MCP request must stop
+        # the next route segment even while its current worker call is finishing.
+        self.stop_requested.set()
+
     def close(self, reason="transport_closed"):
+        self.request_stop()
         with self.lock:
             if self.closed: return
             self.closed = True

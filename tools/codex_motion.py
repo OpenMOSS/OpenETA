@@ -52,6 +52,8 @@ def run_motion_hook(host, arguments, *, preflight_only=False):
             # A cancelled or lost response cannot prove that no motion occurred.
             hook["motion_dispatched"] = None
         last, error = host._execute(payload, parent_request=requested)
+        if name == 'move_to' and not last and (error or {}).get('code') in ('episode_not_active', 'host_validation'):
+            hook['motion_dispatched'] = False
         if name == "move_to" and last:
             hook["motion_dispatched"] = any(
                 c.get("name") == name and c.get("status") in {"executed", "failed"}

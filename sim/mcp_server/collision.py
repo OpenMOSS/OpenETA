@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 
 _logger = logging.getLogger("openeta.collision")
 
@@ -70,6 +71,7 @@ def resolve_contact_authorization(
             "code": "contact_authorization_schema_mismatch",
             "message": "Contact authorization has an unsupported schema version.",
         }
+    patch_enabled = os.environ.get('OPENETA_LIBERO_FIXTURE_CONTACT_PATCH') == '1'
     if model_point:
         if authorization.get("source_kind") != "model_rgbd_point" or not all(
             isinstance(authorization.get(key), str) and authorization[key].strip()
@@ -132,6 +134,16 @@ def resolve_contact_authorization(
     # clear centre-distance winner rather than silently choosing one object.
     near_surface = [item for item in candidates if item[0] <= best_surface + 1e-9]
     near_surface.sort(key=lambda item: item[1])
+    if model_point and patch_enabled:
+        grouped, seen = [], set()
+        for item in near_surface:
+            obj = item[2]
+            key = ((obj.get('contact_object_name'), obj.get('contact_body_name'))
+                   if obj.get('geometry_kind') == 'fixture_contact' else ('object', obj.get('name')))
+            if key not in seen:
+                seen.add(key)
+                grouped.append(item)
+        near_surface = grouped
     if len(near_surface) > 1 and (
         near_surface[1][1] - near_surface[0][1] < ambiguity_margin_m
     ):
@@ -161,6 +173,7 @@ def resolve_contact_authorization(
     if model_point and best_center > .15:
         return None, {"ok": False, "code": "model_point_target_outside_envelope",
                       "message": "Measured point is too far from candidate contact geometry."}
+    from sim.libero_contact_geometry import local_patch_fields
     return best, {
         "ok": True,
         "schema_version": "openeta.contact_authorization_resolution.v1",
@@ -171,7 +184,8 @@ def resolve_contact_authorization(
         "object_scene_epoch": authorization.get("object_scene_epoch"),
         "target_object_name": str(best.get("contact_object_name") or best.get("name") or ""),
         **({"contact_kind": "articulated_fixture", "target_geom_name": best["contact_geom_name"],
-            "target_body_name": best["contact_body_name"]}
+            "target_body_name": best["contact_body_name"],
+            **(local_patch_fields(best, anchor_xyz) if patch_enabled else {})}
            if best.get("geometry_kind") == "fixture_contact" else {}),
         "target_object_category": str(best.get("category") or ""),
         "anchor_world_xyz": anchor_xyz,

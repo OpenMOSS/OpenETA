@@ -24,6 +24,8 @@ def parser():
                    help='Disable the opt-in held-object/fixture control used by Codex experiments')
     p.add_argument('--no-cartesian-segment', action='store_true',
                    help='Disable bounded Cartesian reference tracking for a paired baseline')
+    p.add_argument('--fixture-contact-patch', action='store_true',
+                   help='Experimental local articulated contact patches; off until remaining geometry regressions are resolved')
     return p
 
 
@@ -36,6 +38,8 @@ def launch_spec(args):
     env.pop('OPENETA_LIBERO_FIXTURE_GRIP_STABILIZATION', None)
     env['OPENETA_LIBERO_CARTESIAN_SEGMENT'] = (
         '1' if args.controller == 'mink_joint_velocity' and not args.no_cartesian_segment else '0')
+    env['OPENETA_LIBERO_FIXTURE_CONTACT_PATCH'] = (
+        '1' if args.controller == 'mink_joint_velocity' and args.fixture_contact_patch else '0')
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     from datetime import datetime
     state_dir = args.private_state_dir or REPO / 'tmp/codex-private-state' / datetime.now().strftime('%Y%m%d-%H%M%S-%f')

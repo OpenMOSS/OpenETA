@@ -60,3 +60,13 @@ def test_missing_or_binary_shadowing_overlay_never_falls_back_to_osc(tmp_path):
     (tmp_path / "numpy").mkdir()
     with pytest.raises(RuntimeError, match="must not shadow"):
         codex_sim_server.launch_spec(args)
+
+
+def test_local_fixture_patch_requires_explicit_mink_experiment_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv('OPENETA_LIBERO_FIXTURE_CONTACT_PATCH', '1')
+    args = codex_sim_server.parser().parse_args(['--mink-dependency-path', str(tmp_path)])
+    assert codex_sim_server.launch_spec(args)[1]['OPENETA_LIBERO_FIXTURE_CONTACT_PATCH'] == '0'
+    args.fixture_contact_patch = True
+    assert codex_sim_server.launch_spec(args)[1]['OPENETA_LIBERO_FIXTURE_CONTACT_PATCH'] == '1'
+    args.controller = 'osc_pose'
+    assert codex_sim_server.launch_spec(args)[1]['OPENETA_LIBERO_FIXTURE_CONTACT_PATCH'] == '0'

@@ -1,6 +1,6 @@
 {
   "name": "openeta",
-  "version": "0.1.0+codex.20260911080118",
+  "version": "0.1.0+codex.20260913114937",
   "description": "Operate an OpenETA simulation through existing Host contracts and native MCP tools.",
   "author": {
     "name": "Local developer"

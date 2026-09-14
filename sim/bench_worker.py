@@ -1031,6 +1031,7 @@ async def controller_goal_env(request):
                 else None
             ),
             motion_execution_condition=body.get("motion_execution_condition", "A"),
+            motion_mode=body.get('motion_mode', 'strict'),
             step_callback=lambda action, render: _step_with_image(
                 env,
                 action,

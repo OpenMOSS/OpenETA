@@ -18,7 +18,12 @@ def server_for(host):
 
     @server.call_tool(validate_input=False)
     async def call_tool(name, arguments):
-        return await asyncio.to_thread(host.call, name, arguments)
+        try:
+            return await asyncio.to_thread(host.call, name, arguments)
+        except asyncio.CancelledError:
+            host.request_stop()
+            await asyncio.to_thread(host.close, 'mcp_request_cancelled')
+            raise
 
     return server
 
@@ -32,6 +37,7 @@ async def serve(host):
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
     finally:
+        host.request_stop()
         await asyncio.to_thread(host.close)
 
 

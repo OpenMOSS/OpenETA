@@ -66,6 +66,7 @@ def execute_libero_mink_goal(
     ik_execution_seed: dict[str, Any] | None,
     step_callback: StepCallback,
     motion_execution_condition: object = "A",
+    motion_mode: str = "strict",
 ) -> dict[str, Any]:
     """Drive one fixed JOINT_VELOCITY environment to an EEF goal with Mink."""
 
@@ -82,6 +83,11 @@ def execute_libero_mink_goal(
         else None
     )
     start_xyz, start_quat = _eef_pose(raw, robot)
+    if motion_mode not in ('strict', 'recovery'):
+        raise ValueError('Unknown motion mode')
+    recovery_mode = motion_mode == 'recovery'
+    if recovery_mode and (not enable_collision_check or np.linalg.norm(target-start_xyz) > .15 + 1e-9):
+        raise ValueError('Recovery requires collision checks and a target within 0.15 m')
     target_quat = (
         explicit_target
         if explicit_target is not None
@@ -207,8 +213,13 @@ def execute_libero_mink_goal(
     from sim.controllers.cartesian_segment import (
         ENABLE_ENV as SEGMENT_ENV, CartesianSegment, checked_segment_velocity,
     )
-    segment = (CartesianSegment(start_xyz, target, start_quat, target_quat)
+    segment = (CartesianSegment(start_xyz, target, start_quat, target_quat, recovery=recovery_mode)
                if os.environ.get(SEGMENT_ENV, '0') == '1' else None)
+    if recovery_mode and segment is None:
+        raise ValueError('Recovery requires Cartesian tracking')
+    candidate_trace = []
+    recovery_resolve_steps = 0
+    recovery_selected_variants = set()
     body_to_site_rotation = _body_rotation(raw, robot).T @ start_site_rotation
     if segment is not None and target_quat is not None:
         # Track the intermediate orientation with comparable tolerance-scaled
@@ -450,6 +461,7 @@ def execute_libero_mink_goal(
                         ),
                     }
                     break
+        solved_velocity = np.asarray(velocity).copy()
         if used_joint_limit_escape:
             projected_arm_velocity, clipped_indices = project_velocity_to_joint_limits(
                 velocity[qvel_indices],
@@ -469,28 +481,43 @@ def execute_libero_mink_goal(
                 current_projected_joint_indices = list(clipped_indices)
         if segment is not None and not settling:
             rejected_constraints = set()
+            rejected_obstacles = []
+            rejected_tracking = set()
+            last_geometry = {}
 
             def geometric_check(q, xyz, quat):
+                last_geometry.clear()
                 candidate_joints, _, _ = _robot_joint_limit_state(model, q, robot)
                 if not verified_joint_limit_escape(current_joints, candidate_joints,
                                                   lower_limits, upper_limits):
                     rejected_constraints.add('joint_limit')
+                    last_geometry['geometry_rejections'] = ['joint_limit']
                     return False
                 if collision_policy is None:
                     return True
                 preview_config = mink.Configuration(model, q=q)
+                from sim.libero_contact_geometry import check_fixture_patch
+                if check_fixture_patch(preview_config, collision_policy)['detected']:
+                    rejected_constraints.add('fixture_contact_scope')
+                    last_geometry['geometry_rejections'] = ['fixture_contact_scope']
+                    return False
                 distances = _collision_pair_distances(preview_config, collision_policy['protected_pairs'])
                 hard = float(collision_policy['hard_stop_distance_m'])
                 # Hard penetrations need monotonic escape. A fallback from
                 # an infeasible QP also retains the existing soft-boundary
                 # escape requirement. Ordinary safe QPs keep the hard guard.
-                needs_escape = used_collision_qp_fallback or any(d < hard for d in current_pair_distances.values())
+                needs_escape = (used_collision_qp_fallback and current_recovery_boundary) or any(d < hard for d in current_pair_distances.values())
                 safe = (verified_collision_boundary_escape(current_pair_distances, distances,
                             hard_stop_distance_m=hard,
                             recovery_boundary_distance_m=float(collision_policy['minimum_distance_from_collisions_m']))
                         if needs_escape else all(d >= hard for d in distances.values()))
                 if not safe:
                     rejected_constraints.add('robot_collision')
+                    last_geometry['geometry_rejections'] = ['robot_collision']
+                    from sim.controllers.collision_feedback import rejected_candidate_obstacles
+                    obstacles = rejected_candidate_obstacles(current_pair_distances, distances, collision_policy, recovering=needs_escape)
+                    rejected_obstacles.extend(obstacles)
+                    last_geometry['obstacles'] = obstacles
                     return False
                 if attached_pairs:
                     carried_q = _transform_attached_object_with_eef(q, collision_policy,
@@ -502,16 +529,53 @@ def execute_libero_mink_goal(
                             else all(d >= hard for d in distances.values()))
                     if not safe:
                         rejected_constraints.add('attached_collision')
+                        last_geometry['geometry_rejections'] = ['attached_collision']
                         return False
                 return True
 
+            candidate_trace = []
+            pose_fn = lambda q: _configuration_eef_pose(model, q, robot)
             bounded_velocity = checked_segment_velocity(configuration, velocity, qvel_indices, dt,
-                segment, lambda q: _configuration_eef_pose(model, q, robot), geometric_check)
+                segment, pose_fn, geometric_check, rejected_tracking, candidate_trace=candidate_trace,
+                geometry_feedback=lambda: dict(last_geometry))
+            slow = (recovery_mode and len(segment.samples) >= 13
+                    and segment.samples[-13][0]-segment.samples[-1][0] < .0005
+                    and segment.samples[-13][1]-segment.samples[-1][1] < math.radians(.5))
+            if recovery_mode and (bounded_velocity is None or slow):
+                from sim.controllers.recovery_solver import alternative_velocities
+                from sim.controllers.candidate_feedback import public_candidate_trace
+                solve_limits = (emergency_escape_limits if used_joint_limit_escape else noncollision_limits) if used_collision_qp_fallback else limits
+                for variant, alternative in alternative_velocities(configuration, controller_tasks,
+                        solve_limits, dt, segment, raw.sim.model.site_name2id(eef_site), qvel_indices,
+                        recovery=recovery_mode):
+                    if used_joint_limit_escape:
+                        projected, _ = project_velocity_to_joint_limits(alternative[qvel_indices], current_joints,
+                            lower_limits, upper_limits, dt=dt)
+                        alternative[qvel_indices] = projected
+                    checked = checked_segment_velocity(configuration, alternative, qvel_indices, dt,
+                        segment, pose_fn, geometric_check, rejected_tracking, candidate_trace=candidate_trace,
+                        geometry_feedback=lambda: dict(last_geometry), variant=variant)
+                    if checked is not None:
+                        if slow and bounded_velocity is not None:
+                            def score(v):
+                                px, pq = pose_fn(configuration.integrate(v, dt))
+                                return np.linalg.norm(px-reference_xyz) + .02 * _angular_error_rad(pq, reference_quat)
+                            if score(checked) >= score(bounded_velocity) - 1e-6:
+                                continue
+                        bounded_velocity = checked
+                        solved_velocity = alternative.copy()
+                        recovery_resolve_steps += 1
+                        recovery_selected_variants.add(variant)
+                        break
             if bounded_velocity is None:
+                from sim.controllers.collision_feedback import public_candidate_obstacles
                 control_error = 'No checked velocity stays within the requested Cartesian segment and safety constraints'
                 control_failure = {'schema_version': 'openeta.controller_failure.v1',
                     'code': 'cartesian_segment_blocked',
                     'constraints': sorted(rejected_constraints) or ['path_tracking'],
+                    'candidate_obstacles': public_candidate_obstacles(rejected_obstacles),
+                    'candidate_trace': candidate_trace,
+                    'tracking_constraints': sorted(rejected_tracking),
                     'current_joint_limit_violation': current_joint_violation}
                 break
             velocity = bounded_velocity
@@ -520,6 +584,13 @@ def execute_libero_mink_goal(
             commanded_velocity[qvel_indices] = velocity[qvel_indices]
             predicted_q = configuration.integrate(commanded_velocity, dt)
             predicted = mink.Configuration(model, q=predicted_q)
+            from sim.libero_contact_geometry import check_fixture_patch
+            patch_report = check_fixture_patch(predicted, collision_policy)
+            if patch_report['detected']:
+                collision_detected = True
+                collision_info = {**_collision_receipt(collision_policy), **patch_report,
+                                  'check_mode': 'pre_actuation_configuration'}
+                break
             predicted_pair_distances = _collision_pair_distances(
                 predicted,
                 collision_policy["protected_pairs"],
@@ -864,6 +935,13 @@ def execute_libero_mink_goal(
                 convergence_stall_kind = "orientation_progress_stalled"
         if collision_policy is not None:
             actual = mink.Configuration(model, q=raw.sim.data.qpos.copy())
+            from sim.libero_contact_geometry import check_fixture_patch
+            patch_report = check_fixture_patch(actual, collision_policy)
+            if patch_report['detected']:
+                collision_detected = True
+                collision_info = {**_collision_receipt(collision_policy), **patch_report,
+                                  'check_mode': 'post_step_configuration'}
+                break
             actual_pair_distances = _collision_pair_distances(
                 actual,
                 collision_policy["protected_pairs"],
@@ -1003,8 +1081,18 @@ def execute_libero_mink_goal(
             convergence_stall_kind = segment_stop
             control_failure = {'schema_version': 'openeta.controller_failure.v1',
                               'code': segment_stop}
+            control_failure['candidate_trace'] = candidate_trace
         if convergence_stalled:
             break
+
+    if convergence_stalled and collision_policy is not None and total_steps:
+        from sim.controllers.stall_feedback import stalled_motion_context
+        control_failure = control_failure or {'schema_version': 'openeta.controller_failure.v1',
+                                               'code': 'local_convergence_stalled'}
+        control_failure.setdefault('candidate_trace', candidate_trace)
+        control_failure['stall_context'] = stalled_motion_context(
+            configuration, collision_policy, solved_velocity, velocity, qvel_indices, dt,
+            raw.sim.data._data, collision_qp_used=not used_collision_qp_fallback)
 
     end_xyz, end_quat = _eef_pose(raw, robot)
     position_error = float(np.linalg.norm(target - end_xyz))
@@ -1103,6 +1191,7 @@ def execute_libero_mink_goal(
             ),
             "iteration_budget": max_steps,
             "position_tolerance_m": float(position_tolerance_m),
+            "orientation_tolerance_rad": float(orientation_tolerance_rad),
             "position_tolerance_metric": "max_axis_absolute_error",
             "steps_executed": total_steps,
             "stop_reason": stop_reason,
@@ -1146,6 +1235,10 @@ def execute_libero_mink_goal(
         'orientation_cost_multiplier': orientation_multiplier,
         'orientation_hold_active': orientation_multiplier > 1.0,
         'control_tick_peak_orientation_error_rad': peak_orientation_error,
+        'motion_mode': motion_mode,
+        'recovery_resolve_steps': recovery_resolve_steps,
+        'verified_qp_fallback_steps': collision_boundary_recovery_steps,
+        'recovery_variants': sorted(recovery_selected_variants),
     })
     if segment is not None:
         result['controller_receipt']['cartesian_segment'] = segment.receipt()
@@ -1154,6 +1247,9 @@ def execute_libero_mink_goal(
             'path_peak_cross_track_m': segment.peak_cross_track_m,
             'path_peak_rotation_deviation_rad': segment.peak_rotation_deviation_rad,
             'path_backtracked_steps': segment.backtracked_steps,
+            'path_minimum_step_scale': segment.minimum_step_scale,
+            'path_cross_track_limit_m': segment.max_cross_track_m,
+            'path_rotation_deviation_limit_rad': segment.max_rotation_deviation_rad,
         })
     if progress_diagnostics is not None:
         result["controller_receipt"]["progress_diagnostics"] = progress_diagnostics
@@ -1434,6 +1530,7 @@ def _libero_collision_policy(
         )
     authorized_name = contact_name or attached_name
     target_geoms: set[int] = set()
+    local_fixture_patch = None
     target_root: int | None = None
     if authorized_name:
         target_obj = next(
@@ -1460,8 +1557,8 @@ def _libero_collision_policy(
         if any(target_obj is obj for obj in getattr(raw.env, "fixtures", ())):
             if attached_name or (contact_authorization or {}).get("contact_kind") != "articulated_fixture":
                 raise RuntimeError("Fixtures require a scoped contact grant and cannot be carried")
-            from sim.libero_contact_geometry import validate_fixture_geom
-            target_geoms = {validate_fixture_geom(raw.sim.model, target_obj, contact_authorization)}
+            from sim.libero_contact_geometry import fixture_patch
+            target_geoms, local_fixture_patch = fixture_patch(raw.sim.model, target_obj, contact_authorization)
         else:
             target_bodies = descendants(int(target_root))
             target_geoms = {
@@ -1541,6 +1638,7 @@ def _libero_collision_policy(
     )
     return {
         "limit": limit,
+        "fixture_patch": local_fixture_patch,
         "protected_pairs": list(limit.geom_id_pairs),
         "hard_stop_distance_m": -0.001,
         "minimum_distance_from_collisions_m": 0.003,
@@ -1747,6 +1845,14 @@ def _signed_geom_pair_distance(
     contact_distance = (contact_distances or {}).get(
         (min(first, second), max(first, second))
     )
+    if contact_distance is None and distance < -0.001:
+        # A native near-touching convex query can also report centimetres of
+        # penetration without a contact manifold. Only an independently
+        # certified separating plane may replace that uncorroborated value.
+        from sim.convex_distance import certified_convex_separation
+        proof = certified_convex_separation(model, data, first, second)
+        if proof is not None:
+            distance = proof[0]
     if contact_distance is not None:
         distance = min(distance, contact_distance)
     return distance
@@ -1918,6 +2024,9 @@ def _collision_receipt(policy: dict[str, Any] | None) -> dict[str, Any]:
         "endpoint_checked": True,
         "world_checked": True,
         "self_checked": True,
+        "contact_scope": ('local_articulated_patch' if policy.get('fixture_patch') is not None else
+                          'single_fixture_geom' if (policy.get('contact_authorization') or {}).get('contact_kind') == 'articulated_fixture' else
+                          'target_object' if policy.get('authorized_target_object') else 'none'),
         "check_mode": (
             "per_step_pre_actuation_and_post_step_configuration_with_"
             "rigidly_transformed_attached_object"

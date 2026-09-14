@@ -12,6 +12,7 @@ from sim.controllers.mink_goal import (
 )
 from sim.controllers.collision_recovery import verified_collision_boundary_escape
 from sim.controllers.collision_feedback import classify_collision
+from sim.libero_contact_geometry import check_fixture_patch
 
 
 @contextmanager
@@ -49,6 +50,9 @@ def _execute_checked_gripper(env, *, action, max_steps, contact_authorization, s
     before = _collision_pair_distances(config, policy['protected_pairs'])
     collision = _collision_distance_report(config, policy['protected_pairs'],
         distance_limit_m=policy['hard_stop_distance_m'], pair_distances=before)
+    patch = check_fixture_patch(config, policy)
+    if patch['detected']:
+        collision = patch
     mode = 'pre_actuation_configuration'
     # Do not squeeze further into an already protected contact. Opening is
     # checked as recovery against the actual next configuration below.
@@ -61,10 +65,13 @@ def _execute_checked_gripper(env, *, action, max_steps, contact_authorization, s
             after = _collision_pair_distances(config, policy['protected_pairs'])
             collision = _collision_distance_report(config, policy['protected_pairs'],
                 distance_limit_m=policy['hard_stop_distance_m'], pair_distances=after)
+            patch = check_fixture_patch(config, policy)
+            if patch['detected']:
+                collision = patch
             mode = 'post_step_configuration'
             escape = action[7] < 0 and verified_collision_boundary_escape(before, after,
                 hard_stop_distance_m=policy['hard_stop_distance_m'])
-            if collision['detected'] and not escape:
+            if collision['detected'] and (patch['detected'] or not escape):
                 stop = 'collision_detected'; break
             if result.get('error'):
                 stop = 'control_step_failed'; break

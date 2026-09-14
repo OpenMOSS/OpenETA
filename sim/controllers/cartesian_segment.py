@@ -12,7 +12,7 @@ ENABLE_ENV = 'OPENETA_LIBERO_CARTESIAN_SEGMENT'
 
 
 class CartesianSegment:
-    def __init__(self, start_xyz, target_xyz, start_quat, target_quat):
+    def __init__(self, start_xyz, target_xyz, start_quat, target_quat, *, recovery=False):
         self.start = np.asarray(start_xyz, dtype=float)
         self.delta = np.asarray(target_xyz, dtype=float) - self.start
         self.length = float(np.linalg.norm(self.delta))
@@ -21,8 +21,11 @@ class CartesianSegment:
         end = Rotation.from_quat(target_quat) if self.constrained_rotation else self.start_rotation
         self.rotvec = (end * self.start_rotation.inv()).as_rotvec()
         self.angle = float(np.linalg.norm(self.rotvec))
-        self.max_cross_track_m = 0.010
-        self.max_rotation_deviation_rad = math.radians(6)
+        self.recovery = recovery
+        self.max_cross_track_m = 0.020 if recovery else 0.010
+        self.max_rotation_deviation_rad = math.radians(12 if recovery else 6)
+        self.candidate_cross_track_m = 0.018 if recovery else 0.008
+        self.candidate_rotation_rad = math.radians(10 if recovery else 4)
         self.samples = deque(maxlen=26)
         self.peak_cross_track_m = 0.0
         self.peak_rotation_deviation_rad = 0.0
@@ -59,20 +62,25 @@ class CartesianSegment:
         rotation = float((Rotation.from_quat(quat) * Rotation.from_quat(expected_quat).inv()).magnitude()) if self.constrained_rotation else 0.
         return distance, rotation
 
-    def candidate_allowed(self, current_xyz, current_quat, xyz, quat):
-        # The nonlinear FK is checked, not merely a linearised Jacobian step.
+    def candidate_rejections(self, current_xyz, current_quat, xyz, quat):
+        """Robot-relative tracking bounds violated by a hypothetical next step."""
+        reasons = []
         if np.linalg.norm(np.asarray(xyz)-current_xyz) > 0.008 + 1e-9:
-            return False
+            reasons.append('position_step_limit')
         if (Rotation.from_quat(quat)*Rotation.from_quat(current_quat).inv()).magnitude() > math.radians(4) + 1e-9:
-            return False
+            reasons.append('rotation_step_limit')
         lateral, rotation = self.errors(xyz, quat)
         current_lateral, current_rotation = self.errors(current_xyz, current_quat)
-        # Leave tracking headroom for the velocity PID and contact dynamics;
-        # the actual-state stop remains a separate, wider bound.
         def recovering(value, current, bound):
             return value <= bound or (current > bound and value < current - 1e-8)
-        return (recovering(lateral, current_lateral, 0.008)
-                and recovering(rotation, current_rotation, math.radians(4)))
+        if not recovering(lateral, current_lateral, self.candidate_cross_track_m):
+            reasons.append('position_corridor')
+        if not recovering(rotation, current_rotation, self.candidate_rotation_rad):
+            reasons.append('rotation_corridor')
+        return reasons
+
+    def candidate_allowed(self, current_xyz, current_quat, xyz, quat):
+        return not self.candidate_rejections(current_xyz, current_quat, xyz, quat)
 
     def observe(self, xyz, quat, position_error, orientation_error):
         lateral, rotation = self.errors(xyz, quat)
@@ -103,7 +111,8 @@ class CartesianSegment:
 
 
 def checked_segment_velocity(configuration, velocity, arm_indices, dt, segment,
-                             pose_fn, geometric_check):
+                             pose_fn, geometric_check, rejected_tracking=None, *,
+                             candidate_trace=None, geometry_feedback=None, variant='primary'):
     """Return the largest bounded candidate; each candidate gets exact checks.
 
     geometric_check is supplied by the worker and retains robot, attachment
@@ -115,12 +124,27 @@ def checked_segment_velocity(configuration, velocity, arm_indices, dt, segment,
         candidate_velocity[arm_indices] = velocity[arm_indices] * scale
         q = configuration.integrate(candidate_velocity, dt)
         xyz, quat = pose_fn(q)
-        if not segment.candidate_allowed(current_xyz, current_quat, xyz, quat):
+        tracking = segment.candidate_rejections(current_xyz, current_quat, xyz, quat)
+        row = {'variant': variant, 'scale': scale,
+               'position_step_m': float(np.linalg.norm(np.asarray(xyz)-current_xyz)),
+               'rotation_step_rad': float((Rotation.from_quat(quat)*Rotation.from_quat(current_quat).inv()).magnitude()),
+               'tracking_rejections': tracking, 'tracking_passed': not tracking,
+               'geometry_status': 'not_checked', 'checks_passed': False}
+        if candidate_trace is not None:
+            candidate_trace.append(row)
+        if tracking:
+            if rejected_tracking is not None:
+                rejected_tracking.update(segment.candidate_rejections(current_xyz, current_quat, xyz, quat))
             continue
-        if not geometric_check(q, xyz, quat):
+        accepted = geometric_check(q, xyz, quat)
+        row['geometry_status'] = 'passed' if accepted else 'rejected'
+        if geometry_feedback is not None:
+            row.update(geometry_feedback())
+        if not accepted:
             continue
         if scale < 1.:
             segment.backtracked_steps += 1
             segment.minimum_step_scale = min(segment.minimum_step_scale, scale)
+        row['checks_passed'] = True
         return candidate_velocity
     return None

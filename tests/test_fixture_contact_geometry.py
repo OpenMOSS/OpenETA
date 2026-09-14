@@ -103,3 +103,36 @@ def test_failed_close_cannot_arm_fixture_contact(monkeypatch):
     monkeypatch.setattr(s,'_step_gripper_with_final_observation',lambda *a,**k:{'error':'actuator failed'})
     result=s.gripper_close.__wrapped__(handle='h',session_id='fixture',contact_authorization=grant([0,.1,1]))
     assert result['error']=='actuator failed' and '_fixture_contact' not in meta
+
+
+def test_adjacent_fixture_pieces_are_one_association_but_different_bodies_stay_ambiguous(monkeypatch):
+    monkeypatch.setenv('OPENETA_LIBERO_FIXTURE_CONTACT_PATCH', '1')
+    from copy import deepcopy
+    m,d,f=fixture_scene()
+    records=fixture_geometry(m,d,[f],UnifiedEnv._mujoco_geom_world_aabb)
+    first=next(r for r in records if r['geometry_kind']=='fixture_contact')
+    adjacent={**deepcopy(first), 'name':'adjacent','contact_geom_name':'adjacent'}
+    assert resolve_contact_authorization(grant([0,.1,1]),[first,adjacent])[0] is not None
+    other={**adjacent,'contact_body_name':'other_drawer'}
+    assert resolve_contact_authorization(grant([0,.1,1]),[first,other])[1]['code']=='contact_target_geometry_ambiguous'
+
+
+def test_same_patch_requires_same_object_and_body_and_bounded_anchor():
+    from sim.libero_contact_geometry import same_local_patch
+    first={'target_object_name':'cab','target_body_name':'drawer','contact_scope':'local_articulated_patch',
+           'anchor_body_xyz':[0,0,0],'target_geom_name':'piece1'}
+    assert same_local_patch(first,{**first,'target_geom_name':'piece2','anchor_body_xyz':[.01,0,0]})
+    for changed in ({'target_body_name':'other'}, {'target_object_name':'other'}, {'anchor_body_xyz':[.3,0,0]}):
+        assert not same_local_patch(first,{**first,**changed})
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_resolver_only_emits_local_patch_in_opt_in_mode(monkeypatch, enabled):
+    monkeypatch.setenv('OPENETA_LIBERO_FIXTURE_CONTACT_PATCH', '1' if enabled else '0')
+    m,d,f=fixture_scene()
+    records=fixture_geometry(m,d,[f],UnifiedEnv._mujoco_geom_world_aabb)
+    for r in records:
+        r.update(contact_body_position=[0,0,0],contact_body_rotation=np.eye(3).tolist())
+    _, receipt=resolve_contact_authorization(grant([0,.1,1]),records)
+    assert ('anchor_body_xyz' in receipt) is enabled
+    assert (receipt.get('contact_scope')=='local_articulated_patch') is enabled

@@ -47,8 +47,10 @@ def motion_feedback(command, name='move_to'):
     safe_collision = {k: collision[k] for k in ('detected','endpoint_checked','trajectory_checked','world_checked','self_checked') if type(collision.get(k)) is bool}
     if collision.get('collision_class') in ('none','attached_object_world','self_collision','world_collision','robot_world','robot_self','endpoint','unspecified_contact'):
         safe_collision['collision_class'] = collision['collision_class']
-    for key, choices in {'check_mode':('pre_actuation_configuration','post_step_configuration','per_step_pre_actuation_and_post_step_configuration'),
+    for key, choices in {'check_mode':('pre_actuation_configuration','post_step_configuration','per_step_pre_actuation_and_post_step_configuration','pre_actuation_attached_object_configuration','post_step_attached_object_configuration'),
                          'robot_part':('arm','gripper','unknown'), 'checked_during':('gripper_actuation',),
+                         'contact_scope': ('local_articulated_patch','single_fixture_geom','target_object','none'),
+                         'contact_scope_violation': ('outside_local_patch','fixture_penetration','contact_geometry_uncertain'),
                          'gripper_part':('finger','base_or_palm'),
                          'obstacle_relation':('robot_self','unbound_world','authorized_target','outside_contact_target'),
                          'check_stage':('target_endpoint',),
@@ -62,8 +64,28 @@ def motion_feedback(command, name='move_to'):
         summary['collision'] = safe_collision
     failure = raw.get('controller_failure') or {}
     if failure.get('code') in ('constraint_escape_preview_rejected','mink_qp_no_solution','joint_limit_violation',
-                             'cartesian_segment_blocked','cartesian_path_deviation','cartesian_progress_stalled'):
+                             'cartesian_segment_blocked','cartesian_path_deviation','cartesian_progress_stalled','local_convergence_stalled'):
         summary['controller_failure'] = {'code': failure['code']}
+    constraints = failure.get('constraints')
+    if 'controller_failure' in summary and isinstance(constraints, list):
+        summary['controller_failure']['constraints'] = sorted({v for v in constraints if isinstance(v, str)
+            and v in {'joint_limit', 'robot_collision', 'attached_collision', 'path_tracking', 'fixture_contact_scope'}})
+    from sim.controllers.collision_feedback import public_candidate_obstacles
+    candidates = public_candidate_obstacles(failure.get("candidate_obstacles"))
+    if candidates and "controller_failure" in summary:
+        summary["controller_failure"]["candidate_obstacles"] = candidates
+    from sim.controllers.collision_feedback import public_tracking_constraints
+    tracking_constraints = public_tracking_constraints(failure.get("tracking_constraints"))
+    if tracking_constraints and "controller_failure" in summary:
+        summary["controller_failure"]["tracking_constraints"] = tracking_constraints
+    from sim.controllers.stall_feedback import public_stall_context
+    stall = public_stall_context(failure.get('stall_context'))
+    if stall and 'controller_failure' in summary:
+        summary['controller_failure']['stall_context'] = stall
+    from sim.controllers.candidate_feedback import public_candidate_trace
+    trace = public_candidate_trace(failure.get('candidate_trace'))
+    if trace and 'controller_failure' in summary:
+        summary['controller_failure']['candidate_trace'] = trace
     steps = summary.get('steps_executed')
     controller = raw.get('controller_receipt') or {}
     pose = {k:controller[k] for k in ('ik_seed_validated','position_within_tolerance','orientation_within_tolerance') if type(controller.get(k)) is bool}
@@ -86,6 +108,19 @@ def motion_feedback(command, name='move_to'):
         summary['grip_stabilization_active'] = controller['grip_stabilization_active']
     if controller.get('grip_stabilization_kind') in ('none', 'fixture', 'attached_object'):
         summary['grip_stabilization_kind'] = controller['grip_stabilization_kind']
+    adjustments = {}
+    for key in ('joint_velocity_limit_rad_s', 'iteration_budget', 'position_tolerance_m',
+                'joint_velocity_projection_steps', 'path_backtracked_steps', 'path_minimum_step_scale',
+                'path_cross_track_limit_m', 'path_rotation_deviation_limit_rad', 'orientation_tolerance_rad', 'recovery_resolve_steps', 'verified_qp_fallback_steps'):
+        value = controller.get(key)
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            adjustments[key] = value
+    if controller.get('transport_profile') in ('nominal', 'fixture_grip_stabilized', 'attached_object_stabilized', 'attached_object_gentle'):
+        adjustments['transport_profile'] = controller['transport_profile']
+    if adjustments:
+        summary['control_adjustments'] = adjustments
+    if controller.get('motion_mode') in ('strict', 'recovery'):
+        summary.setdefault('control_adjustments', {})['motion_mode'] = controller['motion_mode']
     contact = raw.get('gripper_contact') or {}
     safe_contact = {k: contact[k] for k in ('available', 'left_finger_contact',
         'right_finger_contact', 'left_fingerpad_contact', 'right_fingerpad_contact')
@@ -100,8 +135,8 @@ def motion_feedback(command, name='move_to'):
             reason == 'control_step_failed' and safe_collision.get('detected') is True):
         action, message = REASONS['collision_detected']
         stage = safe_collision.get('check_mode')
-        message = ('The next actuation was rejected before execution. ' if stage == 'pre_actuation_configuration' else
-                   'A protected contact was detected after a physics step. ' if stage == 'post_step_configuration' else '') + message
+        message = ('The next actuation was rejected before execution. ' if stage in ('pre_actuation_configuration', 'pre_actuation_attached_object_configuration') else
+                   'A protected contact was detected after a physics step. ' if stage in ('post_step_configuration', 'post_step_attached_object_configuration') else '') + message
         if safe_collision.get('check_stage') == 'target_endpoint':
             message = ('The requested endpoint was rejected before execution; this does not establish '
                        'a collision at the current pose. Inspect fresh views and change the proposed '
@@ -124,10 +159,6 @@ def motion_feedback(command, name='move_to'):
             message += ' Contact with your marked target is already authorized; the obstruction is outside that target. Re-marking the same target will not clear this obstruction. Change the approach side or clearance waypoint using fresh views.'
         if name == 'gripper_control':
             message += ' Gripper actuation was interrupted; inspect the actual aperture and use a checked release before retrying contact.'
-    elif pose.get('ik_seed_validated') and reason in ('iteration_limit','local_convergence_stalled','control_step_failed'):
-        message += ' The endpoint IK seed passed validation; local execution failed. Check joint margin and separate clearance motion from large orientation changes.'
-    if name == 'move_to' and reason in ('iteration_limit', 'local_convergence_stalled', 'control_step_failed', 'collision_detected'):
-        message += ' If this was a grasp approach, do not close at the assumed target. Inspect the actual grip-site and fresh views, then retreat/reorient or remeasure and correct the approach before closing.'
     if name == 'gripper_control' and safe_contact.get('available'):
         message += ' Finger contact is with external geometry, not confirmed target identity or retention. '
         message += ('Both pads contact geometry; confirm retention with a small checked motion and fresh views.'
@@ -146,6 +177,52 @@ def motion_feedback(command, name='move_to'):
         action = 'replan_stalled_segment'
         message = ('Neither position nor orientation made meaningful progress in the bounded tracking window. '
                    'Inspect the actual pose, joint margin and views; change the waypoint or orientation instead of repeating the same target.')
+    if 'fixture_contact_scope' in summary.get('controller_failure', {}).get('constraints', []):
+        message += (' Candidate steps could not satisfy the local fixture contact scope. '
+                    'Inspect the marked surface and approach; the grant does not cover remote surfaces or deep penetration.')
+    scope = safe_collision.get('contact_scope_violation')
+    if scope:
+        action = 'replan_local_contact'
+        message = ('Contact left the local patch around your marked surface. Refresh a visible contact point or change the approach.'
+                   if scope == 'outside_local_patch' else
+                   'The local contact geometry could not be verified. Inspect fresh views and choose a different checked approach.'
+                   if scope == 'contact_geometry_uncertain' else
+                   'Contact exceeded the fixture penetration limit. Inspect actual state and choose a checked retreat; do not keep pushing.')
+    if failure.get('code') == 'cartesian_segment_blocked':
+        if any(row.get('robot_part') == 'arm' for row in candidates):
+            message += ' Rejected candidates were constrained by arm clearance; include the arm in your clearance plan.'
+        if any(row.get('gripper_part') == 'base_or_palm' for row in candidates):
+            message += ' Rejected candidates were constrained by gripper base/palm clearance; inspect that volume when changing approach.'
+        if any(row.get('gripper_part') == 'finger' for row in candidates):
+            message += ' Rejected candidates were constrained by finger clearance.'
+        if any(row.get('obstacle_relation') == 'outside_contact_target' for row in candidates):
+            message += ' The constraining geometry is outside the authorized contact target. Re-marking that same target does not change this constraint; choose another approach or clearance waypoint.'
+        if any(row.get('constraint_boundary') == 'clearance_recovery' for row in candidates):
+            message += ' A candidate failed to improve the active clearance boundary; this is not a report of newly executed penetration.'
+    if failure.get('code') == 'cartesian_segment_blocked':
+        if 'rotation_corridor' in tracking_constraints:
+            message += ' Candidate orientations could not stay within the planned rotation corridor. Choose a different rotation axis or split reorientation and clearance translation into separately checked moves.'
+        if 'position_corridor' in tracking_constraints:
+            message += ' Candidate positions could not stay within the planned straight segment. Replan a different segment from the actual pose instead of appending collinear points.'
+    if stall:
+        active = stall.get('active_clearance_constraints', [])
+        measured = stall.get('measured_robot_contacts', [])
+        if active:
+            message += ' The last QP had binding robot-clearance constraints; these are associated evidence, not a proven cause of the stall.'
+        if any(row.get('gripper_part') == 'base_or_palm' for row in active):
+            message += ' Gripper base/palm clearance was constrained.'
+        if any(row.get('gripper_part') == 'base_or_palm' for row in measured):
+            message += ' Measured end-state contact includes the gripper base/palm; finger-only contact feedback does not cover it.'
+        if any(row.get('obstacle_relation') == 'outside_contact_target' for row in active + measured):
+            message += ' This evidence includes geometry outside the authorized contact target. Retreat and change approach before continuing; re-marking the same target does not authorize this obstruction.'
+        if active or measured:
+            message += ' collision.detected=false means no hard collision stop was triggered, not absence of contact or avoidance constraints.'
+        if stall.get('qp_evidence') == 'unavailable' or stall.get('contact_evidence') == 'unavailable':
+            message += ' Some stall diagnostics are unavailable; do not infer free space from missing evidence.'
+    if pose.get('ik_seed_validated') and reason in ('iteration_limit','local_convergence_stalled','control_step_failed'):
+        message += ' The endpoint IK seed passed validation; local execution failed. Check joint margin and separate clearance motion from large orientation changes.'
+    if name == 'move_to' and reason in ('iteration_limit', 'local_convergence_stalled', 'control_step_failed', 'collision_detected'):
+        message += ' If this was a grasp approach, do not close at the assumed target. Inspect the actual grip-site and fresh views, then retreat/reorient or remeasure and correct the approach before closing.'
     return {'reason_code': reason, 'motion_summary': summary,
             'physics_executed': bool(steps > 0) if steps is not None else None,
             'recovery': {'action': action, 'message': message}}
@@ -157,4 +234,4 @@ def execution_error(command):
     receipt = motion_feedback(command, (command.get('request') or {}).get('name', 'move_to'))
     reason = receipt.get('reason_code', 'tool_execution_failed')
     return {'code': reason, 'status': command['status'],
-            'message': REASONS[reason][1], **({'motion': receipt} if receipt else {})}
+            'message': (receipt.get('recovery') or {}).get('message', REASONS[reason][1]), **({'motion': receipt} if receipt else {})}

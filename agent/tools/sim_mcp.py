@@ -1076,6 +1076,11 @@ class SimulatorMcpToolProxy:
             if key in parameters:
                 arguments[key] = parameters[key]
         target_pose = parameters.get("target_pose")
+        recovery_resolver = (metadata or {}).get('_motion_mode_resolver')
+        if callable(recovery_resolver) and isinstance(target_pose, dict):
+            mode = recovery_resolver(target_pose)
+            if mode == 'recovery':
+                arguments['motion_mode'] = mode
         resolver = (metadata or {}).get("_contact_authorization_resolver")
         if callable(resolver) and isinstance(target_pose, dict):
             authorization = resolver(target_pose)
@@ -2413,9 +2418,11 @@ def _agent_visible_collision_receipt(collision: JsonDict) -> JsonDict:
     )
     public["feedback_scope"] = "verdict_and_recovery_class_only"
     for key, choices in {
-        'check_mode': {'pre_actuation_configuration','post_step_configuration','per_step_pre_actuation_and_post_step_configuration'},
+        'check_mode': {'pre_actuation_configuration','post_step_configuration','per_step_pre_actuation_and_post_step_configuration','pre_actuation_attached_object_configuration','post_step_attached_object_configuration'},
         'robot_part': {'arm','gripper','unknown'},
-        'gripper_part': {'finger','base_or_palm'},
+        'contact_scope': ('local_articulated_patch','single_fixture_geom','target_object','none'),
+                         'contact_scope_violation': ('outside_local_patch','fixture_penetration','contact_geometry_uncertain'),
+                         'gripper_part': {'finger','base_or_palm'},
         'obstacle_relation': {'robot_self','unbound_world','authorized_target','outside_contact_target'},
         'checked_during': {'gripper_actuation'},
         'check_stage': {'target_endpoint'},
@@ -2485,6 +2492,26 @@ def _agent_visible_controller_failure(failure: JsonDict) -> JsonDict:
         value = failure.get(field)
         if isinstance(value, str):
             public[field] = value
+    constraints = failure.get("constraints")
+    if isinstance(constraints, list):
+        public["constraints"] = sorted({v for v in constraints if isinstance(v, str)
+            and v in {"joint_limit", "robot_collision", "attached_collision", "path_tracking", "fixture_contact_scope"}})
+    from sim.controllers.collision_feedback import public_candidate_obstacles
+    candidates = public_candidate_obstacles(failure.get("candidate_obstacles"))
+    if candidates:
+        public["candidate_obstacles"] = candidates
+    from sim.controllers.collision_feedback import public_tracking_constraints
+    tracking = public_tracking_constraints(failure.get("tracking_constraints"))
+    if tracking:
+        public["tracking_constraints"] = tracking
+    from sim.controllers.stall_feedback import public_stall_context
+    stall = public_stall_context(failure.get("stall_context"))
+    if stall:
+        public["stall_context"] = stall
+    from sim.controllers.candidate_feedback import public_candidate_trace
+    trace = public_candidate_trace(failure.get('candidate_trace'))
+    if trace:
+        public['candidate_trace'] = trace
     public["recovery"] = (
         "Use the actual EEF pose and fresh visual evidence to choose a materially "
         "different checked waypoint or orientation; do not replay the rejected target."

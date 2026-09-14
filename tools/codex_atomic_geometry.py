@@ -122,7 +122,7 @@ def project(source, xyz):
     return (float(fx*p[0]/p[2]+cx), float(fy*p[1]/p[2]+cy))
 
 
-def render(source, *, mark=None, actual=None, target=None, rotation=None, crop=None):
+def render(source, *, mark=None, actual=None, target=None, rotation=None, crop=None, route=None):
     """Calibrated overlays; their pixels still refer to the original depth."""
     im = Image.open(source["rgb"]).convert("RGB")
     draw = ImageDraw.Draw(im)
@@ -135,6 +135,15 @@ def render(source, *, mark=None, actual=None, target=None, rotation=None, crop=N
         return xy
     if actual is not None:
         dot(actual, "magenta")
+    if route:
+        previous = None
+        for index, xyz in enumerate(route):
+            xy = dot(xyz, "yellow")
+            if xy is not None:
+                draw.text((xy[0]+4, xy[1]+4), "start" if index == 0 else str(index-1), fill="yellow")
+                if previous is not None:
+                    draw.line((*previous, *xy), fill="yellow", width=1)
+            previous = xy
     if mark is not None:
         dot(mark, "cyan")
     if target is not None:

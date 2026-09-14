@@ -113,3 +113,13 @@ def test_completed_codex_requires_cleanup_and_separates_task_success(
     assert summary["integration_passed"] is cleanup_ok
     assert summary["task_success"] is official_success
     assert not (output / "codex-home/auth.json").exists()
+
+
+def test_native_route_deadline_does_not_preempt_the_host_episode(tmp_path, monkeypatch):
+    fake_login(tmp_path, monkeypatch)
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: None)
+    output = tmp_path / 'run'
+    launcher.prepare(output, ['--timeout', '2400'], 'gpt-6-astra', 'high', 'codex')
+    config = json.loads((output / 'marketplace/plugins/openeta/.mcp.json').read_text())
+    assert config['openeta']['tool_timeout_sec'] == 2430
+    assert config['openeta']['startup_timeout_sec'] == 180

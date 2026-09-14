@@ -170,3 +170,110 @@ Host 分别为 R 与 R @ diag(-1,-1,1) 生成目标和新鲜 IK receipt；采用
 当前尚未实现在线隔离 rollout、多 IK 解收集、跨途径点滞回或自动撤退重试。
 完整设计见 [姿态选择设计](codex-gripper-orientation-selection-design.md)。
 参数为独立实验入口的兼容性扩展，合入 main 前需要三人评审。
+
+### Short routes and local fixture patches (2026-09-12)
+
+The current atomic `move_to` additionally accepts up to four `waypoints` before
+its top-level final pose. Routes use absolute world positions / point+offset or
+orientation-only poses, strict orientation, and no contact grants. Omitted
+orientation inherits the preceding target; omitted position inherits the
+preceding target position. Single moves retain their existing delta and symmetry
+support. Routes validate all references before actuation, then run fresh IK and
+ordinary budgeted execution separately for each segment. Failed or unconfirmed
+arrival stops the route. There is no smoothing, automatic bypass or resume.
+
+Illustrative schema example, not a task-specific motion recommendation:
+
+```json
+{
+  "waypoints": [
+    {"xyz_m": [0.1, 0.0, 1.2]},
+    {"approach_world": [0, 0, -1], "jaw_world": [1, 0, 0]}
+  ],
+  "xyz_m": [0.2, 0.1, 1.2],
+  "preview": true
+}
+```
+
+Route feedback includes `segment_count`, `completed_count`, `stopped_index` on
+failure, per-segment `actual_robot` and feedback, `remaining_indices` (not
+attempted), and `internal_tool_calls`. Segment indices and preview target labels
+are zero-based; the preview also labels the current position `start`. Preview
+runs no IK/physics. Routes publish intermediate observations through the same
+memory path as individual moves, encode final views once, and journal segment
+starts/outcomes to `host/atomic-route-progress.jsonl`. Disconnect/cancellation
+signals stop subsequent dispatches; an already-running simulator call can finish
+and must not be inferred to have executed zero steps.
+
+With the explicit `scripts/codex_sim_server.py --fixture-contact-patch` Mink experiment
+flag and live fixture body transforms, new measured-point grants use
+a body-local 60 mm contact patch, covering nearby collision pieces of that exact
+articulated body. Remote pieces remain ordinary QP obstacles; every nearby
+candidate's actual contact/witness must remain inside the patch and satisfy the
+existing 1 mm hard penetration bound. Arm, fixed frames, other parts and carried
+object collision checks remain active. Missing/degenerate witnesses are checked
+against conservative compiled geometry bounds; unresolved scope fails closed.
+This experimental mode remains off by default and is explicitly enabled in the
+2026-09-12 recovery retest. The initial degenerate-witness replay regression was
+resolved by independently certified convex separation, described below.
+A held grant cannot drift through successive re-markings. Older adapters without
+body transforms retain the single-geom scope.
+
+Public feedback adds execution state, bounded constraint enums, carried-object
+pre/post-step stages, local contact scope/geometry failures, stale/depth-edge mark
+codes, and contact/symmetry availability. It does not expose geometry names,
+body transforms, surface coordinates beyond the Agent's own measured marks, or
+task goal regions. The additive atomic interface and shared feedback/authorization
+changes require three-person contract review before main integration.
+
+See [Host change validation](diagnostics/codex-host-routes-contact-2026-09-12.md)
+for tests, local replay results and unresolved limitations.
+
+### Candidate rejection diagnosis and certified geometry queries (2026-09-12)
+
+When no checked Cartesian step is accepted, `controller_failure` can include
+bounded `candidate_obstacles` and `tracking_constraints`. These describe rejected
+candidate configurations, not newly executed contact. Obstacle rows distinguish
+arm/fingers/base-or-palm, self/world/authorized-target/outside-target, and hard
+distance versus clearance-recovery boundaries. Tracking enums distinguish step
+limits from position and rotation corridors. All three feedback filtering layers
+preserve these allowlisted categories; geometry identifiers, transforms and raw
+solver data remain private. Recovery text retains endpoint-IK validation and the
+instruction to inspect a failed grasp approach before closing.
+
+For supported compiled convex meshes and boxes, the worker can independently
+certify positive separation when a native query returns an empty zero-distance
+witness, or reports excessive penetration without a corresponding contact
+record. The fallback checks convex membership, a positive separating plane and
+closest-point agreement; unsupported or uncertified cases retain conservative
+behavior. Actual contact records take precedence. It changes neither simulation
+collision flags nor the existing penetration/contact-scope thresholds, and does
+not replace Mink's QP collision limit. This is private collision infrastructure,
+not a new Agent perception or planning tool.
+
+The atomic skill adds general guidance for clearance/rotation recovery, checking
+actual object motion after short pushes, and reconsidering compartment identity
+after an apparently supported placement fails the official success check. It
+contains no benchmark coordinates, hidden goal regions or task-specific routes.
+See [recovery validation](diagnostics/codex-host-recovery-2026-09-12.md).
+
+### Request-scoped intervention feedback (2026-09-13)
+
+Host and controller interventions now explain changed execution settings, refusal,
+substitution, partial/unknown outcomes and contact-binding retirement. Replies are
+correlated to the current request; `episode_status.previous_request` is explicitly
+historical. Stalled motion reports last-tick clearance constraints separately from
+measured contact, with public-safe categories and unknown evidence preserved.
+See the [cross-layer contract and audit](codex-intervention-feedback.md) and
+[validation report](diagnostics/codex-feedback-contract-2026-09-13.md).
+
+### Explicit bounded recovery (2026-09-13)
+
+`move_to` additionally accepts `motion_mode="recovery"` for one short target
+within 150 mm. This explicitly permits a 20 mm / 12 degree path corridor while
+keeping final pose tolerances, collision checks and contact grants unchanged.
+Routes, symmetric selection and new contact grants use separate calls. Default
+strict moves retain their existing path bounds. Candidate traces separate
+tracking rejection from untested or rejected geometry; remaining budget and
+recent measured progress help select a new plan without automatic replay.
+See [implementation and validation](diagnostics/codex-recovery-implementation-2026-09-13.md).

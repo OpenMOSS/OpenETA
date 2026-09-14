@@ -42,11 +42,16 @@ def prepare(output, host_args, model, effort, codex, *, model_catalog_json=None)
         shutil.rmtree(market / "plugins/openeta/skills/openeta-pick")
     (market / ".agents/plugins").mkdir(parents=True)
     shutil.copy2(REPO / ".agents/plugins/marketplace.json", market / ".agents/plugins/marketplace.json")
+    # A native route can contain multiple normally budgeted motion stages.
+    # Let the Host episode deadline stop it rather than severing stdio at 180 s.
+    episode_timeout = (float(host_args[host_args.index('--timeout') + 1])
+                       if '--timeout' in host_args else 150.)
+    native_tool_timeout = max(180., episode_timeout + 30.)
     plugin_mcp = {"openeta": {
         "command": str(REPO / ".venv/bin/python"), "args": ["-m", "tools.codex_mcp_server"],
         "env": {"PYTHONPATH": str(REPO), "PYTHONDONTWRITEBYTECODE": "1",
                 "OPENETA_CODEX_HOST_ARGS": json.dumps(host_args)},
-        "startup_timeout_sec": 180, "tool_timeout_sec": 180,
+        "startup_timeout_sec": 180, "tool_timeout_sec": native_tool_timeout,
     }}
     (market / "plugins/openeta/.mcp.json").write_text(json.dumps(plugin_mcp, indent=2) + "\n")
     config = (f'model = {json.dumps(model)}\nmodel_reasoning_effort = {json.dumps(effort)}\n'

@@ -150,3 +150,36 @@ def test_atomic_gripper_zero_step_stop_keeps_fresh_measurement(atomic):
     assert result.isError and body(result)['feedback']['motion']['physics_executed'] is False
     assert host.atomic.generation==generation
     assert host.atomic.point(point,contact=True)
+
+
+@pytest.mark.parametrize('stage', ['pre_actuation_attached_object_configuration', 'post_step_attached_object_configuration'])
+def test_carried_collision_stage_and_constraint_classes_survive_redaction(stage):
+    from agent.tools.sim_mcp import _agent_visible_simulator_response
+    from agent.runtime.response_artifacts import build_motion_summary
+    raw = {'stop_reason': 'collision_detected', 'steps_executed': 4,
+           'collision': {'detected': True, 'collision_type': 'attached_object_world', 'check_mode': stage,
+                         'geom1_name': 'secret_object', 'minimum_distance_m': -.03},
+           'controller_failure': {'code': 'constraint_escape_preview_rejected',
+                                  'constraints': ['joint_limit', 'attached_collision', 'private_geom', {'secret': 'x'}]}}
+    summary = build_motion_summary(_agent_visible_simulator_response(raw))
+    command = {'tool_calls': [{'name': 'move_to', 'result': {'details': {'outputs': {'motion_summary': summary}}}}]}
+    feedback = motion_feedback(command)
+    assert feedback['motion_summary']['collision']['check_mode'] == stage
+    assert feedback['motion_summary']['controller_failure']['constraints'] == ['attached_collision', 'joint_limit']
+    assert 'secret' not in json.dumps(feedback) and 'private_geom' not in json.dumps(feedback)
+
+
+@pytest.mark.parametrize('scope', ['outside_local_patch', 'fixture_penetration', 'contact_geometry_uncertain'])
+def test_local_contact_failures_are_specific_without_scene_geometry(scope):
+    from agent.tools.sim_mcp import _agent_visible_simulator_response
+    from agent.runtime.response_artifacts import build_motion_summary
+    raw = {'stop_reason': 'collision_detected', 'steps_executed': 1,
+           'collision': {'detected': True, 'contact_scope_violation': scope, 'contact_scope': 'local_articulated_patch',
+                         'geom1_name': 'private_panel', 'anchor_body_xyz': [1, 2, 3]}}
+    summary = build_motion_summary(_agent_visible_simulator_response(raw))
+    command = {'tool_calls': [{'name': 'move_to', 'result': {'details': {'outputs': {'motion_summary': summary}}}}]}
+    feedback = motion_feedback(command)
+    assert feedback['motion_summary']['collision']['contact_scope_violation'] == scope
+    assert feedback['recovery']['action'] == 'replan_local_contact'
+    assert feedback['motion_summary']['collision']['contact_scope'] == 'local_articulated_patch'
+    assert 'private_panel' not in json.dumps(feedback) and 'anchor_body' not in json.dumps(feedback)
